@@ -30,7 +30,7 @@ import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
 import DataLakeTreeView, {
   UNCATEGORIZED_KEY,
   type DataLakeTreeChrome,
@@ -90,7 +90,10 @@ export default function DataLakeViewer({
 
   // Build tag tree from articles, filtering to only data lake-specific tags
   const tree = useMemo(() => {
-    const prefix = tagPrefix.endsWith(':') ? tagPrefix : tagPrefix + ':';
+    // Same helper the wizard's request-rule mirror uses, so trimming and colon-appending cannot
+    // drift between the two surfaces. `|| ':'` keeps an empty prefix matching nothing - every tag
+    // startsWith(''), which would pull unrelated tags into this lake's tree.
+    const prefix = submittedTagPrefix(tagPrefix) || ':';
     const tagCountMap = new Map<string, number>();
     for (const file of articles) {
       for (const tag of file.tags ?? []) {
@@ -190,7 +193,7 @@ function TreeSidebar({
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
-  const prefixNorm = tagPrefix.endsWith(':') ? tagPrefix : `${tagPrefix}:`;
+  const prefixNorm = submittedTagPrefix(tagPrefix) || ':';
   const uncategorizedFiles = useMemo(
     () =>
       [...articles]

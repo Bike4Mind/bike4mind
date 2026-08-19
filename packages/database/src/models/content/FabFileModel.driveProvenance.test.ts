@@ -95,3 +95,49 @@ describe('findByDriveFileIdsInDataLake', () => {
     expect(result.map(f => f.driveFileId)).toContain('d-shared');
   });
 });
+
+// Re-sync (#1591) diffs the fresh folder walk against every file a connection has in the lake, so
+// it needs the FULL connection set - not a lookup by known ids - to detect deletes (a stored file
+// absent from the walk).
+describe('findByDriveConnectionIdInDataLake', () => {
+  const datalakeTag = 'datalake:test-lake';
+  const connId = 'conn-resync';
+
+  const makeFile = (over: Record<string, unknown>) => ({
+    userId: 'u-sync',
+    fileName: 'f.txt',
+    mimeType: 'text/plain',
+    type: KnowledgeType.FILE,
+    filePath: `${Math.random()}.txt`,
+    status: 'complete',
+    tags: [{ name: datalakeTag, strength: 1.0 }],
+    driveConnectionId: connId,
+    ...over,
+  });
+
+  it('returns every lake file this connection ingested', async () => {
+    await FabFile.create(makeFile({ driveFileId: 'd1' }));
+    await FabFile.create(makeFile({ driveFileId: 'd2' }));
+
+    const result = await fabFileRepository.findByDriveConnectionIdInDataLake(connId, datalakeTag);
+    expect(result.map(f => f.driveFileId).sort()).toEqual(['d1', 'd2']);
+  });
+
+  it('excludes files ingested by a different connection', async () => {
+    await FabFile.create(makeFile({ driveFileId: 'd-mine' }));
+    await FabFile.create(makeFile({ driveFileId: 'd-theirs', driveConnectionId: 'conn-other' }));
+
+    const result = await fabFileRepository.findByDriveConnectionIdInDataLake(connId, datalakeTag);
+    expect(result.map(f => f.driveFileId)).toEqual(['d-mine']);
+  });
+
+  it('excludes pending, deleted, archived, and other-lake rows', async () => {
+    await FabFile.create(makeFile({ driveFileId: 'd-pending', status: 'pending' }));
+    await FabFile.create(makeFile({ driveFileId: 'd-del', deletedAt: new Date() }));
+    await FabFile.create(makeFile({ driveFileId: 'd-arch', archivedAt: new Date() }));
+    await FabFile.create(makeFile({ driveFileId: 'd-other', tags: [{ name: 'datalake:other', strength: 1.0 }] }));
+
+    const result = await fabFileRepository.findByDriveConnectionIdInDataLake(connId, datalakeTag);
+    expect(result).toHaveLength(0);
+  });
+});

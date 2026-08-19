@@ -149,6 +149,27 @@ describe('ConfigStep - Tag Prefix single editable home', () => {
     expect(prefixInput().disabled).toBe(false);
   });
 
+  // #1817: this is the message that was missing entirely - the create just 422'd with the
+  // form showing nothing, so the limit has to be named here, next to the field.
+  it('names the 30-character limit, and the actual length, for an over-long prefix', () => {
+    seedConfig({ tagPrefix: 'triage-router-dry-run-test-ken-delete-after:' });
+
+    renderStep();
+
+    const help = screen.getByTestId('datalake-config-tagprefix-help').textContent ?? '';
+    expect(help).toContain('30 characters or fewer');
+    expect(help).toContain('44');
+    expect(prefixInput().disabled).toBe(false);
+  });
+
+  it('flags a prefix that only busts the limit once its trailing ":" is added', () => {
+    seedConfig({ tagPrefix: 'a'.repeat(30) });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).toMatch(/30 characters or fewer/);
+  });
+
   it('locks the prefix to the target lake in append mode (taxonomy is never offered there)', () => {
     seedConfig({
       tagPrefix: 'niche:',

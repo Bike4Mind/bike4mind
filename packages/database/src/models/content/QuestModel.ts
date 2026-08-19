@@ -181,6 +181,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // is the capped cache-read count used for the discount; estimatedCost /
       // creditsUsed are the billed amounts (previously computed but not persisted).
       cacheReadInputTokens: { type: Number, required: false },
+      // cacheCreationInputTokens is the billed cache-WRITE count (1.25x rate), the most
+      // expensive component of a cold turn. Must stay declared alongside the Zod field or
+      // strict mode strips it and the write rate becomes unmeasurable again.
+      cacheCreationInputTokens: { type: Number, required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },

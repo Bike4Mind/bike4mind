@@ -219,6 +219,47 @@ describe('useBatchUpload onError', () => {
     );
   });
 
+  it('translates a 422 for an over-long prefix into the specific field message', async () => {
+    // Defence in depth for #1817: the wizard no longer lets this value reach the server, so a
+    // 422 that still names the prefix must not degrade to the neutral "settings were rejected".
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'triage-router-dry-run-test-ken-delete-after:' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('validation');
+    expect(progress.errorMessage).toBe(
+      'The tag prefix is too long. Use 30 characters or fewer, including the trailing ":".'
+    );
+  });
+
+  // The classifier is the third mirror of the same rules and has to judge the same submitted
+  // form: reading the raw field turns " legal:  " into " legal:  :" and blames a blank
+  // segment on the one surface whose entire job is naming the real culprit.
+  it('does not blame a blank segment for a prefix that is merely whitespace-padded', async () => {
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: '  legal:  ' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorMessage).not.toMatch(/blank/i);
+    expect(progress.errorMessage).toBe('Your data lake settings were rejected. Review them and try again.');
+  });
+
   it('classifies a 5xx as a server error', async () => {
     apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 500, data: { error: 'boom' } } });
     seedWizardFile();

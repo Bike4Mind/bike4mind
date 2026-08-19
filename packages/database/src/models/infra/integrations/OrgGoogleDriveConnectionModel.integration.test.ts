@@ -238,6 +238,51 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
   });
 
+  it('releaseSyncClaim stamps lastPolledAt so a hard-failing connection is not re-enqueued every tick', async () => {
+    // A deterministic failure (unlistable subtree, Mongo timeout) heals 'syncing' -> 'connected' via
+    // this release. Without stamping lastPolledAt it would stay due and be re-enqueued every hourly
+    // tick, re-walking then failing each time. Stamping keeps the 6h cadence on the failure path.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const before = Date.now();
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect(released?.status).toBe('connected');
+    expect(released?.lastPolledAt?.getTime()).toBeGreaterThanOrEqual(before);
+
+    // End-to-end: a connection just released this way is no longer due (its fresh lastPolledAt is
+    // after the poll cutoff), so the scan does not re-enqueue it until the interval elapses.
+    const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(cutoff, 10);
+    expect(due.map(d => d.id)).not.toContain(created.id);
+  });
+
+  it('releaseSyncClaim records the failure on lastError so a broken connection is not silently healthy', async () => {
+    // The release heals the status to 'connected' AND stamps a fresh lastPolledAt, so without this a
+    // deterministically-failing connection reads healthy and recently-polled with nothing anywhere to
+    // tell an operator its syncs keep dying.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, 'Drive folder unreadable');
+    expect(released?.status).toBe('connected');
+    expect(released?.lastError).toContain('Drive folder unreadable');
+  });
+
+  it('releaseSyncClaim leaves a stored lastError alone when the caller supplies none', async () => {
+    // Only ever WRITTEN when supplied - a caller with nothing to say must not silently clear a real
+    // error, unlike updateHealth, whose contract is to set the field to exactly what it is given.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, {
+      status: 'connected',
+      lastError: 'earlier failure',
+    });
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect(released?.lastError).toContain('earlier failure');
+  });
+
   it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.claimForSync(created.id);
@@ -276,5 +321,70 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     // real error. The claim must refuse, leaving the error state intact.
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
+  });
+});
+
+describe('OrgGoogleDriveConnectionModel - findDueForPoll (re-sync scan)', () => {
+  const anHourAgo = () => new Date(Date.now() - 60 * 60 * 1000);
+
+  it('returns never-polled and stale-polled connections, oldest-first, and honors the cap', async () => {
+    // never polled
+    const a = await OrgGoogleDriveConnection.create({ ...base, driveFolderId: 'f-a', targetDataLakeId: 'l-a' });
+    // polled long ago (stale)
+    const b = await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-b',
+      targetDataLakeId: 'l-b',
+      lastPolledAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+    // polled just now (fresh) - must be excluded
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-c',
+      targetDataLakeId: 'l-c',
+      lastPolledAt: new Date(),
+    });
+
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(anHourAgo(), 10);
+    const ids = due.map(d => d.id);
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+    // oldest-first: the never-polled (null sorts first) leads the stale one.
+    expect(ids[0]).toBe(a.id);
+
+    const capped = await orgGoogleDriveConnectionRepository.findDueForPoll(anHourAgo(), 1);
+    expect(capped).toHaveLength(1);
+    expect(capped[0].id).toBe(a.id);
+  });
+
+  it('excludes disabled connections and any not in a healthy connected state', async () => {
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-disabled',
+      targetDataLakeId: 'l-disabled',
+      enabled: false,
+    });
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-syncing',
+      targetDataLakeId: 'l-syncing',
+      status: 'syncing',
+    });
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-error',
+      targetDataLakeId: 'l-error',
+      status: 'credential_error',
+    });
+    const healthy = await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-ok',
+      targetDataLakeId: 'l-ok',
+      status: 'connected',
+    });
+
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(anHourAgo(), 10);
+    expect(due.map(d => d.id)).toEqual([healthy.id]);
   });
 });

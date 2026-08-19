@@ -8,11 +8,15 @@ import type { IFabFileDocument } from '@bike4mind/common';
 const mockAdd = vi.fn().mockResolvedValue(undefined);
 const mockRemove = vi.fn().mockResolvedValue(undefined);
 const mockIsPending = vi.fn().mockReturnValue(false);
+const mockChunkMutate = vi.fn();
 
 let messageFiles: IFabFileDocument[] = [];
 let workBenchFiles: IFabFileDocument[] = [];
 let currentUserId = 'me';
 let sessionUserId = 'me';
+// Keyed so a test can set only the setting it cares about; other keys stay undefined,
+// matching the real useGetSettingsValue's per-key resolution.
+let settingsValues: Record<string, unknown> = {};
 
 vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
   useNotebookContextFiles: () => ({
@@ -32,8 +36,8 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: currentUserId } }) }));
 vi.mock('@client/app/hooks/useMessageFiles', () => ({ useMessageFiles: () => messageFiles }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: undefined }) }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => undefined }));
-vi.mock('@client/app/hooks/data/fabFiles', () => ({ useChunkFile: () => ({ mutateAsync: vi.fn() }) }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: (key: string) => settingsValues[key] }));
+vi.mock('@client/app/hooks/data/fabFiles', () => ({ useChunkFile: () => ({ mutate: mockChunkMutate }) }));
 vi.mock('@client/app/hooks/useEmbeddingMismatchStatus', () => ({
   useEmbeddingMismatchStatus: () => ({ hasEmbeddingMismatch: () => false }),
 }));
@@ -65,6 +69,7 @@ describe('FilesSection message-scoped files', () => {
     workBenchFiles = [];
     currentUserId = 'me';
     sessionUserId = 'me';
+    settingsValues = {};
   });
 
   it('renders when the notebook has ONLY message-scoped files', () => {
@@ -139,5 +144,19 @@ describe('FilesSection message-scoped files', () => {
   it('renders nothing when there are no files of any kind', () => {
     const { container } = renderPanel();
     expect(container.firstChild).toBeNull();
+  });
+
+  it('clamps a legacy above-ceiling DefaultChunkSize before reprocessing a mismatched file', () => {
+    // Reachable state settings.ts documents explicitly: a value stored before the ceiling shipped
+    // resolves at its stored size on this raw settings-fetch read, with no clamp of its own.
+    settingsValues.DefaultChunkSize = 5000;
+    settingsValues.defaultEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-w1'));
+
+    expect(mockChunkMutate).toHaveBeenCalledOnce();
+    expect(mockChunkMutate.mock.calls[0][0]).toMatchObject({ fabFileId: 'w1', chunkSize: 1500 });
   });
 });

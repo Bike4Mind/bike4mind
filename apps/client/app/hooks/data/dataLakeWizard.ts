@@ -1,6 +1,13 @@
 import { useEffect, useRef } from 'react';
 import type { IMessageDataToClient } from '@bike4mind/common';
-import { isSupportedFabFileMimeType, folderTagForFile, hasBlankTagPrefixSegment } from '@bike4mind/common';
+import {
+  isSupportedFabFileMimeType,
+  folderTagForFile,
+  hasBlankTagPrefixSegment,
+  submittedTagPrefix,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
+} from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -173,7 +180,8 @@ export const UPLOAD_ALL_FAILED_MESSAGE =
  * config validates server-side with zod, whose raw text (e.g. "Too small: expected
  * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
  * re-derived here from the config against the same rules to name the real culprit.
- * Keep the rule thresholds in sync with CreateDataLakeRequestInput (common/schemas/dataLake).
+ * The prefix thresholds come from the same constants the schema uses; the slug rule
+ * still mirrors CreateDataLakeRequestInput by hand.
  */
 function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: string } {
   // Network / offline: the request never reached the server, so there's no response body.
@@ -206,11 +214,20 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
           message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
         };
       }
-      const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
-      if (prefix.length < 2) {
+      const prefix = submittedTagPrefix(config.tagPrefix);
+      if (prefix.length < MIN_TAG_PREFIX_LENGTH) {
         return {
           kind: 'validation',
-          message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+          message: `The tag prefix is too short. Use at least ${MIN_TAG_PREFIX_LENGTH} characters ending in ":" (e.g. "legal:").`,
+        };
+      }
+      // Start Upload gates on this same bound, applied to this same submitted form, so the
+      // wizard should never get here - kept so a prefix arriving by any other route still
+      // names itself rather than falling through to the neutral message below.
+      if (prefix.length > MAX_TAG_PREFIX_LENGTH) {
+        return {
+          kind: 'validation',
+          message: `The tag prefix is too long. Use ${MAX_TAG_PREFIX_LENGTH} characters or fewer, including the trailing ":".`,
         };
       }
       if (hasBlankTagPrefixSegment(prefix)) {
@@ -330,8 +347,9 @@ export function useBatchUpload() {
       }
       // 'update' and 'duplicate' both upload: 'update' will overwrite, 'duplicate' creates new
 
-      // Ensure tag prefix ends with ':'
-      const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
+      // Exactly the value every client-side rule judged (see submittedTagPrefix), so what was
+      // gated is what gets sent.
+      const tagPrefix = submittedTagPrefix(config.tagPrefix);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
       let dataLakeId: string;

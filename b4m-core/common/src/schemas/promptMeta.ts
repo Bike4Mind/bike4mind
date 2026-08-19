@@ -66,6 +66,11 @@ const PromptMetaTokenUsageSchema = z.object({
   // Billed cache-read count: raw provider value on provider-basis settlement,
   // capped-at-local-input discount value on local fallback.
   cacheReadInputTokens: z.number().optional(),
+  // Billed cache-WRITE count, at the 1.25x cache-creation rate. Provider-basis only:
+  // the local fallback never bills cache creation, so it stays absent there. Recorded
+  // because a write is the single most expensive component of a cold turn, and without
+  // it the cache-write rate can only be inferred from cacheReadInputTokens being absent.
+  cacheCreationInputTokens: z.number().optional(),
   // Which basis priced estimatedCost/creditsUsed: provider-reported usage or
   // the local tokenizer estimate (fallback when the provider omits usage).
   settledBasis: z.enum(['provider', 'local']).optional(),

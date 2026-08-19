@@ -1057,6 +1057,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return results;
   }
 
+  async findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]> {
+    const docs = await this.fabFileModel.find({
+      driveConnectionId,
+      deletedAt: null,
+      archivedAt: null,
+      tags: { $elemMatch: { name: datalakeTag } },
+      // Exclude in-flight rows: a 'pending' file from a sync still mid-upload is not yet a
+      // durable member, so it must not be mistaken for a delete (absent from the fresh walk it
+      // has not finished ingesting) nor for a stale copy.
+      status: { $ne: 'pending' },
+    });
+    return docs.map(d => d.toJSON());
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.
@@ -1821,6 +1835,13 @@ FabFileSchema.index({ contentHash: 1, userId: 1 });
 
 // Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
 FabFileSchema.index({ driveFileId: 1 });
+
+// Drive re-sync reconcile: findByDriveConnectionIdInDataLake runs on every poll. Compound rather
+// than a bare { driveConnectionId: 1 }, which is an equality prefix only - that leaves the planner
+// fetching every historical row for a connection and post-filtering the rest of the predicate. The
+// three equality keys the query also carries bound it to the live rows in the index itself
+// (archivedAt and tags.name stay post-filters; a multikey array key here would not help).
+FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
