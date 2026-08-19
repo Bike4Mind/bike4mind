@@ -154,7 +154,7 @@ describe('FilesSection message-scoped files', () => {
     workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
 
     renderPanel();
-    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-w1'));
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-w1-workbench'));
 
     expect(mockChunkMutate).toHaveBeenCalledOnce();
     expect(mockChunkMutate.mock.calls[0][0]).toMatchObject({ fabFileId: 'w1', chunkSize: 1500 });

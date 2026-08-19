@@ -21,10 +21,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   // stored value loads the fallback applies, and the two answers now differ by ~4x (512 vs a stored
   // 2100) where they used to differ by 5% - so a cold mount would silently chunk at a different
   // granularity than a warm one. The effect below resyncs if the setting arrives after mount.
-  // `clampChunkSize` matters here too: a legacy stored value above the ceiling reaches this raw
-  // (the settings-fetch route has no clamp of its own), and submitting it unclamped would resolve
-  // as a silent false "success" here (chunkFileUtility swallows the route's rejection) rather than
-  // a visible error.
+  // clamped - see clampChunkSize (chunkSize.ts)
   const configuredChunkSize = useGetSettingsValue('DefaultChunkSize');
   const [chunkSize, setChunkSize] = useState<number>(
     clampChunkSize(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET)

@@ -10,5 +10,7 @@ import { settingsMap } from '@bike4mind/common';
  * value here would resolve as a silent false "success" with nothing queued, not a visible error.
  */
 export function clampChunkSize(value: number): number {
+  // {} is safe only because this setting's clamp ignores its scope arg (settings.ts); a future
+  // scope-aware clamp on DefaultChunkSize would need this call to pass a real scope instead.
   return settingsMap.DefaultChunkSize.scope?.clamp?.(value, {}) ?? value;
 }
