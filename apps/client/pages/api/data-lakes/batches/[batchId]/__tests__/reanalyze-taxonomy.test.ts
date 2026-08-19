@@ -154,22 +154,42 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
 
   // Unlike the queue handler, there's no SQS retry safety net on this synchronous path -
   // an unexpected error must fail the batch immediately rather than leaving it stuck in
-  // 'analyzing' until the reconciler's generic timeout kicks in. The stored taxonomyError is
-  // a curated message (matching every other writer of that field) - the raw exception isn't
-  // user-facing, so it goes to the logger instead.
-  it('reverts the batch to failed with a curated message, logs the real error, and rethrows on an unexpected exception', async () => {
+  // 'analyzing' until the reconciler's generic timeout kicks in. The stored taxonomyError,
+  // the logged message, AND the thrown HTTP error are all the curated message - the raw
+  // exception (which errorHandler.ts would otherwise put straight into the response body)
+  // never reaches the client, only the logger.
+  it('reverts the batch to failed with a curated message, logs the real error, and throws a curated HTTP error (not the raw exception)', async () => {
     const boom = new Error('OpenAI request timed out');
     h.analyzeBatchTaxonomy.mockRejectedValue(boom);
     const { res } = makeRes();
     const request = req('b1');
 
-    await expect((handler as (req: unknown, res: unknown) => Promise<void>)(request, res)).rejects.toThrow(boom);
+    const thrown: unknown = await (handler as (req: unknown, res: unknown) => Promise<void>)(request, res).catch(
+      (e: unknown) => e
+    );
 
+    expect(thrown).toMatchObject({ statusCode: 500, message: 'Re-analysis failed unexpectedly - try again' });
+    expect(thrown).not.toBe(boom);
+    expect((thrown as Error).message).not.toContain('OpenAI request timed out');
     expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['analyzing'], 'failed', {
       taxonomyError: 'Re-analysis failed unexpectedly - try again',
     });
     expect((request as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
       expect.stringContaining('OpenAI request timed out')
+    );
+  });
+
+  it('logs (rather than swallows) a failure of the revert-to-failed write itself', async () => {
+    const boom = new Error('OpenAI request timed out');
+    h.analyzeBatchTaxonomy.mockRejectedValue(boom);
+    h.setTaxonomyStatusIfActive.mockRejectedValue(new Error('mongo down'));
+    const { res } = makeRes();
+    const request = req('b1');
+
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(request, res).catch(() => {});
+
+    expect((request as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('mongo down')
     );
   });
 });

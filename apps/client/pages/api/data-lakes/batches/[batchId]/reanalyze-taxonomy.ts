@@ -8,7 +8,13 @@ import {
   TAXONOMY_RATE_LIMIT_BUCKET,
   TAXONOMY_RATE_LIMIT_WINDOW_MS,
 } from '@server/dataLakes/taxonomyRateLimit';
-import { BadRequestError, NotFoundError, ReanalyzeTaxonomyRequestInput, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  BadRequestError,
+  InternalServerError,
+  NotFoundError,
+  ReanalyzeTaxonomyRequestInput,
+  hasDeveloperUserTag,
+} from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
@@ -65,18 +71,23 @@ const handler = baseApi()
       // request/response path - fail the batch immediately instead of leaving it stuck in
       // 'analyzing' until the reconciler force-fails it ~10 minutes later. The stored
       // taxonomyError is a curated message, matching every other writer of that field
-      // (analyzeBatchTaxonomy's fail(), the daily-cap revert, the reconciler) - the raw
-      // exception (which can be a DB/network error, not something user-facing) goes to the
-      // logger instead of straight to the client.
+      // (analyzeBatchTaxonomy's fail(), the daily-cap revert, the reconciler).
+      const curatedMessage = 'Re-analysis failed unexpectedly - try again';
       req.logger.error(
         `Re-analyze taxonomy failed for batch ${batchId}: ${error instanceof Error ? error.message : String(error)}`
       );
       await dataLakeBatchRepository
-        .setTaxonomyStatusIfActive(batchId, ['analyzing'], 'failed', {
-          taxonomyError: 'Re-analysis failed unexpectedly - try again',
-        })
-        .catch(() => {});
-      throw error;
+        .setTaxonomyStatusIfActive(batchId, ['analyzing'], 'failed', { taxonomyError: curatedMessage })
+        .catch(revertError => {
+          req.logger.error(`Failed to revert batch ${batchId} to failed after re-analyze error: ${revertError}`);
+        });
+      // Throw a curated HTTPError rather than rethrowing the raw exception: errorHandler.ts
+      // puts a plain Error's .message directly into the JSON response body, so rethrowing
+      // would leak the same raw internal detail (DB/network error text) to this endpoint's
+      // caller (this route accepts API-key auth) that the DB write above just kept out of
+      // the persisted taxonomyError. The raw message is already captured by the logger.error
+      // call above.
+      throw new InternalServerError(curatedMessage);
     }
 
     if (!result.claimed) {

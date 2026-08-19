@@ -6,6 +6,11 @@ import {
   DATA_LAKE_GROUNDING_MODES,
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,
+  MAX_TAXONOMY_TAGS,
+  MAX_TAXONOMY_TAG_SUFFIX_LENGTH,
+  MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
+  MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
+  MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
@@ -205,18 +210,20 @@ export type BatchPresignedUrlRequestInputType = z.infer<typeof BatchPresignedUrl
 // each originalName against the batch's actual stored suggestions, so these bounds are a
 // second, independent layer rather than the only protection.
 const TaxonomyTagInput = z.object({
-  suffix: z.string().min(1).max(100),
-  originalName: z.string().min(1).max(150),
+  suffix: z.string().min(1).max(MAX_TAXONOMY_TAG_SUFFIX_LENGTH),
+  originalName: z.string().min(1).max(MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH),
   strength: z.number().min(0).max(1),
   source: z.enum(['folder', 'ai']),
-  matchingFolders: z.array(z.string().max(512)).max(100),
+  matchingFolders: z
+    .array(z.string().max(MAX_TAXONOMY_MATCHING_FOLDER_LENGTH))
+    .max(MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG),
   deleted: z.boolean(),
 });
 
 export const ApplyTaxonomyRequestInput = z.object({
   /** The reviewed/edited tag list to apply (already filtered to non-deleted by the caller, or
    * filtered here - deleted entries are simply skipped since they carry no tag to write). */
-  tags: z.array(TaxonomyTagInput).max(100),
+  tags: z.array(TaxonomyTagInput).max(MAX_TAXONOMY_TAGS),
 });
 export type ApplyTaxonomyRequestInputType = z.infer<typeof ApplyTaxonomyRequestInput>;
 

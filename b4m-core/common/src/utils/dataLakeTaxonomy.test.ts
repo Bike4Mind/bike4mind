@@ -175,6 +175,23 @@ describe('sanitizeCategories', () => {
 
     expect(result[0]?.matchingFolders).toHaveLength(100);
   });
+
+  it('truncates originalName at 150 chars and suffix at 100 chars, mirroring ApplyTaxonomyRequestInput', () => {
+    const longName = `type:${'x'.repeat(200)}`;
+
+    const result = sanitizeCategories([{ tagName: longName }], 'acme');
+
+    expect(result[0]?.originalName.length).toBeLessThanOrEqual(150);
+    expect(result[0]?.suffix.length).toBeLessThanOrEqual(100);
+  });
+
+  it('truncates each matchingFolders entry at 512 chars, mirroring ApplyTaxonomyRequestInput', () => {
+    const longFolder = 'a/'.repeat(400);
+
+    const result = sanitizeCategories([{ tagName: 'type:contract', matchingFolders: [longFolder] }], 'acme');
+
+    expect(result[0]?.matchingFolders[0]?.length).toBeLessThanOrEqual(512);
+  });
 });
 
 describe('appliedTagsForBatch', () => {

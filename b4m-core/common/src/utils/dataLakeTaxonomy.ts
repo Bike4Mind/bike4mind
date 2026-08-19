@@ -1,3 +1,10 @@
+import {
+  MAX_TAXONOMY_TAGS,
+  MAX_TAXONOMY_TAG_SUFFIX_LENGTH,
+  MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
+  MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
+  MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
+} from '../constants/dataLakes';
 import type {
   InferTaxonomyResponse,
   TaxonomyFileAssignment,
@@ -9,13 +16,6 @@ export interface AppliedTag {
   name: string;
   strength: number;
 }
-
-// Mirrors ApplyTaxonomyRequestInput's Zod bounds (schemas/dataLake.ts) - a category set built
-// here that exceeds what apply will later accept would get stored as 'ready' and then
-// permanently rejected on every apply attempt, so sanitizing needs to enforce the same caps
-// the request schema does, not just cap what it stores as valid-shaped.
-const MAX_TAGS = 100;
-const MAX_MATCHING_FOLDERS_PER_TAG = 100;
 
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
@@ -53,14 +53,19 @@ export function sanitizeCategories(
   return categories
     .filter(cat => cat && isNonEmptyString(cat.tagName))
     .map(cat => {
-      const originalName = cat.tagName.trim();
+      // Truncate originalName BEFORE deriving suffix from it, so the two stay consistent
+      // with each other rather than deriving a suffix from text that gets cut off underneath.
+      const originalName = cat.tagName.trim().slice(0, MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH);
       return {
-        suffix: deriveSuffix(originalName, sourcePrefix),
+        suffix: deriveSuffix(originalName, sourcePrefix).slice(0, MAX_TAXONOMY_TAG_SUFFIX_LENGTH),
         originalName,
         strength: clampStrength(cat.confidence, 0.7),
         source: 'ai' as const,
         matchingFolders: Array.isArray(cat.matchingFolders)
-          ? cat.matchingFolders.filter(isNonEmptyString).slice(0, MAX_MATCHING_FOLDERS_PER_TAG)
+          ? cat.matchingFolders
+              .filter(isNonEmptyString)
+              .map(folder => folder.slice(0, MAX_TAXONOMY_MATCHING_FOLDER_LENGTH))
+              .slice(0, MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG)
           : [],
         deleted: false,
       };
@@ -72,7 +77,7 @@ export function sanitizeCategories(
       seen.add(key);
       return true;
     })
-    .slice(0, MAX_TAGS);
+    .slice(0, MAX_TAXONOMY_TAGS);
 }
 
 export function sanitizeFileAssignments(
