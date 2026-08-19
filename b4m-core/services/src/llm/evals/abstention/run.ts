@@ -85,12 +85,29 @@ export async function runAbstentionEval(
   return results;
 }
 
+/**
+ * Per-case floor the live suite gates on. Not 100%: prompt behaviour is stochastic, so a full-marks
+ * bar reads ordinary sampling noise as a regression. Lives here so the report and the assertion in
+ * `run.live.test.ts` label the same rate the same way - a report that prints FAIL on a rate the gate
+ * accepts is the fastest way to teach everyone to ignore both.
+ */
+export const MIN_PASS_RATE = 0.67;
+
+function verdict(passRate: number): 'PASS' | 'WARN' | 'FAIL' {
+  if (passRate === 1) return 'PASS';
+  return passRate >= MIN_PASS_RATE ? 'WARN' : 'FAIL';
+}
+
 export function formatAbstentionReport(results: AbstentionCaseResult[]): string {
   const lines = results.map(r => {
     const failures = r.samples.filter(s => !s.passed);
     const detail = failures.length > 0 ? ` - ${failures[0].reason}` : '';
-    return `${r.passRate === 1 ? 'PASS' : 'FAIL'} ${r.caseId} (${(r.passRate * 100).toFixed(0)}%)${detail}`;
+    return `${verdict(r.passRate)} ${r.caseId} (${(r.passRate * 100).toFixed(0)}%)${detail}`;
   });
   const clean = results.filter(r => r.passRate === 1).length;
-  return [...lines, `${clean}/${results.length} cases clean across all samples`].join('\n');
+  const below = results.filter(r => r.passRate < MIN_PASS_RATE).length;
+  return [
+    ...lines,
+    `${clean}/${results.length} cases clean across all samples; ${below} below the ${(MIN_PASS_RATE * 100).toFixed(0)}% floor`,
+  ].join('\n');
 }

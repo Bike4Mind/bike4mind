@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
-import { resolveAgentArtifactEmissionPrompt, resolveAgentArtifactGate } from './agentExecutor.artifactGate';
+import { inheritedArtifactFields, resolveAgentArtifactEmissionPrompt, resolveAgentArtifactGate } from './artifactGate';
 
 describe('resolveAgentArtifactGate', () => {
   it('requires the admin setting: no caller flag can turn artifacts back on', () => {
@@ -96,5 +96,24 @@ describe('resolveAgentArtifactEmissionPrompt', () => {
     await expect(resolveAgentArtifactEmissionPrompt({ artifactsEnabled: true, readPromptSetting })).resolves.toBe(
       'CUSTOM PROMPT'
     );
+  });
+});
+
+describe('inheritedArtifactFields', () => {
+  it('carries a parent opt-out across the dispatch boundary', () => {
+    // A caller opt-out that stopped at the parent would be routed around by delegating.
+    expect(inheritedArtifactFields(false)).toEqual({ enableArtifacts: false });
+  });
+
+  it('carries an explicit opt-in through unchanged', () => {
+    expect(inheritedArtifactFields(true)).toEqual({ enableArtifacts: true });
+  });
+
+  it('omits the key entirely when the parent expressed no preference', () => {
+    // Not `{ enableArtifacts: undefined }`: the child doc must read as "no preference expressed" so
+    // the admin setting stays the only gate. Asserted on the key list because a spread of
+    // `{ enableArtifacts: undefined }` is `toEqual({})` but is not an absent key.
+    expect(Object.keys(inheritedArtifactFields(undefined))).toEqual([]);
+    expect(Object.keys(inheritedArtifactFields())).toEqual([]);
   });
 });

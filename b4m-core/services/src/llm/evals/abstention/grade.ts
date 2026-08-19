@@ -10,14 +10,35 @@
 
 export type CoverageClaim = 'notCovered' | 'searchedNothingFound' | 'couldNotConsult';
 
+/**
+ * "The library does not cover this" - phrasings that name the corpus as the thing lacking the
+ * material. Unambiguous: a claim about the corpus whatever else the sentence says.
+ */
+const CORPUS_ABSENCE: RegExp[] = [
+  /\b(?:does|do|did)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:seem\s+to\s+)?(?:cover|contain|include|mention|address)\b/i,
+  /\b(?:is|are)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:covered|documented|in\s+the\s+(?:library|knowledge\s*base))\b/i,
+];
+
+/**
+ * Absence phrasings that read EITHER as a corpus claim ("there is no coverage of password
+ * rotation") or as the speaker's own reach ("I have no information on password rotation"). Only
+ * the first is the claim `unavailable` never earns - an outage legitimately leaves the model with
+ * nothing to offer, and `FORCED_RETRIEVAL_NO_CONTEXT_RULES` asks it to say so. Counted unless the
+ * same sentence scopes the absence to the speaker.
+ */
+const BARE_ABSENCE: RegExp[] = [
+  /\bno\s+(?:coverage|information|documents?|mention|record)\b/i,
+  /\bnothing\s+(?:on|about)\s+(?:that|this|it)\b/i,
+];
+
+/** Scopes an absence to the speaker's access on this turn rather than to the corpus. */
+const SPEAKER_SCOPED: RegExp[] = [
+  /\bI\s+(?:have|had|hold|possess)\s+(?:no|none|nothing)\b/i,
+  /\b(?:no|nothing)\b[^.!?]{0,40}\b(?:I\s+(?:can|could|was\s+able)|available\s+to\s+me|on\s+hand)\b/i,
+];
+
 const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {
-  // "the library does not cover this" - the claim only `no_match` ever earns.
-  notCovered: [
-    /\b(?:does|do|did)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:seem\s+to\s+)?(?:cover|contain|include|mention|address)\b/i,
-    /\bno\s+(?:coverage|information|documents?|mention|record)\b/i,
-    /\b(?:is|are)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:covered|documented|in\s+the\s+(?:library|knowledge\s*base))\b/i,
-    /\bnothing\s+(?:on|about)\s+(?:that|this|it)\b/i,
-  ],
+  notCovered: [...CORPUS_ABSENCE, ...BARE_ABSENCE],
   // "I searched and found nothing relevant".
   searchedNothingFound: [
     /\b(?:search(?:ed|ing)?|look(?:ed|ing)?)\b[^.!?]{0,80}\b(?:turned\s+up\s+nothing|found\s+nothing|no\s+(?:relevant\s+)?(?:results?|matches?)|nothing\s+relevant)\b/i,
@@ -31,11 +52,27 @@ const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {
   ],
 };
 
+/**
+ * Claims are detected per sentence, not per reply: a `BARE_ABSENCE` phrase is corpus-scoped or
+ * speaker-scoped by its own clause, and a whole-reply match would let an honest hedge in one
+ * sentence excuse an overreach in the next (or vice versa).
+ */
+function sentences(reply: string): string[] {
+  return reply.split(/[.!?]+/).filter(s => s.trim().length > 0);
+}
+
+function claimsInSentence(sentence: string): CoverageClaim[] {
+  const speakerScoped = SPEAKER_SCOPED.some(pattern => pattern.test(sentence));
+  return (Object.keys(CLAIM_PATTERNS) as CoverageClaim[]).filter(claim => {
+    const patterns = claim === 'notCovered' && speakerScoped ? CORPUS_ABSENCE : CLAIM_PATTERNS[claim];
+    return patterns.some(pattern => pattern.test(sentence));
+  });
+}
+
 /** Every coverage-ish claim the reply makes, in no particular order. */
 export function detectCoverageClaims(reply: string): CoverageClaim[] {
-  return (Object.keys(CLAIM_PATTERNS) as CoverageClaim[]).filter(claim =>
-    CLAIM_PATTERNS[claim].some(pattern => pattern.test(reply))
-  );
+  const found = new Set(sentences(reply).flatMap(claimsInSentence));
+  return (Object.keys(CLAIM_PATTERNS) as CoverageClaim[]).filter(claim => found.has(claim));
 }
 
 /**

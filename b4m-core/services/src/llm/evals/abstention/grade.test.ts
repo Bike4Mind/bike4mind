@@ -22,6 +22,33 @@ describe('detectCoverageClaims', () => {
     expect(detectCoverageClaims('Nothing relevant matched your question.')).toContain('searchedNothingFound');
   });
 
+  it('does not read an absence scoped to the speaker as a claim about the corpus', () => {
+    // The distinction the whole grader turns on: "I have no information" is a statement about the
+    // model on this turn, "there is no information in the library" is a claim about the corpus, and
+    // only the second is what `unavailable` never earns. Every fixture here is a reply doing exactly
+    // what FORCED_RETRIEVAL_NO_CONTEXT_RULES asks for on an outage.
+    expect(
+      detectCoverageClaims(
+        'The curated library could not be consulted for this turn, so I have no information on password rotation.'
+      )
+    ).toEqual(['couldNotConsult']);
+    expect(detectCoverageClaims('I could not access the library, so there is no coverage I can point you to.')).toEqual(
+      ['couldNotConsult']
+    );
+    expect(
+      detectCoverageClaims('The library could not be consulted, so nothing about that is available to me.')
+    ).toEqual(['couldNotConsult']);
+  });
+
+  it('still flags a corpus claim made in the same sentence as a speaker-scoped one', () => {
+    // Sentence-level scoping must not become a blanket excuse: this reply asserts the library lacks
+    // the material, which an outage never establishes, and the "I have nothing else" clause after it
+    // does not undo that.
+    expect(
+      detectCoverageClaims('The library does not cover password rotation and I have nothing else on it.')
+    ).toContain('notCovered');
+  });
+
   it('flags a could-not-consult claim', () => {
     expect(detectCoverageClaims('The curated library could not be consulted on this turn.')).toContain(
       'couldNotConsult'
@@ -67,6 +94,20 @@ describe('gradeMustHedge', () => {
     );
     expect(result.passed).toBe(false);
     expect(result.reason).toContain('notCovered');
+  });
+
+  it('passes an unavailable turn that concedes the outage and its own empty hands', () => {
+    // The phrasings a real run produces put both claims in one sentence. Before sentence-level
+    // speaker scoping these graded as overreach, which would have red-flagged the honest reply on
+    // the finding this eval exists to protect.
+    for (const reply of [
+      'The curated library could not be consulted for this turn, so I have no information on password rotation. Want me to retry?',
+      'I could not access the library, so there is no coverage I can point you to.',
+      'The library could not be consulted, so nothing about that is available to me.',
+    ]) {
+      const result = gradeMustHedge(reply, 'unavailable');
+      expect(result.passed, `${reply} -> ${result.reason}`).toBe(true);
+    }
   });
 
   it('lets a full no-match search say plainly that it is not covered', () => {

@@ -31,6 +31,8 @@ import {
   generateCompleteArtifactId,
   parseArtifactsWithFallback,
 } from '@client/app/utils/artifactParser';
+// Static, unlike the barrels below: a sibling in `utils/` with no heavy import graph of its own.
+import { resolveAgentArtifactGate } from './artifactGate';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */
 export const MAX_AGENT_ARTIFACTS_PER_RUN = 25;
@@ -137,7 +139,6 @@ function defaultDeps(): PersistAgentArtifactsDeps {
   return {
     isArtifactsEnabled: async callerEnableArtifacts => {
       const { adminSettingsRepository } = await import('@bike4mind/database');
-      const { resolveAgentArtifactGate } = await import('../queueHandlers/agentExecutor.artifactGate');
       return resolveAgentArtifactGate({
         adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
         executionEnableArtifacts: callerEnableArtifacts,

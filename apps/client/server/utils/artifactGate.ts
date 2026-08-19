@@ -1,6 +1,6 @@
 /**
- * Resolves the artifact gate for one agent-executor invocation, and with it the artifact-emission
- * prompt the run receives.
+ * Resolves the artifact gate for one agent run - both the artifact-emission prompt it receives and
+ * whether its emitted artifacts are persisted.
  *
  * The agent surface used to inject the (~2.8k-token) emission prompt off the admin `EnableArtifacts`
  * setting alone, with no channel for caller intent - so a caller that opted out of artifacts still
@@ -12,6 +12,11 @@
  * (start payload, then the persisted doc) is the part a refactor breaks silently. A continuation's
  * SQS payload carries only `executionId` + `connectionId`, so reading the start payload alone would
  * make the gate flip on the second iteration.
+ *
+ * Lives in `utils/` rather than next to the executor because both the prompt-side gate
+ * (`queueHandlers/agentExecutor.ts`) and the persistence-side gate (`persistAgentArtifacts.ts`)
+ * must answer this question identically - two gates that can disagree is the defect this replaced -
+ * and `utils/` is the half both may depend on.
  */
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
 import { resolveArtifactsEnabled } from '@bike4mind/services';
@@ -62,4 +67,21 @@ export async function resolveAgentArtifactEmissionPrompt(args: {
   const { artifactsEnabled, isNewExecution = true, readPromptSetting } = args;
   if (!isNewExecution || !artifactsEnabled) return undefined;
   return (await readPromptSetting()) || ARTIFACT_EMISSION_PROMPT;
+}
+
+/**
+ * The artifact-intent fields a dispatched child (subagent or DAG node) inherits from its parent.
+ *
+ * Deliberately unlike `enableLattice` and the other parent-only launch-gate flags, which children do
+ * NOT inherit: `enableArtifacts` is a caller opt-OUT rather than a grant, so scoping it to the parent
+ * run would let a delegating agent route around it - the child would emit <artifact> markup the
+ * caller asked not to receive, and the parent's summary can carry it through.
+ *
+ * The key is OMITTED rather than set to `undefined` when the parent expressed no preference, so
+ * `resolveAgentArtifactGate` still reads "admin setting decides" off the child doc. That
+ * `undefined` vs `false` distinction is the whole gate; a helper rather than a spread repeated at
+ * each dispatch site so it cannot drift on one of them.
+ */
+export function inheritedArtifactFields(parentEnableArtifacts?: boolean): { enableArtifacts?: boolean } {
+  return parentEnableArtifacts === undefined ? {} : { enableArtifacts: parentEnableArtifacts };
 }

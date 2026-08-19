@@ -76,18 +76,25 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 const findByIdMock = vi.fn();
 const findDagChildrenLeanMock = vi.fn();
 const markFailedMock = vi.fn().mockResolvedValue(undefined);
+const createMock = vi.fn().mockImplementation(async () => ({ id: 'child-1' }));
 
 vi.mock('@bike4mind/database', () => ({
   agentExecutionRepository: {
     findById: (...args: unknown[]) => findByIdMock(...args),
     findDagChildrenLean: (...args: unknown[]) => findDagChildrenLeanMock(...args),
     markFailed: (...args: unknown[]) => markFailedMock(...args),
+    create: (...args: unknown[]) => createMock(...args),
   },
 }));
 
 // Import AFTER mocks are registered so the module picks up our stubs.
-const { buildDagResumeReport, clampMaxIterationsForOverCapAggregationWake, isDagAggregationWake, onDagNodeTerminal } =
-  await import('./agentExecutorDag');
+const {
+  buildDagResumeReport,
+  clampMaxIterationsForOverCapAggregationWake,
+  isDagAggregationWake,
+  makeDagDispatcher,
+  onDagNodeTerminal,
+} = await import('./agentExecutorDag');
 
 const spec: IDagSpec = {
   toolUseId: 'tool_use_1',
@@ -448,5 +455,55 @@ describe('onDagNodeTerminal', () => {
     });
     expect(findByIdMock).not.toHaveBeenCalled();
     expect(sqsSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('makeDagDispatcher artifact opt-out inheritance', () => {
+  const nodeDefaultsBase = {
+    userId: 'u1',
+    organizationId: 'o1',
+    sessionId: 's1',
+    questId: 'q1',
+  };
+  const node = { id: 'explore', description: 'Search code', dependsOn: [] as string[] };
+
+  async function createNodeWith(enableArtifacts?: boolean): Promise<void> {
+    createMock.mockClear();
+    const dispatcher = makeDagDispatcher({
+      connectionId: 'c1',
+      nodeDefaults: { ...nodeDefaultsBase, ...(enableArtifacts !== undefined && { enableArtifacts }) },
+      logger: silentLogger,
+    });
+    await dispatcher.createNode({
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick',
+      agentName: 'worker',
+      model: 'm1',
+      maxIterations: 3,
+    });
+  }
+
+  it('passes the parent artifact opt-out down to each DAG node', async () => {
+    // The PR's headline design claim: the flag is a caller opt-OUT, not a grant, so a delegating
+    // agent must not be able to route around it by fanning out.
+    await createNodeWith(false);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: false }));
+  });
+
+  it('leaves the key absent when the parent expressed no preference', async () => {
+    // `undefined` vs `false` is the load-bearing distinction: absence means "admin setting decides",
+    // so a stamped `false` here would strip artifacts from every internal dispatch.
+    //
+    // Asserted on the key list, not via `not.objectContaining({ enableArtifacts: expect.anything() })`:
+    // `expect.anything()` does not match an explicit `undefined`, so that form passes even if the
+    // conditional spread is replaced by a bare `enableArtifacts: nodeDefaults.enableArtifacts`.
+    await createNodeWith(undefined);
+    expect(Object.keys(createMock.mock.calls[0][0] as Record<string, unknown>)).not.toContain('enableArtifacts');
+  });
+
+  it('passes an explicit opt-in through unchanged', async () => {
+    await createNodeWith(true);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: true }));
   });
 });

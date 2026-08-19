@@ -29,6 +29,7 @@ import {
 import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { inheritedArtifactFields } from '../utils/artifactGate';
 import { Resource } from 'sst';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
@@ -107,7 +108,7 @@ export function makeDagDispatcher(args: {
           thoroughness,
           maxIterations,
         },
-        ...(nodeDefaults.enableArtifacts !== undefined && { enableArtifacts: nodeDefaults.enableArtifacts }),
+        ...inheritedArtifactFields(nodeDefaults.enableArtifacts),
       });
       return { childExecutionId: child.id, dagNodeId: node.id };
     },

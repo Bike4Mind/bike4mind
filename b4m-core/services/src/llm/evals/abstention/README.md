@@ -31,6 +31,10 @@ ABSTENTION_EVAL_SAMPLES=3 \
   pnpm --filter @bike4mind/services test -- run.live
 ```
 
-`ABSTENTION_EVAL_SAMPLES` defaults to 3. Prompt behaviour is stochastic; a single sample per case reads noise as signal, and the failure this eval hunts (volunteering coverage language) is intermittent by nature. The suite prints a per-case pass rate and the first failing reason - that report, not the pass/fail, is the deliverable.
+`ABSTENTION_EVAL_SAMPLES` defaults to 3, and a value that is not a positive integer is a hard error rather than a skip - at 0 samples every pass rate is `NaN`, no comparison against it holds, and the suite would go green having called the model zero times.
+
+Prompt behaviour is stochastic; a single sample per case reads noise as signal, and the failure this eval hunts (volunteering coverage language) is intermittent by nature. The suite prints a per-case pass rate and the first failing reason - that report, not the pass/fail, is the deliverable. The assertion gates on a per-case floor (`MIN_PASS_RATE`, 67%) rather than full marks, so ordinary sampling noise does not read as a regression; the report labels anything short of 100% but above the floor `WARN`, so the two never disagree about the same rate.
 
 Grading is lexical, not semantic: the failure being measured is the model *volunteering* coverage language, and that failure is lexical. A phrase list will miss an exotic paraphrase; it will not produce a false pass for the blunt phrasings a model actually reaches for. Add patterns to `grade.ts` when a run surfaces one, and add the fixture to `grade.test.ts` in the same change.
+
+Claims are detected per sentence, and an absence scoped to the speaker ("I have no information on that", "no coverage I can point you to") does not count as a claim about the corpus. That distinction is the point of the `unavailable` case: an outage genuinely leaves the model with nothing to offer and the block asks it to say so, but it never establishes that the library lacks the material.

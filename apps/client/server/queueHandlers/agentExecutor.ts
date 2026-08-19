@@ -79,7 +79,11 @@ import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4m
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
-import { resolveAgentArtifactEmissionPrompt, resolveAgentArtifactGate } from './agentExecutor.artifactGate';
+import {
+  inheritedArtifactFields,
+  resolveAgentArtifactEmissionPrompt,
+  resolveAgentArtifactGate,
+} from '../utils/artifactGate';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
@@ -1061,11 +1065,9 @@ async function processExecution(
           // child that needs Lattice must be granted it explicitly. A future PR
           // adding a sibling flag should make the same deliberate choice.
           //
-          // `enableArtifacts` is the deliberate exception: it is a caller opt-OUT, not a grant, so
-          // scoping it to the parent run would let a delegating agent route around it - the child
-          // would emit <artifact> markup the caller asked not to receive, and the parent's summary
-          // can carry it through. Inherited verbatim so `undefined` still means "admin decides".
-          ...(execution.enableArtifacts !== undefined && { enableArtifacts: execution.enableArtifacts }),
+          // `enableArtifacts` is the deliberate exception - see `inheritedArtifactFields` for why an
+          // opt-OUT has to cross the dispatch boundary when a grant does not.
+          ...inheritedArtifactFields(execution.enableArtifacts),
         };
 
         // Three execution modes mapped to schema state:
@@ -1561,7 +1563,7 @@ async function processExecution(
     //
     // Admin setting AND the caller's request flag, via the same resolver the chat pipeline uses - so
     // an opt-out is honoured on an autonomous run too, where no human is reading each turn. See
-    // `agentExecutor.artifactGate.ts` for the start-payload/doc precedence.
+    // `server/utils/artifactGate.ts` for the start-payload/doc precedence.
     const enableArtifacts = resolveAgentArtifactGate({
       adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
       startPayloadEnableArtifacts: startPayload?.enableArtifacts,
