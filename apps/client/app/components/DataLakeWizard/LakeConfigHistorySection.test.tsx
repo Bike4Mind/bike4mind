@@ -3,7 +3,11 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { LakeConfigHistoryEntry, LakeConfigHistoryView } from '@bike4mind/common';
+import type {
+  LakeConfigHistoryEntry,
+  LakeConfigHistoryFingerprintChange,
+  LakeConfigHistoryView,
+} from '@bike4mind/common';
 import {
   LakeConfigHistorySection,
   describeLakeConfigChange,
@@ -62,18 +66,42 @@ describe('describeLakeConfigValue', () => {
 });
 
 describe('describeLakeConfigFingerprint', () => {
-  const fp = (present: boolean, length: number, hash: string) => ({ present, length, hash });
-
-  it('describes a set, a clear, and a replacement by SIZE only - never the text', () => {
-    expect(describeLakeConfigFingerprint(fp(false, 0, ''), fp(true, 120, 'aa'))).toBe('set (120 chars)');
-    expect(describeLakeConfigFingerprint(fp(true, 120, 'aa'), fp(false, 0, ''))).toBe('cleared (was 120 chars)');
-    expect(describeLakeConfigFingerprint(fp(true, 120, 'aa'), fp(true, 130, 'bb'))).toBe('replaced (120 -> 130 chars)');
+  // The wire shape: presence and size, plus the server's answer to "same text?". No hash - the
+  // client is never given one, so it cannot compare them even by mistake.
+  const fp = (present: boolean, length: number) => ({ present, length });
+  const change = (
+    before: { present: boolean; length: number },
+    after: { present: boolean; length: number },
+    textUnchanged = false
+  ): LakeConfigHistoryFingerprintChange => ({
+    field: 'systemPrompt',
+    kind: 'fingerprint',
+    beforeFingerprint: before,
+    afterFingerprint: after,
+    textUnchanged,
   });
 
-  it('calls an equal-hash move formatting-only, so an owner is not sent hunting for a meaning change', () => {
-    expect(describeLakeConfigFingerprint(fp(true, 120, 'same'), fp(true, 118, 'same'))).toBe(
+  it('describes a set, a clear, and a replacement by SIZE only - never the text', () => {
+    expect(describeLakeConfigFingerprint(change(fp(false, 0), fp(true, 120)))).toBe('set (120 chars)');
+    expect(describeLakeConfigFingerprint(change(fp(true, 120), fp(false, 0)))).toBe('cleared (was 120 chars)');
+    expect(describeLakeConfigFingerprint(change(fp(true, 120), fp(true, 130)))).toBe('replaced (120 -> 130 chars)');
+  });
+
+  it('says "still not set" when neither side had a prompt', () => {
+    expect(describeLakeConfigFingerprint(change(fp(false, 0), fp(false, 0)))).toBe('still not set');
+  });
+
+  it('calls a server-flagged same-text move formatting-only, so an owner is not sent hunting for a meaning change', () => {
+    expect(describeLakeConfigFingerprint(change(fp(true, 120), fp(true, 118), true))).toBe(
       'formatting only (118 chars)'
     );
+  });
+
+  it('ignores textUnchanged when a side is absent - a set or a clear is never "formatting only"', () => {
+    // Guards the branch order: the server only sets textUnchanged with both sides present, but a
+    // reordering here would turn a genuine clear into a nonsensical formatting-only row.
+    expect(describeLakeConfigFingerprint(change(fp(false, 0), fp(true, 12), true))).toBe('set (12 chars)');
+    expect(describeLakeConfigFingerprint(change(fp(true, 12), fp(false, 0), true))).toBe('cleared (was 12 chars)');
   });
 });
 
