@@ -1070,9 +1070,10 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             },
             max_results: {
               type: 'number',
-              // Built synchronously (see the comment on `implementation` above), so this states
-              // the coded default rather than the live kbSearchDefaultResults setting - an admin
-              // override changes what an omitted max_results resolves to, not this description.
+              // This schema is built synchronously (see the comment on KB_SEARCH_MAX_RESULTS
+              // above), so it states the coded default rather than the live kbSearchDefaultResults
+              // setting - an admin override changes what an omitted max_results resolves to, not
+              // this description.
               description: `Maximum number of results to return (default: ${KB_SEARCH_DEFAULT_RESULTS_DEFAULT}, max: ${KB_SEARCH_MAX_RESULTS})`,
               minimum: 1,
               maximum: KB_SEARCH_MAX_RESULTS,
