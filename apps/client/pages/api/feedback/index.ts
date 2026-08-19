@@ -54,7 +54,12 @@ const handler = baseApi()
 
     const { userId, content, tags, username, userEmail, promptMeta, type } = newFeedbackData;
 
-    const existingUser = await User.findOne({ email: userEmail }).populate('organizationId');
+    // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
+    // two authenticated submissions from the same account can be stamped with different organizations
+    // depending on whatever email string the client happened to send.
+    const existingUser = authenticated
+      ? await User.findById(req.user.id).populate('organizationId')
+      : await User.findOne({ email: userEmail }).populate('organizationId');
 
     const organization = (existingUser?.organizationId as unknown as IOrganizationDocument)?.name || 'Unknown';
 
@@ -83,21 +88,37 @@ const handler = baseApi()
       ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
       : promptMeta;
 
-    if (authenticated)
-      await logEvent(
-        { userId: req.user.id, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
-        { ability: req.ability }
-      );
+    // Use the same resolved id already computed for the saved document, not the raw request-body
+    // userId: an untrusted body value that isn't a valid ObjectId threw a Mongoose CastError deep
+    // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already
+    // succeeded. The resolved id removes that specific trigger, but logEvent is still a post-save
+    // side-effect that can fail for other reasons (e.g. a transient write failure inside
+    // incrementUserCounter) -- same containment as the Slack/email side-effects below.
+    if (authenticated) {
+      try {
+        await logEvent(
+          {
+            userId: newFeedback.userId,
+            type: FeedbackEvents.CREATE_FEEDBACK,
+            metadata: { id: newFeedback.id, content },
+          },
+          { ability: req.ability }
+        );
+      } catch (error) {
+        req.logger.error('Failed to log feedback analytics event', error);
+      }
+    }
 
-    // Send feedback to Slack if enabled
+    // Send feedback to Slack if enabled. postFeedbackToSlack already wraps its entire body and
+    // never rejects (slack.ts), so no containment is needed at this call site.
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
       await postFeedbackToSlack(
         type || 'CS',
         organization,
-        username,
-        userEmail,
-        userId,
+        newFeedback.username,
+        newFeedback.userEmail ?? '',
+        newFeedback.userId,
         content,
         promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
       );
@@ -108,24 +129,26 @@ const handler = baseApi()
 
     console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
 
-    // Send Feedback to Email
+    // Send Feedback to Email. Same reasoning as the Slack block above: a rejected publish must not
+    // turn a successful save into a 5xx.
     if (getSettingsValue('EnableFeedBackToEmail', settings) && feedbackEmails.length > 0) {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
-      const sanitizedUsername = sanitizeHtml(username);
-      const sanitizedUserEmail = sanitizeHtml(userEmail);
+      const sanitizedUsername = sanitizeHtml(newFeedback.username);
+      const sanitizedUserEmail = sanitizeHtml(newFeedback.userEmail ?? '');
       const sanitizedType = type ? sanitizeHtml(type) : '';
       const sanitizedTags = tags ? tags.map(tag => sanitizeHtml(tag)) : [];
       const sanitizedPromptMeta = promptMetaForExternalEgress
         ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
         : '';
 
-      await Promise.all(
-        feedbackEmails.map((email: string) =>
-          EmailEvents.Send.publish({
-            to: email,
-            subject: 'New Feedback Received',
-            body: `
+      try {
+        await Promise.all(
+          feedbackEmails.map((email: string) =>
+            EmailEvents.Send.publish({
+              to: email,
+              subject: 'New Feedback Received',
+              body: `
               <!DOCTYPE html>
               <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
               <head>
@@ -218,7 +241,7 @@ const handler = baseApi()
                   <div class="content">
                     <h2>New Feedback Submission</h2>
                     <div class="info">
-                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${userId})</p>
+                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${newFeedback.userId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
                     </div>
@@ -248,9 +271,12 @@ const handler = baseApi()
               </body>
               </html>
               `,
-          })
-        )
-      );
+            })
+          )
+        );
+      } catch (error) {
+        req.logger.error('Failed to send feedback notification email', error);
+      }
     }
 
     return res.status(201).send(newFeedback);
