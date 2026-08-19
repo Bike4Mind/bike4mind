@@ -189,6 +189,62 @@ describe('executeCompletion - output budget', () => {
     expect(vi.mocked(getTextModelCost).mock.calls[0]?.[2]).toBe(50_000);
   });
 
+  /**
+   * A catalog row that declares no output cap. The type says `max_tokens: number`, but that
+   * is a claim about the data rather than a guarantee about it, and this shape reached the
+   * real path: `Math.min(preferred, undefined)` resolved to NaN, which sized the reservation,
+   * survived `usdToCredits`, and hit a Mongoose `currentCredits` write as an opaque
+   * mid-stream cast error. The sibling metering suites stub the sizing rule out, so this is
+   * the one place the REAL resolver meets a capless row.
+   */
+  describe('a model row declaring no output cap', () => {
+    const CAPLESS_MODEL = { id: 'capless-model', backend: 'anthropic' };
+
+    it('sends a finite budget rather than NaN', async () => {
+      availableModels = [CAPLESS_MODEL];
+      const { db } = buildDb();
+
+      await executeCompletion({ ...baseParams, model: 'capless-model', db });
+
+      expect(capturedOptions?.maxTokens).toBe(DEFAULT_OUTPUT_MAX_TOKENS);
+    });
+
+    it('keeps NaN out of the credit estimate and the deduction', async () => {
+      availableModels = [CAPLESS_MODEL];
+      const { db, users } = buildDb();
+      vi.mocked(getTextModelCost).mockImplementation((_model, _input, output) => (output ?? 0) / 1000);
+      vi.mocked(usdToCredits).mockImplementation(usd => usd);
+
+      await executeCompletion({ ...baseParams, model: 'capless-model', db });
+
+      expect(Number.isFinite(vi.mocked(getTextModelCost).mock.calls[0]?.[2] as number)).toBe(true);
+      const reserved = users.incrementCredits.mock.calls[0]?.[1];
+      expect(Number.isFinite(reserved)).toBe(true);
+    });
+
+    it('still honors an explicit budget instead of shrinking it to the fallback', async () => {
+      availableModels = [CAPLESS_MODEL];
+      const { db } = buildDb();
+
+      await executeCompletion({ ...baseParams, model: 'capless-model', db, options: { maxTokens: 32_000 } });
+
+      expect(capturedOptions?.maxTokens).toBe(32_000);
+    });
+  });
+
+  // Independently of what sized it: a non-finite estimate must halt before either write.
+  // incrementCredits would fail as a Mongoose cast error mid-stream, and the member-cap
+  // check compares with `>`, which answers false for NaN and waves the request through.
+  it('refuses to reserve a non-finite credit estimate', async () => {
+    availableModels = [PLAIN_MODEL];
+    const { db, users } = buildDb();
+    vi.mocked(usdToCredits).mockReturnValue(Number.NaN);
+
+    await expect(executeCompletion({ ...baseParams, model: 'plain-model', db })).rejects.toThrow(/non-finite/i);
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    expect(isMemberCreditCapExceeded).not.toHaveBeenCalled();
+  });
+
   // The member cap is checked against the reservation, so an under-sized estimate is a
   // bypass of an administrator-configured control, not just an inaccurate hold.
   it('checks the org member cap against a large explicit budget', async () => {

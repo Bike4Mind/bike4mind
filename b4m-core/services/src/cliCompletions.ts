@@ -216,13 +216,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         requested: options?.maxTokens,
         fallback: DEFAULT_OUTPUT_MAX_TOKENS,
         modelInfo,
-        // The declared cap clamps the resolved budget. No fallback here on purpose:
-        // ModelInfo.max_tokens is required, and toModelInfo already substitutes
-        // DEFAULT_MAX_OUTPUT_TOKENS (4096) for a catalog row that declares none - so a
-        // fallback at this seam could never fire. That substitution is itself the hole
-        // (a *derived* cap should not clamp an adaptive model down to 4096), and it has
-        // to be closed in toModelInfo, where declared and derived are still tellable
-        // apart. Same reasoning applies at the anthropicBackend call site.
+        // The declared cap clamps the resolved budget. Passed through as-is: the type says
+        // `number`, but that is only a claim about catalog data, and a row that omits it
+        // reaches here for real (the embed route's own integration fixture did). No `??`
+        // here on purpose - resolveOutputMaxTokens absorbs an absent cap itself, so the
+        // two call sites cannot drift on what an unknown cap means. The remaining hole is
+        // upstream: toModelInfo substitutes a *derived* 4096 that then clamps an adaptive
+        // model as though the row had declared it, which has to be closed there where
+        // declared and derived are still tellable apart.
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
@@ -298,6 +299,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     const estimatedOutputTokens = Math.min(maxTokens, options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
     const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
+
+    // Rail the money path independently of whatever sized it. A non-finite estimate must
+    // never reach the two writes below: incrementCredits would hand Mongoose `NaN` and fail
+    // mid-stream as an opaque cast error, and isMemberCreditCapExceeded compares with `>`,
+    // which answers false for NaN and waves an over-cap request straight through. Both are
+    // silent, so this fails loudly at the seam instead of trusting the arithmetic upstream.
+    if (!Number.isFinite(reservedCredits) || reservedCredits < 0) {
+      throw new Error(
+        `[CLI_CREDITS] Refusing to reserve a non-finite credit estimate (${reservedCredits}) for model "${model}". ` +
+          `input=${estimatedInputTokens} output=${estimatedOutputTokens} maxTokens=${maxTokens} usd=${estimatedUsdCost}`
+      );
+    }
 
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
 
