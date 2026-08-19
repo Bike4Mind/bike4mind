@@ -255,6 +255,29 @@ describe('useCleanupDataLake queued purge', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
+  it('brings the row back on the next fetch when the consumer releases a guard-refused purge (#1744)', async () => {
+    // The case the server-side release exists to recover, and the one a prune that ALSO required
+    // absence could never reach: the sweep's guard refused the purge, the consumer released the
+    // lake back to 'deleted', so the server lists it again. A response from a request that started
+    // after the purge is authoritative either way - still listed means released, and the row must
+    // reappear rather than stay hidden in this tab until a full page reload.
+    apiGet.mockResolvedValue(listing('lk9', 'lk10'));
+    const { result, queryClient } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk9');
+    });
+    await settle();
+    expect(result.current.deleted.data).toEqual([deletedLake('lk10')]);
+
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['data-lakes', 'deleted'] });
+    });
+    await settle();
+    expect(result.current.deleted.data).toEqual([deletedLake('lk9'), deletedLake('lk10')]);
+  });
+
   it('invalidates no key that prefix-matches the deleted list', async () => {
     apiGet.mockResolvedValue(listing('lk3', 'lk4'));
     const { result, invalidate } = mountPurgeSurface();
