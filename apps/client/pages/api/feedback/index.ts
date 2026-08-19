@@ -6,7 +6,12 @@ import {
   PromptMetaZodSchema,
   redactFunctionCallsForViewer,
 } from '@bike4mind/common';
-import type { FeedbackChannelDelivery, FeedbackDeliveryResult } from '@bike4mind/common';
+import type {
+  FeedbackChannelDelivery,
+  FeedbackDeliveryResult,
+  FeedbackDeliveryStageClass,
+  FeedbackDeliverySkipReason,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -35,6 +40,45 @@ const CreateFeedbackRequestSchema = z.object({
   type: z.string().optional(),
   promptMeta: PromptMetaZodSchema.optional(),
 });
+
+// Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
+// entry after the first, and a whitespace-only entry (',' or ' ') resolves to zero recipients.
+function splitRecipients(raw: string | undefined): string[] {
+  return (raw || '')
+    .split(',')
+    .map(email => email.trim())
+    .filter(Boolean);
+}
+
+type FeedbackEmailRoute =
+  | { kind: 'send'; recipients: string[]; stageClass: FeedbackDeliveryStageClass }
+  | { kind: 'skip'; stageClass: FeedbackDeliveryStageClass; reason: FeedbackDeliverySkipReason };
+
+/**
+ * Decides where feedback-to-email sends go for a given deploy stage, mirroring
+ * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
+ * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
+ * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
+ * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).
+ */
+export function resolveFeedbackEmailRoute(
+  stage: string | undefined,
+  settings: Record<string, string>
+): FeedbackEmailRoute {
+  const stageClass = classifyStage(stage);
+
+  if (stageClass === 'production') {
+    const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmail', settings));
+    return recipients.length > 0
+      ? { kind: 'send', recipients, stageClass }
+      : { kind: 'skip', stageClass, reason: 'no_recipients' };
+  }
+
+  const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmailNonProd', settings));
+  return recipients.length > 0
+    ? { kind: 'send', recipients, stageClass }
+    : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
+}
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -139,26 +183,18 @@ const handler = baseApi()
       await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled', Config.STAGE);
     }
 
-    // Split the FeedbackReceiveEmail setting into individual addresses, trimmed: a
-    // comma-separated list like 'a@x.com, b@x.com' would otherwise leave a leading space on
-    // every entry after the first, and a whitespace-only entry (',' or ' ') must resolve to
-    // zero recipients rather than publishing to a blank address.
-    const feedbackEmails = (getSettingsValue('FeedbackReceiveEmail', settings) || '')
-      .split(',')
-      .map(email => email.trim())
-      .filter(Boolean);
-
-    console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
-
     let email: FeedbackChannelDelivery;
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
+    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings);
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
       await recordFeedbackDeliverySkipped('email', stageClass, 'disabled', Config.STAGE);
-    } else if (feedbackEmails.length === 0) {
-      email = { outcome: 'skipped', reason: 'no_recipients' };
-      await recordFeedbackDeliverySkipped('email', stageClass, 'no_recipients', Config.STAGE);
+    } else if (emailRoute.kind === 'skip') {
+      email = { outcome: 'skipped', reason: emailRoute.reason };
+      await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE);
     } else {
+      const feedbackEmails = emailRoute.recipients;
+      console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
       const sanitizedUsername = sanitizeHtml(newFeedback.username);
