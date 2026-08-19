@@ -61,6 +61,10 @@ const handler = baseApi()
       isAdmin: ctx.isAdmin,
       administeredOrgIds: ctx.administeredOrgIds,
       // Attribute a key-driven lifecycle change to the KEY, with its owner kept findable.
+      // NOT carried into the cleanup queue: `CleanupPayload` (dataLakeCleanup.ts) is a non-strict
+      // z.object, so this field is silently stripped on the way through. Harmless today because
+      // `cleanupDeletedDataLake` records no config event - but anything there that starts recording
+      // one must re-resolve the principal rather than expect it in the payload.
       auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
     };
 
