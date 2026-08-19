@@ -19,8 +19,9 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
  * of the config-change collection - it was written dormant so the audit trail would already have
  * depth by the time this shipped.
  *
- * Two gates, in order - the same pair as the access view (`[id]/access.ts`), deliberately identical
- * so the two halves of the audit trail cannot diverge on who may read them:
+ * Two gates, in order. FORWARD REFERENCE: the owner-facing access view (#1672) is expected to land
+ * with this same pair, so the two halves of the audit trail cannot diverge on who may read them -
+ * that route does not exist yet, so this is the shape to match, not a shape copied from one:
  *  1. `assertLakeAccess` - existence + read access, denying with a not-found-style error so a lake
  *     the caller cannot even see is not disclosed.
  *  2. `resolveCanManageLake` - MANAGE, not access. The history describes editor-only fields
