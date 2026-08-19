@@ -107,6 +107,16 @@ describe('HelpModal', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  it('falls back to the success toast, not a throw, when a rolling deploy returns no delivery field', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', content: 'great app' });
+    renderModal();
+
+    submitFeedback('great app');
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
   it('does not call the API or toast for empty/whitespace-only content', () => {
     renderModal();
 

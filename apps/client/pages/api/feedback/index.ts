@@ -283,6 +283,7 @@ const handler = baseApi()
         )
       );
       const succeeded = emailResults.filter(r => r.status === 'fulfilled').length;
+      const rejected = emailResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
       await Promise.all([
         succeeded > 0 ? recordFeedbackDeliverySuccess('email', stageClass) : undefined,
         succeeded < emailResults.length
@@ -291,12 +292,15 @@ const handler = baseApi()
       ]);
       // A partial failure still trips the alarm-worthy metric above, but the channel-level
       // outcome below reports 'delivered' (some recipients did get it), so isIncident() never
-      // sees it - log it here, the one place that still has the per-recipient counts.
-      if (succeeded > 0 && succeeded < emailResults.length) {
-        Logger.error('[feedback] partial email delivery - some recipients did not receive it', {
+      // sees it - log the actual rejection reasons here, the one place that still has them
+      // (an all-fail send also lands here rather than only in the generic isIncident log below,
+      // which never reads emailResults[i].reason).
+      if (rejected.length > 0) {
+        Logger.error('[feedback] email publish rejected for one or more recipients', {
           feedbackId: newFeedback.id,
           succeeded,
           attempted: emailResults.length,
+          reasons: rejected.map(r => String(r.reason)),
         });
       }
       // 'email delivered' means the outbound-mail event was enqueued (EmailEvents.Send.publish

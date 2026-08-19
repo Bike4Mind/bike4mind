@@ -243,7 +243,7 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(mockRecordFailure).toHaveBeenCalledWith('email', 'production', 'publish_error', 'production');
   });
 
-  it('logs a partial email failure even though the channel outcome reports delivered', async () => {
+  it('logs the rejection reason for a partial email failure even though the channel outcome reports delivered', async () => {
     mockSettings.EnableFeedBackToEmail = true;
     mockSettings.FeedbackReceiveEmail = 'a@x.com, b@x.com';
     mockEmailPublish.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('smtp down'));
@@ -251,8 +251,21 @@ describe('POST /api/feedback - delivery outcome', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(Logger.error).toHaveBeenCalledWith(
-      '[feedback] partial email delivery - some recipients did not receive it',
-      expect.objectContaining({ succeeded: 1, attempted: 2 })
+      '[feedback] email publish rejected for one or more recipients',
+      expect.objectContaining({ succeeded: 1, attempted: 2, reasons: ['Error: smtp down'] })
+    );
+  });
+
+  it('logs the rejection reasons when every email publish rejects', async () => {
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'a@x.com, b@x.com';
+    mockEmailPublish.mockRejectedValue(new Error('smtp down'));
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(Logger.error).toHaveBeenCalledWith(
+      '[feedback] email publish rejected for one or more recipients',
+      expect.objectContaining({ succeeded: 0, attempted: 2, reasons: ['Error: smtp down', 'Error: smtp down'] })
     );
   });
 

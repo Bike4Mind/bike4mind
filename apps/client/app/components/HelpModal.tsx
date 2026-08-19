@@ -95,7 +95,10 @@ export const HelpModal: React.FC = () => {
       // below) still applies to a modal the user can see closing, not one already gone.
       toggleShowHelp();
 
-      if (feedbackCreated.delivery.delivered) {
+      // Optional chaining: a rolling deploy can route this request to a server instance
+      // still on the pre-delivery-field handler, where the record saved but `delivery` is
+      // absent - fall back to the honest "we don't know" toast rather than throwing.
+      if (feedbackCreated.delivery?.delivered !== false) {
         toast.success('Thank you! Your feedback has been submitted.');
       } else {
         toast.warning('Saved your feedback, but we could not notify the team - please ping support if it is urgent.');

@@ -75,7 +75,10 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         promptMeta: promptMeta ?? {},
       });
       onClose();
-      if (result.delivery.delivered) {
+      // Optional chaining: a rolling deploy can route this request to a server instance
+      // still on the pre-delivery-field handler, where the record saved but `delivery` is
+      // absent - fall back to the honest "we don't know" toast rather than throwing.
+      if (result.delivery?.delivered !== false) {
         toast.success(`${feedbackType} report submitted successfully`);
       } else {
         toast.warning('Saved your report, but we could not notify the team - please ping support if it is urgent.');

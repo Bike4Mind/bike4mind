@@ -69,6 +69,16 @@ describe('BugReportModal', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  it('falls back to the success toast, not a throw, when a rolling deploy returns no delivery field', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({});
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('bug-report-submit-btn'));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
   it('shows an error toast, not a success toast, when the request rejects', async () => {
     h.createFeedbackOnServer.mockRejectedValue(new Error('network down'));
     renderModal();

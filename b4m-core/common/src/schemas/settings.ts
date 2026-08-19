@@ -1514,8 +1514,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'SlackLiveopsWebhookUrl', order: 5 },
       { key: 'SlackUserActivityWebhookUrl', order: 6 },
       { key: 'SlackEmailAuditWebhookUrl', order: 6.5 },
-      { key: 'SlackFeedbackWebhookUrl', order: 7 },
-      { key: 'SlackNonProdFeedbackWebhookUrl', order: 7.5 },
+      { key: 'SlackFeedbackWebhookUrl', order: 6.75 },
+      { key: 'SlackNonProdFeedbackWebhookUrl', order: 6.8 },
       { key: 'FeedbackSendEmailUsername', order: 7 },
       { key: 'FeedbackSendEmailPassword', order: 8 },
       { key: 'FeedbackReceiveEmail', order: 9 },
@@ -2465,7 +2465,7 @@ export const settingsMap = {
     description: 'The webhook URL for sending feedback to the #bike4mind-feedback Slack channel.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
-    order: 7,
+    order: 6.75,
     isSensitive: true,
   }),
   SlackNonProdFeedbackWebhookUrl: makeStringSetting({
@@ -2476,7 +2476,7 @@ export const settingsMap = {
       'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
-    order: 7.5,
+    order: 6.8,
     isSensitive: true,
   }),
   SlackEmailAuditWebhookUrl: makeStringSetting({
