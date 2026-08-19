@@ -99,4 +99,18 @@ export interface LakeConfigHistoryView {
    * "changes since <date>" instead of implying the list is all-time. */
   windowStartsAt?: Date;
   generatedAt: Date;
+  /**
+   * Display names for the USER ids that appear as VALUES inside `entries[].changes` - the identity
+   * fields (`effectiveOwnerUserId`, `createdByUserId`), whose before/after are raw ObjectIds.
+   *
+   * A map rather than resolved-in-place strings because the same id recurs across rows and the raw
+   * id must stay available as the fallback: these rows are retained for years and outlive the
+   * accounts they name, so an unresolvable id renders as itself rather than vanishing. Keyed by id,
+   * value is the same never-an-email display name the principal columns use.
+   *
+   * Only user identities. `organizationId` and `preferredSystemPromptId` are ids too, but of other
+   * entities entirely, and resolving them through a USER lookup would be wrong rather than merely
+   * incomplete.
+   */
+  userNames: Record<string, string>;
 }
