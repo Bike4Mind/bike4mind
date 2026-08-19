@@ -5,6 +5,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { BATCH_TERMINAL_STATUSES, type BatchStatus } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const UpdateBatchInput = z.object({
   status: z.enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled']),
@@ -25,16 +26,27 @@ const UpdateBatchInput = z.object({
 const recomputeLakeAfterTerminal = async (
   status: BatchStatus,
   dataLakeId: string,
-  logger: { error: (msg: string) => void }
+  // `warn` too, not just `error`: the audit write inside recomputeLakeStats is best-effort and
+  // reports failures via `warn`. Unthreaded it falls back to `console.warn`, where log-based
+  // alerting cannot see an audit trail going dark.
+  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void },
+  // Both verbs on this route are authenticated, so a draft -> active flip they cause is a USER's
+  // doing and should say so. Without this it records `system`, which is what the unattributed
+  // queue-side finalizer legitimately records - and conflating the two would make an operator
+  // action indistinguishable from a background one. The rung stays `system` regardless, because
+  // activateIfDraft authorizes nothing.
+  actor?: { userId: string; isAdmin: boolean }
 ): Promise<void> => {
   if (!BATCH_TERMINAL_STATUSES.includes(status)) return;
 
   try {
     const lake = await dataLakeRepository.findById(dataLakeId);
     if (!lake) return;
-    await dataLakeService.recomputeLakeStats(lake, {
-      db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
-    });
+    await dataLakeService.recomputeLakeStats(
+      lake,
+      { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
+      actor ? { actor } : undefined
+    );
   } catch (error) {
     logger.error(`Error recomputing data lake stats for terminal batch in lake ${dataLakeId}: ${error}`);
   }
@@ -78,7 +90,10 @@ const handler = baseApi()
     // otherwise run a fresh whole-lake aggregation per call, and the normal completed path is
     // already recomputed by the queue finalizer.
     if (!BATCH_TERMINAL_STATUSES.includes(batch.status)) {
-      await recomputeLakeAfterTerminal(data.status, batch.dataLakeId, req.logger);
+      await recomputeLakeAfterTerminal(data.status, batch.dataLakeId, req.logger, {
+        userId: req.user.id,
+        isAdmin: !!req.user.isAdmin,
+      });
     }
 
     return res.json({ success: true });
@@ -100,7 +115,10 @@ const handler = baseApi()
       return res.status(400).json({ error: `Batch is already ${batch.status}` });
     }
 
-    await recomputeLakeAfterTerminal('cancelled', batch.dataLakeId, req.logger);
+    await recomputeLakeAfterTerminal('cancelled', batch.dataLakeId, req.logger, {
+      userId: req.user.id,
+      isAdmin: !!req.user.isAdmin,
+    });
 
     return res.json({ success: true });
   });

@@ -4,14 +4,18 @@ import type {
   DataLakeDocumentPurgeReceipt,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
+  IDataLakeSpendResponse,
   IFabFileDocument,
+  LakeHealthApiResponse,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
+import { isAxiosError } from 'axios';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -59,6 +63,28 @@ export function useGetDataLakes(
     },
     refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
     staleTime: opts?.staleTime ?? 1000 * 60 * 2,
+  });
+}
+
+/**
+ * One lake's derived health report (#1666): the four retrievability predicates and the
+ * reachable-content headline, computed on demand from per-file rollups. Advisory only.
+ *
+ * Fetched only where the badge mounts (the lake detail view) and cached for a few minutes - health
+ * shifts only as content is re-ingested, so it does not need to be live. `enabled` stays available
+ * for callers that mount it earlier. Like the other lake reads it does not retry the feature-gate 403.
+ */
+export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.health(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
+    queryFn: async () => {
+      const response = await api.get<LakeHealthApiResponse>(`/api/data-lakes/${dataLakeId}/health`);
+      return response.data;
+    },
   });
 }
 
@@ -213,17 +239,24 @@ export function useBrowsePublicDataLakes(search: string) {
 
 type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
 
+async function postLifecycle(id: string, action: LifecycleAction) {
+  const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
+  return response.data;
+}
+
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
-      return response.data;
-    },
+    mutationFn: (id: string) => postLifecycle(id, action),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
+      // A lifecycle move changes what is BROWSABLE, not just which lakes are listed: archiving
+      // stamps archivedAt on the lake's files, which both tag counters exclude. Without this the
+      // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
+      // row while the tree beside it still shows that lake's branches and counts it in the totals.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
       toast.success(successMessage);
     },
     onError: (error: Error) => {
@@ -252,9 +285,69 @@ export function usePermanentDeleteDataLake() {
   return useLifecycleMutation('delete', 'Data lake deleted (recoverable)', 'Failed to delete data lake');
 }
 
-/** Phase 2 of permanent delete: irreversible hard-delete sweep. */
+/**
+ * Lakes whose purge the server ACCEPTED (202) but whose background sweep may not have run yet, so
+ * GET /api/data-lakes/deleted still lists them. Clearing the row from the cache alone is not
+ * enough: the next read of that list re-adds it, and there are two easy triggers - re-expanding
+ * the Deleted section, and any sibling lake mutation, since they all invalidate this key
+ * (see useLifecycleMutation). Consulted by useGetDeletedDataLakes, which self-prunes each id once
+ * a response that could see the purge stops listing it.
+ *
+ * The value is a sequence number, and it is load-bearing for the prune: a response from a request
+ * that STARTED before the purge says nothing about whether the sweep has run, so pruning on it would
+ * un-hide a row that is still mid-purge. Purges and fetch-starts both tick the same counter, which
+ * orders them exactly - a wall clock cannot, since both can land inside the same millisecond.
+ *
+ * Module-scoped so it survives the section remounting. Deliberate consequence: if a sweep fails
+ * permanently (message DLQs), the row stays hidden until a reload rather than reappearing.
+ */
+const purgingLakes = new Map<string, number>();
+let purgeOrderTick = 0;
+const nextPurgeOrderTick = () => ++purgeOrderTick;
+
+/**
+ * Test-only: drops all pending-purge suppression AND rewinds the order counter, so module state
+ * cannot leak between cases. Double-underscore prefix marks it as not-for-app-code (matching
+ * `__resetAllSessionMovesForTests` in chessSessionState.ts).
+ */
+export function __resetPurgingLakesForTests() {
+  purgingLakes.clear();
+  purgeOrderTick = 0;
+}
+
+/**
+ * Phase 2 of permanent delete: irreversible hard-delete sweep.
+ *
+ * The only lifecycle action that answers 202-queued rather than doing the work inline: the sweep
+ * runs in a background consumer (see the timeout note in pages/api/data-lakes/[id]/lifecycle.ts),
+ * so the lake is still `status: 'deleted'` when this mutation resolves. Refetching the deleted
+ * list here would therefore re-render the very row it was meant to clear, which is what kept a
+ * purged lake visible until the section was collapsed and re-expanded. Clear the row from the
+ * cache and hold the id in `purgingLakes` until the server agrees it is gone.
+ */
 export function useCleanupDataLake() {
-  return useLifecycleMutation('cleanup', 'Data lake permanently purged', 'Failed to clean up data lake');
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => postLifecycle(id, 'cleanup'),
+    onSuccess: (_data, id) => {
+      // Record the suppression BEFORE touching the cache: an in-flight fetch resolves through the
+      // queryFn, which reads this map, so a response landing after this line already hides the row.
+      purgingLakes.set(id, nextPurgeOrderTick());
+      // Deliberately NOT cancelling an in-flight deleted-list fetch. The queryFn filter makes it
+      // harmless, and cancelling reverts the query to its pre-fetch snapshot - which would discard a
+      // refetch a sibling mutation had started (e.g. a restore of another lake) and leave that other
+      // lake shown under Deleted until something else refetched.
+      queryClient.setQueryData<DataLakeConfig[]>(dataLakeKeys.deleted, old => old?.filter(lake => lake.id !== id));
+      // Deliberately NOT invalidating dataLakeKeys.list: ['data-lakes'] prefix-matches
+      // ['data-lakes', 'deleted'], so it would refetch the list above and undo the removal. No
+      // other catalog changes either - a purgeable lake is already soft-deleted, so it is
+      // already absent from the active/archived/public lists.
+      toast.success('Data lake permanently purged');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to clean up data lake');
+    },
+  });
 }
 
 /** Lists archived data lakes (management view). */
@@ -269,14 +362,27 @@ export function useGetArchivedDataLakes(enabled = true) {
   });
 }
 
-/** Lists soft-deleted data lakes (management view: restore / purge). */
+/**
+ * Lists soft-deleted data lakes (management view: restore / purge), minus any whose purge has been
+ * accepted but not yet swept - see `purgingLakes`. Filtering here rather than at the call site
+ * means no refetch of this key can resurrect a purged row, whatever triggered it - including a
+ * fetch that was already in flight when the purge landed.
+ */
 export function useGetDeletedDataLakes(enabled = true) {
   return useQuery({
     queryKey: dataLakeKeys.deleted,
     enabled,
     queryFn: async () => {
+      const startedAt = nextPurgeOrderTick();
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/deleted');
-      return response.data.data;
+      const lakes = response.data.data;
+      // Self-prune, so the map cannot outlive the purges it describes: once the sweep has removed a
+      // lake, stop tracking it. Only a request that STARTED after the purge can settle that - an
+      // older one may predate the soft-delete entirely, and pruning on it would un-hide the row.
+      for (const [id, purgedAt] of purgingLakes) {
+        if (purgedAt < startedAt && !lakes.some(lake => lake.id === id)) purgingLakes.delete(id);
+      }
+      return lakes.filter(lake => !purgingLakes.has(lake.id));
     },
   });
 }
@@ -411,7 +517,15 @@ export function useReprocessFabFile(dataLakeId: string | null) {
     },
     onSuccess: () => {
       toast.success('Re-processing started - chunking and vectorization will re-run.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Reprocessing changes the chunk/vector rollups health is computed from. The final figures
+        // land only once vectorization finishes (async); the badge refreshes then via its staleTime.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+        // Re-chunking a file that was an oversized blob drops it from the under-chunked set, so the
+        // "Rebuild passages" badge must refresh too (it otherwise only self-heals on its next poll).
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+      }
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to re-process file');
@@ -435,7 +549,13 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     },
     onSuccess: () => {
       toast.success('File removed from data lake.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Removing a member changes the lake's reachable-content denominator and predicate tallies.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+        // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+      }
       // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
       // files only, so removing a file that was in the lake by prefix alone drops a row from
       // the list without moving the count.
@@ -494,6 +614,106 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to permanently delete this file');
+    },
+  });
+}
+
+export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number };
+
+/** Extra polls after the backlog clears, at SETTLE_MS each - about three minutes of cover. */
+const REBUILD_SETTLE_POLLS = 18;
+const REBUILD_SETTLE_MS = 10_000;
+
+export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
+export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
+
+/**
+ * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
+ * hook (the two defects this logic has carried both shipped because nothing executed it).
+ *
+ * `underChunkedCount` is the loop condition and `failedCount` deliberately is NOT: a failed file
+ * never retries on its own (see countFailedFilesByScope - it is invisible to both the detection
+ * query and the rescue sweep), so summing the two gives a term that can never reach zero and the
+ * badge polls forever on any lake holding one. But the count alone stops too early: it drops the
+ * instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
+ * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
+ * extra times to catch that, then stop for good.
+ */
+export function nextRebuildPoll(
+  underChunkedCount: number,
+  prev: RebuildPollState
+): { interval: number | false; next: RebuildPollState } {
+  if (underChunkedCount > 0) {
+    const interval = underChunkedCount > 200 ? 30_000 : underChunkedCount > 50 ? 15_000 : 5_000;
+    return { interval, next: { sawBacklog: true, settlePolls: 0 } };
+  }
+  // Never had anything to rebuild in this session - nothing to settle for.
+  if (!prev.sawBacklog || prev.settlePolls >= REBUILD_SETTLE_POLLS) return { interval: false, next: prev };
+  return { interval: REBUILD_SETTLE_MS, next: { ...prev, settlePolls: prev.settlePolls + 1 } };
+}
+
+/**
+ * Hook: the lake's rebuild status - how many files are still oversized passages (predating the
+ * passage-target fix) plus how many gave up (failed re-chunk). Polls itself down while a rebuild
+ * drains, backing off as the backlog stays large so a multi-thousand-file lake isn't re-scanned
+ * every 5s for the whole drain. Rebuild-capable surface, so only enable when the viewer can
+ * REBUILD (`canRebuild`) - narrower than `canManage`, since a fallback (built-in) lake has no
+ * document to manage but can still be rebuilt by a platform admin.
+ */
+export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
+  const pollState = useRef<RebuildPollState>({ ...INITIAL_REBUILD_POLL_STATE });
+  return useQuery({
+    // Same null sentinel as the sibling lake queries. Never fetched either way (the query is disabled
+    // when the id is null), but two spellings side by side in one file invite a real divergence later.
+    queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? ''),
+    queryFn: async (): Promise<LakeRebuildStatus> => {
+      const res = await api.get<LakeRebuildStatus>(`/api/data-lakes/${dataLakeId}/rechunk`);
+      return { underChunkedCount: res.data.underChunkedCount, failedCount: res.data.failedCount ?? 0 };
+    },
+    enabled: enabled && !!dataLakeId,
+    // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
+    // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
+    refetchInterval: query => {
+      const { interval, next } = nextRebuildPoll(query.state.data?.underChunkedCount ?? 0, pollState.current);
+      pollState.current = next;
+      return interval;
+    },
+  });
+}
+
+/**
+ * Hook: re-chunk a bounded wave of the lake's under-chunked files. Server picks the worst
+ * offenders first and caps the wave; call again (the badge shows `remaining`) to drain the rest.
+ */
+export function useRechunkDataLake(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (limit?: number) => {
+      const res = await api.post<{ detected: number; enqueued: number; remaining: number }>(
+        `/api/data-lakes/${dataLakeId}/rechunk`,
+        limit ? { limit } : {}
+      );
+      return res.data;
+    },
+    onSuccess: data => {
+      toast.success(
+        data.enqueued > 0
+          ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
+          : 'All files are already chunked into passages.'
+      );
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // A rebuild mass-mutates the exact rollups health is computed from, and the health query has
+        // no refetchInterval and does not refetch on focus - its observer stays mounted while the
+        // panel re-renders, so staleTime alone never refreshes it. Without this the badge sits frozen
+        // for the whole rebuild while the "to rebuild" chip ticks to zero beside it, which reads as
+        // "the rebuild accomplished nothing". The other two lake mutations already invalidate both.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to start rebuild');
     },
   });
 }
@@ -587,9 +807,18 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
     // `null` means disabled-below, but the key type takes the params shape or undefined only.
     queryKey: dataLakeKeys.articles(source, params ?? undefined),
     queryFn: async () => {
+      // Serialized by hand because of an axios/Next disagreement on arrays: axios writes
+      // `tags[]=x`, Next's query parser keeps the literal key `tags[]`, and the handler reads
+      // `query.tags` - so the tag filter silently vanished and a leaf category showed whatever
+      // happened to be in the first alphabetical page. Repeated bare keys (`tags=x&tags=y`)
+      // parse into exactly the string | string[] shape DataLakeArticlesQuery declares.
+      const search = new URLSearchParams();
+      for (const [key, value] of Object.entries(params ?? {})) {
+        if (value == null) continue;
+        for (const v of Array.isArray(value) ? value : [value]) search.append(key, String(v));
+      }
       const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
-        `${browseBase(source)}/articles`,
-        { params: params ?? undefined }
+        `${browseBase(source)}/articles?${search.toString()}`
       );
       return response.data;
     },
@@ -598,4 +827,37 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });
+}
+
+/**
+ * One lake's spend view: lifetime meter, live budget levers, and the byModel/byFeature/
+ * overTime ledger breakdown. `enabled` is passed by the caller so the modal can fetch lazily -
+ * only once the Spend tab is actually opened, not on every settings-modal mount.
+ *
+ * Any 4xx (not just 403) is treated as "forbidden": a fallback/hardcoded lake has no
+ * `createdByUserId` and no grants, so `canManageLake` fails closed for every non-admin caller
+ * there too (a 403 via the same gate, not a distinct mechanism) - treating any 4xx as
+ * "forbidden" is a deliberately wider net than hardcoding 403, so an unanticipated 4xx also
+ * hides the tab instead of painting a red error.
+ */
+export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?: { enabled?: boolean }) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.spend(dataLakeId, days),
+    queryFn: async () => {
+      const { data } = await api.get<IDataLakeSpendResponse>(`/api/data-lakes/${dataLakeId}/spend`, {
+        params: { days },
+      });
+      return data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    // A permission rejection must never be retried - matches useGetDataLakes' own rationale.
+    retry: false,
+    staleTime: 1000 * 60,
+    placeholderData: keepPreviousData,
+  });
+  const isForbidden =
+    isAxiosError(query.error) &&
+    (query.error.response?.status ?? 0) >= 400 &&
+    (query.error.response?.status ?? 0) < 500;
+  return { ...query, isForbidden };
 }

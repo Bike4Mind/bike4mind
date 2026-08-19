@@ -1,11 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository } from '@bike4mind/database';
-import { type AccessContext } from '@bike4mind/common';
+import { dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
-import { resolveActiveOrg } from '@server/dataLakes/resolveActiveOrg';
+import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 // The active account-switcher org (client-supplied) is the org a promotion targets. It is
 // authorization-validated (resolveActiveOrg) before use, so it can't scope a lake into an
@@ -14,13 +15,6 @@ import { resolveActiveOrg } from '@server/dataLakes/resolveActiveOrg';
 const VisibilityInput = z.object({
   visibility: z.enum(['private', 'organization', 'public']),
   organizationId: z.string().optional(),
-});
-
-const toCtx = (req: Request, organizationId: string | undefined): AccessContext => ({
-  userId: req.user.id,
-  isAdmin: !!req.user.isAdmin,
-  userTags: req.user.tags ?? [],
-  organizationId,
 });
 
 /**
@@ -39,16 +33,33 @@ const handler = baseApi()
     // Validate the client-supplied active org against the caller's memberships before it can
     // become a promotion target. On demotion to private this is a no-op (org ignored).
     const activeOrg = await resolveActiveOrg(req, organizationId);
-    const ctx = toCtx(req, activeOrg);
+    const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
 
     const result = await dataLakeService.setLakeVisibility(
-      { userId: ctx.userId, isAdmin: ctx.isAdmin, organizationId: ctx.organizationId },
+      // The promotion TARGET stays the per-request validated active org - a write input,
+      // not an authorization read (#1674). administeredOrgIds rides the shared context
+      // (toAccessContext resolves it once) for the org-manageable manage rung (#1668).
+      {
+        userId: ctx.userId,
+        isAdmin: ctx.isAdmin,
+        organizationId: activeOrg,
+        administeredOrgIds: ctx.administeredOrgIds,
+      },
       lake.id,
       visibility,
-      { db: { dataLakes: dataLakeRepository } }
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      }
     );
 
     return res.json(result);

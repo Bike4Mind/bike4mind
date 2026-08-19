@@ -24,7 +24,24 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { toggleTags: h.toggleTags },
 }));
 vi.mock('@bike4mind/database', () => ({
+  // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
+  // rather than omitted because this mock REPLACES the whole module: a missing export is an
+  // import-time failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeRepository: { name: 'dataLakes' },
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileRepository: { name: 'fabFiles' },
   fileTagRepository: { name: 'fileTags' },
   userRepository: { name: 'users' },
@@ -54,7 +71,19 @@ describe('POST /api/files/tags/toggle', () => {
 
     // Without this adapter the service cannot resolve a meta-tag to its lake, and the toggle
     // falls back to writing the tag as if it were an ordinary one.
-    expect(h.toggleTags).toHaveBeenCalledWith('u1', { ids: ['f1'], tags: ['datalake:lake'] }, expect.anything());
+    expect(h.toggleTags).toHaveBeenCalledWith(
+      'u1',
+      { ids: ['f1'], tags: ['datalake:lake'] },
+      expect.objectContaining({
+        // Named explicitly rather than expect.anything(): a toggle can flip a draft lake active,
+        // so dropping either audit adapter here would leave that transition unrecorded and still
+        // compile - `adminSettings` is optional, and the event repo degrades to writing nothing.
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      })
+    );
     expect(h.toggleTags.mock.calls[0][2].db.dataLakes).toEqual({ name: 'dataLakes' });
     expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
   });

@@ -34,6 +34,20 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
+  dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+}));
+
+// The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
+// entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
+// comes from req.user (never the body), preserving the security property the route depends on.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    entitlementKeys: [],
+    administeredOrgIds: [],
+  })),
 }));
 
 // Only the settings read is stubbed; checkStorageLimit and resolveSupportedMimeType are real
@@ -127,6 +141,17 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
 
     expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  // This route creates the FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates this namespace centrally - it needs its own
+  // check, same as the meta-tag one above.
+  it('refuses a non-admin self-applying a static-registry-prefixed tag (e.g. opti:)', async () => {
+    const { res } = makeRes();
+    await expect(run(body({ tags: [{ name: 'opti:report', strength: 1 }] }), res)).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });
 

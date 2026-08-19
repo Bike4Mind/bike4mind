@@ -15,17 +15,48 @@ import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePr
  * Returns null for an id the session is not allowed to activate, and for an unknown or
  * admin-disabled prompt - `ChatCompletionProcess` treats null as "no authored prompt".
  *
- * DELIBERATELY UNCACHED. This does two Mongo reads (`findByPromptId` + `getActiveContent`) per
- * call, and `ChatCompletionProcess` calls it once per turn for a session that has a
- * `systemPromptId`. That costs nothing today because no surface sets that field, so there is no hot
- * path to protect yet and a cache here would only add an admin-edit staleness window for no gain.
- * When a surface does start setting it, this becomes a per-turn double read and wants the same
- * treatment `loadBaseIdentitySystemPromptMessages` already applies for the identity prompt: a
- * short-TTL in-process cache, best-effort, correctness never depending on it (see the comment above
- * `identityPromptCache` in `systemPrompts/loader.ts`). Keyed by promptId rather than single-slot.
+ * CACHED, short-TTL, per-process. A surface now DOES set `session.systemPromptId` (a data lake's
+ * preferred prompt), so this runs on the per-turn completion path AND on the identity-suppression
+ * decision in `/api/ai/llm` - two Mongo reads (`findByPromptId` + `getActiveContent`) each. The
+ * cache, keyed by promptId, keeps a busy session from re-reading the same prompt every turn; an
+ * admin edit takes effect within the TTL. Mirrors `identityPromptCache` in `systemPrompts/loader.ts`
+ * (per-Lambda-container, best-effort, correctness never depends on it). A null result (disabled or
+ * unknown) is cached too, so a disabled prompt is not re-read every turn either.
  */
+const RESOLVED_PROMPT_CACHE_TTL_MS = 60_000;
+const resolvedPromptCache = new Map<string, { content: string | null; expiresAt: number }>();
+
+/** Test-only: drop the in-process cache so a mocked resolution in one test cannot leak into the next. */
+export const __resetResolvedPromptCache = (): void => resolvedPromptCache.clear();
+
 export const loadSystemPromptById = async (promptId: string): Promise<string | null> => {
   if (!isSessionActivatablePromptId(promptId)) return null;
+  const now = Date.now();
+  const cached = resolvedPromptCache.get(promptId);
+  if (cached && cached.expiresAt > now) return cached.content;
   const resolved = await loadSystemPromptContent(promptId);
-  return resolved?.content ?? null;
+  const content = resolved?.content ?? null;
+  resolvedPromptCache.set(promptId, { content, expiresAt: now + RESOLVED_PROMPT_CACHE_TTL_MS });
+  return content;
+};
+
+/**
+ * Will this session actually get an authored system prompt injected at completion time?
+ *
+ * The suppression decision in `/api/ai/llm` (skip the generic brand identity when the session
+ * carries its own prompt) MUST ask THIS, not mere allowlist membership. `systemPromptId` is a
+ * reference the completion path RESOLVES, and an allowlisted id whose registry record an admin has
+ * disabled - or a lake bound to a since-delisted id - resolves to null. Deciding suppression from
+ * membership alone would then suppress the identity AND inject nothing, leaving the session with no
+ * system prompt at all. Resolving here closes that: an unresolvable id reports false, so the caller
+ * injects the generic identity instead. Raw `systemPromptText` is authored by definition and needs
+ * no resolution (whitespace-only does not count, matching how the completion path reads it).
+ */
+export const sessionWillInjectAuthoredPrompt = async (session: {
+  systemPromptText?: string;
+  systemPromptId?: string;
+}): Promise<boolean> => {
+  if (session.systemPromptText?.trim()) return true;
+  if (!session.systemPromptId) return false;
+  return (await loadSystemPromptById(session.systemPromptId)) !== null;
 };

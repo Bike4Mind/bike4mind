@@ -7,7 +7,7 @@ import type {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { canManageLake } from './authorizeLakeWrite';
-import { resolveLakeMembership } from './lakeMembership';
+import { lakeMembershipSignals } from './lakeMembership';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
@@ -49,7 +49,7 @@ interface PurgeDataLakeDocumentAdapters {
  * from a clean one, and an exception carrying no counts tells them less than the receipt does.
  *
  * Lake creator or admin only, and only for a document the lake's read path actually admits
- * (`resolveLakeMembership`) - an id that is not a member 404s rather than being destroyed.
+ * (`lakeMembershipSignals`) - an id that is not a member 404s rather than being destroyed.
  */
 export const purgeDataLakeDocument = async (
   actor: { userId: string; isAdmin: boolean },
@@ -68,7 +68,7 @@ export const purgeDataLakeDocument = async (
   assertLakeWritable(lake);
 
   const file = await db.fabFiles.findById(fabFileId);
-  const { inLake } = resolveLakeMembership(lake, file);
+  const { inLake } = lakeMembershipSignals(lake, file);
   if (!file || !inLake) {
     throw new NotFoundError('File not found in this data lake');
   }

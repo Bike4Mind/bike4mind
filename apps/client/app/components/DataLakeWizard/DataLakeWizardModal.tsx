@@ -5,7 +5,13 @@ import { useDataLakeWizardStore, type OptionalSteps } from '@client/app/stores/u
 import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
-import { isReservedTagPrefix } from '@bike4mind/common';
+import {
+  hasBlankTagPrefixSegment,
+  isReservedTagPrefix,
+  submittedTagPrefix,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
+} from '@bike4mind/common';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -44,7 +50,11 @@ export default function DataLakeWizardModal() {
   const batchUpload = useBatchUpload();
 
   const STEP_ORDER = stepOrderFor({ optionalSteps });
-  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  // What the create request will carry, which is what every rule below judges - see
+  // submittedTagPrefix. The overlap lookup gets it too, or a colon-less entry silently
+  // matches no lake (normalizeTagPrefix drops it) and the collision goes unreported.
+  const effectivePrefix = submittedTagPrefix(config.tagPrefix);
+  const duplicatePrefixLake = useDuplicatePrefixLake(effectivePrefix, !!targetLake);
   const currentIndex = STEP_ORDER.indexOf(step);
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
@@ -61,16 +71,24 @@ export default function DataLakeWizardModal() {
       case 'preview':
         return allFiles.some(f => !f.excluded);
       case 'config':
-        // Append mode reuses the target lake's (already valid) slug; create mode must
-        // produce a slug the server will accept (slug.min(2)) before Start Upload enables.
-        // The prefix has to clear the server's reserved-namespace rule here too, or the whole
-        // upload fails at the final step.
-        // An overlapping prefix is refused by the server, so block here rather than failing the
-        // whole upload at the last step.
+        // Every rule the create endpoint enforces on identity is mirrored here, so a value it
+        // will refuse cannot reach Start Upload and fail the whole upload at the last step:
+        // slug.min(2), the prefix bounds, the reserved namespace, a blank ":" segment, and an
+        // overlap with another lake. Append mode reuses the target lake's (already valid) slug.
+        //
+        // The create-only rules are guarded with !targetLake: append inherits a STORED prefix
+        // the user cannot edit here, and a legacy lake predating a rule must not be locked out
+        // of its own uploads over a value this form cannot fix.
+        //
+        // Judged on the SUBMITTED prefix, not the field: useBatchUpload closes the value with
+        // ":" before POSTing, so 30 colon-less characters are 31 on arrival (refused) and a
+        // bare "a" is the legal "a:" (accepted). Sizing the field got both of those wrong.
         return (
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
-          config.tagPrefix.trim().length >= 2 &&
-          !isReservedTagPrefix(config.tagPrefix) &&
+          effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
+          !isReservedTagPrefix(effectivePrefix) &&
+          (!!targetLake ||
+            (effectivePrefix.length <= MAX_TAG_PREFIX_LENGTH && !hasBlankTagPrefixSegment(effectivePrefix))) &&
           !duplicatePrefixLake
         );
       case 'upload':

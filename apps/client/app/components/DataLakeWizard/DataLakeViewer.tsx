@@ -31,7 +31,7 @@ import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import type { IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
 import DataLakeTreeView, {
   UNCATEGORIZED_KEY,
   type DataLakeTreeChrome,
@@ -51,6 +51,9 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
   if (!file.tags) return [];
   return file.tags.map(t => t.name).filter(name => !name.startsWith('datalake:'));
 }
+
+/** Stable identity so a Set-typed prop doesn't churn every render when nothing is selected. */
+const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
 
 // DataLakeViewer
 
@@ -78,13 +81,20 @@ export default function DataLakeViewer({
 }: DataLakeViewerProps) {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
+  const selectedFileIds = useMemo(
+    () => (selectedFile ? new Set([selectedFile.id]) : EMPTY_SELECTED_IDS),
+    [selectedFile]
+  );
 
   const { data: filesResult, isLoading, isError } = useDataLakeFiles(dataLakeId);
   const articles = filesResult?.data ?? [];
 
   // Build tag tree from articles, filtering to only data lake-specific tags
   const tree = useMemo(() => {
-    const prefix = tagPrefix.endsWith(':') ? tagPrefix : tagPrefix + ':';
+    // Same helper the wizard's request-rule mirror uses, so trimming and colon-appending cannot
+    // drift between the two surfaces. `|| ':'` keeps an empty prefix matching nothing - every tag
+    // startsWith(''), which would pull unrelated tags into this lake's tree.
+    const prefix = submittedTagPrefix(tagPrefix) || ':';
     const tagCountMap = new Map<string, number>();
     for (const file of articles) {
       for (const tag of file.tags ?? []) {
@@ -139,7 +149,7 @@ export default function DataLakeViewer({
           tagPrefix={tagPrefix}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
-          selectedFileId={selectedFile?.id ?? null}
+          selectedFileIds={selectedFileIds}
           onSelectFile={handleSelectFile}
           isLoading={isLoading}
           isError={isError}
@@ -164,7 +174,7 @@ interface TreeSidebarProps {
   tagPrefix: string;
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
+  selectedFileIds: ReadonlySet<string>;
   onSelectFile: (file: IFabFileDocument) => void;
   isLoading: boolean;
   isError?: boolean;
@@ -176,7 +186,7 @@ function TreeSidebar({
   tagPrefix,
   breadcrumb,
   onNavigate,
-  selectedFileId,
+  selectedFileIds,
   onSelectFile,
   isLoading,
   isError,
@@ -184,7 +194,7 @@ function TreeSidebar({
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
-  const prefixNorm = tagPrefix.endsWith(':') ? tagPrefix : `${tagPrefix}:`;
+  const prefixNorm = submittedTagPrefix(tagPrefix) || ':';
   const uncategorizedFiles = useMemo(
     () =>
       [...articles]
@@ -290,7 +300,7 @@ function TreeSidebar({
       articles={articles}
       breadcrumb={breadcrumb}
       onNavigate={onNavigate}
-      selectedFileId={selectedFileId}
+      selectedFileIds={selectedFileIds}
       onSelectFile={onSelectFile}
       isLoading={isLoading}
       isError={isError}

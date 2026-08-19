@@ -31,7 +31,7 @@ export const USAGE_EVENT_FEATURES = [
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
 
-export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout'] as const;
+export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal'] as const;
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
@@ -50,6 +50,12 @@ export const UsageEvent = z.object({
   ownerId: z.string(),
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
+  /**
+   * Data lake this call is 1:1 attributable to (ingestion embeds only - a query
+   * embedding can span multiple lakes and is never attributed here). Unset for
+   * every other feature/call.
+   */
+  dataLakeId: z.string().optional(),
   feature: z.enum(USAGE_EVENT_FEATURES),
   /** Provider/backend, e.g. 'bedrock', 'openai', 'gemini'. */
   provider: z.string(),
@@ -198,6 +204,13 @@ export interface IOwnerUsageSummary {
   totals: IUsageSpendBucket;
 }
 
+/**
+ * Same rollup as IOwnerUsageSummary minus byMember: the data-lake spend view has no UI that
+ * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
+ * to any owner/curator/org-admin who can view a lake's spend.
+ */
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
+
 /** A member spend bucket with the user id resolved to a display name by the API. */
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
 
@@ -335,6 +348,171 @@ export interface ISessionUsageSummary {
   byModel: ISessionModelUsage[];
 }
 
+/**
+ * Filters for the admin Spend rollup. Date bounds map to `createdAt` as the half-open
+ * window `[from, to)` - the upper bound is exclusive so a window and the equal-length
+ * prior window before it (whose `to` is this window's `from`) don't both count an event
+ * at the shared instant. Omitting a field spans all. `userId`/`model` mirror the
+ * ModelMetrics user/model filters. Status is intentionally not a filter here: it would
+ * distort the error-rate KPI, which is derived from the same event set.
+ */
+export interface ISpendSummaryFilters {
+  from?: Date;
+  to?: Date;
+  userId?: string;
+  model?: string;
+}
+
+/** Spend for one credit holder (the account behind the events) over the window. */
+export interface ISpendAccountBucket extends IUsageSpendBucket {
+  ownerId: string;
+  ownerType: CreditHolderType;
+}
+
+/** COGS for one UTC day (Spend daily-cost line point). */
+export interface ISpendCostDay {
+  day: string; // YYYY-MM-DD (UTC)
+  cogsUsd: number;
+}
+
+/** p50/p95 request latency in ms over the window; 0 when no event carries latencyMs. */
+export interface ISpendLatency {
+  p50: number;
+  p95: number;
+}
+
+/**
+ * Request-outcome counts over the window. The error rate folds `errors` and
+ * `timeouts` together (both are failed calls); `refusals` are counted separately
+ * so a model refusal reads as its own rate rather than an error.
+ */
+export interface ISpendStatusCounts {
+  total: number;
+  errors: number;
+  timeouts: number;
+  refusals: number;
+}
+
+/**
+ * One window's spend rolled up every way the admin Spend tab needs it, in a
+ * single aggregation so all cuts reconcile against the same event set. `byModel`
+ * and `byAccount` are descending by cogsUsd (both are capped, and the tab ranks
+ * and truncates them by cost); `dailyCost` is ascending by day. p50/p95 latency
+ * and status counts are not available from the margin rollups, hence this
+ * dedicated summary. The API layer adds vs-prior deltas, owner-name resolution,
+ * and the client SpendData shape on top.
+ */
+export interface ISpendSummary {
+  totals: IUsageSpendBucket;
+  /** Distinct credit holders (ownerId) with at least one event in the window. */
+  activeAccounts: number;
+  latency: ISpendLatency;
+  status: ISpendStatusCounts;
+  byModel: IOwnerSpendModel[];
+  byAccount: ISpendAccountBucket[];
+  dailyCost: ISpendCostDay[];
+}
+
+/*
+ * Spend-tab wire contract. This is the shape GET /api/admin/spend returns and the
+ * admin Spend tab renders - the single source of truth shared by the handler and
+ * the client. The handler maps the raw ISpendSummary rollups (above) into this,
+ * layering display labels, formatting hints, and vs-prior deltas.
+ */
+
+/** How a KPI's raw numeric value should be rendered. */
+export type SpendKpiFormat = 'currency' | 'currencyPrecise' | 'number' | 'ms' | 'percent';
+
+/** Stable identifier for each KPI card so wiring can map query results by key. */
+export type SpendKpiKey =
+  | 'estCost'
+  | 'requests'
+  | 'costPerRequest'
+  | 'creditsUsed'
+  | 'activeAccounts'
+  | 'p50Latency'
+  | 'p95Latency'
+  | 'errorRate'
+  | 'refusalRate';
+
+export interface SpendKpi {
+  key: SpendKpiKey;
+  label: string;
+  /** Raw value for the current period; the component handles formatting. */
+  value: number;
+  /** Raw value for the immediately prior period, used to compute the delta. */
+  priorValue: number;
+  format: SpendKpiFormat;
+  /**
+   * Whether an increase is a good thing. Drives the delta color: cost/latency
+   * rising is bad (red), requests/credits rising is good (green).
+   */
+  higherIsBetter: boolean;
+}
+
+export interface SpendByAccountRow {
+  accountId: string;
+  accountName: string;
+  estCost: number;
+  requests: number;
+  creditsUsed: number;
+  costPerRequest: number;
+}
+
+export interface CostByModelRow {
+  modelId: string;
+  modelName: string;
+  estCost: number;
+  requests: number;
+  /** Share of total est. cost across all models, 0..1. */
+  share: number;
+}
+
+export interface DailyCostPoint {
+  /** ISO date, YYYY-MM-DD. */
+  date: string;
+  cost: number;
+}
+
+/** Default spend window (in days) when no explicit range is selected. */
+export const SPEND_DEFAULT_WINDOW_DAYS = 30;
+
+export interface SpendData {
+  /**
+   * Human label for the selected period, echoing the ControlPanel range. Formatted
+   * on the CLIENT in the viewer's local timezone (see spendPeriodLabels / useSpend),
+   * NOT part of the server payload: the handler only has UTC instants and never
+   * receives the caller's timezone, so a local-midnight range formatted server-side
+   * lands a day early east of UTC. See SpendServerPayload.
+   */
+  periodLabel: string;
+  /** Human label for the prior comparison period; client-formatted, see periodLabel. */
+  priorPeriodLabel: string;
+  /**
+   * Whether any events settled in the window. Authoritative empty-state signal
+   * so the tab does not have to infer it from whichever derived cut happens to be
+   * empty.
+   */
+  hasData: boolean;
+  /**
+   * True distinct credit-holder count in the window. `byAccount` is capped to the
+   * top spenders, so the tab compares this against `byAccount.length` to tell when
+   * the table is partial.
+   */
+  activeAccounts: number;
+  kpis: SpendKpi[];
+  byAccount: SpendByAccountRow[];
+  byModel: CostByModelRow[];
+  dailyCost: DailyCostPoint[];
+}
+
+/**
+ * What GET /api/admin/spend actually returns. The tz-local period labels are added
+ * by the client (they can't be formatted server-side, and are omitted from the 12h
+ * response cache so a label can't leak across callers in different timezones).
+ */
+export type SpendServerPayload = Omit<SpendData, 'periodLabel' | 'priorPeriodLabel'>;
+
 /** One model's slice of an agent execution's iteration billing. */
 export interface ISessionAgentModelUsage {
   model: string;
@@ -380,6 +558,14 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   /** Monthly COGS per provider for invoice reconciliation, newest month first. */
   monthlyCogsByProvider(): Promise<IProviderMonthCogs[]>;
 
+  /**
+   * Spend rollup for the admin Spend tab over a bounded window, honoring optional
+   * user/model filters, in a single aggregation. Includes p50/p95 latency and
+   * status-outcome counts (neither available from the margin rollups). Call once
+   * per window (current + prior) to build vs-prior KPI deltas.
+   */
+  spendSummary(filters?: ISpendSummaryFilters): Promise<ISpendSummary>;
+
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
 
@@ -418,4 +604,14 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * to an org they can access (session-usage detail authorization).
    */
   sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean>;
+
+  /**
+   * One data lake's ledgered spend (ingestion embeds only, see `dataLakeId` on
+   * UsageEvent) rolled up by day, model, and feature, over the trailing N days
+   * (default 30). Same $facet shape as `ownerUsageSummary` minus byMember - a lake
+   * is just a different $match key over the same event set, but the owner-facing
+   * spend view has no use for raw per-uploader userIds. Powers the owner-facing
+   * data-lake spend view.
+   */
+  lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
 }

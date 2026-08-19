@@ -38,11 +38,16 @@ vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: { shareable: { findAccessibleById } },
 }));
 
-vi.mock('@bike4mind/common', () => ({
-  Permission: { update: 'update' },
-  // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
-  NotFoundError: class NotFoundError extends Error {},
-}));
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    Permission: { update: 'update' },
+    // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
+    NotFoundError: class NotFoundError extends Error {},
+    // Real implementation: the redaction test below verifies the actual behavior, not a stub.
+    redactPromptMetaForViewer: actual.redactPromptMetaForViewer,
+  };
+});
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -58,9 +63,9 @@ import {
   stopReply,
   forkSession,
   snipSession,
-  cloneSession,
   summarizeSession,
   contextSummarizeSession,
+  getMessagesFromSession,
 } from './sessionOperations';
 import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
 import type { Ability } from '@server/auth/ability';
@@ -78,6 +83,55 @@ describe('sessionOperations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     SessionMock.updateOne.mockResolvedValue(undefined);
+  });
+
+  describe('getMessagesFromSession', () => {
+    // A Mongoose Query mock: skip/limit/sort mutate-and-return-this, and the object itself is
+    // awaitable (thenable), matching how the real code chains then `await`s the query.
+    const chainableFind = (docs: unknown[]) => {
+      const query = {
+        skip: () => query,
+        limit: () => query,
+        sort: () => query,
+        then: (resolve: (v: unknown[]) => void) => resolve(docs),
+      };
+      return query;
+    };
+
+    const questWithFunctionCalls = (returnValue: string) => ({
+      toJSON: () => ({
+        id: 'q1',
+        promptMeta: {
+          functionCalls: [{ name: 'web_search', parameters: {}, id: 'call_1', returnValue, success: true }],
+        },
+      }),
+    });
+
+    it('returns functionCalls untouched for the session owner', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithFunctionCalls('private tool output')]));
+
+      const { data } = await getMessagesFromSession({ id: 'owner-1' } as never, 's1', undefined, { all: true });
+
+      expect(JSON.stringify(data)).toContain('private tool output');
+    });
+
+    it('strips functionCalls[].returnValue for a non-owner viewer (shared-session read)', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithFunctionCalls('private tool output')]));
+
+      const { data } = await getMessagesFromSession({ id: 'sharee-2' } as never, 's1', undefined, { all: true });
+
+      expect(JSON.stringify(data)).not.toContain('private tool output');
+      // name/id/success must survive - only returnValue/error are owner-only.
+      expect(JSON.stringify(data)).toContain('web_search');
+      expect(JSON.stringify(data)).toContain('call_1');
+    });
+
+    it('throws NotFoundError when the session is not accessible', async () => {
+      findAccessibleById.mockResolvedValueOnce(null);
+      await expect(getMessagesFromSession({ id: 'u1' } as never, 's1')).rejects.toThrow('Session not found');
+    });
   });
 
   describe('addMessageToSession', () => {
@@ -192,30 +246,6 @@ describe('sessionOperations', () => {
 
       expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Snipped Orig' }, ability);
       expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $gte: expect.any(Date) } });
-    });
-  });
-
-  describe('cloneSession', () => {
-    it('rejects when the ability lacks the clone permission', async () => {
-      const denyAbility = mockAbility(false);
-      await expect(cloneSession('s1', 'admin-1', denyAbility)).rejects.toThrow(
-        'User does not have permission to clone sessions'
-      );
-    });
-
-    it('clones the session under the admin user and copies all messages', async () => {
-      const newSession = { id: 'clone-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ name: 'Orig', knowledgeIds: ['k'], tags: ['t'] });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([{ toObject: () => ({ _id: 'm1', id: 'm1', prompt: 'x' }) }]);
-      SessionMock.findOne.mockResolvedValue({ id: 'clone-1', lastUpdated: new Date(0) });
-      QuestMock.create.mockResolvedValue({ id: 'copied' });
-
-      const result = await cloneSession('s1', 'admin-1', ability);
-
-      expect(createSessionMock).toHaveBeenCalledWith('admin-1', { name: 'Cloned Orig', knowledgeIds: ['k'] }, ability);
-      expect(QuestMock.create).toHaveBeenCalledWith({ prompt: 'x', sessionId: 'clone-1' });
-      expect(result).toBe(newSession);
     });
   });
 

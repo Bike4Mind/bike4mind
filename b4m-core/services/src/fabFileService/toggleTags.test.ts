@@ -40,7 +40,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
           doc.tags.push(...toAdd.map(name => ({ name, strength })));
           return toAdd.length;
         }),
-        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99 }),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 }),
       },
       fileTags: { touchLastActivityBy: vi.fn() },
       dataLakes: {
@@ -170,11 +170,19 @@ describe('toggleTags - data lake meta-tags', () => {
   it('recomputes the lake stats in both directions', async () => {
     const leaving = makeAdapters([file('f1', [{ name: 'datalake:lake', strength: 1 }])]);
     await run(leaving, { ids: ['f1'], tags: ['datalake:lake'] });
-    expect(leaving.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(leaving.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
 
     const joining = makeAdapters([file('f1')]);
     await run(joining, { ids: ['f1'], tags: ['datalake:lake'] });
-    expect(joining.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(joining.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   it('activates a draft lake the toggle just added a file to (#1342)', async () => {
@@ -251,8 +259,27 @@ describe('toggleTags - data lake meta-tags', () => {
   it('refuses a lake the caller cannot manage', async () => {
     const adapters = makeAdapters([file('f1')], lake({ createdByUserId: 'someone-else' }));
 
-    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(/only the creator/i);
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /do not have permission to add/i
+    );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+    // A rejected join must not still trigger recomputeLakeStats - that would let a mere file-share
+    // recipient force-publish a draft lake they have no relationship to via activateIfDraft.
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+  });
+
+  it('refuses to leave a lake the caller cannot manage, without recomputing stats', async () => {
+    const adapters = makeAdapters(
+      [file('f1', [{ name: 'datalake:lake', strength: 1 }])],
+      lake({ createdByUserId: 'someone-else' })
+    );
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /do not have permission to remove/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
   it('treats a concurrent removal as the outcome the caller asked for', async () => {
@@ -379,7 +406,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
     expect(adapters.store.get('f1')?.tags).toEqual([]);
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   it('refuses a non-manager actor before any write in the batch', async () => {
@@ -388,7 +419,7 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
     await expect(runAs('editor', adapters, { ids: ['f1'], tags: ['lk:invoices'] })).rejects.toThrow(
-      /only the creator can remove/i
+      /do not have permission to remove/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
@@ -403,7 +434,7 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
     await expect(runAs('editor', adapters, { ids: ['f1', 'f2'], tags: ['unrelated', 'lk:invoices'] })).rejects.toThrow(
-      /only the creator can remove/i
+      /do not have permission to remove/i
     );
     // f1's unrelated-tag toggle never ran either - the gate for the WHOLE batch fires up front.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
@@ -432,22 +463,32 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     // 'owner' both owns the file (file()'s default) and manages the lake (lake()'s default).
     await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
-  // stats recompute also flips a draft lake to active (recomputeLakeStats -> activateIfDraft) - a
-  // one-way publication change a mere file-share recipient must not be able to force onto a lake
-  // they do not manage.
-  it('does not recompute stats on a prefix-arm join by an actor who cannot manage the lake', async () => {
-    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }]);
-    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner' })]);
+  // stats recompute's activation side effect also flips a draft lake to active - a one-way
+  // publication change a mere file-share recipient must not be able to force onto a lake they do
+  // not manage. Stats still get corrected (so they don't drift forever), just never the
+  // activation.
+  it('corrects stats but never activates on a prefix-arm join by an actor who cannot manage the lake', async () => {
+    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }], lake({ status: 'draft' }));
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner', status: 'draft' })]);
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
     const runAs = (userId: string, params: unknown) => toggleTags(userId, params, adapters as any);
     await runAs('editor', { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
   it('recomputes a shared lake once for a batch where every file leaves it', async () => {
@@ -491,7 +532,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
 
     await runAs('admin', adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   it('issues no extra dataLakes.find when no requested tag has a colon', async () => {
@@ -518,7 +563,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     // leave prediction - the lake's prefix tag is still the thing being evaluated.
     await run(adapters, { ids: ['f1'], tags: ['FOO', 'lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
     expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual([]);
   });
 
@@ -533,6 +582,51 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     });
 
     await expect(run(adapters, { ids: ['f1'], tags: ['lk:invoices'] })).resolves.toBeDefined();
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
+  });
+});
+
+describe('toggleTags - static-registry prefix (e.g. opti:), no owning lake document', () => {
+  const runAs = (userId: string, adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
+    toggleTags(userId, params, adapters as any);
+
+  it('refuses a non-admin newly applying a registry-prefixed tag, before any write', async () => {
+    const adapters = makeAdapters([file('f1')]);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['opti:report'] })).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin to apply a registry-prefixed tag', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await runAs('admin', adapters, { ids: ['f1'], tags: ['opti:report'] });
+
+    expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual(['opti:report']);
+  });
+
+  it('allows a non-admin to remove a legacy registry-prefixed tag already on the file', async () => {
+    const adapters = makeAdapters([file('f1', [{ name: 'opti:report', strength: 0 }])]);
+
+    await run(adapters, { ids: ['f1'], tags: ['opti:report'] });
+
+    expect(adapters.store.get('f1')?.tags).toEqual([]);
+  });
+
+  it('refuses the whole batch when one file would newly join, even if another is only leaving', async () => {
+    const adapters = makeAdapters([file('f1', [{ name: 'opti:existing', strength: 0 }]), file('f2')]);
+
+    await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['opti:existing', 'opti:new'] })).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
 });

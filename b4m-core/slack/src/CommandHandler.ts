@@ -513,6 +513,10 @@ export class CommandHandler {
           type: KnowledgeType.FILE,
           status: 'complete',
           sourceType: FabFileSourceType.SLACK,
+          // Same origin pair the data-lake ingest stamps, so an attachment that arrived through the
+          // plain path is auditable the same way rather than only being labelled "from Slack".
+          // `channel` is '' on an event that carries none; the field is Mixed, so it round-trips.
+          sourceMetadata: { channel: this.slackEvent.channel, messageTs: this.slackEvent.ts },
         });
 
         const fabFileIdStr = fabFile._id.toString();

@@ -55,6 +55,9 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
     adminUserIds: [],
     users: [],
     seats: validatedParams.seats,
+    // Records the acting caller's email (the human who issued the create), deliberately NOT the
+    // billing owner used for `userId`/`userDetails` above: on an on-behalf create this is the admin
+    // to reach about the request, while usage/billing tracks the owner.
     billingContact: user.email!,
     // Seed the credit side-table for the billing OWNER (not the acting caller), so an on-behalf
     // create tracks the member the org actually bills. Keep in sync with `users[]` at every grant

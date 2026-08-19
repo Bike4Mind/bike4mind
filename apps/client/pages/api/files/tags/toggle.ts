@@ -2,8 +2,14 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -27,7 +33,7 @@ const handler = baseApi().post(
       { userId: req.user.id, isAdmin: !!req.user.isAdmin },
       toggledTags,
       {
-        db: { dataLakes: dataLakeRepository },
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       }
     );
 
@@ -36,7 +42,9 @@ const handler = baseApi().post(
         fabFiles: fabFileRepository,
         fileTags: fileTagRepository,
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
+        ...lakeConfigAuditDb,
       },
       logger: req.logger,
     });

@@ -581,14 +581,26 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
-      // Update the user's last notebook ID if it's a different session
+      // Fire-and-forget on purpose: lastNotebookId feeds API chat routing (getSessionId in
+      // pages/api/chat.ts), session resumption, and Slack notebook resolution (notebook-manager
+      // in b4m-core/slack, which only ever reads it - a lost write is repaired by the next
+      // web-app message, never by a Slack one). Awaiting would hold up the switch, and a toast
+      // would interrupt a path the user is actively navigating.
       if (sessionId && currentUser.lastNotebookId !== sessionId) {
-        updateUserToServer(currentUser.id, { lastNotebookId: sessionId });
+        updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
+          console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
+        });
         queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
       }
     },
     [currentSessionId, currentUser?.id, queryClient, currentUser?.lastNotebookId, setWorkBenchFiles, initializeSession]
   );
+
+  // Whether the context's session copy can be BELIEVED about having no knowledge files: every
+  // full document carries the array (the schema defaults it to []), so a missing field marks a
+  // partial copy that must not drive a workbench reset. A boolean, so the hydration effect's
+  // cadence stays keyed to knowledgeIds identity rather than to every session-object touch.
+  const knowledgeFieldTrustworthy = !currentSession || Array.isArray(currentSession.knowledgeIds);
 
   // Usage in useEffect for initial fetch
   useEffect(() => {
@@ -606,10 +618,14 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
           setWorkBenchFiles(sessionId, fetched);
         })
         .catch(console.error);
-    } else if (currentSessionId) {
+    } else if (currentSessionId && knowledgeFieldTrustworthy) {
+      // Zero the workbench only when the emptiness is trustworthy (see the flag above): a doc
+      // with the field missing is a partial copy - e.g. the session.created fanout payload,
+      // which can adopt the session before the create response does - and zeroing on it wipes
+      // files the store legitimately holds (the Data Lake mint writes the opened file there).
       setWorkBenchFiles(currentSessionId, []);
     }
-  }, [currentSession?.knowledgeIds, fetchFiles, currentSessionId, setWorkBenchFiles]);
+  }, [currentSession?.knowledgeIds, fetchFiles, currentSessionId, setWorkBenchFiles, knowledgeFieldTrustworthy]);
 
   // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research and QuestMaster when SWITCHING notebooks (A->B)
   // This prevents accidental expensive operations when users change context

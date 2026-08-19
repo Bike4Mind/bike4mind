@@ -89,6 +89,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   dataLakeRepository: {},
+  lakeAccessEventRepository: {},
 }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
@@ -152,8 +153,8 @@ beforeEach(() => {
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
   mockUserFindById.mockResolvedValue({ id: 'user-1', groups: [] });
-  // Org membership lives on the org doc (userDetails), not the user doc.
-  mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', userDetails: [] });
+  // Org membership lives on the org doc's authoritative users[] ACL, not the user doc.
+  mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', users: [] });
   mockHydrate.mockReturnValue({
     model: 'test-model',
     systemPrompt: 'AGENT PERSONA PROMPT',
@@ -607,14 +608,17 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(deps.kbScope).toEqual({ fileIds: [] });
   });
 
-  it('an org-owned agent accepts a project owned by an org TEAMMATE (org-scoped grant)', async () => {
+  it('an org-owned agent accepts a project owned by an org TEAMMATE present only in the authoritative users[] (no userDetails row yet)', async () => {
     hydrateWith();
     mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-TEAMMATE', fileIds: ['f9'], deletedAt: null });
     mockOrgFindById.mockResolvedValue({
       id: 'org-1',
       currentCredits: 100,
       userId: 'admin-1',
-      userDetails: [{ id: 'user-TEAMMATE' }],
+      // Membership is the authoritative users[] ACL. userDetails (credit side-table) is empty
+      // for this teammate - reading it would wrongly deny KB scope (the pre-fix bug).
+      users: [{ userId: 'user-TEAMMATE' }],
+      userDetails: [],
     });
     await post(CHAT);
 
@@ -629,7 +633,7 @@ describe('POST /api/embed/chat - server-side tools', () => {
       id: 'org-1',
       currentCredits: 100,
       userId: 'admin-1',
-      userDetails: [{ id: 'user-1' }], // user-FOREIGN is not a member
+      users: [{ userId: 'user-1' }], // user-FOREIGN is not a member
     });
     await post(CHAT);
 
@@ -645,7 +649,7 @@ describe('POST /api/embed/chat - server-side tools', () => {
       id: 'org-1',
       currentCredits: 100,
       userId: 'admin-1',
-      userDetails: [{ id: 'user-TEAMMATE' }],
+      users: [{ userId: 'user-TEAMMATE' }],
     });
     await post(CHAT);
 

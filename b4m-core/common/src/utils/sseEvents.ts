@@ -106,7 +106,12 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   };
 
   if (info?.toolsUsed && info.toolsUsed.length > 0) {
-    event.tools = info.toolsUsed;
+    // Project rather than pass the array through by reference: toolsUsed is re-emitted on
+    // every streaming callback (not just the terminal one), and once a backend attaches a
+    // returnValue (up to several KB, see recordToolResult) that reference would put the full
+    // tool output on every SSE frame. SSEContentEvent.tools is the declared wire contract and
+    // stays narrow regardless of what CompletionInfo.toolsUsed later grows.
+    event.tools = info.toolsUsed.map(t => ({ name: t.name, arguments: t.arguments, id: t.id }));
   }
 
   if (

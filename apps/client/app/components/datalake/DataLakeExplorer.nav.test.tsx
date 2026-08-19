@@ -22,6 +22,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isError: false,
   }),
   useGetDataLakeArticles: () => ({ data: { data: [] }, isLoading: false }),
+  useGetDataLakes: () => ({ data: [] }),
+  useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({

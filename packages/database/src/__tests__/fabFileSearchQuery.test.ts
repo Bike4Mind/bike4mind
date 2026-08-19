@@ -271,6 +271,24 @@ describe('buildFabFileSearchQuery', () => {
       expect(conditions).toHaveLength(4);
     });
 
+    describe('excludePersonalShares', () => {
+      it('drops the personal-share arm, keeping only the owned-file arm', () => {
+        const conditions = buildOwnershipConditions('user1', { excludePersonalShares: true });
+        expect(conditions).toEqual([{ userId: 'user1' }]);
+      });
+
+      it('keeps the group arm when userGroups is also set', () => {
+        const conditions = buildOwnershipConditions('user1', {
+          excludePersonalShares: true,
+          userGroups: ['g1'],
+        });
+        expect(conditions).toEqual([
+          { userId: 'user1' },
+          { groups: { $elemMatch: { groupId: { $in: ['g1'] }, permissions: { $in: ['read', 'write'] } } } },
+        ]);
+      });
+    });
+
     // ── Cross-tenant leak guard ──────────────────────────────
     // OPEN prefixes (static registry: opti:/acme:) are an ownership bypass by design
     // (shared KB). SCOPED prefixes (dynamic, user-created lakes) must be matched ONLY

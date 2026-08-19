@@ -69,6 +69,18 @@ export interface ResolveToolAvailabilityOptions {
    */
   onLookupError?: 'available' | 'unavailable';
   logger?: Pick<Logger, 'warn'>;
+  /**
+   * Already-resolved effective LLM keys, for a caller that fetched them for its own reasons anyway
+   * (the agent executor needs the table to build its backend). Supplying them skips the identical
+   * internal `getEffectiveLLMApiKeys` read instead of issuing it twice per request. Omitted -> this
+   * function fetches them itself, which is the behavior every other caller relies on.
+   *
+   * NOTE the taint difference: an internal fetch that throws marks `llmKeys` tainted, so
+   * `search_knowledge_base` follows `onLookupError`. An injected value cannot be tainted - the
+   * caller already awaited it, so a failure there surfaced in the caller instead of here. Both are
+   * correct, but they are not the same code path; do not assume one exercises the other.
+   */
+  llmKeys?: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>> | null;
 }
 
 type Taint = Partial<
@@ -125,7 +137,7 @@ export async function resolveToolAvailability(
   adapters: { db: GetEffectiveLLMApiKeysAdapters['db'] },
   options: ResolveToolAvailabilityOptions = {}
 ): Promise<ToolAvailability> {
-  const { onLookupError = 'available', logger } = options;
+  const { onLookupError = 'available', logger, llmKeys: injectedLlmKeys } = options;
 
   try {
     const dbAdapters = { db: adapters.db, getSettingsByNames };
@@ -153,8 +165,13 @@ export async function resolveToolAvailability(
       // Deep Research uses Firecrawl (key OR self-hosted URL) - mirror the tool's own resolver.
       getFirecrawlConfig(dbAdapters),
       // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
-      // so matching its self-host env fallback here is correct.
-      userId ? getEffectiveLLMApiKeys(userId, dbAdapters) : Promise.resolve(null),
+      // so matching its self-host env fallback here is correct. A caller that already holds the
+      // table (see `options.llmKeys`) hands it over rather than paying for the identical read twice.
+      injectedLlmKeys !== undefined
+        ? Promise.resolve(injectedLlmKeys)
+        : userId
+          ? getEffectiveLLMApiKeys(userId, dbAdapters)
+          : Promise.resolve(null),
       userId
         ? Promise.all(imageProviders.map(type => getEffectiveApiKey(userId, { type }, dbAdapters)))
         : Promise.resolve<(string | undefined)[]>([]),

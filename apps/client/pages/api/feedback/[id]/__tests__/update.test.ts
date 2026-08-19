@@ -48,7 +48,10 @@ function mocks(can: (action: string, subject: unknown) => boolean) {
 describe('PUT /api/feedback/[id] - instance-level authorization', () => {
   beforeEach(() => {
     model.findById.mockResolvedValue(feedbackDoc);
-    model.findOneAndUpdate.mockResolvedValue({ ...feedbackDoc, content: 'edited' });
+    const updatedFeedbackDoc = { ...feedbackDoc, content: 'edited' };
+    // findOneAndUpdate returns a hydrated Mongoose document in production; the route calls
+    // .toJSON() on it before redacting, so the mock needs that method too.
+    model.findOneAndUpdate.mockResolvedValue({ ...updatedFeedbackDoc, toJSON: () => updatedFeedbackDoc });
     model.findOneAndUpdate.mockClear();
   });
 
@@ -73,5 +76,22 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     await mockRefs.putHandler!(req, res);
     expect(model.findOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('redacts functionCalls[].returnValue in the response, the same as GET /api/feedback', async () => {
+    const promptMeta = {
+      functionCalls: [
+        { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
+      ],
+    };
+    const updatedFeedbackDoc = { ...feedbackDoc, content: 'edited', promptMeta };
+    model.findOneAndUpdate.mockResolvedValue({ ...updatedFeedbackDoc, toJSON: () => updatedFeedbackDoc });
+
+    const { req, res } = mocks(() => true);
+    await mockRefs.putHandler!(req, res);
+
+    const body = JSON.stringify(res._getJSONData());
+    expect(body).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(body).toContain('web_search');
   });
 });
