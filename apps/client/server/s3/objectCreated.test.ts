@@ -161,7 +161,18 @@ describe('objectCreated - upload status is recorded independently of post-proces
 
     await run();
 
-    expect(h.updateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { status: 'complete' } });
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+  });
+
+  it('recomputes the lakes the file joined even when the owner lookup fails', async () => {
+    h.userFindById.mockReturnValue({ session: () => null });
+
+    await run();
+
+    expect(h.recomputeUploaded).toHaveBeenCalledWith(file, { logger });
   });
 
   it("marks the file 'complete' before a moderation scan that throws", async () => {
@@ -169,13 +180,19 @@ describe('objectCreated - upload status is recorded independently of post-proces
 
     await expect(run()).rejects.toThrow('Rekognition unavailable');
 
-    expect(h.updateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { status: 'complete' } });
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
   });
 
   it('marks the file complete on the happy path and leaves the moderation verdict on the record', async () => {
     await run();
 
-    expect(h.updateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { status: 'complete' } });
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
     expect(file.status).toBe('complete');
     expect(file.moderationStatus).toBe('clean');
     expect(file.save).toHaveBeenCalled();
