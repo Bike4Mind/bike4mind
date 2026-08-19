@@ -2,24 +2,19 @@ import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepos
 import { NotFoundError } from '@bike4mind/utils';
 import { removeFileFromLake, type MembershipActor } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
-import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
-interface RemoveFileFromDataLakeAdapters {
-  db: {
+interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
+  // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
+  // rather than merely spread at the route because the type is the only place the requirement is
+  // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
+  // at the call site is never checked against this shape and dropping it still compiles. The route
+  // test is what actually catches that; this keeps the contract honest for a reader.
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
-  /** Forwarded into the stats recompute so an audit-write failure there is logged at `error` like
-   *  every other config-write path, instead of falling through to a bare console.error. Removing a
-   *  file can still reach activateIfDraft's draft->active flip, so this call site really can emit an
-   *  audit row - it is not merely parity with its siblings.
-   *
-   *  That only holds while the CALLER also supplies `db.lakeConfigChangeEvents`: without it
-   *  `recordLakeConfigChange` returns at its own guard, no event is attempted, and this logger has
-   *  nothing to report. The route spreads `lakeConfigAuditDb` for exactly that reason, and a test
-   *  there pins it - a test in this package cannot, since its fixture supplies the repos itself. */
-  logger?: LakeConfigAuditLogger;
 }
 
 /**
