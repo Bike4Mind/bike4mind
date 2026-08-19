@@ -1,4 +1,4 @@
-import { IChatHistoryItemDocument, ISessionDocument } from '@bike4mind/common';
+import { IChatHistoryItemRepository, ISessionRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -11,13 +11,8 @@ type DeleteSessionMessageParams = z.infer<typeof deleteSessionMessageSchema>;
 
 interface DeleteSessionMessageAdapters {
   db: {
-    sessions: {
-      findByIdAndUserId: (id: string, userId: string) => Promise<ISessionDocument | null>;
-    };
-    chatHistories: {
-      findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
-      update: (value: IChatHistoryItemDocument) => Promise<unknown>;
-    };
+    sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
+    chatHistories: Pick<IChatHistoryItemRepository, 'findBySessionIdAndId' | 'update'>;
   };
 }
 
