@@ -113,6 +113,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         <Box sx={{ mt: 2 }}>
           <Typography level="h3">Please give us as much information as possible to improve your experience.</Typography>
           <Textarea
+            slotProps={{ textarea: { 'data-testid': 'bug-report-modal-content-textarea' } }}
             minRows={10}
             value={bugReport || ''}
             onChange={e => setBugReport(e.target.value)}
@@ -129,10 +130,10 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
           <Typography level="body-xs">{JSON.stringify(promptMeta, null, 2)}</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 2 }}>
-          <Button onClick={onClose} variant="outlined">
+          <Button data-testid="bug-report-modal-cancel-btn" onClick={onClose} variant="outlined">
             Cancel
           </Button>
-          <Button onClick={handleSubmit} variant="solid">
+          <Button data-testid="bug-report-modal-submit-btn" onClick={handleSubmit} variant="solid">
             Submit
           </Button>
         </Box>
