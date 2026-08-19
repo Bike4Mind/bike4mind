@@ -298,9 +298,12 @@ describe('useCleanupDataLake queued purge', () => {
 
   it('stays gone when a sibling mutation refetches the list before the sweep has run', async () => {
     // The realistic trigger: every other lake mutation invalidates dataLakeKeys.list, which
-    // prefix-matches this key, and re-expanding the section refetches too. The server still lists
-    // the lake for the whole sweep window, so the cache write alone would be undone here.
-    apiGet.mockResolvedValue(listing('lk5', 'lk6'));
+    // prefix-matches this key, and re-expanding the section refetches too. Since #1744 the accept
+    // claims 'purging' BEFORE the route answers, so any refetch that starts after the mutation
+    // resolves answers WITHOUT the lake - the row stays gone because the server says so, which is
+    // what makes this survivable without the client map.
+    apiGet.mockResolvedValueOnce(listing('lk5', 'lk6'));
+    apiGet.mockResolvedValue(listing('lk6'));
     const { result, queryClient } = mountPurgeSurface();
     await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
 
@@ -354,10 +357,11 @@ describe('useCleanupDataLake queued purge', () => {
     expect(result.current.deleted.data).toEqual([]);
   });
 
-  it('does not prune on a response from a request that predates the purge', async () => {
-    // The prune must only trust a request that STARTED after the purge. An older one can be missing
-    // the lake for an unrelated reason (it predates the soft-delete), and pruning on it would
-    // un-hide a row whose sweep has not run.
+  it('filters a response from a request that predates the purge, and does not prune on it', async () => {
+    // The map's ONE remaining job since #1744, and the only case the server cannot cover: a fetch
+    // that STARTED before the accept and lands after it, carrying a payload that still names the
+    // lake because the server had not claimed 'purging' yet when it was taken. That response must
+    // be filtered and must NOT prune - it settles nothing about the sweep.
     let releaseStale = (_value: unknown) => {};
     const stale = new Promise(resolve => {
       releaseStale = resolve;
@@ -367,10 +371,11 @@ describe('useCleanupDataLake queued purge', () => {
     const { result, queryClient } = mountPurgeSurface();
     await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
 
-    // In-flight fetch that will answer WITHOUT lk11 - as if taken before lk11 was soft-deleted.
+    // In-flight fetch taken BEFORE the purge, so it still lists lk11 the way the pre-accept server
+    // would have answered.
     apiGet.mockImplementationOnce(async () => {
       await stale;
-      return listing('lk12');
+      return listing('lk11', 'lk12');
     });
     act(() => {
       void queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
@@ -385,15 +390,9 @@ describe('useCleanupDataLake queued purge', () => {
       await settle();
     });
 
-    // lk11 must still be suppressed: a later fetch that DOES list it keeps the row hidden.
-    apiGet.mockResolvedValue(listing('lk11', 'lk12'));
-    await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: ['data-lakes', 'deleted'] });
-    });
-    // Settle before asserting: waitFor would pass instantly against the pre-render snapshot, which
-    // makes the assertion unfailable (it did, until this was caught).
-    await settle();
-    expect(deletedFetchCount()).toBe(3);
+    // Filtered on arrival, and the id is still tracked: pruning on a pre-purge request would have
+    // un-hidden a row whose purge had only just been accepted.
+    expect(deletedFetchCount()).toBe(2);
     expect(result.current.deleted.data).toEqual([deletedLake('lk12')]);
   });
 
