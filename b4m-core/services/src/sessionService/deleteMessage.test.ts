@@ -33,8 +33,8 @@ describe('deleteSessionMessage', () => {
     expect(db.chatHistories.update).not.toHaveBeenCalled();
   });
 
-  // Regression: update() previously had its return value ignored entirely, so a race where the
-  // message vanished between the read and the write would still report success.
+  // Regression: update()'s return value was previously ignored entirely, so a write that matched
+  // nothing (however that happens - update() has no way to know why) would still report success.
   it('throws NotFoundError when update() finds nothing to update', async () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', deletedAt: null });

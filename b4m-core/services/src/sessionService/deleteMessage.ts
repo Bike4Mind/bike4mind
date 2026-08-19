@@ -31,9 +31,10 @@ export const deleteSessionMessage = async (
 
   message.deletedAt = new Date();
 
-  // Only reachable if the message was deleted between the findBySessionIdAndId check above and
-  // this update (or update() encounters some other unmatched-document case) - report it as a real
-  // failure rather than reporting success on a write that touched nothing.
+  // update() matches by _id alone and can return null if nothing matched. Quest documents are
+  // normally only soft-deleted, but notebookImportComplete.ts's session-replace flow does hard
+  // delete matching rows, so this guards a narrow real race rather than dead code - report it as
+  // a real failure rather than success on a write that touched nothing.
   const updated = await db.chatHistories.update(message);
   if (!updated) throw new NotFoundError('Message not found');
 
