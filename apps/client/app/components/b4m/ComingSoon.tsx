@@ -18,14 +18,20 @@ const ComingSoon = () => {
       return;
     }
 
-    await createFeedbackOnServer({
-      userId: 'Unknown',
-      userEmail: email,
-      tags: ['comingSoon', 'marketing'],
-      status: FeedbackStatus.New,
-    });
+    try {
+      await createFeedbackOnServer({
+        userId: 'Unknown',
+        content: 'Coming soon signup',
+        username: email,
+        userEmail: email,
+        tags: ['comingSoon', 'marketing'],
+        status: FeedbackStatus.New,
+      });
 
-    toast.success('Thank you! You will be notified when we launch.');
+      toast.success('Thank you! You will be notified when we launch.');
+    } catch {
+      toast.error('Something went wrong. Please try again.');
+    }
   };
 
   return (
