@@ -42,6 +42,14 @@ function joinWithOverflow(items: string[], max: number): string {
   return overflow > 0 ? `${shown.join(', ')}, +${overflow} more` : shown.join(', ');
 }
 
+/** `text.slice(0, max)`, but drops a trailing lone UTF-16 high surrogate rather than
+ * splitting a surrogate pair (which would render as a replacement character). */
+function truncateSafely(text: string, max: number): string {
+  const sliced = text.slice(0, max);
+  const lastCode = sliced.charCodeAt(sliced.length - 1);
+  return lastCode >= 0xd800 && lastCode <= 0xdbff ? sliced.slice(0, -1) : sliced;
+}
+
 /**
  * A short, readable summary of the diagnostic signals that matter for triaging a bug
  * report - not a dump of the full object (unreadable, and Slack truncates long messages
@@ -62,6 +70,8 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   // actualTotalTokens is a field the completion pipeline has never actually populated (it
   // writes actualInputTokens/actualOutputTokens instead) - sum those as a further fallback so
   // a real completion's usage isn't silently dropped just because the summed field is absent.
+  // Only sums when BOTH halves are present - a lone actualInputTokens or actualOutputTokens
+  // isn't a total, and rendering it as one would misrepresent a partial number as the whole.
   const actualSum =
     tokenUsage?.actualInputTokens !== undefined && tokenUsage?.actualOutputTokens !== undefined
       ? tokenUsage.actualInputTokens + tokenUsage.actualOutputTokens
@@ -141,7 +151,9 @@ function toBlockquote(text: string): string {
  * from a real one, and on the unauthenticated submission path username/userEmail/type
  * are raw request-body values, the same exposure class as content. The result is capped
  * to MAX_MESSAGE_CHARS so an oversized field (a huge `content`, an unbounded `model.name`)
- * truncates the delivered message rather than failing to send at all.
+ * truncates the delivered message rather than failing to send at all. Prompt Meta sits last,
+ * so an oversized submission loses the diagnostic summary before it loses the identity
+ * fields or the feedback text itself - the more actionable half of the message for triage.
  */
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
   const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;
@@ -151,5 +163,5 @@ export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): str
     `*User Email:* ${escapeSlackText(userEmail)}\n` +
     `*Feedback:*\n${toBlockquote(escapeSlackText(content))}\n` +
     `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`;
-  return message.length > MAX_MESSAGE_CHARS ? `${message.slice(0, MAX_MESSAGE_CHARS)}... [truncated]` : message;
+  return message.length > MAX_MESSAGE_CHARS ? `${truncateSafely(message, MAX_MESSAGE_CHARS)}... [truncated]` : message;
 }

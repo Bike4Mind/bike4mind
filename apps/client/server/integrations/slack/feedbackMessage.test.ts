@@ -161,4 +161,12 @@ describe('buildFeedbackSlackMessage', () => {
     expect(message.length).toBeLessThan(3100);
     expect(message.endsWith('... [truncated]')).toBe(true);
   });
+
+  it('does not split a UTF-16 surrogate pair when truncating', () => {
+    const emoji = '\u{1F600}'; // 2 UTF-16 code units - a naive slice can land between them
+    const message = buildFeedbackSlackMessage({ ...base, content: emoji.repeat(5000) });
+    const withoutSuffix = message.slice(0, message.length - '... [truncated]'.length);
+    const lastCode = withoutSuffix.charCodeAt(withoutSuffix.length - 1);
+    expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+  });
 });
