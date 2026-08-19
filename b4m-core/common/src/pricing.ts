@@ -179,7 +179,7 @@ export const PREFLIGHT_RESERVATION_OUTPUT_TOKENS = 16_384;
  * request's real ceiling and therefore has to cover the worst case: exceeding it
  * truncates a reply mid-tag, an unrecoverable failure. A hold has no such duty -
  * exceeding it settles as a shortfall debit - so it is sized for the long turn
- * (roughly 2x the largest observed visible answer, leaving the rest for the trace)
+ * (roughly 3x the largest observed visible answer, leaving the rest for the trace)
  * rather than the worst one, which is what keeps the gate off affordable requests.
  */
 export const PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS = 32_768;
@@ -189,9 +189,12 @@ export const PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS = 32_768;
  * this request will actually send. Never raises the caller's ceiling: a request
  * that asks for less than the cap holds only what it can possibly spend.
  *
- * Reserving only, never gating: the per-member org credit cap is still checked
- * against the raw ceiling at both call sites, since that check has no settlement
- * counterpart to correct an under-estimate.
+ * Reserving only, never gating: the per-member org credit cap is still priced on
+ * the unshrunk ceiling at both call sites, since that check has no settlement
+ * counterpart to correct an under-estimate. That is a strictly larger figure than
+ * the hold, not a true upper bound on the turn - it prices one model round trip,
+ * at the uncached input rate, on the primary model - so it still under-counts a
+ * multi-round tool loop, a cache-write turn, or a fallback hop onto pricier pricing.
  *
  * @param reasonsWithinOutputBudget - reasonsWithinOutputBudget(modelInfo); passed as
  *   a boolean because common cannot import llm-adapters.

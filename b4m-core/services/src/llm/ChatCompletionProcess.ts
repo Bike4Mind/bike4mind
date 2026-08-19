@@ -3189,11 +3189,6 @@ export class ChatCompletionProcess {
         );
         const requiredCredits = usdToCredits(usdCost);
 
-        // The org per-member cap gets the raw ceiling instead: unlike the balance hold it
-        // has no settlement counterpart (see memberCreditCap.ts), so an under-estimate here
-        // lets a member blow past the cap in one turn with nothing left to catch it.
-        const worstCaseCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
-
         // Determine credit holder (user or org)
         let reservationOwnerId = this.user.id;
         let reservationOwnerType = CreditHolderType.User;
@@ -3208,7 +3203,14 @@ export class ChatCompletionProcess {
           // Enforce the per-member cap here, at pre-flight, before debiting the org pool.
           // Blocking must happen now: by settlement the reply has streamed and the balance
           // has moved, so a cap throw there can only sabotage usage tracking (#1536).
-          if (isMemberCreditCapExceeded(organization, this.user.id, worstCaseCredits)) {
+          // Priced on the unshrunk ceiling rather than the hold: this gate has no
+          // settlement counterpart (see memberCreditCap.ts), so an under-estimate lets a
+          // member blow past the cap in one turn with nothing left to catch it. Still not
+          // an upper bound on the turn - it prices one round at the uncached input rate on
+          // the primary model, so a tool loop, a cache-write turn, or a fallback hop onto
+          // pricier pricing can each settle above it.
+          const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
+          if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),

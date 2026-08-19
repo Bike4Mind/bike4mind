@@ -274,11 +274,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
 
     // Org-billed keys: enforce the per-member cap before touching the shared pool.
-    // Checked against the raw ceiling, not the shrunk hold: unlike the balance reservation
-    // this gate has no settlement counterpart, so an under-estimate here is unrecoverable.
-    const worstCaseCredits = usdToCredits(getTextModelCost(modelInfo, estimatedInputTokens, maxTokens));
-    if (billToOrg && isMemberCreditCapExceeded(organization!, userId, worstCaseCredits)) {
-      throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
+    // Priced on the unshrunk ceiling rather than the hold, because unlike the balance
+    // reservation this gate has no settlement counterpart to correct an under-estimate.
+    // Still not an upper bound on the turn: it prices one round at the uncached input
+    // rate, so a multi-round tool loop or a cache-write turn can settle above it.
+    if (billToOrg) {
+      const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, estimatedInputTokens, maxTokens));
+      if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
+        throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
+      }
     }
 
     // Atomically reserve credits using incrementCredits with negative value

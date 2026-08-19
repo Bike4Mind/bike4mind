@@ -33,6 +33,7 @@ import {
   ModelBackend,
   usdToCredits as realUsdToCredits,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
+  PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -1316,7 +1317,7 @@ describe('ChatCompletionProcess', () => {
     // this call site to the raw ceiling would pass them untouched. Input priced at $0 so the
     // hold depends only on the output figure, whatever the assembled prompt tokenizes to.
     const RESERVATION_MAX_TOKENS = 100_000;
-    const reservationOrgSetup = () => {
+    const reservationOrgSetup = (extraModelFields: Record<string, unknown> = {}) => {
       const setup = capOrgSetup();
       mockedGetAvailableModels.mockResolvedValue([
         {
@@ -1329,6 +1330,7 @@ describe('ChatCompletionProcess', () => {
           can_stream: false,
           pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
           supportsImageVariation: false,
+          ...extraModelFields,
         },
       ]);
       return setup;
@@ -1342,7 +1344,8 @@ describe('ChatCompletionProcess', () => {
     });
     const outputOnlyCredits = (outputTokens: number) => realUsdToCredits((outputTokens * 30) / 1_000_000);
     const expectedHold = outputOnlyCredits(PREFLIGHT_RESERVATION_OUTPUT_TOKENS);
-    const worstCaseHold = outputOnlyCredits(RESERVATION_MAX_TOKENS);
+    const expectedReasoningHold = outputOnlyCredits(PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS);
+    const ceilingHold = outputOnlyCredits(RESERVATION_MAX_TOKENS);
 
     it('holds the reservation ceiling, not the full requested max_tokens window', async () => {
       reservationOrgSetup();
@@ -1359,8 +1362,28 @@ describe('ChatCompletionProcess', () => {
 
       await service.process({ body: reservationBody(), logger: mockLogger });
 
-      expect(expectedHold).toBeLessThan(worstCaseHold);
+      expect(expectedHold).toBeLessThan(ceilingHold);
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
+    });
+
+    // 'adaptive' is what the real reasonsWithinOutputBudget keys off - it is not mocked here,
+    // so dropping that argument at the call site would show up as the 16K figure.
+    it('holds the larger reasoning ceiling for a model that reasons inside its output budget', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive' });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(expectedReasoningHold).toBeGreaterThan(expectedHold);
+      expect(expectedReasoningHold).toBeLessThan(ceilingHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
     });
 
     it('checks the per-member cap against the raw ceiling, not the shrunk hold', async () => {
@@ -1371,7 +1394,7 @@ describe('ChatCompletionProcess', () => {
         id: 'org1',
         name: 'Cap Org',
         currentCredits: 100_000,
-        maxCreditsPerMember: Math.floor((expectedHold + worstCaseHold) / 2),
+        maxCreditsPerMember: Math.floor((expectedHold + ceilingHold) / 2),
         userDetails: [{ id: 'user1', usedCredits: 0 }],
       });
       mockDb.organizations.incrementCredits = vi.fn();

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ModelBackend, getTextModelCost, usdToCredits, type ModelInfo } from '@bike4mind/common';
-import { PREFLIGHT_RESERVATION_OUTPUT_TOKENS, reservationOutputTokens } from '@bike4mind/common';
+import {
+  PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
+  PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  reservationOutputTokens,
+} from '@bike4mind/common';
 
 // Real pricing math here (unlike cliCompletions.orgBilling.test.ts, which stubs it flat):
 // the point of this file is the reservation *figure*, so nothing that computes it is mocked.
@@ -19,6 +23,17 @@ const MODEL_INFO = {
   supportsImageVariation: false,
 } as unknown as ModelInfo;
 
+// Same pricing, but reasoning tokens bill inside the output budget, so this one must
+// hold the larger reasoning figure. 'adaptive' is what real reasonsWithinOutputBudget
+// keys off - it is deliberately NOT mocked here.
+const REASONING_MODEL_ID = 'reservation-test-reasoning-model';
+const REASONING_MODEL_INFO = {
+  ...MODEL_INFO,
+  id: REASONING_MODEL_ID,
+  name: 'Reservation Test Reasoning',
+  thinkingStyle: 'adaptive',
+} as unknown as ModelInfo;
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -26,7 +41,7 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
-  getAvailableModels: vi.fn(async () => [MODEL_INFO]),
+  getAvailableModels: vi.fn(async () => [MODEL_INFO, REASONING_MODEL_INFO]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
@@ -44,7 +59,10 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 import { executeCompletion } from './cliCompletions';
 
 const expectedHold = usdToCredits(getTextModelCost(MODEL_INFO, INPUT_TOKENS, reservationOutputTokens(MAX_TOKENS)));
-const worstCaseCredits = usdToCredits(getTextModelCost(MODEL_INFO, INPUT_TOKENS, MAX_TOKENS));
+const expectedReasoningHold = usdToCredits(
+  getTextModelCost(REASONING_MODEL_INFO, INPUT_TOKENS, reservationOutputTokens(MAX_TOKENS, true))
+);
+const ceilingCredits = usdToCredits(getTextModelCost(MODEL_INFO, INPUT_TOKENS, MAX_TOKENS));
 
 function buildDb(org?: Record<string, unknown>) {
   const users = {
@@ -89,13 +107,13 @@ describe('executeCompletion - pre-flight reservation size', () => {
     await executeCompletion({ ...baseParams, db });
 
     expect(MAX_TOKENS).toBeGreaterThan(PREFLIGHT_RESERVATION_OUTPUT_TOKENS);
-    expect(expectedHold).toBeLessThan(worstCaseCredits);
+    expect(expectedHold).toBeLessThan(ceilingCredits);
     expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expectedHold);
   });
 
   it('checks the org per-member cap against the raw ceiling, not the shrunk hold', async () => {
     // Cap sits between the two figures: the hold clears it, the worst case does not.
-    const capBetween = Math.floor((expectedHold + worstCaseCredits) / 2);
+    const capBetween = Math.floor((expectedHold + ceilingCredits) / 2);
     const org = {
       id: 'org1',
       name: 'Org',
@@ -109,5 +127,16 @@ describe('executeCompletion - pre-flight reservation size', () => {
 
     // Blocked before the pool was touched.
     expect(organizations.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('holds the larger reasoning ceiling for a model that reasons inside its output budget', async () => {
+    const { db, users } = buildDb();
+
+    await executeCompletion({ ...baseParams, model: REASONING_MODEL_ID, db });
+
+    expect(MAX_TOKENS).toBeGreaterThan(PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS);
+    expect(expectedReasoningHold).toBeGreaterThan(expectedHold);
+    expect(expectedReasoningHold).toBeLessThan(ceilingCredits);
+    expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expectedReasoningHold);
   });
 });
