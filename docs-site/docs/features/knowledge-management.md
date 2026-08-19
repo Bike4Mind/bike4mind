@@ -100,6 +100,16 @@ Check these in order, all of them visible in the plan the button reads:
   the pause caught after its passages were rewritten is already *at* the target, so it is conformant
   as far as convergence is concerned even though none of it is searchable. Repair is the rebuild
   door's job, not the policy door's.
+
+  **A rebuild restores searchability, not conformance.** "Rebuild passages" deliberately rebuilds at
+  the owner's default passage size rather than the lake's declared target, because it has to work on
+  any lake - including one with no policy at all - and because a file can belong to several lakes that
+  want different sizes. So on a lake that *does* declare a target, repaired files come back searchable
+  but may be off-policy: health will show them failing the passage-size rule and the reachable
+  percentage can dip right after a repair that in fact succeeded. Run **Converge to policy** once
+  afterwards to bring them onto the lake's target. Restoring retrieval first and conformance second is
+  the intended order - a searchable file that is the wrong size still answers questions; an
+  unsearchable one does not.
 :::
 
 Before it rewrites a large share of a lake, convergence **asks**. Rewriting most of a lake at once is

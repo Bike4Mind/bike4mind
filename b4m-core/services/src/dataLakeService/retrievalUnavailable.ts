@@ -177,10 +177,18 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     // Worded for both arms deliberately. The chunk arm's passages were deleted; the vectorize arm's
     // exist but carry no vector, and the search read path requires one - so "no searchable passages
     // at all" is literally true of both, while naming the re-chunk specifically was true of one.
+    // The repair leads and the admin action is CONDITIONAL, in that order, because the marker outlives
+    // the pause that caused it: the switch is often already back off by the time anyone reads this
+    // (QA hit exactly that - a marker acquired around a pause flip, then read minutes later against a
+    // switch confirmed off). Leading with "an administrator has to resume convergence" pointed the
+    // reader at a control that was already in the right position, leaving the one action that always
+    // works buried in a trailing clause. Rebuilding passages is policy-independent and works on any
+    // lake, so it is the honest primary instruction.
     sentences.push(
       `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: re-processing ` +
         'them was paused partway, so they were withheld. Unlike re-indexing files these do NOT return on ' +
-        'their own - an administrator has to resume convergence, or the files have to be reprocessed.'
+        "their own - use the lake's \"Rebuild passages\" action, or reprocess the files individually, to " +
+        'restore them. If background lake work is still paused, an administrator has to resume it first.'
     );
   }
   return sentences.length > 0 ? sentences.join(' ') : null;

@@ -121,6 +121,16 @@ describe('buildRetrievalUnavailableReport', () => {
     const prose = describeRetrievalUnavailable(report);
     expect(prose).toContain('do NOT return on');
     expect(prose).toContain('no searchable passages at all');
+
+    // The REPAIR must lead and the admin action must be conditional. The marker outlives the pause
+    // that caused it, so this text is usually read against a switch that is already back off - QA hit
+    // exactly that. Naming the resume first sent the reader to a control already in the right
+    // position. Asserted by position, because both clauses being merely present is what it did before.
+    const rebuildAt = prose!.indexOf('Rebuild passages');
+    const adminAt = prose!.indexOf('administrator');
+    expect(rebuildAt).toBeGreaterThan(-1);
+    expect(adminAt).toBeGreaterThan(rebuildAt);
+    expect(prose).toContain('If background lake work is still paused');
   });
 
   it('caps the sample but keeps the count exact', () => {
