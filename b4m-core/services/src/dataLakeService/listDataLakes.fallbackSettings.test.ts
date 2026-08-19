@@ -47,7 +47,7 @@ describe('listDataLakes / listAllDataLakes - canManageSettings flag for fallback
   });
 });
 
-describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromptId) for fallback lakes', () => {
+describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromptId, systemPrompt) for fallback lakes', () => {
   it('merges the overlay groundingMode for an admin', async () => {
     const db = {
       dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
@@ -72,7 +72,43 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
     expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBe('triage_router');
   });
 
-  it('omits both fields when no overlay row exists', async () => {
+  it('merges the overlay systemPrompt for an admin, trimmed', async () => {
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      fallbackLakeSettings: {
+        findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', systemPrompt: '  Cite sources.  ' }]),
+      },
+    };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.systemPrompt).toBe('Cite sources.');
+  });
+
+  it('omits a blank/whitespace-only overlay systemPrompt (blank-as-absent, matching toManageableConfig)', async () => {
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      fallbackLakeSettings: {
+        findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', systemPrompt: '   ' }]),
+      },
+    };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.systemPrompt).toBeUndefined();
+  });
+
+  it('does NOT surface systemPrompt to a non-admin - the canManageSettings gate, not read access', async () => {
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+      fallbackLakeSettings: {
+        findByLakeIds: vi.fn().mockResolvedValue([{ lakeId: 'opti-knowledge', systemPrompt: 'Cite sources.' }]),
+      },
+    };
+    // listDataLakes (non-admin path) never even fetches the overlay batch - see the "only ever
+    // surfaced to an admin" comment in listDataLakes.ts - so this also pins that non-fetch.
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.systemPrompt).toBeUndefined();
+    expect(db.fallbackLakeSettings.findByLakeIds).not.toHaveBeenCalled();
+  });
+
+  it('omits all three fields when no overlay row exists', async () => {
     const db = {
       dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
       fallbackLakeSettings: { findByLakeIds: vi.fn().mockResolvedValue([]) },
@@ -80,6 +116,7 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.groundingMode).toBeUndefined();
     expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBeUndefined();
+    expect(result.find(l => l.id === 'opti-knowledge')?.systemPrompt).toBeUndefined();
   });
 
   it('lists cleanly with no overlay adapter wired (back-compat)', async () => {
@@ -87,5 +124,6 @@ describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromp
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.groundingMode).toBeUndefined();
     expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBeUndefined();
+    expect(result.find(l => l.id === 'opti-knowledge')?.systemPrompt).toBeUndefined();
   });
 });

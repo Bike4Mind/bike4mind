@@ -39,6 +39,8 @@ const lake = {
   name: 'OptiHashi Knowledge',
   groundingMode: 'retrieve' as const,
   preferredSystemPromptId: '',
+  systemPrompt: '',
+  organizationId: '',
 };
 
 beforeEach(() => {
@@ -65,7 +67,7 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'inline' },
+      { id: 'opti-knowledge', groundingMode: 'inline', systemPrompt: '' },
       expect.objectContaining({ onSuccess: expect.any(Function) })
     );
   });
@@ -79,7 +81,10 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     // groundingMode is unchanged here too, so this pins BOTH fields are omitted when neither moved.
-    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge', groundingMode: 'retrieve' }, expect.anything());
+    expect(updateMutate).toHaveBeenCalledWith(
+      { id: 'opti-knowledge', groundingMode: 'retrieve', systemPrompt: '' },
+      expect.anything()
+    );
   });
 
   it('binds a prompt from the picker and sends the new id', async () => {
@@ -91,7 +96,7 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: 'triage_router' },
+      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: 'triage_router', systemPrompt: '' },
       expect.anything()
     );
   });
@@ -108,7 +113,7 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: '' },
+      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: '', systemPrompt: '' },
       expect.anything()
     );
   });
@@ -125,7 +130,40 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     // Unchanged (still bound to the same, now-delisted id) - omitted, never re-sent to 400.
-    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge', groundingMode: 'retrieve' }, expect.anything());
+    expect(updateMutate).toHaveBeenCalledWith(
+      { id: 'opti-knowledge', groundingMode: 'retrieve', systemPrompt: '' },
+      expect.anything()
+    );
+  });
+
+  it('seeds the system prompt textarea from the lake and always sends the trimmed value', async () => {
+    const user = userEvent.setup();
+    render(<FallbackLakeSettingsModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    const textarea = screen.getByTestId('fallback-lake-systemprompt-input').querySelector('textarea')!;
+    expect(textarea).toHaveValue('');
+
+    await user.type(textarea, '  Answer only from this lake.  ');
+    await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledWith(
+      { id: 'opti-knowledge', groundingMode: 'retrieve', systemPrompt: 'Answer only from this lake.' },
+      expect.anything()
+    );
+  });
+
+  it("warns that a GATELESS (no organizationId) lake's prompt is stored but never injected", () => {
+    render(<FallbackLakeSettingsModal lake={{ ...lake, organizationId: '' }} onClose={vi.fn()} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('fallback-lake-systemprompt-help')).toHaveTextContent(/never injected/i);
+  });
+
+  it('does NOT warn for an org-scoped lake - the prompt IS active for that org', () => {
+    render(<FallbackLakeSettingsModal lake={{ ...lake, organizationId: 'org-alpha' }} onClose={vi.fn()} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('fallback-lake-systemprompt-help')).not.toHaveTextContent(/never injected/i);
   });
 
   it('does NOT offer name/description/visibility/gate fields - a fallback lake has no document for them', () => {

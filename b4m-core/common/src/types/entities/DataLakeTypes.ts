@@ -834,13 +834,15 @@ export interface IDataLakeSpendResponse {
  * DB lake stores directly on its document), not a resolved operational lever, and every consumer
  * reads them off a lake object rather than through the scoped-settings resolver.
  *
- * `groundingMode` (Phase 0) and `preferredSystemPromptId` (Phase 1) live here. `systemPrompt` is
- * intentionally NOT here yet - surfacing free text for a static lake requires widening
- * `getDataLakePrompts`' trust rule (a static lake has no creator/org, so it is never "trusted" for
- * prompt injection today), which is a security decision to make on its own terms, not a storage
- * change. `preferredSystemPromptId` carries no such risk: it is an id reference re-validated
- * against the session-activatable allowlist at every write AND read boundary (see
- * `isSessionActivatablePromptId`), never injected text.
+ * `groundingMode` (Phase 0), `preferredSystemPromptId` (Phase 1) and `systemPrompt` (Phase 2) all
+ * live here. `systemPrompt` is injected free text, so it is gated on a NARROWER trust rule than
+ * the other two: `isTrustedForInjection` (getDataLakePrompts.ts) treats a registry lake as trusted
+ * ONLY when it is org-scoped and the caller is a member of that org - the same rule an ordinary
+ * DB lake's org arm already applies, never wider. A gateless/global registry lake's systemPrompt
+ * is stored here but never injected (deliberately - see that rule's doc comment for why unbounded
+ * cross-tenant injection was rejected as an option). `preferredSystemPromptId` carries no such
+ * risk: it is an id reference re-validated against the session-activatable allowlist at every
+ * write AND read boundary (see `isSessionActivatablePromptId`), never injected text itself.
  */
 export interface IFallbackLakeSetting extends IMongoDocument {
   /** The registry lake's `id` (a human slug, never an ObjectId hex string - see `isFallbackLake`). */
@@ -853,6 +855,14 @@ export interface IFallbackLakeSetting extends IMongoDocument {
    * translated to absent before it reaches this row, matching how a DB lake treats the same clear.
    */
   preferredSystemPromptId?: string;
+  /**
+   * Per-lake system prompt (see IDataLake.systemPrompt). Stored for EVERY registry lake regardless
+   * of scope - `isTrustedForInjection` is what decides whether it is ever actually injected, not
+   * this storage layer, so an admin can set it ahead of a lake being re-scoped to an org without
+   * losing the value. Absent (never an empty-string stand-in) means unset, matching the DB-lake
+   * convention that a blank/whitespace-only prompt reads as absent.
+   */
+  systemPrompt?: string;
 }
 
 export interface IFallbackLakeSettingsRepository extends IBaseRepository<IFallbackLakeSetting> {
@@ -867,6 +877,6 @@ export interface IFallbackLakeSettingsRepository extends IBaseRepository<IFallba
    */
   setFields: (
     lakeId: string,
-    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId'>>
+    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>>
   ) => Promise<IFallbackLakeSetting>;
 }

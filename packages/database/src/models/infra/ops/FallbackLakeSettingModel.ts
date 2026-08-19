@@ -21,6 +21,7 @@ const FallbackLakeSettingSchema = new Schema<
     lakeId: { type: String, required: true, unique: true },
     groundingMode: { type: String, enum: DATA_LAKE_GROUNDING_MODES },
     preferredSystemPromptId: { type: String },
+    systemPrompt: { type: String },
   },
   {
     timestamps: true,
@@ -55,7 +56,7 @@ class FallbackLakeSettingsRepository
 
   async setFields(
     lakeId: string,
-    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId'>>
+    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>>
   ): Promise<IFallbackLakeSetting> {
     // Object.entries + filter, not a bare spread of `fields` into $set: a caller-supplied
     // `undefined` (rather than an omitted key) must also mean "leave unchanged", not "write

@@ -250,6 +250,8 @@ export default function DataLakeManagerPanel() {
           name: l.name,
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
           preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          systemPrompt: l.systemPrompt ?? '',
+          organizationId: l.organizationId ?? '',
         }
       : null;
   }, [dataLakes, editingFallbackLakeId]);

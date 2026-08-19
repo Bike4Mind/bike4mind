@@ -11,6 +11,7 @@ import {
   ModalDialog,
   Option,
   Select,
+  Textarea,
 } from '@mui/joy';
 import { useUpdateFallbackLakeSettings } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
@@ -30,14 +31,22 @@ export interface EditableFallbackLake {
   groundingMode: DataLakeGroundingMode;
   /** '' means no preferred prompt bound - same sentinel as DataLakeSettingsModal's field. */
   preferredSystemPromptId: string;
+  /** '' means unset - same as DataLakeSettingsModal's field. */
+  systemPrompt: string;
+  /**
+   * Whether this lake is currently org-scoped - drives which helper text `systemPrompt` shows.
+   * `isTrustedForInjection` (getDataLakePrompts.ts) never injects a GATELESS registry lake's
+   * prompt, so an admin editing one needs to know the value they are typing is stored but inert
+   * until (if ever) the lake is scoped to an org - it is not a silent no-op to hide from them.
+   */
+  organizationId: string;
 }
 
 /**
- * Edit a STATIC (registry) lake's admin-settable overlay - `groundingMode` and
- * `preferredSystemPromptId`. Not `DataLakeSettingsModal`: a fallback lake has no
- * name/description/gate/visibility to edit (it is curated config, not a document), so reusing
- * that modal would offer affordances that 400 server-side. `systemPrompt` is not here yet - see
- * IFallbackLakeSetting's doc comment for why.
+ * Edit a STATIC (registry) lake's admin-settable overlay - `groundingMode`,
+ * `preferredSystemPromptId` and `systemPrompt`. Not `DataLakeSettingsModal`: a fallback lake has no
+ * name/description/gate/visibility to edit (it is curated config, not a document), so reusing that
+ * modal would offer affordances that 400 server-side.
  */
 export function FallbackLakeSettingsModal({
   lake,
@@ -49,6 +58,7 @@ export function FallbackLakeSettingsModal({
   const updateSettings = useUpdateFallbackLakeSettings();
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
   // Only fetch the picker options while the modal is actually open - mirrors DataLakeSettingsModal.
   const { data: activatablePrompts, isLoading: promptsLoading, isError: promptsFailed } = useActivatablePrompts(!!lake);
   const activatable = activatablePrompts ?? [];
@@ -64,6 +74,7 @@ export function FallbackLakeSettingsModal({
     if (lake) {
       setGroundingMode(lake.groundingMode);
       setPreferredSystemPromptId(lake.preferredSystemPromptId);
+      setSystemPrompt(lake.systemPrompt);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lake?.id]);
@@ -78,6 +89,9 @@ export function FallbackLakeSettingsModal({
         // value means "leave as-is" server-side, so a now-delisted id the picker still shows (via
         // the fallback Option above) never gets re-sent and 400s a save of unrelated fields.
         ...(preferredSystemPromptId !== lake.preferredSystemPromptId ? { preferredSystemPromptId } : {}),
+        // Always sent (never conditioned on change), matching DataLakeSettingsModal's systemPrompt
+        // field - there is no delisted-value hazard here, so "send only if changed" buys nothing.
+        systemPrompt: systemPrompt.trim(),
       },
       { onSuccess: onClose }
     );
@@ -92,6 +106,23 @@ export function FallbackLakeSettingsModal({
         <DialogTitle>{lake?.name ?? 'Data lake'} settings</DialogTitle>
         <DialogContent>
           <FormControl>
+            <FormLabel>System prompt</FormLabel>
+            <Textarea
+              minRows={3}
+              maxRows={10}
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              placeholder="e.g. Answer only from this lake's documents, and always cite the source file."
+              data-testid="fallback-lake-systemprompt-input"
+            />
+            <FormHelperText data-testid="fallback-lake-systemprompt-help">
+              {lake?.organizationId
+                ? "Extra instructions added to answers on turns that use this lake, for members of this lake's organization."
+                : "This lake is global (not scoped to an organization), so this prompt is stored but NEVER injected into anyone's turn - only an org-scoped registry lake's prompt is ever used. Scope this lake to an org to activate it."}
+              {systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''}
+            </FormHelperText>
+          </FormControl>
+          <FormControl sx={{ mt: 2 }}>
             <FormLabel>Grounding mode</FormLabel>
             <Select
               value={groundingMode}

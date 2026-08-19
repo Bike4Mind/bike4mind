@@ -88,6 +88,20 @@ describe('fallbackLakeSettingsRepository.setFields - upsert by lakeId', () => {
     const row = await fallbackLakeSettingsRepository.findByLakeId('opti-knowledge');
     expect(row?.preferredSystemPromptId).toBeFalsy();
   });
+
+  it('stores and updates systemPrompt independently of the other two fields', async () => {
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', {
+      groundingMode: 'inline',
+      systemPrompt: 'Answer only from this lake and cite the source file.',
+    });
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', {
+      systemPrompt: 'Revised instructions.',
+    });
+
+    const row = await fallbackLakeSettingsRepository.findByLakeId('opti-knowledge');
+    expect(row?.groundingMode).toBe('inline');
+    expect(row?.systemPrompt).toBe('Revised instructions.');
+  });
 });
 
 describe('fallbackLakeSettingsRepository.findByLakeId / findByLakeIds', () => {

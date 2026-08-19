@@ -128,4 +128,17 @@ describe('PUT /api/data-lakes/:id/settings', () => {
     );
     expect(json).toHaveBeenCalledWith(LAKE);
   });
+
+  it('passes systemPrompt through with NO allowlist check - unlike preferredSystemPromptId', async () => {
+    const { res, json } = makeRes();
+    await invoke(makeReq({ systemPrompt: 'Answer only from this lake.' }), res);
+
+    expect(h.updateFallbackLakeSettings).toHaveBeenCalledWith(
+      'opti-knowledge',
+      { userId: 'admin-1', isAdmin: true },
+      { systemPrompt: 'Answer only from this lake.' },
+      expect.anything()
+    );
+    expect(json).toHaveBeenCalledWith(LAKE);
+  });
 });

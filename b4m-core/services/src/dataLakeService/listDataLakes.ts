@@ -152,13 +152,13 @@ const resolveOwnerNames = async (
   return nameById;
 };
 
-type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId'>;
+type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>;
 
 /**
- * Batch-resolve the overlay (`groundingMode`, `preferredSystemPromptId`) for a set of fallback
- * lake ids, in one round-trip. Empty map when no overlay repo was supplied (the content-scope
- * resolver / Slack never render these fields) - mirrors `resolveOwnerNames`'s "pay nothing when
- * nobody reads it" shape.
+ * Batch-resolve the overlay (`groundingMode`, `preferredSystemPromptId`, `systemPrompt`) for a set
+ * of fallback lake ids, in one round-trip. Empty map when no overlay repo was supplied (the
+ * content-scope resolver / Slack never render these fields) - mirrors `resolveOwnerNames`'s "pay
+ * nothing when nobody reads it" shape.
  */
 const resolveFallbackSettings = async (
   lakeIds: string[],
@@ -171,6 +171,7 @@ const resolveFallbackSettings = async (
     byLakeId.set(row.lakeId, {
       groundingMode: row.groundingMode,
       preferredSystemPromptId: row.preferredSystemPromptId,
+      systemPrompt: row.systemPrompt,
     });
   }
   return byLakeId;
@@ -224,24 +225,27 @@ const toManageableConfig = (
 /**
  * Fallback (built-in) registry entries as list results. Routed through `toDataLakeConfig` rather
  * than spread, so the "an actor-less projection cannot carry an editor-only field" invariant holds
- * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so an
- * overlay entry carrying a `systemPrompt` would otherwise be served to every caller. Fallbacks have
- * no owner and are read-only for everyone, so `canManage` is always false.
+ * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so a
+ * REGISTRY entry (`dl`) carrying a `systemPrompt` field would otherwise be served to every caller.
+ * This is why `systemPrompt` below is read ONLY from `overlay` (the admin-write-gated table), never
+ * from `dl` - the leak guard is about the untrusted source, not the field name. Fallbacks have no
+ * owner and are read-only for everyone, so `canManage` is always false.
  *
  * `canRebuild` and `canManageSettings` DO take an actor, unlike every other field here: both are
  * `ctx.isAdmin` directly, not `resolveCanManageLake` - see `assertLakeRebuildAccess`'s comment for
  * why an org-scoped overlay lake must not let a customer-side org admin pass. This is a
- * deliberate, narrow exception to "actor-less projection"; it is not a route for a future field
- * (e.g. `systemPrompt`) to follow without the same reasoning - see `getDataLakePrompts`'s trust
- * rule, which is the reason `systemPrompt` is not surfaced here at all.
+ * deliberate, narrow exception to "actor-less projection"; any field added here under this pattern
+ * must repeat the same reasoning.
  *
- * `groundingMode` and `preferredSystemPromptId` are the exceptions to "no editor-only field for a
- * fallback lake": both are merged in from the overlay (`fallbackSettingsByLakeId`) and gated on
- * `canManageSettings`, mirroring how `toManageableConfig` gates the same fields on `manageable` -
- * they need to round-trip into the settings modal the same way a DB lake's do. Neither is the
- * effective value a session actually resolves (that is `resolveFallbackLake`'s job); this is
- * purely what the editor UI seeds its picker from. `systemPrompt` stays absent here regardless -
- * see `getDataLakePrompts`'s trust rule above.
+ * `groundingMode`, `preferredSystemPromptId` and `systemPrompt` are the exceptions to "no
+ * editor-only field for a fallback lake": all three are merged in from the overlay
+ * (`fallbackSettingsByLakeId`) and gated on `canManageSettings`, mirroring how `toManageableConfig`
+ * gates the same fields on `manageable` - they need to round-trip into the settings modal the same
+ * way a DB lake's do. None of the three is the effective value a session/turn actually resolves
+ * (that is `resolveFallbackLake`'s job for the first two, and `getDataLakePrompts`'s
+ * `isTrustedForInjection` for the third - which independently decides whether THIS stored value is
+ * ever injected, org-scoped registry lakes only); this is purely what the editor UI seeds its
+ * picker/textarea from. `systemPrompt` is trimmed and blank-as-absent, matching `toManageableConfig`.
  */
 const toFallbackConfig = (
   dl: DataLakeConfig,
@@ -258,6 +262,7 @@ const toFallbackConfig = (
   ...(ctx.isAdmin && overlay?.preferredSystemPromptId
     ? { preferredSystemPromptId: overlay.preferredSystemPromptId }
     : {}),
+  ...(ctx.isAdmin && overlay?.systemPrompt?.trim() ? { systemPrompt: overlay.systemPrompt.trim() } : {}),
 });
 
 /**

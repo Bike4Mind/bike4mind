@@ -41,6 +41,7 @@ import {
   AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
   CitableSource,
   OpenAIEmbeddingModel,
   ImageModerationIncident,
@@ -172,6 +173,13 @@ interface DatabaseAdapters {
     IDataLakeRepository,
     'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
   >;
+  /**
+   * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
+   * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
+   * reached from KnowledgeRetrievalFeature; absent means zero registry lakes ever contribute an
+   * injected prompt on the forced-retrieval path.
+   */
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
   /**
    * Audit-trail repo for images blocked by the image_generation/edit_image tools'
    * moderation gate. Optional - the gate itself is unconditional (the tools

@@ -147,6 +147,11 @@ export const UpdateFallbackLakeSettingsRequestInput = z.object({
   // The session-activatable ALLOWLIST check is enforced at the write route (apps/client), same as
   // the DB-lake path; this schema is a crafted-body cap only, not the real constraint.
   preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Same field, uncapped, as UpdateDataLakeRequestInput's above. Storage is unconditional - which
+  // registry lakes actually get this INJECTED is isTrustedForInjection's decision (org-scoped
+  // only, getDataLakePrompts.ts), not a write-time restriction, so an admin can set this ahead of
+  // a lake being scoped to an org without the value being rejected or silently dropped.
+  systemPrompt: z.string().optional(),
 });
 export type UpdateFallbackLakeSettingsRequestInputType = z.infer<typeof UpdateFallbackLakeSettingsRequestInput>;
 /**

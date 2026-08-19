@@ -190,6 +190,39 @@ describe('updateFallbackLakeSettings', () => {
     expect(result.preferredSystemPromptId).toBeUndefined();
   });
 
+  it('persists systemPrompt unconditionally - no allowlist gate, unlike preferredSystemPromptId', async () => {
+    const setFields = vi.fn().mockResolvedValue({});
+    const findByLakeId = vi.fn().mockResolvedValue(null);
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    const result = await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { systemPrompt: '  Answer only from this lake.  ' },
+      { db }
+    );
+
+    // Written as-is (untrimmed) - trimming is a RESPONSE presentation concern, not a storage one.
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', { systemPrompt: '  Answer only from this lake.  ' });
+    expect(result.systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('an explicit blank systemPrompt clears it, and the response omits the key entirely', async () => {
+    const setFields = vi.fn().mockResolvedValue({});
+    const findByLakeId = vi.fn().mockResolvedValue(null);
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    const result = await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { systemPrompt: '   ' },
+      { db }
+    );
+
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', { systemPrompt: '   ' });
+    expect(result.systemPrompt).toBeUndefined();
+  });
+
   it('refuses a non-admin before ever touching the overlay repo', async () => {
     const setFields = vi.fn();
     const findByLakeId = vi.fn().mockResolvedValue(null);
