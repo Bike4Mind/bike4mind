@@ -560,6 +560,22 @@ describe('config-history invalidation on the non-update config writes', () => {
     expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
   });
 
+  it("a file removal invalidates that lake's history too - it can trigger the auto-activate row", async () => {
+    // Inert in today's UI (this hook fires from the file wizard, where the History observer is
+    // unmounted), so this pins the CONSISTENCY rather than a visible bug: every client path whose
+    // write can record a config-history row invalidates that lake's history, with no per-path
+    // reasoning about which ones currently matter.
+    const { wrapper, invalidate } = mountWith();
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 4 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
   it('scopes the invalidation to that one lake, never the whole history root', async () => {
     // configHistory sits outside the `list` prefix precisely so a rename does not refetch every
     // lake's history (see dataLakeKeys.ts). Invalidating the bare root here would undo that.
