@@ -13,6 +13,18 @@ const lake = (over: Partial<IDataLakeDocument> = {}) =>
 
 const nameChange: ILakeConfigFieldChange = { field: 'name', kind: 'literal', before: 'a', after: 'b' };
 
+// A stored fingerprint carries a REAL truncated sha256 - that is the value which must not reach the
+// wire. Literal hex, not lakeConfigTextFingerprint(...): deriving it from the same helper the code
+// uses would make the leak assertions self-referential.
+const PROMPT_HASH_BEFORE = 'a1b2c3d4e5f60718';
+const PROMPT_HASH_AFTER = '99887766554433aa';
+const promptChange: ILakeConfigFieldChange = {
+  field: 'systemPrompt',
+  kind: 'fingerprint',
+  beforeFingerprint: { present: true, length: 139, hash: PROMPT_HASH_BEFORE },
+  afterFingerprint: { present: true, length: 204, hash: PROMPT_HASH_AFTER },
+};
+
 const event = (over: Partial<ILakeConfigChangeEventDocument> = {}) =>
   ({
     id: 'evt1',
@@ -93,7 +105,8 @@ describe('assembleLakeConfigHistory', () => {
   it('reads the clamped page size, not the raw request', async () => {
     const { listByLake, adapters: a } = adapters([], { limit: LAKE_CONFIG_HISTORY_MAX_LIMIT + 50 });
     await assembleLakeConfigHistory(lake(), a);
-    expect(listByLake).toHaveBeenCalledWith('lake1', { limit: LAKE_CONFIG_HISTORY_MAX_LIMIT });
+    // +1 is the truncation probe, not an off-by-one: see the fetch in assembleLakeConfigHistory.
+    expect(listByLake).toHaveBeenCalledWith('lake1', { limit: LAKE_CONFIG_HISTORY_MAX_LIMIT + 1 });
   });
 
   it('is empty and untruncated for a lake whose history predates the feature', async () => {
@@ -105,21 +118,108 @@ describe('assembleLakeConfigHistory', () => {
   });
 
   describe('truncation', () => {
-    it('flags a full page and carries the window start, so a partial list is never read as all-time', async () => {
+    it('flags a genuinely truncated window and carries its oldest event as the start', async () => {
+      // limit 2 fetches 3; the third row is the probe proving more exist behind the page.
       const events = [
         event({ id: 'a', createdAt: new Date('2026-08-05T00:00:00Z') }),
         event({ id: 'b', createdAt: new Date('2026-08-01T00:00:00Z') }),
+        event({ id: 'probe', createdAt: new Date('2026-07-01T00:00:00Z') }),
       ];
       const { adapters: a } = adapters(events, { limit: 2 });
       const view = await assembleLakeConfigHistory(lake(), a);
       expect(view.truncated).toBe(true);
+      // windowStartsAt is the oldest RETURNED event, never the probe - it names where the window
+      // begins, and the probe is deliberately outside it.
       expect(view.windowStartsAt).toEqual(new Date('2026-08-01T00:00:00Z'));
+    });
+
+    it('never returns the probe row itself, so a page is exactly the size asked for', async () => {
+      const events = [event({ id: 'a' }), event({ id: 'b' }), event({ id: 'probe' })];
+      const { adapters: a } = adapters(events, { limit: 2 });
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(view.entries).toHaveLength(2);
+      expect(view.entries.map(e => e.eventId)).toEqual(['a', 'b']);
+    });
+
+    it('does NOT flag a lake holding exactly `limit` events - a complete history is not a window', async () => {
+      // The regression this pins: `events.length >= pageSize` off a same-size fetch cannot tell
+      // "exactly this many exist" from "more are behind the page", so a lake with precisely 200
+      // changes got truncated:true and a windowStartsAt, licensing the UI to caption its whole
+      // life as "changes since <date>". The probe row is what makes the two distinguishable.
+      const events = [event({ id: 'a' }), event({ id: 'b' })];
+      const { adapters: a } = adapters(events, { limit: 2 });
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(view.truncated).toBe(false);
+      expect(view.windowStartsAt).toBeUndefined();
+      expect(view.entries).toHaveLength(2);
     });
 
     it('does not flag a partial page', async () => {
       const { adapters: a } = adapters([event()], { limit: 2 });
       const view = await assembleLakeConfigHistory(lake(), a);
       expect(view.truncated).toBe(false);
+    });
+  });
+
+  /**
+   * The disclosure boundary this whole PR exists to hold. The hash is an UNSALTED sha256 of the
+   * trimmed prompt, so it is directly checkable against a guessed prompt, and `listByLake` scopes
+   * only by `dataLakeId` - so after a transferLakeOwnership a NEW owner reads rows written before
+   * they had any access to the lake. "The UI never renders it" is not the same claim as "it never
+   * leaves the server", and only the second one is worth anything: the first still ships the value
+   * to devtools and to every network log along the way.
+   *
+   * Asserted against the SERIALIZED view, not against the rendered output - that gap is exactly how
+   * this survived a bot review, a security-lens pass and a manual QA that all checked for the prompt
+   * TEXT and never for the hash FIELD.
+   */
+  describe('system-prompt fingerprint disclosure', () => {
+    it('never puts the fingerprint hash on the wire, while keeping presence and size', async () => {
+      const { adapters: a } = adapters([event({ changes: [promptChange] })]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+
+      const change = view.entries[0].changes[0];
+      expect(change.kind).toBe('fingerprint');
+      if (change.kind !== 'fingerprint') throw new Error('expected the fingerprint arm');
+      // What an owner IS owed: that a prompt exists and roughly how big it is.
+      expect(change.beforeFingerprint).toEqual({ present: true, length: 139 });
+      expect(change.afterFingerprint).toEqual({ present: true, length: 204 });
+      // toEqual above already fails on an extra key, but say it outright - this is the invariant.
+      expect(change.beforeFingerprint).not.toHaveProperty('hash');
+      expect(change.afterFingerprint).not.toHaveProperty('hash');
+    });
+
+    it('leaks no hash anywhere in the serialized response, not just in the field we thought to check', async () => {
+      // Whole-object sweep rather than a field probe: a future shape change could carry the hash
+      // somewhere new, and a targeted assertion would keep passing while the leak moved.
+      const { adapters: a } = adapters([event({ changes: [promptChange, nameChange] })]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+
+      const wire = JSON.stringify(view);
+      expect(wire).not.toContain(PROMPT_HASH_BEFORE);
+      expect(wire).not.toContain(PROMPT_HASH_AFTER);
+      expect(wire).not.toContain('hash');
+    });
+
+    it('passes the literal arm through untouched - it holds nothing a reader is not already owed', async () => {
+      const { adapters: a } = adapters([event({ changes: [nameChange] })]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(view.entries[0].changes[0]).toEqual(nameChange);
+    });
+
+    it('keeps an ABSENT prompt legible - present:false still crosses, so a clear is not a blank row', async () => {
+      const cleared: ILakeConfigFieldChange = {
+        field: 'systemPrompt',
+        kind: 'fingerprint',
+        beforeFingerprint: { present: true, length: 12, hash: PROMPT_HASH_BEFORE },
+        afterFingerprint: { present: false, length: 0, hash: '' },
+      };
+      const { adapters: a } = adapters([event({ changes: [cleared] })]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+
+      const change = view.entries[0].changes[0];
+      if (change.kind !== 'fingerprint') throw new Error('expected the fingerprint arm');
+      expect(change.afterFingerprint).toEqual({ present: false, length: 0 });
     });
   });
 
