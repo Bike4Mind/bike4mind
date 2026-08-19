@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -81,6 +81,9 @@ import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
+import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
+import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
@@ -158,6 +161,7 @@ export default function DataLakeManagerPanel() {
   // sidebar footer's Discover button flips it the same way.
   const managerTab = useDataLakeWizardStore(s => s.managerTab);
   const openManager = useDataLakeWizardStore(s => s.openManager);
+  const managerLakeId = useDataLakeWizardStore(s => s.managerLakeId);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
@@ -174,6 +178,16 @@ export default function DataLakeManagerPanel() {
   const [path, setPath] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
+
+  // Deep-link: a per-lake action elsewhere (the page rail's header) opens the manager already
+  // pointed at that lake. Only a non-null id steers; null is the plain "open at root" case and
+  // must not wipe a selection the user made inside the panel.
+  useEffect(() => {
+    if (!managerLakeId) return;
+    setLakeId(managerLakeId);
+    setPath([]);
+    setSelectedFile(null);
+  }, [managerLakeId]);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
@@ -751,6 +765,7 @@ function ManagerNav({
                 <DialogContent>
                   This irreversibly deletes “{purgeTarget?.name}” and all its files, chunks, and batches. This cannot be
                   undone.
+                  {purgeTarget && <PurgeDriveWarning lakeId={purgeTarget.id} />}
                 </DialogContent>
                 <DialogActions>
                   <Button
@@ -1096,6 +1111,51 @@ function NavLifecycleSection({
 
 // Right pane: selected lake's details + management actions
 
+/**
+ * Purge-time warning that the lake still has a Drive folder attached. Renders nothing when there is
+ * no connection (or it is not visible to this caller - the endpoint 404s on a personal lake and
+ * 403s for a non-manager).
+ *
+ * It deliberately does NOT promise that purging releases the connection, because today it does not:
+ * the row survives its lake and its globally-unique driveFolderId then blocks re-claiming that
+ * folder app-wide, with no UI or API path back (#1807). So the copy tells the user to disconnect
+ * FIRST. When #1807 lands and teardown releases the connection itself, this wording must change
+ * with it - it describes a defect, not a design.
+ */
+function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
+  // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
+  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
+  // populate would trade one wasted request for silently withholding the warning on a lake that
+  // does have a connection. A rare 404 on a purge dialog is the cheaper failure.
+  const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
+
+  // A FAILED read is not "no connection". Collapsing it into the silent case would borrow the
+  // benign default's meaning for an unknown, and the cost lands on the one action that cannot be
+  // undone: the user purges, the row survives, and its globally-unique driveFolderId blocks
+  // re-claiming that folder app-wide with no path back (#1807). A 404 (personal lake / no
+  // connection) resolves to `connection: null` and is NOT an error, so this only fires on a real
+  // failure - it does not nag on every ordinary purge.
+  if (isError) {
+    return (
+      <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. If one is, purging leaves the
+        connection behind and that folder cannot be connected to another lake afterwards - restore the lake and
+        disconnect Drive first to be safe.
+      </Typography>
+    );
+  }
+  if (isLoading || !connection) return null;
+
+  const folder = connection.folderName || connection.driveFolderId;
+  return (
+    <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
+      This lake still syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging leaves that connection behind, and
+      the folder cannot be connected to another lake afterwards. Restore the lake and disconnect Drive first.
+    </Typography>
+  );
+}
+
 function LakeInfoPanel({
   lake,
   fileCount,
@@ -1126,7 +1186,7 @@ function LakeInfoPanel({
   const deleteLake = usePermanentDeleteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
-  const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
+  const visibility = lakeVisibilityLabel(lake);
   // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
   // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
   // surfaced when the lake actually has legacy oversized-chunk files to repair (the count
@@ -1286,6 +1346,9 @@ function LakeInfoPanel({
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
             </Chip>
           )}
+          {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
+              and it previously gave no sign a Drive folder was feeding it (#1645). */}
+          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />

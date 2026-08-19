@@ -13,6 +13,20 @@ export type LakeDriveConnection = {
   connectedAt: string | null;
 };
 
+/**
+ * User-facing label + severity per connection status. Lives beside the type so every surface that
+ * renders a Drive connection (the wizard's connect action, the lake detail panel, the page header)
+ * reads the SAME wording - three hand-synced copies would drift the moment a status is added.
+ */
+export const DRIVE_STATUS_BADGE: Record<
+  LakeDriveConnection['status'],
+  { label: string; color: 'success' | 'warning' | 'danger' }
+> = {
+  connected: { label: 'Connected', color: 'success' },
+  needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
+  credential_error: { label: 'Credential error', color: 'danger' },
+};
+
 const lakeDriveConnectionKey = (dataLakeId?: string) => ['lake-drive-connection', dataLakeId];
 
 export function useConnectGoogleDrive() {
@@ -40,10 +54,13 @@ export function useDisconnectGoogleDrive() {
 }
 
 /** The current Drive connection feeding a lake (null when none). Org owner/manager only, server-side. */
-export function useLakeDriveConnection(dataLakeId?: string) {
+export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
   return useQuery({
     queryKey: lakeDriveConnectionKey(dataLakeId),
-    enabled: !!dataLakeId,
+    // `enabled` lets a caller skip a request that cannot succeed: the route resolves the lake's
+    // ORGANIZATION, so a personal lake always 404s. Passing false there keeps a guaranteed failure
+    // (and its console error) off every personal lake, instead of firing and discarding it.
+    enabled: !!dataLakeId && enabled,
     queryFn: async () => {
       const response = await api.get<{ connection: LakeDriveConnection | null }>(
         `/api/data-lakes/${dataLakeId}/drive-connection`

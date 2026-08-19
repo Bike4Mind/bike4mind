@@ -12,15 +12,8 @@ import {
   useLakeDriveConnection,
   useConnectDriveFolderToLake,
   useDisconnectLakeDrive,
-  type LakeDriveConnection,
+  DRIVE_STATUS_BADGE,
 } from '@client/app/hooks/data/googleDrive';
-
-const STATUS_LABEL: Record<LakeDriveConnection['status'], { label: string; color: 'success' | 'warning' | 'danger' }> =
-  {
-    connected: { label: 'Connected', color: 'success' },
-    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
-    credential_error: { label: 'Credential error', color: 'danger' },
-  };
 
 /** The specific server `error` message off an axios failure, if the response carried one. */
 function serverError(e: unknown): string | undefined {
@@ -163,7 +156,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } | nu
   }
 
   if (connection) {
-    const badge = STATUS_LABEL[connection.status];
+    const badge = DRIVE_STATUS_BADGE[connection.status];
     return (
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="drive-connection-status">
         <CloudIcon color="primary" />
