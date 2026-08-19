@@ -2,8 +2,8 @@ import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, Stack, Typo
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
+import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
 
 /**
@@ -65,6 +65,89 @@ function describeFailures(failedFiles: number, processingFailedFiles: number): s
   return parts.join('; ');
 }
 
+/**
+ * The fileless Drive commit's own status screen (#1916): create the lake, bind the folder, hand off
+ * to background ingest. No per-file counters exist on this path - the files arrive later, from
+ * Drive - so it reports the connection instead of a progress bar it could only ever draw at 0%.
+ */
+function DriveOnlyCommitStatus({
+  status,
+  errorMessage,
+  folderLabel,
+  onDone,
+  onBack,
+}: {
+  status: UploadProgress['status'];
+  errorMessage: string | undefined;
+  folderLabel: string;
+  onDone: () => void;
+  onBack: () => void;
+}) {
+  const centered = {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  } as const;
+
+  if (status === 'complete') {
+    return (
+      <Box sx={centered} data-testid="drive-only-commit-complete">
+        <CheckCircleIcon sx={{ fontSize: 64, color: 'success.500' }} />
+        <Typography level="title-lg">{DATA_LAKE} Created</Typography>
+        <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
+          Google Drive ingest is running in the background for &ldquo;{folderLabel}&rdquo;. Files appear in this{' '}
+          {DATA_LAKE} as they are pulled in - the {DATA_LAKES} list shows the connection&apos;s status.
+        </Typography>
+        <Button variant="solid" color="primary" onClick={onDone}>
+          Done
+        </Button>
+      </Box>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <Box sx={centered} data-testid="drive-only-commit-error">
+        <ErrorOutlineIcon sx={{ fontSize: 64, color: 'danger.500' }} />
+        <Typography level="title-lg" color="danger">
+          Could not connect Google Drive
+        </Typography>
+        <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
+          {errorMessage || 'The Google Drive folder could not be connected. Please try again.'}
+        </Typography>
+        {/* The rollback is the reason this can be retried from Configure with no cleanup: a failed
+            connect deletes the lake it just created (see useCreateLakeFromDrive). */}
+        <Typography level="body-xs" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
+          No {DATA_LAKE} was created.
+        </Typography>
+        <Button variant="outlined" color="neutral" onClick={onBack}>
+          Back to Configuration
+        </Button>
+      </Box>
+    );
+  }
+
+  if (status === 'uploading') {
+    return (
+      <Box sx={centered} data-testid="drive-only-commit-pending">
+        <CircularProgress size="lg" />
+        <Typography level="title-md">Creating the {DATA_LAKE} and connecting Google Drive&hellip;</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={centered} data-testid="drive-only-commit-idle">
+      <Typography level="title-md" color="neutral">
+        Ready to create this {DATA_LAKE} and sync &ldquo;{folderLabel}&rdquo;.
+      </Typography>
+    </Box>
+  );
+}
+
 function ProgressRow({ label, current, total }: { label: string; current: number; total: number }) {
   const pct = total > 0 ? Math.round((current / total) * 100) : 0;
   return (
@@ -84,9 +167,17 @@ export default function UploadStep() {
   const progress = useDataLakeWizardStore(s => s.uploadProgress);
   const closeWizard = useDataLakeWizardStore(s => s.closeWizard);
   const resetWizard = useDataLakeWizardStore(s => s.resetWizard);
+  const setStep = useDataLakeWizardStore(s => s.setStep);
   // Append mode locks the Config fields to the existing lake, so a "fix your Name /
   // Tag Prefix" hint would point at inputs the user can't edit.
   const isAppendMode = useDataLakeWizardStore(s => s.targetLake !== null);
+  const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
+  // The fileless Drive commit (#1916) shares uploadProgress with the upload path, so it is told
+  // apart by having a Drive folder and no files at all - the one shape the upload path can't
+  // produce (it refuses an empty batch). Everything below then reads in Drive terms instead of
+  // file counts, which would all be zero and read as a failure.
+  const isDriveOnlyCommit = !!pendingDriveFolder && progress.totalFiles === 0;
+  const driveFolderLabel = pendingDriveFolder?.folderName || 'your Drive folder';
   // AI tagging is never offered in append mode (the source step hides the toggle there too).
   const wantsTaxonomy = useDataLakeWizardStore(s => s.optionalSteps.taxonomy) && !isAppendMode;
 
@@ -97,6 +188,20 @@ export default function UploadStep() {
   const isError = progress.status === 'error';
   const isUploading = progress.status === 'uploading';
   const isIdle = progress.status === 'idle';
+
+  if (isDriveOnlyCommit) {
+    return (
+      <Box data-testid="wizard-upload-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
+        <DriveOnlyCommitStatus
+          status={progress.status}
+          errorMessage={progress.errorMessage}
+          folderLabel={driveFolderLabel}
+          onDone={resetWizard}
+          onBack={() => setStep('config')}
+        />
+      </Box>
+    );
+  }
 
   // Uploads finish before chunk/vectorize (async, and skipped entirely in
   // self-host without the worker - see #822/#828). Drive the completion copy
@@ -222,14 +327,7 @@ export default function UploadStep() {
               </Typography>
             </Alert>
           )}
-          <Button
-            variant="outlined"
-            color="neutral"
-            onClick={() => {
-              const setStep = useDataLakeWizardStore.getState().setStep;
-              setStep('config');
-            }}
-          >
+          <Button variant="outlined" color="neutral" onClick={() => setStep('config')}>
             Back to Configuration
           </Button>
         </Box>

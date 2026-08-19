@@ -192,3 +192,69 @@ describe('UploadStep - in-progress failure alert (#1412)', () => {
     expect(screen.queryByText(/failed/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The fileless Drive commit (#1916) shares uploadProgress with the upload path, so this step has to
+ * tell them apart: with zero files every counter is 0, and the file-count screens above would read
+ * that as "nothing uploaded" - a failure - for what is a successful hand-off to Drive ingest.
+ */
+describe('UploadStep - Drive-only commit (#1916)', () => {
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  function renderDriveCommit(status: UploadProgress['status'], overrides: Partial<UploadProgress> = {}) {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: null,
+      allFiles: [],
+      pendingDriveFolder: { driveFolderId: 'FOLDER1', folderName: 'Contracts' },
+      uploadProgress: { ...state.uploadProgress, totalFiles: 0, status, ...overrides },
+    }));
+    return render(
+      <TestWrapper>
+        <UploadStep />
+      </TestWrapper>
+    );
+  }
+
+  it('reports the folder it is about to sync while idle', () => {
+    renderDriveCommit('idle');
+    expect(screen.getByTestId('drive-only-commit-idle')).toHaveTextContent('Contracts');
+  });
+
+  it('reports the create + connect in progress, not an upload', () => {
+    renderDriveCommit('uploading');
+    expect(screen.getByTestId('drive-only-commit-pending')).toBeInTheDocument();
+    expect(screen.queryByText(/Uploading files/)).toBeNull();
+  });
+
+  it('reads success as a created lake with ingest running, not zero files uploaded', () => {
+    renderDriveCommit('complete');
+    const complete = screen.getByTestId('drive-only-commit-complete');
+    expect(complete).toHaveTextContent('Contracts');
+    expect(complete).toHaveTextContent('background');
+    expect(screen.queryByText('Upload Complete!')).toBeNull();
+  });
+
+  it('surfaces the refusal and states that no lake survived it', () => {
+    // Matches useCreateLakeFromDrive's rollback: a failed connect deletes the lake it created, so
+    // the user has nothing to clean up before retrying.
+    renderDriveCommit('error', { errorMessage: 'This Drive folder is already connected to another data lake' });
+    const failed = screen.getByTestId('drive-only-commit-error');
+    expect(failed).toHaveTextContent('This Drive folder is already connected to another data lake');
+    expect(failed).toHaveTextContent('No Data Lake was created.');
+  });
+
+  it('sends a failed commit back to Configure, where the name and prefix can be fixed', () => {
+    renderDriveCommit('error', { errorMessage: 'nope' });
+    screen.getByText('Back to Configuration').click();
+    expect(useDataLakeWizardStore.getState().step).toBe('config');
+  });
+
+  it('keeps the file-count screens when files were uploaded alongside a Drive folder', () => {
+    // The mixed path is a real upload, so it must keep the upload UI even though a folder is pending.
+    renderDriveCommit('complete', { totalFiles: 2, uploadedFiles: 2, chunkedFiles: 2, vectorizedFiles: 2 });
+    expect(screen.getByText('Upload Complete!')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-only-commit-complete')).toBeNull();
+  });
+});

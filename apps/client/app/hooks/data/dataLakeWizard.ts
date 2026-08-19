@@ -15,6 +15,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
+  type DataLakeFormValues,
+  type PendingDriveFolder,
   type UploadProgress,
   type UploadErrorKind,
 } from '@client/app/stores/useDataLakeWizardStore';
@@ -273,6 +275,53 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
 }
 
 /**
+ * Zeroed progress counters for a fresh commit attempt. `totalFiles` is left at 0 for the caller
+ * that knows the real count to override - the fileless Drive commit genuinely has none.
+ */
+function zeroProgressCounts(): Partial<UploadProgress> {
+  return {
+    totalFiles: 0,
+    uploadedFiles: 0,
+    chunkedFiles: 0,
+    vectorizedFiles: 0,
+    failedFiles: 0,
+    failedFileNames: [],
+    processingFailedFiles: 0,
+  };
+}
+
+/**
+ * Create the lake the wizard is configuring (create mode only). Shared by both commit paths - the
+ * batch upload and the fileless Drive-only create - so a lake is born from exactly the same fields
+ * either way.
+ *
+ * `tagPrefix` is passed in rather than derived here: it is the value every client-side gate already
+ * judged (see submittedTagPrefix), and re-deriving it would let the two drift.
+ */
+async function createWizardLake(config: DataLakeFormValues, tagPrefix: string): Promise<string> {
+  // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads the store
+  // at call time, like the wizard config itself, so it can't go stale.
+  const organizationId = activeOrgId();
+  const res = await api.post<{ id: string }>('/api/data-lakes', {
+    name: config.name,
+    // The slug we ask for. The server disambiguates it against lakes in scope, so the created
+    // lake's real slug can differ - everything downstream keys off the id.
+    slug: slugifyDataLakeName(config.name),
+    description: config.description || undefined,
+    fileTagPrefix: tagPrefix,
+    requiredUserTag: config.requiredUserTag || undefined,
+    requiredEntitlement: config.requiredEntitlement || undefined,
+    ...(organizationId ? { organizationId } : {}),
+  } satisfies CreateDataLakeRequestInputType);
+  return res.data.id;
+}
+
+/** Bind a Drive folder picked during create to the lake that now exists (POST drive-sync). */
+async function connectPendingDriveFolder(dataLakeId: string, folder: PendingDriveFolder): Promise<void> {
+  await api.post('/api/data-lakes/drive-sync', { dataLakeId, ...folder });
+}
+
+/**
  * Upload one file to the URL the server returned - a same-origin proxy (self-host) or an
  * S3 presigned URL (hosted). The auth routing (authenticated api client vs raw axios) lives
  * in uploadFileToUrl so this and the single-file path stay in sync.
@@ -309,7 +358,7 @@ export function useBatchUpload() {
 
       // Read from store at mutation time to avoid stale closure
       // (same pattern as useComputeHashes)
-      const { config, allFiles, targetLake, optionalSteps } = useDataLakeWizardStore.getState();
+      const { config, allFiles, targetLake, optionalSteps, pendingDriveFolder } = useDataLakeWizardStore.getState();
       let included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files to upload');
 
@@ -352,26 +401,7 @@ export function useBatchUpload() {
       const tagPrefix = submittedTagPrefix(config.tagPrefix);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
-      let dataLakeId: string;
-      if (targetLake) {
-        dataLakeId = targetLake.id;
-      } else {
-        // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads
-        // the store at mutation time, like the wizard config above, so it can't go stale.
-        const organizationId = activeOrgId();
-        const dataLakeRes = await api.post<{ id: string }>('/api/data-lakes', {
-          name: config.name,
-          // The slug we ask for. The server disambiguates it against lakes in scope, so the
-          // created lake's real slug can differ - everything downstream keys off the id.
-          slug: slugifyDataLakeName(config.name),
-          description: config.description || undefined,
-          fileTagPrefix: tagPrefix,
-          requiredUserTag: config.requiredUserTag || undefined,
-          requiredEntitlement: config.requiredEntitlement || undefined,
-          ...(organizationId ? { organizationId } : {}),
-        } satisfies CreateDataLakeRequestInputType);
-        dataLakeId = dataLakeRes.data.id;
-      }
+      const dataLakeId = targetLake ? targetLake.id : await createWizardLake(config, tagPrefix);
       let uploadedCount = 0;
       // Hoisted above the try so the outcome branch + the catch can reconcile the batch
       // and clean up the records setup created. `failedFileIds` are the FabFiles presign
@@ -414,13 +444,8 @@ export function useBatchUpload() {
         // Switch to upload step and set initial progress
         setStep('upload');
         updateUploadProgress({
+          ...zeroProgressCounts(),
           totalFiles: included.length,
-          uploadedFiles: 0,
-          chunkedFiles: 0,
-          vectorizedFiles: 0,
-          failedFiles: 0,
-          failedFileNames: [],
-          processingFailedFiles: 0,
           status: 'uploading',
           currentBatchId: batchId,
           // Clear any error from a prior attempt so a retry starts clean.
@@ -593,6 +618,28 @@ export function useBatchUpload() {
           })
           .catch(() => {});
 
+        // A Drive folder picked during create (#1916) is connected only HERE - after the lake
+        // exists and its files have landed. Connecting any earlier would strand a connection row
+        // behind the rollback the total-failure branch above performs on the new lake (#1807).
+        // Never in append mode: there DriveConnectAction already connected on the spot.
+        if (!targetLake && pendingDriveFolder) {
+          try {
+            await connectPendingDriveFolder(dataLakeId, pendingDriveFolder);
+          } catch (e) {
+            // The files are in, so the batch is a success - don't fail it over the Drive half.
+            // Name the actual refusal (not an org manager, folder claimed elsewhere, Drive not
+            // linked) AND where to retry, since this mutation offers no retry of its own.
+            // Reason last: it is a server sentence of its own, with no punctuation we can rely on
+            // to splice mid-message.
+            toast.error(
+              `Files uploaded, but the Google Drive folder was not connected - connect it from the data lake's header to retry. ${
+                classifyUploadError(e).message
+              }`,
+              { duration: 10000 }
+            );
+          }
+        }
+
         updateUploadProgress({ status: 'complete' });
 
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
@@ -639,6 +686,90 @@ export function useBatchUpload() {
       // toast instead of stacking a new one on top of it - same id as the
       // pre-flight check in DataLakeWizardModal's handleStartUpload, since both
       // represent the one current upload attempt's error state.
+      toast.error(message, {
+        id: 'data-lake-batch-upload-error',
+        duration: 8000,
+        action: { label: 'Retry', onClick: () => retryRef.current() },
+      });
+    },
+  });
+
+  useEffect(() => {
+    retryRef.current = () => mutation.mutate();
+  });
+  return mutation;
+}
+
+/**
+ * Hook: the wizard's FILELESS commit - create the lake, then bind the Drive folder picked during
+ * create so ingest runs from Drive alone, with no local upload (#1916).
+ *
+ * The upload pipeline (useBatchUpload) cannot serve this: it creates the lake as a side effect of a
+ * batch and refuses an empty file set. This is the same create call, followed by the connect, with
+ * one rule the upload path shares - a commit that cannot be completed leaves NOTHING behind, so a
+ * refused connect (Personal-scope lake, non-manager, folder already claimed) deletes the lake it
+ * just made rather than stranding an empty one.
+ *
+ * Reuses uploadProgress for its status/error state so the Complete and Failed screens, the error
+ * classification, and the retry toast are the same ones the upload path uses; UploadStep tells the
+ * two apart by `totalFiles === 0` and swaps in Drive wording.
+ */
+export function useCreateLakeFromDrive() {
+  const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
+  const setStep = useDataLakeWizardStore(s => s.setStep);
+  const queryClient = useQueryClient();
+  // Same indirection as useBatchUpload: lets onError's retry action call the mutation it belongs to.
+  const retryRef = useRef<() => void>(() => {});
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      // Matches useBatchUpload's guard: fail before the request rather than letting it reject.
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        throw new Error(OFFLINE_MESSAGE);
+      }
+
+      // Read at mutation time to avoid a stale closure, as everywhere else in this module.
+      const { config, pendingDriveFolder, targetLake } = useDataLakeWizardStore.getState();
+      if (!pendingDriveFolder) throw new Error('No Google Drive folder selected');
+      // Append mode never reaches here - it has a lake, so DriveConnectAction connects directly.
+      if (targetLake) throw new Error('This data lake already exists - connect Drive from its header instead');
+
+      const tagPrefix = submittedTagPrefix(config.tagPrefix);
+      const dataLakeId = await createWizardLake(config, tagPrefix);
+
+      setStep('upload');
+      updateUploadProgress({
+        ...zeroProgressCounts(),
+        status: 'uploading',
+        // Clear any error from a prior attempt so a retry starts clean.
+        errorMessage: undefined,
+        errorKind: undefined,
+      });
+
+      try {
+        await connectPendingDriveFolder(dataLakeId, pendingDriveFolder);
+      } catch (err) {
+        // Best-effort, and deliberately not awaited into the error: a cleanup failure must not mask
+        // the refusal the user needs to read.
+        await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+        throw err;
+      }
+
+      updateUploadProgress({ status: 'complete' });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // First lake unlocks the 'datalakes' nav slot; no files yet, so 'files' stays locked (#833).
+      invalidateGearsStatusWhileLocked(queryClient, ['datalakes']);
+
+      return { dataLakeId };
+    },
+    onSuccess: () => {
+      const { pendingDriveFolder } = useDataLakeWizardStore.getState();
+      toast.success(`Syncing "${pendingDriveFolder?.folderName || 'your Drive folder'}" into the new data lake...`);
+    },
+    onError: (error: unknown) => {
+      const { kind, message } = classifyUploadError(error);
+      updateUploadProgress({ status: 'error', errorKind: kind, errorMessage: message });
+      // Same toast id as the upload path: both represent the one current commit attempt's error.
       toast.error(message, {
         id: 'data-lake-batch-upload-error',
         duration: 8000,
