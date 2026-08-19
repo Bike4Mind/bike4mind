@@ -27,6 +27,7 @@ import {
 import {
   getLlmByModel,
   getAvailableModels,
+  reasonsWithinOutputBudget,
   type ICompletionOptions,
   type ICompletionOptionTools,
   type ApiKeyTable,
@@ -263,14 +264,20 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // maxTokens is a ceiling, and holding it would gate the request on a cost it
     // will not incur (see reservationOutputTokens). Settlement below charges actual usage.
     const estimatedInputTokens = estimateInputTokens(messages);
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, reservationOutputTokens(maxTokens));
+    const estimatedUsdCost = getTextModelCost(
+      modelInfo,
+      estimatedInputTokens,
+      reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
+    );
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
 
     // Org-billed keys: enforce the per-member cap before touching the shared pool.
-    // Uses the estimate; settlement records the actual usage against the member below.
-    if (billToOrg && isMemberCreditCapExceeded(organization!, userId, reservedCredits)) {
+    // Checked against the raw ceiling, not the shrunk hold: unlike the balance reservation
+    // this gate has no settlement counterpart, so an under-estimate here is unrecoverable.
+    const worstCaseCredits = usdToCredits(getTextModelCost(modelInfo, estimatedInputTokens, maxTokens));
+    if (billToOrg && isMemberCreditCapExceeded(organization!, userId, worstCaseCredits)) {
       throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
     }
 

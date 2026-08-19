@@ -32,6 +32,7 @@ import {
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
+  PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -1308,6 +1309,78 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.reply).toMatch(/is out of credits/);
       expect(mockQuest.reply).not.toMatch(/per-member credit limit/);
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
+    });
+
+    // The reservation figure itself, at the production call site. The cap tests above run a
+    // 100-token output window, where reservationOutputTokens is the identity - so reverting
+    // this call site to the raw ceiling would pass them untouched. Input priced at $0 so the
+    // hold depends only on the output figure, whatever the assembled prompt tokenizes to.
+    const RESERVATION_MAX_TOKENS = 100_000;
+    const reservationOrgSetup = () => {
+      const setup = capOrgSetup();
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 128_000,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      return setup;
+    };
+    const reservationBody = () => ({
+      ...startQuestParams,
+      params: { ...startQuestParams.params, max_tokens: RESERVATION_MAX_TOKENS },
+      tools: [],
+      projectId: undefined,
+      organizationId: 'org1',
+    });
+    const outputOnlyCredits = (outputTokens: number) => realUsdToCredits((outputTokens * 30) / 1_000_000);
+    const expectedHold = outputOnlyCredits(PREFLIGHT_RESERVATION_OUTPUT_TOKENS);
+    const worstCaseHold = outputOnlyCredits(RESERVATION_MAX_TOKENS);
+
+    it('holds the reservation ceiling, not the full requested max_tokens window', async () => {
+      reservationOrgSetup();
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      // Balance reads empty at the debit, which stops the turn right after the reservation -
+      // all this test needs is the amount that was held.
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(expectedHold).toBeLessThan(worstCaseHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
+    });
+
+    it('checks the per-member cap against the raw ceiling, not the shrunk hold', async () => {
+      // The cap has no settlement counterpart, so it must stay priced on the ceiling:
+      // this cap clears the hold but not the worst case, and must still block.
+      reservationOrgSetup();
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: Math.floor((expectedHold + worstCaseHold) / 2),
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn();
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockQuest.errorCode).toBe('insufficient_credits');
+      expect(mockQuest.reply).toMatch(/per-member credit limit/);
+      expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
     });
 
     // Idempotency guard for a cross-model failover: the failed primary

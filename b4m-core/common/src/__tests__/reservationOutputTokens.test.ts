@@ -41,8 +41,16 @@ describe('pre-flight reservation output sizing', () => {
     expect(pricing.reservationOutputTokens(128_000)).toBe(pricing.PREFLIGHT_RESERVATION_OUTPUT_TOKENS);
   });
 
+  it('holds a larger ceiling for models that reason inside the output budget', () => {
+    expect(pricing.reservationOutputTokens(128_000, true)).toBe(pricing.PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS);
+    expect(pricing.PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS).toBeGreaterThan(
+      pricing.PREFLIGHT_RESERVATION_OUTPUT_TOKENS
+    );
+  });
+
   it('never raises a request that asks for less than the ceiling', () => {
     expect(pricing.reservationOutputTokens(4096)).toBe(4096);
+    expect(pricing.reservationOutputTokens(4096, true)).toBe(4096);
   });
 
   it('holds a few hundred credits on a 128K-cap premium turn instead of thousands', () => {

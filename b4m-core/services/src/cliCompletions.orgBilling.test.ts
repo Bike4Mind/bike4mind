@@ -10,6 +10,7 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  reasonsWithinOutputBudget: vi.fn(() => false),
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
