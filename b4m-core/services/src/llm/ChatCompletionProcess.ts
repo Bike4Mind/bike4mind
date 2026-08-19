@@ -160,7 +160,11 @@ import {
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
+import {
+  buildAlwaysOnFloorDetails,
+  buildInjectedBlockDetails,
+  sortDetailsByDeliveryOrder,
+} from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
 import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
@@ -3074,6 +3078,9 @@ export class ChatCompletionProcess {
         } catch (injectedDetailsError) {
           logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
         }
+        // Sorted once, after every batch has landed, so the persisted array reads in the order the
+        // model sees the blocks rather than the order the three helpers happened to run.
+        systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       }
 
