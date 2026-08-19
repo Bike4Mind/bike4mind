@@ -75,4 +75,18 @@ describe('errorHandler - the body carries no keys the envelope does not document
       error: 'no credits',
     });
   });
+
+  // The HTTPError branch is the only one that reaches `additionalInfo`, so without a
+  // case here the membership loop above never runs against a populated one and a new
+  // subclass spreading an undocumented key would ship with CI green. additionalInfo's
+  // own members are the endpoint contract's business, so they are excluded by key -
+  // what is pinned is that the *middleware* adds nothing else.
+  it('adds nothing beyond the envelope for an HTTPError carrying additionalInfo', () => {
+    const additionalInfo = { errorCode: 'insufficient_credits' };
+    const body = bodyOf(new BadRequestError('no credits', additionalInfo));
+    for (const key of Object.keys(body)) {
+      if (key in additionalInfo) continue;
+      expect(documented).toContain(key);
+    }
+  });
 });

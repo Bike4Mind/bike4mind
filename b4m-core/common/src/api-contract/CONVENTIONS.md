@@ -99,13 +99,25 @@ Deprecate-then-remove is the combination that works: the envelope is honest **no
 the field still leaves. Branch on the HTTP status, not on `name`. On the sunset date drop
 it from `errorHandler.ts`, `ApiErrorSchema`, and `ErrorResponse` together.
 
+Note that this reaches past contracts that name `ApiErrorSchema` directly. `errorHandler`
+serves every *thrown* error body regardless of which schema the contract declared for that
+status, so a bespoke error schema (`InsufficientCreditsErrorSchema`,
+`ttsErrorResponseSchema`) would omit a field the wire carries. Those derive from
+`ApiErrorSchema` via `.extend()` rather than re-declaring `error`/`request_id`, which is
+also what makes the sunset a single edit. Write a bespoke error schema from scratch only
+when the body is `res.status(...).json(...)`-ed rather than thrown and so never passes
+through the middleware - `ttsResponseTooLargeSchema` is the one such case, and says so.
+
 **[gated]** Now that the runtime and the spec agree, the middleware is pinned to the
 envelope: `errorHandler.test.ts` asserts every key `errorHandler` adds is one
-`ApiErrorSchema` declares, so a new undocumented field fails CI, and it fails again if
-`name` is dropped from only some of the three places above. `ApiErrorSchema` is the plain
-twin of `ErrorResponse` (the OpenAPI layer is generate-time only, so `apps/client` cannot
-import the component); `openapi/errorEnvelopeParity.test.ts` keeps the two copies from
-drifting.
+`ApiErrorSchema` declares - across all three of its branches, including the `HTTPError`
+one that spreads `additionalInfo` (the endpoint's own typed members are excluded by key,
+since those are its contract's concern). So a new undocumented field fails CI, and it
+fails again if `name` is dropped from only some of the three places above. `ApiErrorSchema`
+is the plain twin of `ErrorResponse` (the OpenAPI layer is generate-time only, so
+`apps/client` cannot import the component); `openapi/errorEnvelopeParity.test.ts` keeps the
+two copies from drifting, and pins `name`'s published `deprecated: true` and sunset date so
+the deprecation cannot quietly decay into a plain documented field.
 
 ### Status codes for shared conditions
 

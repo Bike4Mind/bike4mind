@@ -61,7 +61,7 @@
           "name": {
             "type": "string",
             "deprecated": true,
-            "description": "Deprecated, sunset 2026-12-01. The internal error class name the server threw (`NotFoundError`, `UnprocessableEntityError`, ...). Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           }
         },
         "required": [
@@ -980,6 +980,14 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -993,9 +1001,6 @@
               "provider_not_configured",
               "provider_rejected"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
@@ -1008,6 +1013,14 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -1021,9 +1034,6 @@
               "provider_not_configured",
               "provider_rejected"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
@@ -1067,6 +1077,14 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -1080,9 +1098,6 @@
               "provider_not_configured",
               "provider_rejected"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
@@ -1095,6 +1110,14 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -1108,9 +1131,6 @@
               "provider_not_configured",
               "provider_rejected"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
@@ -1123,6 +1143,14 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -1136,9 +1164,6 @@
               "provider_not_configured",
               "provider_rejected"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
@@ -1218,14 +1243,19 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "errorCode": {
             "type": "string",
             "enum": [
               "insufficient_credits"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
@@ -1282,14 +1312,19 @@
           "error": {
             "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
           "errorCode": {
             "type": "string",
             "enum": [
               "insufficient_credits"
             ]
-          },
-          "request_id": {
-            "type": "string"
           }
         },
         "required": [
