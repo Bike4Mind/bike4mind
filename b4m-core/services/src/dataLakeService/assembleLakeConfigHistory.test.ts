@@ -198,7 +198,9 @@ describe('assembleLakeConfigHistory', () => {
       const wire = JSON.stringify(view);
       expect(wire).not.toContain(PROMPT_HASH_BEFORE);
       expect(wire).not.toContain(PROMPT_HASH_AFTER);
-      expect(wire).not.toContain('hash');
+      // Anchored to the JSON KEY, not the bare word: a fixture named "Hashi" or a description
+      // mentioning hashing would otherwise redden this for entirely the wrong reason.
+      expect(wire).not.toContain('"hash"');
     });
 
     it('passes the literal arm through untouched - it holds nothing a reader is not already owed', async () => {
@@ -220,6 +222,68 @@ describe('assembleLakeConfigHistory', () => {
       const change = view.entries[0].changes[0];
       if (change.kind !== 'fingerprint') throw new Error('expected the fingerprint arm');
       expect(change.afterFingerprint).toEqual({ present: false, length: 0 });
+    });
+  });
+
+  /**
+   * `textUnchanged` is the answer that crosses the wire IN PLACE of the hashes, and it alone decides
+   * whether a manager reads `formatting only (N chars)` or a misleading `replaced (N -> N chars)`.
+   * The consumer side was pinned from the start with a hand-set boolean; the PRODUCER was not, which
+   * is the same render-verified / producer-unverified asymmetry that let the hash leak through.
+   */
+  describe('textUnchanged - the hash comparison, resolved server-side', () => {
+    const fingerprintEvent = (
+      before: { present: boolean; length: number; hash: string },
+      after: { present: boolean; length: number; hash: string }
+    ) =>
+      event({
+        changes: [{ field: 'systemPrompt', kind: 'fingerprint', beforeFingerprint: before, afterFingerprint: after }],
+      });
+
+    const textUnchangedOf = async (
+      before: { present: boolean; length: number; hash: string },
+      after: { present: boolean; length: number; hash: string }
+    ) => {
+      const { adapters: a } = adapters([fingerprintEvent(before, after)]);
+      const view = await assembleLakeConfigHistory(lake(), a);
+      const change = view.entries[0].changes[0];
+      if (change.kind !== 'fingerprint') throw new Error('expected the fingerprint arm');
+      return change.textUnchanged;
+    };
+
+    it('is TRUE for equal hashes at different lengths - the whitespace-only save', async () => {
+      expect(
+        await textUnchangedOf(
+          { present: true, length: 120, hash: 'same' },
+          { present: true, length: 118, hash: 'same' }
+        )
+      ).toBe(true);
+    });
+
+    it('is FALSE for differing hashes, even at identical lengths', async () => {
+      // Equal lengths deliberately: length is NOT the signal, so a rewrite that swapped the hash
+      // comparison for a length comparison would pass every other test in this file.
+      expect(
+        await textUnchangedOf(
+          { present: true, length: 120, hash: PROMPT_HASH_BEFORE },
+          { present: true, length: 120, hash: PROMPT_HASH_AFTER }
+        )
+      ).toBe(false);
+    });
+
+    it('is FALSE when a side is absent, even though two absent values share the empty-string hash', async () => {
+      // The case a naive `before.hash === after.hash` rewrite breaks: '' === '' is true, which would
+      // report "text unchanged" for a prompt that was never set on either side, and the consumer
+      // would render `formatting only` for a lake that has no prompt at all.
+      expect(
+        await textUnchangedOf({ present: false, length: 0, hash: '' }, { present: false, length: 0, hash: '' })
+      ).toBe(false);
+      expect(
+        await textUnchangedOf({ present: false, length: 0, hash: '' }, { present: true, length: 9, hash: 'aa' })
+      ).toBe(false);
+      expect(
+        await textUnchangedOf({ present: true, length: 9, hash: 'aa' }, { present: false, length: 0, hash: '' })
+      ).toBe(false);
     });
   });
 
