@@ -80,10 +80,7 @@ export const HelpModal: React.FC = () => {
         console.error('Feedback content is empty');
         return;
       }
-      toast.success('Thank you! Your feedback has been submitted.');
       console.log('Submitting feedback:', currentUser?.email);
-
-      toggleShowHelp();
 
       const feedbackCreated = await createFeedbackOnServer({
         userId: userId,
@@ -99,9 +96,12 @@ export const HelpModal: React.FC = () => {
         metadata: { id: feedbackCreated.id, content: feedbackCreated.content },
       });
 
+      toast.success('Thank you! Your feedback has been submitted.');
+      toggleShowHelp();
       setFeedbackContent('');
     } catch (error) {
       console.error('Failed to submit feedback:', error);
+      toast.error('Something went wrong. Please try again.');
     }
   };
   if (!settings.showHelp) return null;

@@ -61,20 +61,24 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
     },
   });
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     console.log('Submitting bug report:', bugReport);
-    createFeedbackOnServer({
-      userId: userContext?.currentUser?.id ?? 'Unknown',
-      username: userContext?.currentUser?.username ?? 'Unknown',
-      userEmail: userContext?.currentUser?.email ?? 'Unknown',
-      tags: ['bug', 'feedback', 'bugReport'],
-      type: feedbackType,
-      content: bugReport || 'No feedback details provided',
-      promptMeta: promptMeta ?? {},
-    });
-    onClose();
-    toast.success(`${feedbackType} report submitted successfully`);
-    setBugReport('');
+    try {
+      await createFeedbackOnServer({
+        userId: userContext?.currentUser?.id ?? 'Unknown',
+        username: userContext?.currentUser?.username ?? 'Unknown',
+        userEmail: userContext?.currentUser?.email ?? 'Unknown',
+        tags: ['bug', 'feedback', 'bugReport'],
+        type: feedbackType,
+        content: bugReport || 'No feedback details provided',
+        promptMeta: promptMeta ?? {},
+      });
+      onClose();
+      toast.success(`${feedbackType} report submitted successfully`);
+      setBugReport('');
+    } catch {
+      toast.error('Something went wrong. Please try again.');
+    }
   };
 
   return (
