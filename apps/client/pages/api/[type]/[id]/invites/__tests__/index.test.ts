@@ -125,7 +125,7 @@ describe('POST /api/[type]/[id]/invites', () => {
     const { req, res } = createMocks({
       method: 'POST',
       query: { type: pathType, id: 'doc-1' },
-      body: { permissions: ['Read'] },
+      body: { permissions: ['read'] },
     });
     (req as any).user = { id: 'u1' };
 

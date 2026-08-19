@@ -65,8 +65,9 @@ const CreateInviteRequestSchema = z.object({
 });
 
 // Runtime parse schema. z.coerce.date() accepts ISO strings from axios (z.date() would not).
+// z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
-  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
+  permissions: z.array(z.enum(Permission)),
   recipients: z.string().array().optional(),
   description: z.string().optional(),
   expiresAt: z.coerce.date().optional(),
