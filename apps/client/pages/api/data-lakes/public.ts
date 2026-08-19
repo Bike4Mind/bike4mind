@@ -3,6 +3,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, userRepository } from '@bike4mind/database';
 import { Request } from 'express';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { z } from 'zod';
 
 // Coerce + clamp the browse query. Strings arrive from the query string; empty search is
@@ -22,7 +23,7 @@ const handler = baseApi()
     const { q, limit, offset } = BrowseQuery.parse(req.query);
 
     const result = await dataLakeService.browsePublicDataLakes(
-      { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+      await toAccessContext(req),
       { search: q, limit, offset },
       { db: { dataLakes: dataLakeRepository, users: userRepository } }
     );

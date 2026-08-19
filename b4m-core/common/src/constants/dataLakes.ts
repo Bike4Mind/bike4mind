@@ -199,8 +199,8 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
 /**
  * A public data lake as it appears in the discover/browse surface: the lightweight card
  * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
- * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
- * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * DataLakeConfig - it drops the access/gate internals (the endpoint has already resolved the
+ * gate for this caller) and adds the human-facing preview metadata the catalog renders: owner
  * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
  * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
  */

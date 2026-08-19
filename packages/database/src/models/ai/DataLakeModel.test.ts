@@ -356,6 +356,16 @@ describe('DataLakeRepository.findAccessible — management gate (entitlement-awa
 describe('DataLakeRepository.findPublicLakes — public discover catalog', () => {
   setupMongoTest();
 
+  // A stranger: not the owner ('admin' by baseLake default), no tags, no keys, not an admin.
+  const viewer = (overrides: Partial<AccessContext> = {}): AccessContext => ({
+    userId: 'stranger',
+    isAdmin: false,
+    userTags: [],
+    organizationId: undefined,
+    entitlementKeys: [],
+    ...overrides,
+  });
+
   // Seed the catalog once per test: a mix that exercises every exclusion rule.
   const seedMixed = async () => {
     await dataLakeRepository.create(baseLake({ slug: 'alpha', name: 'Alpha Lake', isPublic: true }));
@@ -364,17 +374,72 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     );
     // Excluded: private (not public).
     await dataLakeRepository.create(baseLake({ slug: 'private-lake', createdByUserId: 'alice' }));
-    // Excluded: public but gated after publishing (no longer open to everyone).
+    // Excluded for a caller lacking the gate; admitted for one who holds it (see below).
     await dataLakeRepository.create(baseLake({ slug: 'gated', isPublic: true, requiredUserTag: 'Opti' }));
     // Excluded: public but archived (browse is active-only).
     await dataLakeRepository.create(baseLake({ slug: 'archived-pub', isPublic: true, status: 'archived' }));
   };
 
-  it('returns only active, public, gate-less lakes', async () => {
+  it('returns only active, public lakes whose gate the caller passes', async () => {
     await seedMixed();
-    const { lakes, total } = await dataLakeRepository.findPublicLakes();
+    const { lakes, total } = await dataLakeRepository.findPublicLakes(viewer());
     expect(lakes.map(l => l.slug)).toEqual(['alpha', 'beta']); // sorted by name
     expect(total).toBe(2);
+  });
+
+  it('surfaces a gated public lake to a caller who HOLDS the gate (tag or entitlement key)', async () => {
+    await seedMixed();
+    await dataLakeRepository.create(baseLake({ slug: 'ent-gated', isPublic: true, requiredEntitlement: 'medlib:pro' }));
+
+    const viaTag = await dataLakeRepository.findPublicLakes(viewer({ userTags: ['Opti'] }));
+    expect(viaTag.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
+    expect(viaTag.total).toBe(3);
+
+    // Entitlement holder.
+    const viaKey = await dataLakeRepository.findPublicLakes(viewer({ entitlementKeys: ['medlib:pro'] }));
+    expect(viaKey.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'ent-gated']);
+
+    // Holding neither gate leaves both out.
+    const neither = await dataLakeRepository.findPublicLakes(viewer({ userTags: ['unrelated'] }));
+    expect(neither.lakes.map(l => l.slug)).toEqual(['alpha', 'beta']);
+  });
+
+  it('surfaces a gated public lake to its owner and to admins', async () => {
+    await seedMixed();
+
+    const owner = await dataLakeRepository.findPublicLakes(viewer({ userId: 'admin' }));
+    expect(owner.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
+
+    // Admin: gate bypassed entirely, but the catalog is still public + active only.
+    const admin = await dataLakeRepository.findPublicLakes(viewer({ isAdmin: true }));
+    expect(admin.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
+  });
+
+  it('agrees with findAccessible on which public lakes a caller can see', async () => {
+    await seedMixed();
+    await dataLakeRepository.create(baseLake({ slug: 'ent-gated', isPublic: true, requiredEntitlement: 'medlib:pro' }));
+
+    const cases: AccessContext[] = [
+      viewer(),
+      viewer({ userTags: ['Opti'] }),
+      viewer({ entitlementKeys: ['medlib:pro'] }),
+      viewer({ userTags: ['Opti'], entitlementKeys: ['medlib:pro'] }),
+      viewer({ userTags: ['unrelated'], entitlementKeys: ['unrelated:key'] }),
+      viewer({ userId: 'admin' }),
+      viewer({ isAdmin: true }),
+      viewer({ organizationId: 'orgB' }),
+    ];
+
+    for (const ctx of cases) {
+      const discovered = (await dataLakeRepository.findPublicLakes(ctx)).lakes.map(l => l.slug).sort();
+      // What findAccessible grants this caller, restricted to the catalog's own scope
+      // (public + active). Anything the caller can access there must be discoverable.
+      const accessible = (await dataLakeRepository.findAccessible(ctx, { statuses: ['active'] }))
+        .filter(l => l.isPublic)
+        .map(l => l.slug)
+        .sort();
+      expect(discovered).toEqual(accessible);
+    }
   });
 
   it('admits a public lake as soon as its first member file activates it (#1342)', async () => {
@@ -384,27 +449,31 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     const created = await dataLakeRepository.create(
       baseLake({ slug: 'brand-new', name: 'Brand New', isPublic: true, status: 'draft' })
     );
-    expect((await dataLakeRepository.findPublicLakes()).lakes).toEqual([]);
+    expect((await dataLakeRepository.findPublicLakes(viewer())).lakes).toEqual([]);
 
     await dataLakeRepository.activateIfDraft(created.id);
 
-    expect((await dataLakeRepository.findPublicLakes()).lakes.map(l => l.slug)).toEqual(['brand-new']);
+    expect((await dataLakeRepository.findPublicLakes(viewer())).lakes.map(l => l.slug)).toEqual(['brand-new']);
   });
 
   it('search matches name OR description, case-insensitively', async () => {
     await seedMixed();
-    expect((await dataLakeRepository.findPublicLakes({ search: 'alpha' })).lakes.map(l => l.slug)).toEqual(['alpha']);
+    expect((await dataLakeRepository.findPublicLakes(viewer(), { search: 'alpha' })).lakes.map(l => l.slug)).toEqual([
+      'alpha',
+    ]);
     // "widgets" only appears in beta's description.
-    expect((await dataLakeRepository.findPublicLakes({ search: 'WIDGETS' })).lakes.map(l => l.slug)).toEqual(['beta']);
-    expect((await dataLakeRepository.findPublicLakes({ search: 'lake' })).total).toBe(2);
+    expect((await dataLakeRepository.findPublicLakes(viewer(), { search: 'WIDGETS' })).lakes.map(l => l.slug)).toEqual([
+      'beta',
+    ]);
+    expect((await dataLakeRepository.findPublicLakes(viewer(), { search: 'lake' })).total).toBe(2);
   });
 
   it('paginates with limit/offset while total stays the full count', async () => {
     await seedMixed();
-    const page1 = await dataLakeRepository.findPublicLakes({ limit: 1, offset: 0 });
+    const page1 = await dataLakeRepository.findPublicLakes(viewer(), { limit: 1, offset: 0 });
     expect(page1.lakes.map(l => l.slug)).toEqual(['alpha']);
     expect(page1.total).toBe(2);
-    const page2 = await dataLakeRepository.findPublicLakes({ limit: 1, offset: 1 });
+    const page2 = await dataLakeRepository.findPublicLakes(viewer(), { limit: 1, offset: 1 });
     expect(page2.lakes.map(l => l.slug)).toEqual(['beta']);
     expect(page2.total).toBe(2);
   });
@@ -417,7 +486,7 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     }
     const seen: string[] = [];
     for (let offset = 0; offset < 4; offset += 2) {
-      const { lakes } = await dataLakeRepository.findPublicLakes({ limit: 2, offset });
+      const { lakes } = await dataLakeRepository.findPublicLakes(viewer(), { limit: 2, offset });
       seen.push(...lakes.map(l => l.slug));
     }
     // All four returned exactly once across the two pages - no overlap, nothing missed.
@@ -430,7 +499,7 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     await dataLakeRepository.create(baseLake({ slug: 'dotstar', name: 'a.b', isPublic: true }));
     await dataLakeRepository.create(baseLake({ slug: 'plain', name: 'axb', isPublic: true }));
     // ".*" must match the literal "a.b" name, not act as a wildcard matching "axb".
-    const { lakes } = await dataLakeRepository.findPublicLakes({ search: 'a.b' });
+    const { lakes } = await dataLakeRepository.findPublicLakes(viewer(), { search: 'a.b' });
     expect(lakes.map(l => l.slug)).toEqual(['dotstar']);
   });
 });

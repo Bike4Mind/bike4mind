@@ -1,15 +1,17 @@
 import type {
+  AccessContext,
   BrowsePublicDataLakesResult,
   IDataLakeDocument,
   IDataLakeRepository,
   PublicDataLakeSummary,
 } from '@bike4mind/common';
 
-/** The browsing caller. Only identity is needed - the public catalog is the same for everyone. */
-interface BrowseActor {
-  userId: string;
-  isAdmin: boolean;
-}
+/**
+ * The browsing caller. The catalog is per-caller (a gated public lake is discoverable by the
+ * users who hold its gate), so the browse actor carries the full access context the repository
+ * needs, not just an id.
+ */
+type BrowseActor = AccessContext;
 
 interface BrowsePublicDataLakesOptions {
   search?: string;
@@ -33,8 +35,9 @@ interface BrowsePublicDataLakesAdapters {
 }
 
 /**
- * The discover/browse catalog of public data lakes. Returns one page of gate-less public
- * lakes (the repo enforces public + gate-less) enriched with the preview metadata the
+ * The discover/browse catalog of public data lakes. Returns one page of the public lakes this
+ * caller can reach (the repo enforces public + active + the same gate `findAccessible` applies,
+ * so discover and access never disagree) enriched with the preview metadata the
  * catalog renders: owner display name, file count, total size, plus per-caller `isOwn`/
  * `canManage` so the UI can gate management affordances. This is a read-only discovery
  * surface - it grants nothing; access is already ambient once a lake is public (a public
@@ -49,7 +52,7 @@ export const browsePublicDataLakes = async (
   opts: BrowsePublicDataLakesOptions,
   { db }: BrowsePublicDataLakesAdapters
 ): Promise<BrowsePublicDataLakesResult> => {
-  const { lakes, total } = await db.dataLakes.findPublicLakes({
+  const { lakes, total } = await db.dataLakes.findPublicLakes(actor, {
     search: opts.search,
     limit: opts.limit,
     offset: opts.offset,
