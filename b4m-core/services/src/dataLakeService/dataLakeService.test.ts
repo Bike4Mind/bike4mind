@@ -2226,16 +2226,20 @@ describe('restore, delete and archive against a purge-accepted lake (#1744)', ()
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
-  it('short-circuits a soft-delete of a purging lake instead of un-purging it', async () => {
-    // Falling through would re-run phase 1 and settle on status 'deleted', which silently reverses
-    // an accepted purge and leaves the sweep to fail its guard.
+  it('refuses a soft-delete of a purging lake rather than reporting success over it', async () => {
+    // Falling through would re-run phase 1 and settle on 'deleted', silently reversing an accepted
+    // purge. Returning the lake unchanged would avoid that but report SUCCESS, which the client
+    // renders as 'Data lake deleted (recoverable)' over an irreversible purge - so this refuses,
+    // the same answer archive gives for the same reason.
     const db = {
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })), update: vi.fn() },
       dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
       batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
       fabFiles: { softDeleteByDataLakeTag: vi.fn() },
     };
-    await expect(deleteDataLake(owner, 'lake1', { db } as never)).resolves.toMatchObject({ status: 'purging' });
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be deleted/i
+    );
     expect(db.dataLakes.update).not.toHaveBeenCalled();
     expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
   });
