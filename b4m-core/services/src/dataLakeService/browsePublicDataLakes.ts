@@ -65,7 +65,10 @@ export const browsePublicDataLakes = async (
   { db }: BrowsePublicDataLakesAdapters
 ): Promise<BrowsePublicDataLakesResult> => {
   // Resolved before the catalog query so an explicitly granted public lake discovers on the same
-  // terms it lists on - the arm `listDataLakes` already passes to findAccessible.
+  // terms it lists on - the arm `listDataLakes` already passes to findAccessible. Both the flag
+  // read and the grant lookup cost one query per page on this load-more path; while the read-grant
+  // cutover is report-only the flag can only ever resolve false, and it is wired now so the arm
+  // lights up at cutover instead of needing a second pass here.
   const includeReaders = await resolveEnforceReadGrants(db.settings);
   const grantedLakeIds = await grantedLakeIdsFor(
     actor.userId,

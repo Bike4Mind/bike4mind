@@ -256,7 +256,11 @@ const GATELESS = {
  *
  * Shared by every access filter in this repository (findAccessible, the public arms of
  * findActiveByUserTagsAndEntitlements and findPublicLakes) so the DB paths cannot drift from
- * each other or from the in-memory filter.
+ * each other. NOT byte-parity with the in-memory filter: `requiredUserTag` has no normalizing
+ * setter, so this matches the STORED value against the caller's tags in both casings while
+ * lakeMatchesAccess lowercases the stored value - a mixed-case stored tag held only in
+ * lowercase is filtered out here but admitted by the gate. Fails closed; entitlements are
+ * exempt (schema setter). Closing it needs a requiredUserTag setter plus a backfill.
  */
 const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): Record<string, unknown> => {
   const normalizedTags = userTags.map(t => t.toLowerCase());
@@ -344,13 +348,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (memberOrgIds.length > 0) {
       // Gateless lake (no tag, no entitlement) scoped to one of the caller's orgs -> membership
       // is its grant.
-      nonOwnerArms.push({
-        $and: [
-          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
-          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-          { organizationId: { $in: memberOrgIds } },
-        ],
-      });
+      nonOwnerArms.push({ $and: [GATELESS, { organizationId: { $in: memberOrgIds } }] });
     }
     // Only add the entitlement arm when there are keys - `$in: []` is a harmless no-match
     // but `$in: undefined` throws, so guard explicitly.
