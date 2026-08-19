@@ -62,9 +62,12 @@ const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
  * The unit-test defaults these suites otherwise inherit are too tight for them. Booting mongod
  * costs an unavoidable cold start on the first write: Mongoose builds every model's index set on
  * connect (autoIndex CANNOT be disabled - index-dependent suites need it) plus first-collection
- * creation, measured at 16-22s under the client shard's file parallelism. Against that shard's
- * 30s test budget and the shared 30s hook budget, a suite has under 14s of real headroom, so on a
- * CI runner sharing cores it times out at random rather than on anything it asserts.
+ * creation. What matters is that the cost SCALES with how contended the runner is, which is what
+ * makes the resulting failure intermittent rather than reproducible. Measured spread for a whole
+ * file: 3-12s on a healthy CI run, 16-22s under this shard's file parallelism (see the note in
+ * apps/client/vitest.config.mts), and past 35s on a busy dev machine. A 30s test budget and the
+ * shared 30s hook budget sit inside that spread, so the suites cross it at random - which is why
+ * one fails on a timeout, asserts nothing, and goes green on re-run of the same commit.
  *
  * This is not a hang mask - it is the correct budget for work that starts a database. A genuinely
  * hung test still fails, just later. Keep it the single lever for the whole class: raising the

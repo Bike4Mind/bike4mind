@@ -6,11 +6,11 @@ import * as ts from 'typescript';
 /**
  * Structural guard for the client shard's real-Mongo suites.
  *
- * A suite that boots a real mongod pays a 16-22s cold start (see MONGO_TEST_TIMEOUT_MS in
+ * A suite that boots a real mongod pays a cold start whose cost scales with runner contention -
+ * 3-12s per file on a healthy CI run, past 35s on a busy machine (see MONGO_TEST_TIMEOUT_MS in
  * packages/database/src/__test__/createMongoServer.ts). This shard sets a 30s test budget and
- * inherits a 30s hook budget, both sized for unit tests, so such a suite has under 14s of real
- * headroom and reddens CI at random on a runner sharing cores - a timeout with no failed
- * assertion, green on re-run of the same commit.
+ * inherits a 30s hook budget, both sized for unit tests, so they sit inside that spread and get
+ * crossed at random - a timeout with no failed assertion, green on re-run of the same commit.
  *
  * Auditing that by hand only holds until the next suite is added, so the audit lives here: every
  * real-Mongo suite in this shard must declare the shared budget for its tests AND its hooks, and
