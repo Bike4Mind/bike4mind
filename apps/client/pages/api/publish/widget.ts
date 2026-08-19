@@ -132,6 +132,9 @@ const WIDGET_JS = String.raw`(function () {
    *
    * A 401 that survives stage 2 latches authCannotFix, because at that point no credential this
    * page can produce will help and retrying is pure cost.
+   *
+   * The headers and credentials keys on init are OWNED by this function and overwritten - the
+   * whole point is that the stage decides them. Pass anything else (method, body, cache) freely.
    */
   function authedFetch(url, init, stage) {
     var s = Math.max(stage || 0, baseStage);

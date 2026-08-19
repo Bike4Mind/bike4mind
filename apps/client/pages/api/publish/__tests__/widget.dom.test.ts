@@ -116,18 +116,44 @@ function listCalls(): StubbedCall[] {
   return calls.filter(c => !c.url.includes(REFRESH) && !c.url.includes(CAN_COMMENT));
 }
 
+function canCommentCalls(): StubbedCall[] {
+  return calls.filter(c => c.url.includes(CAN_COMMENT));
+}
+
+/** jsdom reports visibilityState 'visible', so this runs the handler's live branch. */
+function refocusTab(): void {
+  document.dispatchEvent(new Event('visibilitychange'));
+}
+
 function clickLauncher(): void {
   (document.getElementById('b4m-launch') as HTMLButtonElement).click();
 }
 
+/**
+ * The widget registers a document-level visibilitychange listener at eval time, and jsdom keeps
+ * ONE document for the whole file - mountWidget only resets document.body. Without detaching,
+ * every widget eval'd by an earlier test is still listening, so dispatching the event runs all
+ * of them and the request counts are the sum of every instance. Track what each run adds and
+ * remove it afterwards.
+ */
+let addedDocListeners: Array<[string, EventListener]> = [];
+const nativeAddEventListener = document.addEventListener.bind(document);
+
 describe('publish comment widget - credential path', () => {
   beforeEach(() => {
     calls = [];
+    addedDocListeners = [];
+    document.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions) => {
+      addedDocListeners.push([type, fn]);
+      nativeAddEventListener(type, fn, opts);
+    }) as typeof document.addEventListener;
     vi.useFakeTimers();
     mountWidget();
   });
 
   afterEach(() => {
+    addedDocListeners.forEach(([type, fn]) => document.removeEventListener(type, fn));
+    document.addEventListener = nativeAddEventListener as typeof document.addEventListener;
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -314,6 +340,39 @@ describe('publish comment widget - credential path', () => {
 
     expect(calls.some(c => c.url.includes(CAN_COMMENT))).toBe(false);
     expect(document.getElementById('b4m-signin')).not.toBeNull();
+  });
+
+  // The visibilitychange handler used to re-check capability unconditionally. That was free when
+  // loadCanComment was a bare fetch, but it now begins with ensureToken(), so on a public
+  // artifact whose panel was never opened a backgrounded tab would start an exchange purely by
+  // being refocused - the same cost the lazy design exists to avoid, on a path a reader reaches
+  // without ever interacting. Both directions are pinned: skipped while capability is unknown,
+  // still performed once it is known.
+  it('does not start auth traffic when a tab refocuses before the panel is opened', async () => {
+    stubFetch({ signedIn: true });
+    await runWidget();
+
+    refocusTab();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refreshCalls()).toHaveLength(0);
+    expect(canCommentCalls()).toHaveLength(0);
+  });
+
+  it('still re-checks capability on refocus once it has been established', async () => {
+    // The guard must not be satisfied by simply never re-checking - a revoked or newly granted
+    // ability to comment should still be picked up when the viewer comes back to the tab.
+    stubFetch({ signedIn: true });
+    await runWidget();
+    clickLauncher();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(canCommentCalls()).toHaveLength(1);
+
+    refocusTab();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(canCommentCalls()).toHaveLength(2); // re-checked
+    expect(refreshCalls()).toHaveLength(1); // but on the cached token, no second exchange
   });
 
   it('recovers a session that expires while the page is open', async () => {
