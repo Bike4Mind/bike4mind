@@ -9,9 +9,12 @@ import { createMocks } from 'node-mocks-http';
  * emits - no real database, so we mock the DB layer and inspect the pipeline handed to it.
  */
 
-const { aggregate, buildListVisibilityFilter, projectFind } = vi.hoisted(() => ({
+const { aggregate, buildListVisibilityFilter, buildListQuery, projectFind } = vi.hoisted(() => ({
   aggregate: vi.fn(),
   buildListVisibilityFilter: vi.fn(),
+  // Narrowing/sort is unit-tested in buildListQuery.test.ts; here it is a seam so these tests
+  // can assert WHERE its output lands in the pipeline without restating its logic.
+  buildListQuery: vi.fn(() => ({ match: {}, sort: { publishedAt: -1, publicId: 1 } })),
   projectFind: vi.fn(() => ({ select: () => ({ lean: () => Promise.resolve([]) }) })),
 }));
 
@@ -39,6 +42,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/services/publish', () => ({
   buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a),
+  buildListQuery: (...a: unknown[]) => buildListQuery(...a),
 }));
 
 import handler from '../index';
@@ -64,16 +68,44 @@ function matchStage(): Record<string, unknown> {
   return (pipeline.find(s => '$match' in s) as { $match: Record<string, unknown> }).$match;
 }
 
-/** The `$project` stage from the first aggregate() call. */
-function projectStage(): Record<string, unknown> {
+/** The `rows` branch of the $facet stage - where sort/skip/limit/project now live. */
+function rowsBranch(): Array<Record<string, unknown>> {
   const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
-  return (pipeline.find(s => '$project' in s) as { $project: Record<string, unknown> }).$project;
+  const facet = pipeline.find(s => '$facet' in s) as { $facet: Record<string, Array<Record<string, unknown>>> };
+  return facet.$facet.rows;
+}
+
+/** The `$project` stage, now nested inside the $facet rows branch. */
+function projectStage(): Record<string, unknown> {
+  return (rowsBranch().find(s => '$project' in s) as { $project: Record<string, unknown> }).$project;
+}
+
+/** A named stage from the rows branch, e.g. '$skip' or '$limit'. */
+function rowsStage(name: string): unknown {
+  const stage = rowsBranch().find(s => name in s) as Record<string, unknown> | undefined;
+  return stage?.[name];
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  aggregate.mockResolvedValue([{ publicId: 'p1', versionsCount: 3 }]);
+  aggregate.mockResolvedValue([
+    {
+      rows: [{ publicId: 'p1', versionsCount: 3 }],
+      total: [{ n: 41 }],
+      byKind: [
+        { _id: 'bundle', n: 40 },
+        { _id: 'reply', n: 1 },
+      ],
+      byVisibility: [{ _id: 'public', n: 38 }],
+      byGate: [
+        { _id: 'none', n: 39 },
+        { _id: 'passphrase', n: 2 },
+      ],
+      withComments: [{ n: 1 }],
+    },
+  ]);
   buildListVisibilityFilter.mockReturnValue(VIS);
+  buildListQuery.mockReturnValue({ match: {}, sort: { publishedAt: -1, publicId: 1 } });
 });
 
 describe('GET /api/publish/artifacts — auth', () => {
@@ -150,14 +182,107 @@ describe('GET /api/publish/artifacts — ?mine and default visibility', () => {
 describe('GET /api/publish/artifacts — projection', () => {
   it('computes versionsCount and never ships the versions[] array', async () => {
     await run({ mine: 'true' });
-    const project = projectStage();
-    expect(project.versionsCount).toEqual({ $size: { $ifNull: ['$versions', []] } });
-    expect(project.versions).toBeUndefined();
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const added = (pipeline.find(st => '$addFields' in st) as { $addFields: Record<string, unknown> }).$addFields;
+    // The $size expression moved up to $addFields, which must precede $sort; $project then
+    // just passes the computed field through.
+    expect(added.versionsCount).toEqual({ $size: { $ifNull: ['$versions', []] } });
+    expect(projectStage().versionsCount).toBe(1);
+    expect(projectStage().versions).toBeUndefined();
   });
 
-  it('returns the aggregation result under { artifacts }', async () => {
+  it('returns the page under { artifacts } alongside total, paging and facet counts', async () => {
     const res = await run({ mine: 'true' });
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ artifacts: [{ publicId: 'p1', versionsCount: 3 }] });
+    expect(res._getJSONData()).toEqual({
+      artifacts: [{ publicId: 'p1', versionsCount: 3 }],
+      total: 41,
+      limit: 200,
+      skip: 0,
+      facets: {
+        kind: { bundle: 40, reply: 1 },
+        visibility: { public: 38 },
+        gate: { none: 39, passphrase: 2 },
+        comments: 1,
+      },
+    });
+  });
+
+  it('projects the gate KIND but never the passphrase hash', async () => {
+    // select:false does not protect an aggregation, so the projection is the only guard.
+    await run({ mine: 'true' });
+    const project = projectStage();
+    expect(project.gateKind).toBe('$accessGate.kind');
+    expect(JSON.stringify(project)).not.toContain('passphraseHash');
+  });
+
+  it('derives versionsCount and titleSort BEFORE $facet, so $sort can order by them', async () => {
+    // $project runs after $sort, so a sort key naming a projected-only field orders by nothing.
+    await run({ mine: 'true' });
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const addIdx = pipeline.findIndex(st => '$addFields' in st);
+    const facetIdx = pipeline.findIndex(st => '$facet' in st);
+    expect(addIdx).toBeGreaterThanOrEqual(0);
+    expect(addIdx).toBeLessThan(facetIdx);
+    const added = (pipeline[addIdx] as { $addFields: Record<string, unknown> }).$addFields;
+    expect(Object.keys(added).sort()).toEqual(['titleSort', 'versionsCount']);
+  });
+});
+
+describe('GET /api/publish/artifacts - paging', () => {
+  it('defaults to the pre-paging cap so callers written before paging are unaffected', async () => {
+    await run({ mine: 'true' });
+    expect(rowsStage('$limit')).toBe(200);
+    expect(rowsStage('$skip')).toBe(0);
+  });
+
+  it('honours limit and skip', async () => {
+    const res = await run({ mine: 'true', limit: '25', skip: '50' });
+    expect(rowsStage('$limit')).toBe(25);
+    expect(rowsStage('$skip')).toBe(50);
+    // Echoed back so a client can tell what page size it actually got after clamping.
+    expect(res._getJSONData().limit).toBe(25);
+    expect(res._getJSONData().skip).toBe(50);
+  });
+
+  it('clamps a limit above the maximum and rejects nonsense rather than unbounding the query', async () => {
+    await run({ mine: 'true', limit: '99999' });
+    expect(rowsStage('$limit')).toBe(200);
+
+    aggregate.mockClear();
+    await run({ mine: 'true', limit: 'all' });
+    expect(rowsStage('$limit')).toBe(200);
+
+    aggregate.mockClear();
+    await run({ mine: 'true', limit: '0' });
+    expect(rowsStage('$limit')).toBe(1); // floor of 1; never an unlimited page
+  });
+
+  it('floors a negative skip at zero', async () => {
+    await run({ mine: 'true', skip: '-10' });
+    expect(rowsStage('$skip')).toBe(0);
+  });
+
+  it('counts the total behind the SAME narrowing as the page, not the whole scope', async () => {
+    // A total computed over the unfiltered scope would tell the owner there are 41 results
+    // while showing them 3, and the pager would offer pages that render empty.
+    buildListQuery.mockReturnValue({ match: { visibility: 'private' }, sort: { publishedAt: -1 } });
+    await run({ mine: 'true', visibility: 'private' });
+
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, Array<Record<string, unknown>>> })
+      .$facet;
+    expect(facet.total[0]).toEqual({ $match: { visibility: 'private' } });
+  });
+
+  it('computes facet counts WITHOUT the caller selection, so a chip keeps its count once clicked', async () => {
+    buildListQuery.mockReturnValue({ match: { 'source.kind': 'reply' }, sort: { publishedAt: -1 } });
+    await run({ mine: 'true', kind: 'reply' });
+
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, Array<Record<string, unknown>>> })
+      .$facet;
+    // byKind groups straight off the scope - no $match ahead of it.
+    expect(facet.byKind).toEqual([{ $group: { _id: '$source.kind', n: { $sum: 1 } } }]);
   });
 });

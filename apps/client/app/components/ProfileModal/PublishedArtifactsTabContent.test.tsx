@@ -72,11 +72,27 @@ const bundleRow = {
   versionsCount: 1,
 };
 const replyRow = { ...bundleRow, publicId: 'pub-2', title: 'My Reply', source: { kind: 'reply' } };
+
+/** listMyPublishedArtifacts returns a page envelope, not a bare array. */
+const page = (rows: unknown[], over: Record<string, unknown> = {}) => ({
+  artifacts: rows,
+  total: rows.length,
+  limit: 25,
+  skip: 0,
+  facets: { kind: {}, visibility: {}, gate: {}, comments: 0 },
+  ...over,
+});
+
+/**
+ * The row is collapsed by default now, so its settings, export and version controls live behind
+ * the disclosure. Open it first - this is the click a real owner makes too.
+ */
+const expandRow = (publicId: string) => fireEvent.click(screen.getByTestId(`published-artifact-expand-${publicId}`));
 /** A bundle that still knows its in-app source, so it can be refreshed. */
 const sourcedRow = { ...bundleRow, publicId: 'pub-3', source: { kind: 'bundle', artifactId: 'artifact_html_x_1_0' } };
 
 beforeEach(() => {
-  mockList.mockReset().mockResolvedValue([bundleRow]);
+  mockList.mockReset().mockResolvedValue(page([bundleRow]));
   mockExport.mockReset().mockResolvedValue('# exported');
   mockDownloadData.mockReset();
   mockRefresh.mockReset().mockResolvedValue({ publicId: 'pub-3' });
@@ -89,6 +105,7 @@ describe('PublishedArtifactsTabContent - manage toggle', () => {
   it('mounts the sharing panel only after the </> toggle is clicked, and unmounts on re-click', async () => {
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
 
     // Lazy: panel not mounted until the owner opens it.
     expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
@@ -105,6 +122,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
   it('hides Copy-as-Markdown for a bundle, which has no faithful Markdown form', async () => {
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
 
     expect(screen.queryByTestId('published-artifact-copy-md-pub-1')).toBeNull();
     // HTML is faithful for every kind, so that action is always present.
@@ -114,9 +132,10 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
   it('copies a reply as Markdown through the authenticated export fetch', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
-    mockList.mockResolvedValue([replyRow]);
+    mockList.mockResolvedValue(page([replyRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-2');
+    expandRow('pub-2');
 
     fireEvent.click(screen.getByTestId('published-artifact-copy-md-pub-2'));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('# exported'));
@@ -130,6 +149,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
     mockExport.mockResolvedValue('<html></html>');
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
 
     fireEvent.click(screen.getByTestId('published-artifact-save-html-pub-1'));
     await waitFor(() =>
@@ -142,6 +162,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
     mockExport.mockRejectedValue(new Error('boom'));
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
 
     fireEvent.click(screen.getByTestId('published-artifact-save-html-pub-1'));
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
@@ -152,6 +173,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
     mockExport.mockResolvedValue('<html><body>bundle</body></html>');
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
 
     // Present on a bundle, which has no faithful Markdown form - PDF is not gated.
     fireEvent.click(screen.getByTestId('published-artifact-save-pdf-pub-1'));
@@ -166,6 +188,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
     mockExport.mockRejectedValue(new Error('boom'));
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
 
     fireEvent.click(screen.getByTestId('published-artifact-save-pdf-pub-1'));
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
@@ -175,9 +198,10 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
 
 describe('PublishedArtifactsTabContent - refresh from source (issue #1142, option 2)', () => {
   it('offers Refresh only for a bundle that still knows its source artifact', async () => {
-    mockList.mockResolvedValue([bundleRow, replyRow, sourcedRow]);
+    mockList.mockResolvedValue(page([bundleRow, replyRow, sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
+    expandRow('pub-3');
 
     expect(screen.getByTestId('published-artifact-refresh-pub-3')).not.toBeNull();
     // No artifactId (published from outside the app) - nothing to read back.
@@ -188,9 +212,10 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
 
   it('confirms before refreshing, since it replaces what viewers of a live link see', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(page([sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
+    expandRow('pub-3');
 
     fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
     expect(confirm).toHaveBeenCalled();
@@ -200,9 +225,10 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
 
   it('refreshes the row on confirm and reports success', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(page([sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
+    expandRow('pub-3');
 
     fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledWith(expect.objectContaining({ publicId: 'pub-3' })));
@@ -213,9 +239,10 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
   it('surfaces a refresh failure', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockRefresh.mockRejectedValue(new Error('boom'));
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(page([sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
+    expandRow('pub-3');
 
     fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
@@ -224,15 +251,150 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
   });
 
   it('points the single-version hint at Refresh when the row can use it', async () => {
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(page([sourcedRow]));
     renderTab();
+    await screen.findByTestId('published-artifact-pub-3');
+    // The hint moved into the expanded row: repeated on every collapsed row it was the largest
+    // consumer of vertical space on the page, and it is guidance you read while in settings.
+    expandRow('pub-3');
     const hint = await screen.findByTestId('published-artifact-single-version-pub-3');
     expect(hint.textContent).toContain('refresh it from source');
   });
 
   it('keeps the generic hint wording when the row cannot be refreshed', async () => {
     renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    // The hint moved into the expanded row: repeated on every collapsed row it was the largest
+    // consumer of vertical space on the page, and it is guidance you read while in settings.
+    expandRow('pub-1');
     const hint = await screen.findByTestId('published-artifact-single-version-pub-1');
     expect(hint.textContent).toContain('re-publish this artifact');
+  });
+});
+
+/**
+ * The library controls. These assert the QUERY the tab asks for rather than re-testing the
+ * server's filtering (buildListQuery has its own unit tests) - what matters here is that a
+ * click turns into the right request and that paging resets when the result set changes.
+ */
+describe('PublishedArtifactsTabContent - search, facets and paging', () => {
+  /** The query argument of the most recent list call. */
+  const lastQuery = () => mockList.mock.calls[mockList.mock.calls.length - 1][0] as Record<string, unknown>;
+
+  it('requests a bounded page instead of the whole library', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(lastQuery()).toMatchObject({ limit: 25, skip: 0, sort: 'newest' });
+  });
+
+  it('collapses the row: settings and export controls are hidden until expanded', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    // Scannable on the collapsed row.
+    expect(screen.getByTestId('published-artifact-meta-pub-1')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-copy-pub-1')).not.toBeNull();
+    // Everything else is one click away.
+    expect(screen.queryByTestId('published-artifact-visibility-pub-1')).toBeNull();
+    expect(screen.queryByTestId('published-artifact-delete-pub-1')).toBeNull();
+
+    expandRow('pub-1');
+    expect(screen.getByTestId('published-artifact-visibility-pub-1')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-delete-pub-1')).not.toBeNull();
+  });
+
+  it('expands rows independently, so two artifacts can be compared', async () => {
+    mockList.mockResolvedValue(page([bundleRow, replyRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    expandRow('pub-1');
+    expandRow('pub-2');
+
+    expect(screen.getByTestId('published-artifact-visibility-pub-1')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-visibility-pub-2')).not.toBeNull();
+  });
+
+  it('sends the typed search term, debounced', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'ionq' } });
+
+    await waitFor(() => expect(lastQuery().q).toBe('ionq'));
+  });
+
+  it('filters on a facet chip and turns the filter off when clicked again', async () => {
+    mockList.mockResolvedValue(
+      page([bundleRow], { facets: { kind: { bundle: 3 }, visibility: {}, gate: {}, comments: 0 } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-kind-bundle');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-bundle'));
+    await waitFor(() => expect(lastQuery().kind).toBe('bundle'));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-bundle'));
+    await waitFor(() => expect(lastQuery().kind).toBeUndefined());
+  });
+
+  it('pages forward and back, and reports the range against the real total', async () => {
+    mockList.mockResolvedValue(page([bundleRow], { total: 60 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    expect(screen.getByTestId('published-artifacts-pager').textContent).toContain('of 60');
+    expect(screen.getByTestId('published-artifacts-prev')).toHaveProperty('disabled', true);
+
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-prev'));
+    await waitFor(() => expect(lastQuery().skip).toBe(0));
+  });
+
+  it('hides the pager when everything fits on one page', async () => {
+    mockList.mockResolvedValue(page([bundleRow], { total: 1 }));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.queryByTestId('published-artifacts-pager')).toBeNull();
+  });
+
+  it('returns to the first page when a filter changes', async () => {
+    // Staying on page 3 of a narrower result set is how you end up looking at an empty list you
+    // did not ask for.
+    mockList.mockResolvedValue(
+      page([bundleRow], { total: 60, facets: { kind: { bundle: 60 }, visibility: {}, gate: {}, comments: 0 } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-bundle'));
+    await waitFor(() => expect(lastQuery().skip).toBe(0));
+  });
+
+  it('shows the never-published copy for a genuinely empty library, with no toolbar', async () => {
+    mockList.mockResolvedValue(page([]));
+    renderTab();
+
+    expect(await screen.findByTestId('published-artifacts-empty')).not.toBeNull();
+    // Nothing to search or sort, so the controls would be furniture.
+    expect(screen.queryByTestId('published-artifacts-search')).toBeNull();
+  });
+
+  it('says "no matches" - not "nothing published" - when a filter empties the list', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    mockList.mockResolvedValue(page([]));
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'nothing matches' } });
+
+    expect(await screen.findByTestId('published-artifacts-no-matches')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifacts-empty')).toBeNull();
+    // The way out stays on screen even with zero results.
+    expect(screen.getByTestId('published-artifacts-clear-filters')).not.toBeNull();
   });
 });
