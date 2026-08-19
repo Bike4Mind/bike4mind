@@ -6,12 +6,19 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
 
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
- * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
+ * states (archiving/restoring/deleting/purging) that exist to drive UI and make a crashed
  * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
  * holds its first member file (see `activateIfDraft` below), and unconditionally when an
  * archived or deleted lake is restored, which is how an empty lake can end up active.
+ *
+ * `purging` is the one transitional state that is NOT recoverable by retrying the same action:
+ * it is claimed the moment a phase-2 hard delete is ACCEPTED (#1744), before the background
+ * sweep runs, so that `listDeletedDataLakes` stops offering Restore on a lake whose
+ * destruction is already irreversible. Everything else that reads `status` must treat it as
+ * "going away", never as a lake to act on.
  */
-export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
+export type DataLakeStatus =
+  'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted' | 'purging';
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
@@ -387,6 +394,35 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
   /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
   claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
+  /**
+   * Claim `deleted -> purging` at the moment a phase-2 hard delete is ACCEPTED (#1744). Returns
+   * whether THIS caller won; a loser must refuse the purge and must NOT enqueue a sweep.
+   *
+   * The status test lives in the FILTER for the same reason as `activateIfDraft`, and here it is
+   * load-bearing rather than defensive: every write in this area is read-then-write (the route
+   * pre-checks a lake it fetched, `restoreDeletedDataLake` reads then writes), so a plain `$set`
+   * would let a restore that read `deleted` before this claim write its terminal `active` after
+   * it. The sweep would then fail its guard and be swallowed as permanently-invalid - the exact
+   * abandonment #1744 exists to remove, just through a narrower window.
+   */
+  claimPurging(id: string): Promise<boolean>;
+  /**
+   * Enter `restoring` from a soft-deleted lake, claimed rather than set so it cannot overwrite a
+   * `purging` accepted between the caller's status read and this write - the mirror of the race
+   * `claimPurging` closes from the other side. Re-entrant from `restoring` itself, so a crashed
+   * prior attempt can still be retried. Returns whether this caller may proceed.
+   */
+  claimRestoring(id: string): Promise<boolean>;
+  /**
+   * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
+   * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
+   * on `purging` so it can never resurrect a lake that some other transition has since moved.
+   *
+   * ONLY safe for a sweep that failed BEFORE destroying anything. `cleanupDeletedDataLake` throws
+   * `BadRequestError` exclusively from its two entry guards, which is what makes the consumer's
+   * use of this correct; a partially-swept lake must stay `purging` and be recovered by DLQ replay.
+   */
+  releasePurgingToDeleted(id: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
