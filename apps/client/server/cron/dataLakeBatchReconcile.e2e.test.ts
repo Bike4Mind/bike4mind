@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { dataLakeBatchRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 
@@ -27,16 +27,20 @@ vi.mock('@server/utils/cloudwatch', () => ({
 
 import { runStuckBatchSweep } from './dataLakeBatchReconcile';
 
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let mongoServer: MongoMemoryServer;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
   vi.clearAllMocks();

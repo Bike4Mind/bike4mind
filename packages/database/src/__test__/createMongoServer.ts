@@ -49,6 +49,31 @@ const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
   throw lastError;
 };
 
+/**
+ * Time budget for every test and hook in a suite that boots a real mongod through the factories
+ * below. Declare it once per file, right after the imports:
+ *
+ *   vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+ *
+ * Both keys matter - mongod boots in a hook, and a `describe` option covers only tests. Prefer
+ * this over per-test/per-hook third arguments: one lever per file, and no literal left behind to
+ * silently pin a suite back to the old budget.
+ *
+ * The unit-test defaults these suites otherwise inherit are too tight for them. Booting mongod
+ * costs an unavoidable cold start on the first write: Mongoose builds every model's index set on
+ * connect (autoIndex CANNOT be disabled - index-dependent suites need it) plus first-collection
+ * creation, measured at 16-22s under the client shard's file parallelism. Against that shard's
+ * 30s test budget and the shared 30s hook budget, a suite has under 14s of real headroom, so on a
+ * CI runner sharing cores it times out at random rather than on anything it asserts.
+ *
+ * This is not a hang mask - it is the correct budget for work that starts a database. A genuinely
+ * hung test still fails, just later. Keep it the single lever for the whole class: raising the
+ * shard default instead would hand the same slack to ~1000 unit tests that must stay tight.
+ * `apps/client/__tests__/mongoTestTimeoutBudget.test.ts` fails the build if a real-Mongo suite in
+ * that shard declares anything else.
+ */
+export const MONGO_TEST_TIMEOUT_MS = 60_000;
+
 export const createMongoServer = async (): Promise<MongoMemoryServer> =>
   withPortRetry(() => MongoMemoryServer.create());
 
