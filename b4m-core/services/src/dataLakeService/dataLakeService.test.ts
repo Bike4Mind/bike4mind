@@ -28,6 +28,7 @@ import type { RetrievalIndexRemoval } from './ports';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
+import { acceptDataLakePurge } from './acceptDataLakePurge';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
@@ -1630,6 +1631,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
       activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
     };
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
@@ -1985,6 +1987,7 @@ describe('teardown stamp bookkeeping', () => {
         update: vi.fn().mockResolvedValue(lake()),
         setStats: vi.fn().mockResolvedValue(undefined),
         activateIfDraft: vi.fn(),
+        claimRestoring: vi.fn().mockResolvedValue(true),
       },
       fabFiles: {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
@@ -2086,9 +2089,12 @@ describe('teardown stamp bookkeeping', () => {
       const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
       await restoreDeletedDataLake(owner, 'lake1', adapters);
 
-      // The transitional hop stays unstamped - see the same assertion on unarchive/archive/delete.
-      const [transitional] = adapters.db.dataLakes.update.mock.calls[0];
-      expect(transitional).toEqual({ id: 'lake1', status: 'restoring' });
+      // The transitional hop is now the CLAIM (#1744), which takes an id and nothing else - so the
+      // one-stamp-per-operator-action rule the sibling unarchive test pins with an object assertion
+      // holds structurally here: there is no payload on this hop to attach a write stamp to. What
+      // still needs pinning is that the hop happened and that `update` is therefore the settle only.
+      expect(adapters.db.dataLakes.claimRestoring).toHaveBeenCalledWith('lake1');
+      expect(adapters.db.dataLakes.update).toHaveBeenCalledTimes(1);
 
       const settle = adapters.db.dataLakes.update.mock.calls.at(-1)?.[0];
       expect(settle).toEqual({
@@ -2124,6 +2130,113 @@ describe('teardown stamp bookkeeping', () => {
         ARCHIVE_RECORDED
       );
     });
+  });
+});
+
+describe('acceptDataLakePurge - the accept-time status transition (#1744)', () => {
+  const owner = { userId: 'owner', isAdmin: false };
+  const makeAdapters = (existing: IDataLakeDocument, claimed = true) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        claimPurging: vi.fn().mockResolvedValue(claimed),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
+    },
+  });
+
+  it('claims deleted -> purging so the lake leaves the deleted list before the sweep runs', async () => {
+    const adapters = makeAdapters(lake({ status: 'deleted' }));
+    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).resolves.toBeUndefined();
+    expect(adapters.db.dataLakes.claimPurging).toHaveBeenCalledWith('lake1');
+  });
+
+  it('refuses when the claim is LOST, which is what stops a purge racing a concurrent restore', async () => {
+    // The whole point of the claim: the guards above it ran against a document read moments earlier,
+    // so a restore landing in that gap must make this refuse rather than overwrite it. A bare status
+    // write here would leave #1744 in place behind a narrower window.
+    const adapters = makeAdapters(lake({ status: 'deleted' }), false);
+    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).rejects.toThrow(/soft-deleted/i);
+  });
+
+  it('records no audit event when the claim is lost, so the trail never shows a refused purge', async () => {
+    const adapters = makeAdapters(lake({ status: 'deleted' }), false);
+    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).rejects.toThrow();
+    expect(adapters.db.lakeConfigChangeEvents.record).not.toHaveBeenCalled();
+  });
+
+  it("records the purge under its own action, not the recoverable phase-1 'delete'", async () => {
+    // This is the only audit record a purge ever leaves: the sweep records nothing and then deletes
+    // the lake, so folding it into 'delete' would make the irreversible request indistinguishable
+    // from the reversible one for the rest of time.
+    const adapters = makeAdapters(lake({ status: 'deleted' }));
+    await acceptDataLakePurge(owner, 'lake1', adapters as never);
+    expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'purge' })
+    );
+  });
+
+  it('refuses a caller who cannot manage the lake, and never claims', async () => {
+    const adapters = makeAdapters(lake({ status: 'deleted', createdByUserId: 'someone-else' }));
+    await expect(
+      acceptDataLakePurge({ userId: 'intruder', isAdmin: false }, 'lake1', adapters as never)
+    ).rejects.toThrow(/do not have permission to clean up/i);
+    expect(adapters.db.dataLakes.claimPurging).not.toHaveBeenCalled();
+  });
+});
+
+describe('restore and delete against a purge-accepted lake (#1744)', () => {
+  const owner = { userId: 'owner', isAdmin: false };
+
+  it('refuses to restore a purging lake, with a message that says the purge is irreversible', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })),
+        update: vi.fn(),
+        setStats: vi.fn(),
+      },
+    };
+    await expect(restoreDeletedDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be restored/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses the restore when claimRestoring LOSES to a purge accepted mid-call', async () => {
+    // The mirror of the accept-side race: this lake still read as 'deleted', so the status guard
+    // passed, and the claim is the only thing standing between the restore and a lake whose purge
+    // is already accepted.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+        claimRestoring: vi.fn().mockResolvedValue(false),
+        update: vi.fn(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+      },
+      fabFiles: { findDeletedByDataLakeTag: vi.fn(), undeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(restoreDeletedDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be restored/i
+    );
+    // Nothing may have been un-deleted: losing the claim must abort before any file work.
+    expect(db.fabFiles.undeleteByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('short-circuits a soft-delete of a purging lake instead of un-purging it', async () => {
+    // Falling through would re-run phase 1 and settle on status 'deleted', which silently reverses
+    // an accepted purge and leaves the sweep to fail its guard.
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })), update: vi.fn() },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { softDeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).resolves.toMatchObject({ status: 'purging' });
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
   });
 });
 
@@ -2165,6 +2278,21 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     await expect(cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters)).rejects.toThrow(
       /soft-deleted/i
     );
+  });
+
+  it('sweeps a lake in purging, the state the accept now leaves it in (#1744)', async () => {
+    const adapters = makeAdapters('purging');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
+  it('still sweeps a lake in deleted, which keeps DLQ replay and in-flight messages working', async () => {
+    // Load-bearing, not leniency: a message enqueued before #1744, or one replayed by an admin after
+    // the consumer released a refused purge back to 'deleted', arrives with this status. Narrowing
+    // the guard to 'purging' alone would make the DLQ replay path fail on arrival.
+    const adapters = makeAdapters('deleted');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
 
   it('purges chunks, files, batches, then the lake when soft-deleted', async () => {
