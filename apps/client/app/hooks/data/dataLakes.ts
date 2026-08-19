@@ -232,8 +232,13 @@ export function useSetLakeVisibility() {
       });
       return response.data;
     },
-    onSuccess: (_data, { visibility }) => {
+    onSuccess: (_data, { id, visibility }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // A visibility change records a config-history row, same as an update. Not relying on the
+      // History tab's staleTime:0 + enabled-toggle refetch: that pairing happens to refresh today,
+      // but it is incidental, and raising staleTime or dropping the toggle would silently strand
+      // the new row.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success(VISIBILITY_TOAST[visibility]);
     },
     onError: (error: Error) => {
@@ -285,10 +290,14 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postLifecycle(id, action),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
+      // Every lifecycle action records a config-history row. Invalidated for all five rather than
+      // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
+      // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success(successMessage);
     },
     onError: (error: Error) => {
