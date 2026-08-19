@@ -188,7 +188,7 @@ const handler = baseApi()
     const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings);
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('email', stageClass, 'disabled', Config.STAGE);
+      await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, 'disabled', Config.STAGE);
     } else if (emailRoute.kind === 'skip') {
       email = { outcome: 'skipped', reason: emailRoute.reason };
       await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE);
