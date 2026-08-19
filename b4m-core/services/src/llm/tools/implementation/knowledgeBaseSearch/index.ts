@@ -299,7 +299,8 @@ async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
   corpusLabel: string,
-  skipNotice?: string | null
+  skipNotice?: string | null,
+  dataLakeTags: string[] = []
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -330,7 +331,13 @@ async function emitSemanticCitables(
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
     // does not narrow to this literal. Pre-existing pattern in this file.
-    { promptMeta: { citables, ...(skipNotice ? { warnings: [skipNotice] } : {}) } } as any,
+    {
+      promptMeta: {
+        citables,
+        ...(skipNotice ? { warnings: [skipNotice] } : {}),
+        retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
+      },
+    } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
 }
@@ -436,7 +443,7 @@ async function trySemanticKbSearch(
     // value arrives already clamped to KB_SEARCH_MAX_RESULTS; this arm must not re-derive it.
     const ranked = search.results.slice(0, maxResults);
 
-    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
+    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice, dataLakeTags);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
@@ -514,7 +521,7 @@ async function tryScopedSemanticKbSearch(
       return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 
     const ranked = search.results.slice(0, maxResults);
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice, []);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
     return {
@@ -944,7 +951,18 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
             await context.statusUpdate(
-              { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
+              {
+                promptMeta: {
+                  citables,
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'ok',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                  },
+                },
+              } as any,
               foundStatus
             );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
@@ -953,7 +971,19 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
             const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
-              { promptMeta: semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {} } as any,
+              {
+                promptMeta: {
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  // Ran to completion and legitimately found nothing - must be distinguishable
+                  // from "never searched" (#1867).
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'ok',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                  },
+                },
+              } as any,
               (scope
                 ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
                 : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix

@@ -42,6 +42,18 @@ const LakeMemorySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
+// Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
+// auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
+// re-parse since `attempted`/`outcome` are required). Top-level on promptMeta, not nested under
+// `context` - see the field's own comment in QuestModel.ts and in promptMeta.ts for why a
+// one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
+const RetrievalSummarySchema = subSchema({
+  attempted: { type: Boolean, required: true },
+  outcome: { type: String, enum: ['ok', 'no_lakes', 'failed'], required: true },
+  surfaces: [{ type: String, required: false }],
+  dataLakeTags: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -263,6 +275,9 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         verbatimTurnsExcluded: { type: Number, required: false },
       },
     },
+    // Must stay in sync with the Zod PromptMeta `retrieval` (parity test enforces it). Top-level,
+    // not nested under `context` above - see RetrievalSummarySchema's comment.
+    retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },

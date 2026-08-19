@@ -308,11 +308,53 @@ export const CitableSourceSchema = z.object({
     .optional(),
 });
 
+/**
+ * Per-turn retrieval outcome (#1867): whether retrieval was attempted this turn and what happened,
+ * independent of whether the model then cited anything. Exists specifically to make the zero case
+ * distinguishable from "never asked" - `context.lakeMemory` and `citables` both go silent on a
+ * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
+ * where retrieval never ran at all.
+ *
+ * Deliberately holds NO counts and NO identifiers. Counts already exist and are more precise:
+ * `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * `applyQuestStatusChanges`, while this shape (identifier-free by design, so it never needs
+ * redaction) cannot dedupe and would have to sum - producing a second, disagreeing number for the
+ * same question. Similarity scores live on `LakeAccessEvent`, not here.
+ *
+ * `attempted`/`outcome` on their own would still be ambiguous about WHICH lakes were searched on a
+ * zero-recall turn (dataLakeTags otherwise lives only inside `lakeMemory`, written after the
+ * zero-belief return), so this stamps the resolved tags at write time rather than making a reader
+ * fall back to the session's current (possibly since-changed) `retrievalTags`.
+ *
+ * Absent-or-fully-present, matching `lakeMemory` above - see the Mongoose-side subSchema comment
+ * in QuestModel.ts for why partial-write and default-array shapes are unsafe here.
+ */
+export const RetrievalSummarySchema = z.object({
+  /** True once a retrieval-capable surface actually ran (not merely offered) this turn. */
+  attempted: z.boolean(),
+  /**
+   * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
+   * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
+   * 'failed' - threw; recall did not complete.
+   * On multiple retrieval calls within one turn, merge priority is failed > no_lakes > ok (see
+   * ToolBuilder.ts mergeRetrievalSummary), so a single failure is never masked by a later success.
+   */
+  outcome: z.enum(['ok', 'no_lakes', 'failed']),
+  /** Which retrieval-capable surface(s) ran this turn, e.g. 'forced-retrieval', 'knowledgeBaseSearch'. */
+  surfaces: z.array(z.string()),
+  /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
+  dataLakeTags: z.array(z.string()),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
+  /** Per-turn retrieval outcome - see RetrievalSummarySchema. Top-level (not under `context`)
+   * deliberately: applyQuestStatusChanges does a one-level spread merge, so a field nested under
+   * `context` would be replaced wholesale by any tool-arm write instead of merging. */
+  retrieval: RetrievalSummarySchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`

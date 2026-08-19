@@ -349,6 +349,21 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           if (retrievedFiles.length === 0) {
+            // Ran to completion (documents were located) and legitimately found no stored text -
+            // must be distinguishable from "never asked" (#1867). No prior statusUpdate call
+            // exists on this branch; dataLakeTags is left empty rather than resolved synchronously
+            // - see the audit-write comment below on why dynamicAccess() is deliberately deferred
+            // off this path.
+            await context.statusUpdate({
+              promptMeta: {
+                retrieval: {
+                  attempted: true,
+                  outcome: 'ok',
+                  surfaces: ['knowledgeBaseRetrieve'],
+                  dataLakeTags: [],
+                },
+              },
+            } as any);
             // A file already inlined into this turn's prompt (attached but still chunking) has its
             // content in front of the model regardless of this zero-chunk result - say so explicitly
             // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
@@ -464,17 +479,24 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             };
           });
 
-          if (citables.length > 0) {
-            await context.statusUpdate(
-              {
-                promptMeta: {
-                  citables,
+          // citables mirrors retrievedFiles 1:1 and is therefore always non-empty here (the
+          // retrievedFiles.length === 0 case returns above, before this point). retrieval is
+          // recorded unconditionally rather than gated on citables.length for that reason.
+          await context.statusUpdate(
+            {
+              promptMeta: {
+                citables,
+                retrieval: {
+                  attempted: true,
+                  outcome: 'ok',
+                  surfaces: ['knowledgeBaseRetrieve'],
+                  dataLakeTags: [],
                 },
-              } as any,
-              'Knowledge base content retrieved'
-            );
-            context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
-          }
+              },
+            } as any,
+            'Knowledge base content retrieved'
+          );
+          context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
 
           // This channel returns WHOLE documents (up to ABSOLUTE_MAX_CHARS) and is reachable
           // without a prior search, so the delimiter matters more here than on the search path.

@@ -110,6 +110,73 @@ describe('applyQuestStatusChanges', () => {
     });
   });
 
+  describe('retrieval', () => {
+    it('merges a tool-arm write onto an existing forced-arm value instead of clobbering it', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['forced-retrieval'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-b'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['forced-retrieval', 'knowledgeBaseSearch'],
+        dataLakeTags: ['lake-a', 'lake-b'],
+      });
+    });
+
+    it('never lets a later ok mask an earlier failure within the same turn', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'failed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    });
+
+    it('dedupes surfaces and dataLakeTags on repeated calls', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.surfaces).toEqual(['knowledgeBaseSearch']);
+      expect(quest.promptMeta?.retrieval?.dataLakeTags).toEqual(['lake-a']);
+    });
+
+    it('does not erase an existing retrieval value when the change set carries none', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['forced-retrieval'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['forced-retrieval'],
+        dataLakeTags: ['lake-a'],
+      });
+    });
+  });
+
   describe('other fields', () => {
     it('overwrites non-accreting fields wholesale', () => {
       const quest = makeQuest({ status: 'running' } as Partial<IChatHistoryItemDocument>);

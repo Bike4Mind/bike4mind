@@ -1762,6 +1762,62 @@ describe('search_knowledge_base access-event audit', () => {
  * Asserted on the tool OUTPUT, never on an internal variable: the output is what costs tokens, and a
  * test reading the clamped local would still pass if a consumer went back to the raw param.
  */
+
+describe('search_knowledge_base retrieval summary (#1867)', () => {
+  it('records attempted:true, outcome:ok on the keyword arm with no hits (the zero case)', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      db: { fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) } } as never,
+    });
+
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: ['datalake:x'],
+    });
+  });
+
+  it('records attempted:true, outcome:ok on the keyword arm when it finds results', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: ['datalake:x'],
+    });
+  });
+});
+
 describe('search_knowledge_base max_results clamp (#1757)', () => {
   const scan = {
     truncated: false,

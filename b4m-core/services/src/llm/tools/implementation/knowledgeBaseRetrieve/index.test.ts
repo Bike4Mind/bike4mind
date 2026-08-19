@@ -600,6 +600,45 @@ describe('retrieve_knowledge_content zero-chunk wording for inlined attachments 
   });
 });
 
+describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
+  it('records attempted:true, outcome:ok even when a matched file has no stored text (zero case)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo([]);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    await runById(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records attempted:true, outcome:ok when content is retrieved', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Current Protocol.pdf' })
+    );
+
+    await runById(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+});
+
 /**
  * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
  * fails to advance. Both were added with the paging and neither would fail if it were deleted.
