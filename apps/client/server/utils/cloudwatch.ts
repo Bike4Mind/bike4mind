@@ -228,6 +228,9 @@ export async function recordWebhookDeliveryFailure(
       dimensions: { ...baseDimensions, errorType },
       unit: StandardUnit.Count,
     },
+    // Dimensionless copy: webhookDeliveryHighFailures (infra/alarms.ts) alarms on this metric
+    // with no dimension filter, so it needs its own dimensionless data point to receive any data.
+    { name: WebhookMetrics.DELIVERY_FAILED, value: 1, dimensions: {}, unit: StandardUnit.Count },
     { name: WebhookMetrics.DELIVERY_LATENCY, value: latencyMs, dimensions: { orgId }, unit: StandardUnit.Milliseconds },
     ...(httpStatusCode > 0
       ? [
