@@ -248,7 +248,10 @@ export class ImageGenerationService {
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
         output_format: rest.output_format,
-      }).filter(([_, value]) => value !== undefined)
+        // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
+        // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
+        // client's own default) fails /api/feedback's validation when a bug report posts it back.
+      }).filter(([_, value]) => value !== undefined && value !== null)
     );
 
     // Get session message history to build proper context
@@ -924,13 +927,11 @@ export class ImageGenerationService {
             aspect_ratio,
             output_format,
             safety_tolerance,
-            // Deliberately NOT forwarding prompt_upsampling/seed: Google's generateImages API
-            // rejects the mere PRESENCE of `enhancePrompt`/`seed` in the request, not just an
-            // unsupported value - GeminiImageService.buildGenerationConfig() sets them whenever
-            // the option is `!== undefined`, and ImageGenerationBodySchema.prompt_upsampling
-            // always has a value post-parse (prefaulted), so passing it here breaks every Gemini
-            // generation unconditionally, even at default settings. BFL's branch below is
-            // unaffected - only Gemini's API rejects these fields.
+            // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
+            // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
+            // forward them to Google's API, since it rejects their mere presence.
+            prompt_upsampling,
+            seed,
           });
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {
