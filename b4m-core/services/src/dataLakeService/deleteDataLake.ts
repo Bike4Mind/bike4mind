@@ -57,7 +57,12 @@ export const deleteDataLake = async (
   // Only short-circuit on the terminal state. A lake stuck in transitional 'deleting'
   // from a crashed prior attempt must be able to re-run; the phase-1 side effects
   // (cancel batches, soft-delete files, best-effort index removal) are idempotent.
-  if (existing.status === 'deleted') {
+  //
+  // 'purging' short-circuits too, and NOT because it is terminal - because it is past the point
+  // of no return (#1744). Falling through would re-run phase 1 on a lake whose hard delete is
+  // already accepted, whose closing `status: 'deleted'` write would silently un-purge it: the
+  // sweep's guard would then throw and the consumer would swallow the purge with a WARN.
+  if (existing.status === 'deleted' || existing.status === 'purging') {
     return existing;
   }
 
