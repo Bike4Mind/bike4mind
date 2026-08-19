@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   unarchiveDataLake: vi.fn(),
   restoreDeletedDataLake: vi.fn(),
   cleanupDeletedDataLake: vi.fn(),
+  acceptDataLakePurge: vi.fn(),
+  releasePurgingToDeleted: vi.fn(),
   // Real admin-or-creator logic (not a bare stub) so the cleanup action's canManageLake call
   // behaves identically to production for these tests, including the blank-identity case.
   canManageLake: vi.fn(
@@ -43,13 +45,14 @@ vi.mock('@bike4mind/services', () => ({
     unarchiveDataLake: h.unarchiveDataLake,
     restoreDeletedDataLake: h.restoreDeletedDataLake,
     cleanupDeletedDataLake: h.cleanupDeletedDataLake,
+    acceptDataLakePurge: h.acceptDataLakePurge,
     canManageLake: h.canManageLake,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
     loadActiveLakeGrants: h.loadActiveLakeGrants,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
   // omitted because the mock replaces the whole module: a missing export is an import-time
   // failure, not a silent undefined.
@@ -91,6 +94,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     vi.clearAllMocks();
     h.assertLakeWritable.mockReturnValue(undefined);
     h.sendToQueue.mockResolvedValue(undefined);
+    h.acceptDataLakePurge.mockResolvedValue(undefined);
   });
 
   it('enqueues the cleanup and returns 202 for the owner without running the sweep inline', async () => {
@@ -106,6 +110,55 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     expect(res.status).toHaveBeenCalledWith(202);
   });
 
+  it('claims the purge BEFORE enqueueing, so the lake leaves the deleted list first (#1744)', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    const order: string[] = [];
+    h.acceptDataLakePurge.mockImplementation(async () => void order.push('accept'));
+    h.sendToQueue.mockImplementation(async () => void order.push('enqueue'));
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    // Ordering is the fix, not an implementation detail: enqueue-first leaves the accept window
+    // this issue is about wide open, because the sweep can complete before the status ever moves.
+    expect(order).toEqual(['accept', 'enqueue']);
+    expect(h.acceptDataLakePurge).toHaveBeenCalledWith({ userId: 'u1', isAdmin: false }, 'lake1', expect.anything());
+  });
+
+  it('releases the claim when the enqueue fails, so the lake cannot strand in purging', async () => {
+    // Without the release this is the one unrecoverable outcome: no list shows a purging lake, and
+    // with no message enqueued there is nothing to alarm on or replay - only a manual DB edit.
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.sendToQueue.mockRejectedValue(new Error('sqs unavailable'));
+    const { res } = makeRes();
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+    ).rejects.toThrow(/sqs unavailable/);
+
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expect(res.status).not.toHaveBeenCalledWith(202);
+  });
+
+  it('does NOT release on a successful enqueue', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('does NOT enqueue when the claim is lost, so a refused purge leaves no orphan message', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.acceptDataLakePurge.mockRejectedValue(new Error('Data lake must be soft-deleted before cleanup'));
+    const { res } = makeRes();
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+    ).rejects.toThrow(/soft-deleted/i);
+
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalledWith(202);
+  });
+
   it('rejects with 403 and does not enqueue when a non-owner requests cleanup', async () => {
     h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'someone-else' });
     const { res } = makeRes();
@@ -113,6 +166,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.acceptDataLakePurge).not.toHaveBeenCalled();
   });
 
   it('rejects with 400 and does not enqueue when the lake is not soft-deleted', async () => {
