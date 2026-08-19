@@ -291,7 +291,7 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 5,
+      version: 6,
       migrate: (persistedState: any, version: number) => {
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
@@ -330,6 +330,13 @@ export const useLLM = create(
         // raises on an actual model switch, deliberately, so it cannot do this for us.
         if (version < 5) {
           persistedState.max_tokens = 0;
+        }
+        // Migration v5->v6: the pre-fix store default was 'jpeg' while the server silently
+        // produced PNG, so a persisted 'jpeg' was never a choice the user could observe. Reset it
+        // once so restoring the passthrough is behaviour-preserving for everyone, not just for
+        // browsers with no persisted state.
+        if (version < 6) {
+          if (persistedState.output_format === 'jpeg') persistedState.output_format = 'png';
         }
         return persistedState;
       },
