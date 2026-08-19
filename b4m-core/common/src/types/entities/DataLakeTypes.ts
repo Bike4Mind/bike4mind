@@ -17,8 +17,24 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
  * destruction is already irreversible. Everything else that reads `status` must treat it as
  * "going away", never as a lake to act on.
  */
-export type DataLakeStatus =
-  'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted' | 'purging';
+export const DATA_LAKE_STATUSES = [
+  'draft',
+  'active',
+  'archiving',
+  'archived',
+  'restoring',
+  'deleting',
+  'deleted',
+  'purging',
+] as const;
+
+/**
+ * Derived from the constant above, NOT a parallel union: the mongoose enum imports that same
+ * constant, so a status added here reaches the schema by construction. A hand-maintained second
+ * list would type-check either way (an annotation proves each entry is valid, never that all are
+ * present) and then reject the write at runtime.
+ */
+export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
