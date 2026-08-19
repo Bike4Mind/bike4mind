@@ -330,7 +330,10 @@ const HelpYouTube: React.FC<{ id: string; label?: string }> = ({ id, label }) =>
       src={`https://www.youtube-nocookie.com/embed/${id}`}
       title={label || 'YouTube video player'}
       loading="lazy"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      // Narrower than YouTube's default embed grant: a demo clip needs no
+      // accelerometer/gyroscope (360-degree video) or clipboard-write/web-share
+      // (the in-player share and copy-link buttons, which stop working here).
+      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
       allowFullScreen
       data-testid="help-youtube-iframe"
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}

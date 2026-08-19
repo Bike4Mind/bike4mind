@@ -140,6 +140,8 @@ describe('help media rendering', () => {
     expect(iframe.getAttribute('title')).toBe('Enabling Research Mode');
     expect(iframe.getAttribute('loading')).toBe('lazy');
     expect(iframe.hasAttribute('allowfullscreen')).toBe(true);
+    // Pinned: a demo clip needs no accelerometer/gyroscope/clipboard-write/web-share.
+    expect(iframe.getAttribute('allow')).toBe('autoplay; encrypted-media; picture-in-picture; fullscreen');
   });
 
   it('accepts the youtu.be short-link form', () => {
