@@ -280,10 +280,12 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
 });
 
 describe('ImageGenerationService.process (Gemini provider-dispatch parameter passthrough)', () => {
-  // Regression: invoke() forwarding the 4 fields into the queue payload (tested above) is not
-  // the same as process() actually forwarding them to the provider. process()'s Gemini
-  // text-to-image branch read `seed` into scope but never passed it to geminiService.generate() -
-  // same bug class already fixed in the agentic tool's Gemini branch, one function over.
+  // Regression: Google's generateImages API rejects the mere PRESENCE of `enhancePrompt`/`seed`
+  // in the request, not just an unsupported value. ImageGenerationBodySchema.prompt_upsampling is
+  // always defined post-parse (prefaulted), so once GenerateImageIvokeParamsSchema stopped
+  // stripping it, process()'s pre-existing (unconditional) forwarding of prompt_upsampling to
+  // geminiService.generate() broke every Gemini generation, even at default settings. seed must
+  // stay omitted too. output_format/safety_tolerance are unaffected and must keep flowing.
   const geminiModelInfo = {
     id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
     type: 'image',
@@ -317,7 +319,7 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
     return service;
   };
 
-  it('forwards the user-set seed to GeminiImageService.generate on the composer/queue-handler path', async () => {
+  it('omits prompt_upsampling and seed from GeminiImageService.generate, but still forwards output_format/safety_tolerance', async () => {
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation below
@@ -333,19 +335,17 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
         model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
         seed: 42,
         prompt_upsampling: true,
+        safety_tolerance: 1,
         output_format: 'jpeg',
       } as any,
       logger: silentLogger,
     });
 
-    expect(mockGeminiGenerate).toHaveBeenCalledWith(
-      'a red bicycle',
-      expect.objectContaining({
-        seed: 42,
-        prompt_upsampling: true,
-        output_format: 'jpeg',
-      })
-    );
+    expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
+    const [, callOptions] = mockGeminiGenerate.mock.calls[0];
+    expect(callOptions).not.toHaveProperty('prompt_upsampling');
+    expect(callOptions).not.toHaveProperty('seed');
+    expect(callOptions).toMatchObject({ output_format: 'jpeg' });
   });
 });
 

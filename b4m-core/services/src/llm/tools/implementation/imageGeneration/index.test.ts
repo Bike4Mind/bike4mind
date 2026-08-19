@@ -129,15 +129,17 @@ describe('image_generation local-image env gating (self-host only)', () => {
 });
 
 describe('image_generation Gemini branch parameter passthrough', () => {
-  // Regression: the BFL branch forwarded prompt_upsampling/seed to its service call, but the
-  // Gemini branch read both into scope and dropped them - so prompt enhancement and reproducible
-  // seeds silently never reached Gemini generations.
+  // Regression: Google's generateImages API rejects the mere PRESENCE of `enhancePrompt`/`seed`
+  // in the request, not just an unsupported value. GeminiImageService.buildGenerationConfig()
+  // sets them whenever the option is `!== undefined`, so forwarding prompt_upsampling/seed here -
+  // even `false`/absent-seed - broke every Gemini generation unconditionally. output_format and
+  // safety_tolerance are unaffected and must keep flowing through.
   beforeEach(() => {
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue([]);
   });
 
-  it('forwards prompt_upsampling and seed to GeminiImageService.generate', async () => {
+  it('omits prompt_upsampling and seed from GeminiImageService.generate, but still forwards output_format/safety_tolerance', async () => {
     const context = createFakeContext();
 
     const { toolFn } = imageGenerationTool.implementation(context, {
@@ -150,14 +152,13 @@ describe('image_generation Gemini branch parameter passthrough', () => {
 
     await toolFn({ prompt: 'a red bike' });
 
-    expect(mockGeminiGenerate).toHaveBeenCalledWith(
-      'a red bike',
-      expect.objectContaining({
-        prompt_upsampling: true,
-        seed: 42,
-        safety_tolerance: 1,
-        output_format: 'jpeg',
-      })
-    );
+    expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
+    const [, callOptions] = mockGeminiGenerate.mock.calls[0];
+    expect(callOptions).not.toHaveProperty('prompt_upsampling');
+    expect(callOptions).not.toHaveProperty('seed');
+    expect(callOptions).toMatchObject({
+      safety_tolerance: 1,
+      output_format: 'jpeg',
+    });
   });
 });
