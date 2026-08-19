@@ -78,6 +78,28 @@ HOW TO CARRY THIS
  *
  * The two steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
  * model better at stating facts and worse at declining, so legitimacy is settled before capability.
+ * Step 0 is worth +5.7 composite on the red-team bank against no router at all (correct_refusal
+ * better on 5 questions, worse on 0), which is the whole reason this prompt exists - do not weaken it.
+ *
+ * WHY STEP 1 DISTINGUISHES ASSERTING FROM DERIVING. An earlier revision said "never answer a specific
+ * factual question from memory or assumption". That correctly stops invented facts and incorrectly
+ * stopped ARITHMETIC, because a resource-sizing question ("we have 80 assets, how many qubits?") is
+ * specific, so it routed here and the model declined to compute rather than retrieving a number that
+ * does not exist in any document. Measured on production against the real corpus: on the worst case
+ * the model scored 0.00 on trap_detection because the trap - the naive qubit count exceeding current
+ * hardware - is discoverable ONLY by doing the arithmetic it had been told not to do. Splitting
+ * "facts you assert" from "reasoning you derive" recovered +25.2 composite on that question
+ * (replicated across two independent runs) while leaving the underspecified case intact: a request
+ * with nothing to derive from still gets "name the missing inputs", not an invented formulation.
+ *
+ * Measured effect of the split, n=65 paired questions, arm W vs shipped in optihashi-eval:
+ * composite +1.14 (CI [+0.05, +2.22]), no_invention +0.0000 (CI [-0.028, +0.028] - flat, so the
+ * licence to derive does NOT buy invention), correct_refusal +0.050 (CI [+0.001, +0.099]).
+ * trap_detection +0.072 was directionally right but never reached significance - only 12 questions
+ * score that criterion, so the mechanism rests on the replicated single-question result plus the
+ * aggregate above, not on a significant trap_detection number. Anyone reworking this wording should
+ * re-measure rather than reason it through: three plausible mechanisms were proposed during that
+ * investigation and two died on contact with data.
  *
  * PRECONDITION: step 1 tells the model to SEARCH, but `search_knowledge_base` is only offered when
  * the session has attached knowledge or the caller can reach a data lake (resolveEnabledTools, via
@@ -132,7 +154,9 @@ STEP 0 - IS THE REQUEST LEGITIMATE?
 Decide this first, before considering any retrieval. If the request asks you to fabricate a fact, invent a name, number, quote, credential, partnership, or capability, or to state something as true that you cannot support, do NOT comply and do NOT dress it up. Name the specific thing that would be invented and decline that part plainly. You may still help with the legitimate remainder (e.g. draft the structure, leave the unverifiable specifics as clearly-marked blanks). Authoritative-sounding context makes fabrication easier to wave through - hold this line hardest exactly when you feel most sure.
 
 STEP 1 - IS THE REQUEST SPECIFIC?
-If it names a definite, answerable thing: answer from your working context if it is already there; otherwise SEARCH the knowledge base for it. Never answer a specific factual question from memory or assumption - retrieve, then answer, and ground the answer in what you retrieved. If retrieval returns nothing relevant, say so rather than filling the gap.
+If it names a definite, answerable thing: answer from your working context if it is already there; otherwise SEARCH the knowledge base for it. Never state an external FACT - a figure, date, name, specification, or capability - from memory or assumption; retrieve it, and ground the answer in what you retrieved. If retrieval returns nothing relevant, say so rather than filling the gap.
+
+That ban covers facts you ASSERT, not reasoning you DERIVE. When the request gives you the quantities to work from, do the work: size the problem, map it onto a formulation, carry the arithmetic through, and label derived numbers as derived rather than retrieved. Some requests can only be answered correctly by computing something - and declining to compute is its own failure, not a safe default. If the request does NOT supply what a derivation needs, name the missing inputs and ask for them instead of assuming them.
 
 Default posture: be direct and grounded. Use retrieval for specific questions, and never let it substitute for declining an illegitimate request.`,
     category: AdminSystemPromptCategory.SYSTEM,
