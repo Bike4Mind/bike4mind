@@ -130,6 +130,20 @@ describe('POST /api/test/propose-lake-content', () => {
     expect(status).toHaveBeenCalledWith(201);
   });
 
+  it('still falls back to slug when findById REJECTS on a non-ObjectId', async () => {
+    // The real repository throws rather than returning null for a malformed id, so a mock that
+    // merely resolves null cannot catch this - verified live on the pr1928 preview, where every
+    // by-slug seed 404'd before the fallback ran.
+    h.findById.mockRejectedValue(new Error('Cast to ObjectId failed'));
+    h.findBySlug.mockResolvedValue(LAKE);
+    const { res, status } = makeRes();
+
+    await handler(makeReq({ body: body({ dataLake: 'proposal-qa' }) }) as never, res);
+
+    expect(h.findBySlug).toHaveBeenCalledWith('proposal-qa');
+    expect(status).toHaveBeenCalledWith(201);
+  });
+
   it('404s an unknown lake', async () => {
     h.findById.mockResolvedValue(null);
     const { res, status } = makeRes();

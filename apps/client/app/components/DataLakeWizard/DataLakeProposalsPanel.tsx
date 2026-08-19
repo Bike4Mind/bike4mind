@@ -107,7 +107,7 @@ export function DataLakeProposalsPanel({
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-provenance">
                 {`Found by ${proposal.provenance.producer}`}
                 {proposal.provenance.query ? ` while researching "${proposal.provenance.query}"` : ''}
-                {` · retrieved ${formatRetrieved(proposal.provenance.retrievedAt)}`}
+                {` \u00b7 retrieved ${formatRetrieved(proposal.provenance.retrievedAt)}`}
               </Typography>
 
               {proposal.proposedTags.length > 0 && (

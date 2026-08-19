@@ -58,7 +58,12 @@ const handler = baseApi({ auth: false }).post(
       return res.status(400).json({ error: 'dataLake, sourceUrl and title are required' });
     }
 
-    const lake = (await dataLakeRepository.findById(dataLake)) ?? (await dataLakeRepository.findBySlug(dataLake));
+    // `.catch(() => null)` is load-bearing, not defensive noise: findById REJECTS on a
+    // non-ObjectId string, so without it a slug never reaches the findBySlug fallback and the
+    // route 404s for every by-slug caller. Same shape as assertLakeAccess.ts:146.
+    const lake =
+      (await dataLakeRepository.findById(dataLake).catch(() => null)) ??
+      (await dataLakeRepository.findBySlug(dataLake));
     if (!lake) {
       return res.status(404).json({ error: 'Data lake not found' });
     }
