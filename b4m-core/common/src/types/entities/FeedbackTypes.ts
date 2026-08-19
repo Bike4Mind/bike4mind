@@ -52,4 +52,4 @@ export interface FeedbackDeliveryResult {
 }
 
 /** POST /api/feedback response: the saved document plus how far delivery got. */
-export type CreateFeedbackResponse = IFeedbackDocument & { delivery: FeedbackDeliveryResult };
+export type CreateFeedbackResponse = IFeedbackDocument & { delivery?: FeedbackDeliveryResult };

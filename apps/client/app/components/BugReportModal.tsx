@@ -77,7 +77,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
       onClose();
       // Optional chaining: a rolling deploy can route this request to a server instance
       // still on the pre-delivery-field handler, where the record saved but `delivery` is
-      // absent - fall back to the honest "we don't know" toast rather than throwing.
+      // absent - fall back to the success toast (the pre-fix default) rather than throwing.
       if (result.delivery?.delivered !== false) {
         toast.success(`${feedbackType} report submitted successfully`);
       } else {
