@@ -40,10 +40,8 @@ describe('ComingSoon', () => {
 
     await waitFor(() => expect(createFeedbackOnServer).toHaveBeenCalledTimes(1));
     const payload = createFeedbackOnServer.mock.calls[0][0];
-    expect(payload.content).toEqual(expect.any(String));
-    expect(payload.content.length).toBeGreaterThan(0);
-    expect(payload.username).toEqual(expect.any(String));
-    expect(payload.username.length).toBeGreaterThan(0);
+    expect(payload.content).toBe('Coming soon signup');
+    expect(payload.username).toBe('signup@example.com');
     expect(payload.userEmail).toBe('signup@example.com');
 
     expect(toast.success).toHaveBeenCalled();
@@ -61,5 +59,27 @@ describe('ComingSoon', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('disables the submit button while the request is in flight, so a second click cannot double-submit', async () => {
+    let resolveSubmit: () => void = () => {};
+    createFeedbackOnServer.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          resolveSubmit = resolve;
+        })
+    );
+    const user = userEvent.setup();
+
+    render(<ComingSoon />, { wrapper: TestWrapper });
+    await user.type(screen.getByTestId('coming-soon-email-input'), 'signup@example.com');
+    const submitBtn = screen.getByTestId('coming-soon-submit-btn');
+    await user.click(submitBtn);
+
+    await waitFor(() => expect(submitBtn).toBeDisabled());
+    expect(createFeedbackOnServer).toHaveBeenCalledTimes(1);
+
+    resolveSubmit();
+    await waitFor(() => expect(submitBtn).not.toBeDisabled());
   });
 });
