@@ -1055,6 +1055,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async isLiveDataLakeMember(fabFileId: string, datalakeTag: string): Promise<boolean> {
+    // Same predicate as findByServerTextHashesInDataLake, id-keyed: the two must agree on what
+    // "live member" means, or the acquisition queue's two dedup arms would disagree about the same
+    // lake. Kept as an existence check rather than a fetch - no caller needs the document.
+    const found = await this.fabFileModel.exists({
+      _id: fabFileId,
+      deletedAt: null,
+      archivedAt: null,
+      tags: { $elemMatch: { name: datalakeTag } },
+      status: { $ne: 'pending' },
+    });
+    return found !== null;
+  }
+
   async findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
     if (driveFileIds.length === 0) return [];
     // The recursive Drive walk can surface up to 100k children PER folder, so an unchunked $in

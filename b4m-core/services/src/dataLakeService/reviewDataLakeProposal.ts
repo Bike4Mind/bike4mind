@@ -7,7 +7,7 @@ import type {
   IDataLakeRepository,
 } from '@bike4mind/common';
 import { DATALAKE_TAG_STRENGTH, FabFileSourceType } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { resolveCanManageLake } from './authorizeLakeManage';
 
@@ -67,8 +67,11 @@ async function resolveReviewable(
   const lake = await db.dataLakes.findById(proposal.dataLakeId);
   if (!lake) throw new NotFoundError('Proposal not found');
 
+  // 403, matching the sibling manage-gated read (`data-lakes/[id]/spend.ts`): the lake read gate
+  // above has already cleared the caller, so refusing here is an authorization answer, not a
+  // malformed request. Any change to this status belongs in the list route too.
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
-    throw new BadRequestError('You do not have permission to review proposals for this data lake');
+    throw new ForbiddenError('You do not have permission to review proposals for this data lake');
   }
   return { proposal, lake };
 }

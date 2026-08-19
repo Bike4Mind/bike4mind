@@ -27,20 +27,35 @@ const proposalRow = (over: Partial<IDataLakeProposalDocument> = {}): IDataLakePr
     ...over,
   }) as IDataLakeProposalDocument;
 
-const adapters = (over: { latest?: IDataLakeProposalDocument | null; lakeMembers?: unknown[] } = {}) => {
-  const createProposal = vi.fn(async input => proposalRow(input as Partial<IDataLakeProposalDocument>));
+const adapters = (
+  over: {
+    latest?: IDataLakeProposalDocument | null;
+    lakeMembers?: unknown[];
+    /** Whether the file a prior approval admitted is still a live member. Live unless a test says otherwise. */
+    admittedFileStillHeld?: boolean;
+    /** Simulates losing the create race to a concurrent producer run for the same source. */
+    createLosesRaceTo?: string;
+  } = {}
+) => {
+  const createProposal = vi.fn(async input =>
+    over.createLosesRaceTo
+      ? { created: false as const, pendingProposalId: over.createLosesRaceTo }
+      : { created: true as const, proposal: proposalRow(input as Partial<IDataLakeProposalDocument>) }
+  );
   const findLatestBySourceKey = vi.fn(async () => over.latest ?? null);
   const findByServerTextHashesInDataLake = vi.fn(async () => (over.lakeMembers ?? []) as never);
+  const isLiveDataLakeMember = vi.fn(async () => over.admittedFileStillHeld ?? true);
   return {
     deps: {
       db: {
         dataLakeProposals: { findLatestBySourceKey, createProposal },
-        fabFiles: { findByServerTextHashesInDataLake },
+        fabFiles: { findByServerTextHashesInDataLake, isLiveDataLakeMember },
       },
     },
     createProposal,
     findLatestBySourceKey,
     findByServerTextHashesInDataLake,
+    isLiveDataLakeMember,
   };
 };
 
@@ -112,14 +127,65 @@ describe('proposeDataLakeContent', () => {
   });
 
   it('skips a source already approved whose text has not changed', async () => {
-    const { deps, createProposal } = adapters({
-      latest: proposalRow({ status: 'approved', textHash: computeServerTextHash('the candidate text') }),
+    const { deps, createProposal, isLiveDataLakeMember } = adapters({
+      latest: proposalRow({
+        status: 'approved',
+        textHash: computeServerTextHash('the candidate text'),
+        admittedFabFileId: 'file-9',
+      }),
     });
 
     const result = await proposeDataLakeContent(LAKE, candidate(), deps);
 
     expect(result).toMatchObject({ outcome: 'already_in_lake', reason: 'prior_approval' });
+    expect(isLiveDataLakeMember).toHaveBeenCalledWith('file-9', LAKE.datalakeTag);
     expect(createProposal).not.toHaveBeenCalled();
+  });
+
+  it('re-proposes an approved source whose admitted file is no longer in the lake', async () => {
+    // Ordinary file management can archive or delete an admitted member long after the approval. The
+    // stored `approved` status would otherwise suppress this source forever with no human seeing it.
+    const { deps, createProposal } = adapters({
+      latest: proposalRow({
+        status: 'approved',
+        textHash: computeServerTextHash('the candidate text'),
+        admittedFabFileId: 'file-9',
+      }),
+      admittedFileStillHeld: false,
+    });
+
+    const result = await proposeDataLakeContent(LAKE, candidate(), deps);
+
+    expect(result.outcome).toBe('proposed');
+    expect(createProposal.mock.calls[0][0].priorDisposition).toBe('approved');
+  });
+
+  it('re-proposes an approved row that never admitted anything, without asking the lake', async () => {
+    // The approved-but-empty row a failed admission can leave behind: nothing reached the lake, so
+    // there is no file to ask about.
+    const { deps, isLiveDataLakeMember } = adapters({
+      latest: proposalRow({
+        status: 'approved',
+        textHash: computeServerTextHash('the candidate text'),
+        admittedFabFileId: null,
+      }),
+    });
+
+    const result = await proposeDataLakeContent(LAKE, candidate(), deps);
+
+    expect(result.outcome).toBe('proposed');
+    expect(isLiveDataLakeMember).not.toHaveBeenCalled();
+  });
+
+  it('reports duplicate_pending when a concurrent run wins the create race', async () => {
+    // The dedup read is not a lock: an overlapping producer run for the same source can land its
+    // pending row between that read and this write, and the DB constraint is what catches it. The
+    // answer must be the one the read would have given, never a second open question or an error.
+    const { deps } = adapters({ createLosesRaceTo: 'prop-winner' });
+
+    const result = await proposeDataLakeContent(LAKE, candidate(), deps);
+
+    expect(result).toEqual({ outcome: 'duplicate_pending', proposalId: 'prop-winner' });
   });
 
   it('re-proposes an approved source whose text changed materially', async () => {

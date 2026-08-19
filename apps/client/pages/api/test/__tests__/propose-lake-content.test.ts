@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const LAKE = { id: 'lake-1', datalakeTag: 'datalake:lake-1' };
+const LAKE = { id: 'lake-1', slug: 'proposal-qa-e2e', datalakeTag: 'datalake:lake-1' };
 
 const h = vi.hoisted(() => ({
   isE2EEnabled: vi.fn(() => true),
@@ -124,9 +124,9 @@ describe('POST /api/test/propose-lake-content', () => {
     h.findBySlug.mockResolvedValue(LAKE);
     const { res, status } = makeRes();
 
-    await handler(makeReq({ body: body({ dataLake: 'proposal-qa' }) }) as never, res);
+    await handler(makeReq({ body: body({ dataLake: 'proposal-qa-e2e' }) }) as never, res);
 
-    expect(h.findBySlug).toHaveBeenCalledWith('proposal-qa');
+    expect(h.findBySlug).toHaveBeenCalledWith('proposal-qa-e2e');
     expect(status).toHaveBeenCalledWith(201);
   });
 
@@ -138,9 +138,31 @@ describe('POST /api/test/propose-lake-content', () => {
     h.findBySlug.mockResolvedValue(LAKE);
     const { res, status } = makeRes();
 
-    await handler(makeReq({ body: body({ dataLake: 'proposal-qa' }) }) as never, res);
+    await handler(makeReq({ body: body({ dataLake: 'proposal-qa-e2e' }) }) as never, res);
 
-    expect(h.findBySlug).toHaveBeenCalledWith('proposal-qa');
+    expect(h.findBySlug).toHaveBeenCalledWith('proposal-qa-e2e');
+    expect(status).toHaveBeenCalledWith(201);
+  });
+
+  it('refuses a lake that is not marked for e2e, whatever the secret', async () => {
+    // Guard 3, the counterpart of create-user.ts's email pattern: the stage secret is one shared
+    // value, so without this anyone holding it could seed a real reviewer's queue with content for a
+    // lake they do not manage.
+    h.findById.mockResolvedValue({ ...LAKE, slug: 'customer-research' });
+    const { res, status } = makeRes();
+
+    await handler(makeReq() as never, res);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(h.proposeDataLakeContent).not.toHaveBeenCalled();
+  });
+
+  it('accepts an e2e-marked slug in any position, not only as a suffix', async () => {
+    h.findById.mockResolvedValue({ ...LAKE, slug: 'e2e-proposal-queue' });
+    const { res, status } = makeRes();
+
+    await handler(makeReq() as never, res);
+
     expect(status).toHaveBeenCalledWith(201);
   });
 

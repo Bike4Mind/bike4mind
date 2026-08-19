@@ -20,9 +20,21 @@ import { Request } from 'express';
  * always a PENDING row, which admits nothing until a human approves it - so even if the guards below
  * failed open, this could not put content into a lake.
  *
- * Guards mirror `create-user.ts` exactly: non-production stages only (`isE2EEnabled`), plus the
- * shared E2E secret. Any change to that pattern belongs in both files.
+ * Guards mirror `create-user.ts` exactly, all three: non-production stages only (`isE2EEnabled`),
+ * the shared E2E secret, and a restriction on WHAT the secret can be used to create - here the
+ * target lake, where `create-user.ts` restricts the target email. Any change to that pattern belongs
+ * in both files.
  */
+
+/**
+ * Guard 3's marker, the counterpart of `create-user.ts`'s `-e2e@test.com` email pattern. The shared
+ * secret is ONE value for a whole stage, so without a restriction on the TARGET, anyone holding it
+ * could seed a real reviewer's queue on a shared preview with attacker-chosen content for a lake they
+ * do not manage - betting on the reviewer trusting a card that looks like a legitimate producer run.
+ * Scoped to lakes an e2e run created for itself; `slug` is caller-supplied at lake creation
+ * (`createDataLake` only lowercases it), so a spec opts its own lake in by name.
+ */
+const E2E_LAKE_SLUG_PATTERN = /(^|-)e2e(-|$)/;
 
 interface ProposeLakeContentBody {
   /** The target lake, by id or slug. */
@@ -66,6 +78,13 @@ const handler = baseApi({ auth: false }).post(
       (await dataLakeRepository.findBySlug(dataLake));
     if (!lake) {
       return res.status(404).json({ error: 'Data lake not found' });
+    }
+
+    // Guard 3: only into a lake an e2e run created for itself. See E2E_LAKE_SLUG_PATTERN.
+    if (!E2E_LAKE_SLUG_PATTERN.test(lake.slug)) {
+      return res
+        .status(400)
+        .json({ error: 'Proposals may only be seeded into a lake whose slug carries an e2e marker' });
     }
 
     const outcome = await dataLakeService.proposeDataLakeContent(

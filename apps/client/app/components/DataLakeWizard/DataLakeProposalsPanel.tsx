@@ -82,9 +82,14 @@ export function DataLakeProposalsPanel({
                     Previously declined
                   </Chip>
                 )}
+                {/* Deliberately not "Updated since approval": a re-proposed approved source means
+                    EITHER its text changed materially OR the file that approval admitted is no
+                    longer a live lake member (see proposeDataLakeContent's prior_approval arm).
+                    "Previously approved" is the one claim true of both, and it is the history the
+                    reviewer actually needs. */}
                 {proposal.priorDisposition === 'approved' && (
                   <Chip size="sm" color="neutral" data-testid="datalake-proposal-previously-approved">
-                    Updated since approval
+                    Previously approved
                   </Chip>
                 )}
                 {typeof proposal.confidence === 'number' && (

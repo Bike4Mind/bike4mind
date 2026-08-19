@@ -3,7 +3,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeProposalRepository } from '@bike4mind/database';
 import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { ForbiddenError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -37,8 +37,11 @@ const handler = baseApi()
     const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
       db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
+    // 403, not 400 - same manage-denial the sibling `spend.ts` refuses with, and the same status
+    // `resolveReviewable` uses for the review routes. The read gate above already cleared the caller,
+    // so this is an authorization answer.
     if (!canManage) {
-      throw new BadRequestError('You do not have permission to review proposals for this data lake');
+      throw new ForbiddenError('You do not have permission to review proposals for this data lake');
     }
 
     const proposals = await dataLakeProposalRepository.listByLake(lake.id, {

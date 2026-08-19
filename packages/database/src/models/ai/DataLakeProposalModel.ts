@@ -1,6 +1,7 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import type {
   CreateDataLakeProposalInput,
+  CreateDataLakeProposalResult,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
   IDataLakeProposalRepository,
@@ -52,8 +53,21 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
 
 // Dedup read: the latest row for one source in one lake (findLatestBySourceKey). Deliberately NOT
 // unique - a source legitimately gets several rows over time (declined, then re-proposed when its
-// text changed materially), and the tombstone semantics depend on that history surviving.
+// text changed materially), and the tombstone semantics depend on that history surviving. The
+// uniqueness the queue does need is the narrower pending-only one below.
 DataLakeProposalSchema.index({ dataLakeId: 1, canonicalSourceKey: 1, createdAt: -1 });
+// At most one PENDING row per source per lake. `unique` here is a data constraint, not a query hint:
+// it IS the "one open question per source" invariant the queue exists to deliver. The dedup decision
+// in proposeDataLakeContent is a read followed by a write, so without this two overlapping producer
+// runs for the same source both pass the "nothing pending yet" check, both insert, and a reviewer
+// who approves both cards admits one source twice - the exact duplicate this queue prevents.
+// Partial on `pending` so the terminal history above is untouched: a declined tombstone must not
+// occupy the key and block the re-proposal its own changed-text rule is designed to allow.
+// Precedent for the shape: ScopedSettingModel's live-row-only unique index.
+DataLakeProposalSchema.index(
+  { dataLakeId: 1, canonicalSourceKey: 1 },
+  { unique: true, partialFilterExpression: { status: 'pending' } }
+);
 // The review queue: one lake's pending proposals, newest first.
 DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1 });
 
@@ -69,9 +83,32 @@ class DataLakeProposalRepository
     super(proposalModel);
   }
 
-  async createProposal(input: CreateDataLakeProposalInput): Promise<IDataLakeProposalDocument> {
-    const doc = await this.proposalModel.create({ ...input, status: 'pending' satisfies DataLakeProposalStatus });
-    return doc.toJSON() as IDataLakeProposalDocument;
+  async createProposal(input: CreateDataLakeProposalInput): Promise<CreateDataLakeProposalResult> {
+    const insert = async (): Promise<CreateDataLakeProposalResult> => {
+      const doc = await this.proposalModel.create({ ...input, status: 'pending' satisfies DataLakeProposalStatus });
+      return { created: true, proposal: doc.toJSON() as IDataLakeProposalDocument };
+    };
+
+    try {
+      return await insert();
+    } catch (error) {
+      // A bare code check is unambiguous here: the pending-uniqueness index is this collection's only
+      // unique index other than `_id`, whose key mongoose mints, so 11000 can mean nothing else.
+      // (Contrast createDataLake, which keys on `keyPattern` because its collection carries three.)
+      if ((error as { code?: number }).code !== 11000) throw error;
+
+      const winner = await this.proposalModel.findOne({
+        dataLakeId: input.dataLakeId,
+        canonicalSourceKey: input.canonicalSourceKey,
+        status: 'pending',
+      });
+      if (winner) return { created: false, pendingProposalId: winner.id };
+
+      // No pending row despite the collision: the winner was reviewed in the instant between the
+      // two, which frees the key and makes this candidate an unanswered question again. Retried
+      // once only - a second collision means a third writer, and is raised rather than looped on.
+      return await insert();
+    }
   }
 
   async findLatestBySourceKey(
@@ -122,10 +159,19 @@ class DataLakeProposalRepository
   }
 
   async releaseClaim(id: string): Promise<void> {
-    await this.proposalModel.updateOne(
-      { _id: id },
-      { $set: { status: 'pending', reviewedByUserId: null, reviewedAt: null, declineReason: null } }
-    );
+    try {
+      await this.proposalModel.updateOne(
+        { _id: id },
+        { $set: { status: 'pending', reviewedByUserId: null, reviewedAt: null, declineReason: null } }
+      );
+    } catch (error) {
+      // The pending-uniqueness index refused the reopen, which can only mean a fresh proposal for
+      // this same source (its text having changed materially) took the pending slot while the
+      // approval was in flight. The open question this row would restore therefore already exists,
+      // so leave it approved-but-empty - the lesser evil the approve path's own comment describes -
+      // rather than let a duplicate-key throw mask the admission failure worth reporting.
+      if ((error as { code?: number }).code !== 11000) throw error;
+    }
   }
 
   async deleteForLake(dataLakeId: string): Promise<number> {

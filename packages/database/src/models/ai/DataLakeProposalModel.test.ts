@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect } from 'vitest';
 import type { CreateDataLakeProposalInput } from '@bike4mind/common';
 import { dataLakeProposalRepository as repo, DataLakeProposalModel } from './DataLakeProposalModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -23,21 +23,73 @@ const review = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/**
+ * Unwraps the create result for the tests that only care about the row. Throws rather than returning
+ * a union so a lost race in a test that did not intend one fails loudly at the call site.
+ */
+const create = async (overrides: Partial<CreateDataLakeProposalInput> = {}) => {
+  const result = await repo.createProposal(input(overrides));
+  if (!result.created) throw new Error(`expected a fresh row, lost the race to ${result.pendingProposalId}`);
+  return result.proposal;
+};
+
 describe('DataLakeProposalRepository', () => {
   setupMongoTest();
 
+  // setupMongoTest drops the whole database between tests, and indexes go with it - so the
+  // pending-uniqueness constraint has to be rebuilt per test rather than once in beforeAll, or every
+  // test after the first would run without the constraint it is asserting on.
+  beforeEach(async () => {
+    await DataLakeProposalModel.ensureIndexes();
+  });
+
   it('creates every proposal pending, whatever a caller hoped for', async () => {
-    const created = await repo.createProposal(input());
+    const created = await create();
 
     expect(created.status).toBe('pending');
     expect(created.reviewedByUserId).toBeNull();
     expect(created.admittedFabFileId).toBeNull();
   });
 
+  it('admits only ONE pending row per source per lake, so a concurrent run cannot double-enter', async () => {
+    // Fired together, not sequentially: a sequential pair would pass even without the index, because
+    // proposeDataLakeContent's preceding read would see the first row. The index is what holds when
+    // two overlapping producer runs interleave their read and their write.
+    const [first, second] = await Promise.all([repo.createProposal(input()), repo.createProposal(input())]);
+
+    const created = [first, second].filter(r => r.created);
+    const lost = [first, second].filter(r => !r.created);
+    expect(created).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    // The loser is pointed at the winner, which is what lets the caller answer duplicate_pending.
+    expect(lost[0]).toEqual({
+      created: false,
+      pendingProposalId: (created[0] as { proposal: { id: string } }).proposal.id,
+    });
+    expect(await repo.listByLake('lake-1', { status: 'pending' })).toHaveLength(1);
+  });
+
+  it('still allows a re-proposal once the prior row is terminal - the tombstone does not hold the key', async () => {
+    const declined = await create();
+    await repo.claimForReview(declined.id, review({ status: 'declined', declineReason: 'paywalled' }));
+
+    // The whole point of the PARTIAL filter: a terminal row must not occupy the pending slot, or the
+    // changed-text re-proposal rule could never fire.
+    const reproposed = await repo.createProposal(input({ textHash: 'hash-b' }));
+
+    expect(reproposed.created).toBe(true);
+    expect(await repo.listByLake('lake-1')).toHaveLength(2);
+  });
+
+  it('lets the same source be pending in two different lakes at once', async () => {
+    expect((await repo.createProposal(input())).created).toBe(true);
+    expect((await repo.createProposal(input({ dataLakeId: 'lake-2' }))).created).toBe(true);
+  });
+
   it('returns the LATEST row for a source, so an older ruling never decides', async () => {
-    const first = await repo.createProposal(input());
+    const first = await create();
     await repo.claimForReview(first.id, review({ status: 'declined', declineReason: 'paywalled' }));
-    const second = await repo.createProposal(input({ textHash: 'hash-b' }));
+    const second = await create({ textHash: 'hash-b' });
 
     const latest = await repo.findLatestBySourceKey('lake-1', 'https://example.com/report');
 
@@ -46,13 +98,13 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('scopes the source lookup to one lake', async () => {
-    await repo.createProposal(input());
+    await create();
 
     expect(await repo.findLatestBySourceKey('lake-2', 'https://example.com/report')).toBeNull();
   });
 
   it('claims a pending proposal exactly once - the second reviewer gets nothing', async () => {
-    const created = await repo.createProposal(input());
+    const created = await create();
 
     const first = await repo.claimForReview(created.id, review());
     const second = await repo.claimForReview(created.id, review({ reviewedByUserId: 'reviewer-2' }));
@@ -63,7 +115,7 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('strips the declined material but keeps the tombstone and its fingerprint', async () => {
-    const created = await repo.createProposal(input());
+    const created = await create();
 
     const declined = await repo.claimForReview(created.id, review({ status: 'declined', declineReason: 'paywalled' }));
 
@@ -77,7 +129,7 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('keeps the excerpt on an approval - only a decline strips it', async () => {
-    const created = await repo.createProposal(input());
+    const created = await create();
 
     const approved = await repo.claimForReview(created.id, review());
 
@@ -85,7 +137,7 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('records the admitted file against the approval', async () => {
-    const created = await repo.createProposal(input());
+    const created = await create();
     await repo.claimForReview(created.id, review());
 
     await repo.recordAdmission(created.id, 'file-9');
@@ -95,7 +147,7 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('returns a claimed proposal to the queue with its reviewer stamp cleared', async () => {
-    const created = await repo.createProposal(input());
+    const created = await create();
     await repo.claimForReview(created.id, review());
 
     await repo.releaseClaim(created.id);
@@ -108,9 +160,24 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.claimForReview(created.id, review())).not.toBeNull();
   });
 
+  it('leaves a released claim alone when a fresh proposal already holds the pending slot', async () => {
+    const approved = await create();
+    await repo.claimForReview(approved.id, review());
+    // The materially-changed re-proposal a producer can land while an approval is still admitting.
+    const fresh = await create({ textHash: 'hash-b' });
+
+    // Must not throw: releaseClaim runs inside approveDataLakeProposal's catch, where a duplicate-key
+    // throw would mask the admission error that is the one worth reporting.
+    await expect(repo.releaseClaim(approved.id)).resolves.toBeUndefined();
+
+    const stored = await DataLakeProposalModel.findById(approved.id);
+    expect(stored?.status).toBe('approved');
+    expect((await repo.listByLake('lake-1', { status: 'pending' })).map(p => p.id)).toEqual([fresh.id]);
+  });
+
   it('lists a lake queue newest first, and narrows by status', async () => {
-    const older = await repo.createProposal(input({ canonicalSourceKey: 'https://example.com/a' }));
-    const newer = await repo.createProposal(input({ canonicalSourceKey: 'https://example.com/b' }));
+    const older = await create({ canonicalSourceKey: 'https://example.com/a' });
+    const newer = await create({ canonicalSourceKey: 'https://example.com/b' });
     await repo.claimForReview(older.id, review({ status: 'declined' }));
 
     const all = await repo.listByLake('lake-1');
@@ -121,8 +188,8 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('drops a deleted lake queue without touching another lake', async () => {
-    await repo.createProposal(input());
-    await repo.createProposal(input({ dataLakeId: 'lake-2' }));
+    await create();
+    await create({ dataLakeId: 'lake-2' });
 
     expect(await repo.deleteForLake('lake-1')).toBe(1);
     expect(await repo.listByLake('lake-1')).toHaveLength(0);

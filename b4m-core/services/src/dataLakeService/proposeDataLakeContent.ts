@@ -71,7 +71,7 @@ export type ProposalOutcome =
 export interface ProposalAdapters {
   db: {
     dataLakeProposals: Pick<IDataLakeProposalRepository, 'findLatestBySourceKey' | 'createProposal'>;
-    fabFiles: Pick<IFabFileRepository, 'findByServerTextHashesInDataLake'>;
+    fabFiles: Pick<IFabFileRepository, 'findByServerTextHashesInDataLake' | 'isLiveDataLakeMember'>;
   };
 }
 
@@ -123,11 +123,22 @@ export async function proposeDataLakeContent(
 
   const textHash = computeServerTextHash(candidate.text);
 
-  // The PRIMARY key: what this lake has already decided about this source.
+  // The PRIMARY key: what this lake has already decided about this source. A read, not a claim - the
+  // create below is where a concurrent run for the same source is actually excluded.
   const latest = await db.dataLakeProposals.findLatestBySourceKey(lake.id, sourceKey);
   if (latest?.status === 'pending') return { outcome: 'duplicate_pending', proposalId: latest.id };
   if (latest?.status === 'approved' && !changedMaterially(latest.textHash, textHash)) {
-    return { outcome: 'already_in_lake', reason: 'prior_approval' };
+    // The stored ruling alone is not the answer: an admitted file can be archived or deleted
+    // afterwards by ordinary file management, and a prior approval with no live file behind it would
+    // otherwise keep answering `already_in_lake` forever - leaving the source permanently
+    // unproposable with no human ever seeing it again, the failure the tombstone design avoids.
+    // A missing `admittedFabFileId` is the same answer: it is the approved-but-empty row a failed
+    // admission leaves, which never put anything in the lake either. Falling through re-proposes it
+    // VISIBLY, carrying `priorDisposition: 'approved'` so the reviewer sees the history.
+    const stillHeld =
+      !!latest.admittedFabFileId &&
+      (await db.fabFiles.isLiveDataLakeMember(latest.admittedFabFileId, lake.datalakeTag));
+    if (stillHeld) return { outcome: 'already_in_lake', reason: 'prior_approval' };
   }
   if (latest?.status === 'declined' && !changedMaterially(latest.textHash, textHash)) {
     return { outcome: 'suppressed_by_tombstone', proposalId: latest.id };
@@ -140,7 +151,7 @@ export async function proposeDataLakeContent(
     if (existing.length > 0) return { outcome: 'already_in_lake', reason: 'lake_member' };
   }
 
-  const proposal = await db.dataLakeProposals.createProposal({
+  const created = await db.dataLakeProposals.createProposal({
     dataLakeId: lake.id,
     sourceUrl: recordedUrl,
     canonicalSourceKey: sourceKey,
@@ -157,5 +168,10 @@ export async function proposeDataLakeContent(
     ...(latest ? { priorDisposition: latest.status } : {}),
   });
 
-  return { outcome: 'proposed', proposal };
+  // The read above is not a lock, so an overlapping run for the same source can land its pending row
+  // between that read and this write. The DB's pending-uniqueness index is what makes that visible
+  // instead of admitting a second open question, and the answer is the one the read would have given.
+  if (!created.created) return { outcome: 'duplicate_pending', proposalId: created.pendingProposalId };
+
+  return { outcome: 'proposed', proposal: created.proposal };
 }

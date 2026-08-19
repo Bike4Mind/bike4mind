@@ -114,6 +114,13 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getByTestId('datalake-proposal-previously-declined')).toBeInTheDocument();
   });
 
+  it('flags a re-proposed approved source without claiming why it came back', () => {
+    renderPanel({ proposals: [proposal({ priorDisposition: 'approved' })] });
+
+    // Either its text changed or the admitted file left the lake - the chip must not assert one.
+    expect(screen.getByTestId('datalake-proposal-previously-approved')).toHaveTextContent('Previously approved');
+  });
+
   it('shows confidence as context only', () => {
     renderPanel({ proposals: [proposal({ confidence: 0.62 })] });
 

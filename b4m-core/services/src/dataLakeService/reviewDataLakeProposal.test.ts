@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeProposalDocument } from '@bike4mind/common';
 import { FabFileSourceType } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { approveDataLakeProposal, declineDataLakeProposal } from './reviewDataLakeProposal';
 
 const OWNER = 'owner-1';
@@ -162,10 +162,12 @@ describe('approveDataLakeProposal', () => {
     await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(NotFoundError);
   });
 
-  it('refuses a caller who cannot manage the lake, without admitting anything', async () => {
+  it('refuses a caller who cannot manage the lake as a 403, without admitting anything', async () => {
     const { deps, admitSource, claimForReview } = adapters();
 
-    await expect(approveDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(BadRequestError);
+    // 403, matching the sibling manage-gated read (`data-lakes/[id]/spend.ts`) - the lake read gate
+    // has already cleared the caller, so a manage denial is an authorization answer, not a bad request.
+    await expect(approveDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(ForbiddenError);
     expect(claimForReview).not.toHaveBeenCalled();
     expect(admitSource).not.toHaveBeenCalled();
   });
@@ -201,11 +203,11 @@ describe('declineDataLakeProposal', () => {
     await expect(declineDataLakeProposal('prop-1', ctx(), {}, deps)).rejects.toThrow(BadRequestError);
   });
 
-  it('refuses a caller who cannot manage the lake', async () => {
+  it('refuses a caller who cannot manage the lake, as a 403', async () => {
     const { deps, claimForReview } = adapters();
 
     await expect(declineDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), {}, deps)).rejects.toThrow(
-      BadRequestError
+      ForbiddenError
     );
     expect(claimForReview).not.toHaveBeenCalled();
   });

@@ -60,11 +60,16 @@ describe('GET /api/data-lakes/:id/proposals', () => {
     expect(json).toHaveBeenCalledWith({ data: [{ id: 'prop-1' }] });
   });
 
-  it('refuses a caller who can read the lake but not manage it', async () => {
+  it('refuses a caller who can read the lake but not manage it, as a 403', async () => {
     h.resolveCanManageLake.mockResolvedValue(false);
     const { res } = makeRes();
 
-    await expect(handler(makeReq() as never, res)).rejects.toThrow(/permission to review proposals/);
+    // 403 rather than 400: the read gate already cleared this caller, so the refusal is an
+    // authorization answer. Same status the sibling `spend.ts` manage-denial uses.
+    await expect(handler(makeReq() as never, res)).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringMatching(/permission to review proposals/),
+    });
     expect(h.listByLake).not.toHaveBeenCalled();
   });
 

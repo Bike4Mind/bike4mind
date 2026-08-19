@@ -119,6 +119,15 @@ export interface CreateDataLakeProposalInput {
   priorDisposition?: DataLakeProposalStatus;
 }
 
+/**
+ * What `createProposal` reports. `created: false` is the LOST side of a create race: a concurrent
+ * producer run's pending row for the same source landed first, so this candidate is the duplicate
+ * open question the caller already has an outcome for. Not an error - the caller reports it as
+ * `duplicate_pending`, exactly as it would have had its preceding dedup read seen the winner.
+ */
+export type CreateDataLakeProposalResult =
+  { created: true; proposal: IDataLakeProposalDocument } | { created: false; pendingProposalId: string };
+
 /** The compare-and-set a review performs. `pending -> approved | declined`, once. */
 export interface ReviewDataLakeProposalInput {
   status: Extract<DataLakeProposalStatus, 'approved' | 'declined'>;
@@ -128,8 +137,13 @@ export interface ReviewDataLakeProposalInput {
 }
 
 export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakeProposalDocument> {
-  /** Insert a candidate, always as `pending` - the status is the server's to set, never a caller's. */
-  createProposal(input: CreateDataLakeProposalInput): Promise<IDataLakeProposalDocument>;
+  /**
+   * Insert a candidate, always as `pending` - the status is the server's to set, never a caller's.
+   * ATOMIC in the one way that matters: at most one pending row per source per lake, enforced by a
+   * unique index rather than by the caller's preceding dedup read, so two overlapping producer runs
+   * cannot both enter the queue and leave a reviewer two cards that admit one source twice.
+   */
+  createProposal(input: CreateDataLakeProposalInput): Promise<CreateDataLakeProposalResult>;
   /**
    * The most recent proposal for a source in a lake, whatever its status - the single read every
    * dedup decision is made from. One query rather than three status-specific ones: the LATEST row

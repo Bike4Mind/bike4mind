@@ -903,6 +903,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByServerTextHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
+   * Whether ONE named file is still a live member of a lake - same META-TAG scope and same liveness
+   * rule as findByServerTextHashesInDataLake (not deleted, not archived, not an orphaned `pending`
+   * ingest), keyed on the id instead of the hash. The acquisition queue asks this about the file a
+   * prior approval admitted (#1671): a stored `approved` status alone would keep answering "the lake
+   * already holds this" long after ordinary file management removed the file, leaving the source
+   * permanently unproposable with no human ever seeing it again.
+   */
+  isLiveDataLakeMember(fabFileId: string, datalakeTag: string): Promise<boolean>;
+  /**
    * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
    * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:
    * it is stable across edits where contentHash is not, so it decides create-vs-skip-vs-update.
