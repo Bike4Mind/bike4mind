@@ -1444,6 +1444,23 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(false);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('active');
   });
+
+  it('drops a purging lake out of the deleted-lakes query, which is the behaviour #1744 turns on', async () => {
+    // The one invariant the whole fix rests on, and the one nothing else covers: the deleted list
+    // asks for statuses ['deleted'], so claiming 'purging' is what removes the lake from it. That
+    // query needed no change, which is exactly why it has no test - every service-level case mocks
+    // findAccessible outright. Widening it to ['deleted', 'purging'] (a plausible "let users watch
+    // the purge" change) reintroduces the original bug with every other test still green.
+    const owner = { userId: 'alice', isAdmin: false, userTags: [], organizationIds: [] } as AccessContext;
+    await dataLakeRepository.create(baseLake({ slug: 'still-deleted', status: 'deleted', createdByUserId: 'alice' }));
+    const purging = await dataLakeRepository.create(
+      baseLake({ slug: 'accepted-purge', status: 'deleted', createdByUserId: 'alice' })
+    );
+    await dataLakeRepository.claimPurging(purging.id);
+
+    const listed = await dataLakeRepository.findAccessible(owner, { statuses: ['deleted'], includePublic: false });
+    expect(listed.map(l => l.slug)).toEqual(['still-deleted']);
+  });
 });
 
 describe('DataLakeRepository.activateIfDraft', () => {
