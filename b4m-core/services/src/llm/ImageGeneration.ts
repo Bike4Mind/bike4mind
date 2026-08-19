@@ -924,10 +924,13 @@ export class ImageGenerationService {
             aspect_ratio,
             output_format,
             safety_tolerance,
-            // GeminiImageService maps this to Google's `enhancePrompt`. Only the text-to-image path
-            // honours it: `edit()` takes ImageEditOptions and does not build a generation config.
-            prompt_upsampling,
-            seed,
+            // Deliberately NOT forwarding prompt_upsampling/seed: Google's generateImages API
+            // rejects the mere PRESENCE of `enhancePrompt`/`seed` in the request, not just an
+            // unsupported value - GeminiImageService.buildGenerationConfig() sets them whenever
+            // the option is `!== undefined`, and ImageGenerationBodySchema.prompt_upsampling
+            // always has a value post-parse (prefaulted), so passing it here breaks every Gemini
+            // generation unconditionally, even at default settings. BFL's branch below is
+            // unaffected - only Gemini's API rejects these fields.
           });
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {
