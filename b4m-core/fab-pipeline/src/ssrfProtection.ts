@@ -173,10 +173,11 @@ function isPrivateIPv6(ip: string): boolean {
   // before dispatching here.
   if (!normalized.includes(':')) return false;
 
-  // ::1 - Loopback
+  // ::1 - Loopback, and :: - unspecified. The written-out spellings cannot match any more: a string
+  // equal to one of them is well-formed, so `normalizeIpv6` compresses it to `::1` / `::` first. They
+  // stay as the pair that documents what each canonical form is, and as cover if the canonicalise call
+  // is ever moved or removed.
   if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
-
-  // :: - Unspecified address
   if (normalized === '::' || normalized === '0:0:0:0:0:0:0:0') return true;
 
   // fe00::/8 - link-local (fe80::/10), site-local (fec0::/10, deprecated by RFC 3879 but still accepted
@@ -239,6 +240,12 @@ function isPrivateIPv6(ip: string): boolean {
   // refuse exactly this space. A zero first hextet is inside 0000::/16, which is IANA-reserved in full
   // (RFC 4291), and global unicast is 2000::/3, so nothing routable can reach this line.
   if (normalized.startsWith('0:')) return true;
+
+  // The zero-padded alternates in the four arms below (`2001:0db8:`, `2001:0000:`, `0064:ff9b:`,
+  // `0100::`) never match a well-formed address, since `normalizeIpv6` strips the padding first. They
+  // are NOT dead code: input that does not parse as IPv6 takes the bail-out and arrives raw, so
+  // `2001:0db8:zz::1` still reaches the padded arm and is refused. Deleting them as unreachable would
+  // quietly loosen the guard for malformed input - there is a test pinning that.
 
   // 2001:db8::/32 - Documentation
   if (normalized.startsWith('2001:db8:') || normalized.startsWith('2001:0db8:')) return true;
