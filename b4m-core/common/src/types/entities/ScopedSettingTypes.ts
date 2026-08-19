@@ -107,7 +107,8 @@ export interface IScopedSetting extends IMongoDocument {
    * Present only when `scopeLevel` is `Owner`: attribution of an individual vs org owner for audit
    * and #1675's cost tiers. NOT part of the row's identity - the unique key is `(scopeLevel, scopeId,
    * settingName)` and `scopeId` alone addresses the rung, so a writer must never treat `ownerType` as
-   * disambiguating two rows at the same `scopeId`. Written by a future scoped-override writer.
+   * disambiguating two rows at the same `scopeId`. Written by the scoped-override writer
+   * (`writeScopedOverride`, `b4m-core/services/src/settings/writeScopedOverride.ts`).
    */
   ownerType?: SettingOwnerType;
   settingName: SettingKey;
