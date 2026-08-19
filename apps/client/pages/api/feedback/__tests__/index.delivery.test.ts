@@ -84,9 +84,11 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
   recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),
   recordFeedbackDeliverySkipped: (...args: unknown[]) => mockRecordSkipped(...args),
+  ALARM_WORTHY_SKIP_REASONS: ['unconfigured_webhook', 'no_recipients'],
 }));
 
 import '../index';
+import { Logger } from '@bike4mind/observability';
 
 const run = () => {
   const { req, res } = createMocks({
@@ -195,6 +197,23 @@ describe('POST /api/feedback - delivery outcome', () => {
     const body = res._getJSONData();
     expect(body.delivery.delivered).toBe(false);
     expect(body.id).toBe(savedFeedback.id);
+  });
+
+  it('logs at warn (not error) when both channels are deliberately disabled - not an incident', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(Logger.warn).toHaveBeenCalled();
+    expect(Logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs at error when Slack is enabled but the webhook is unconfigured - a real incident, not a deliberate choice', async () => {
+    mockSettings.EnableFeedBackToSlack = true;
+    mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'skipped', reason: 'unconfigured_webhook' });
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(Logger.error).toHaveBeenCalled();
   });
 
   it('reports delivered:true via email even when Slack is skipped', async () => {

@@ -82,6 +82,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),
   recordFeedbackDeliveryFailure: vi.fn(),
   recordFeedbackDeliverySkipped: vi.fn(),
+  ALARM_WORTHY_SKIP_REASONS: ['unconfigured_webhook', 'no_recipients'],
 }));
 
 import '../index';

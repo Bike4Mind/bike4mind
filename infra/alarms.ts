@@ -1068,12 +1068,24 @@ if (isMonitoredStage) {
     },
   });
 
+  // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
+  // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
+  // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
+  // divergence between the two lists would surface as a bare TypeError at deploy-plan time - this
+  // guard turns that into a readable error instead.
+  if (!dlqAlarmTopic) {
+    throw new Error('feedback delivery alarms require dlqAlarmTopic');
+  }
+
   /**
    * Alarm: Feedback Delivery Failure
    *
-   * A user submitted feedback and neither Slack nor email actually delivered it - the
-   * submission is saved, but no human was notified. Feedback volume is low, so any loss
-   * is worth investigating; threshold 0 means one failure alarms.
+   * A user submitted feedback and it failed to reach at least one enabled channel or recipient -
+   * the submission is saved, but nobody was notified of the failure. This also fires on a PARTIAL
+   * failure (one bad address in a multi-recipient list) even though the response still reports
+   * `delivered: true` for the channel overall - alerting on that is deliberate, since a silently
+   * dropped recipient is exactly the kind of gap this pair of alarms exists to surface. Feedback
+   * volume is low, so any loss is worth investigating; threshold 0 means one failure alarms.
    *
    * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
@@ -1090,7 +1102,7 @@ if (isMonitoredStage) {
    */
   new aws.cloudwatch.MetricAlarm('feedbackDeliveryFailures', {
     name: `${$app.name}-${$app.stage}-feedback-delivery-failures`,
-    alarmDescription: 'Feedback submitted by a user failed to reach Slack or email',
+    alarmDescription: 'Feedback delivery failed for at least one channel or recipient',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: 'DeliveryFailed',
@@ -1100,7 +1112,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: { Stage: $app.stage },
-    alarmActions: [dlqAlarmTopic!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'FeedbackDelivery',
       Severity: 'High',
@@ -1133,7 +1145,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: { Stage: $app.stage },
-    alarmActions: [dlqAlarmTopic!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'FeedbackDelivery',
       Severity: 'Medium',

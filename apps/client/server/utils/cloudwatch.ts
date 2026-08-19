@@ -509,22 +509,28 @@ export async function recordTaxonomyTagsApplySkipped(count: number): Promise<voi
 }
 
 // Feedback Delivery Metrics - Namespace: Lumina5/FeedbackDelivery
-// DeliveryAttempted, DeliverySucceeded, DeliveryFailed, DeliverySkipped, split by channel
-// (slack|email) and stageClass (production|nonprod). Feeds feedbackDeliveryFailures and
-// feedbackDeliveryMisconfigured (infra/alarms.ts).
+// DeliverySucceeded, DeliveryFailed, DeliverySkipped, each split by channel (slack|email) and
+// stageClass (production|nonprod). DeliveryFailed and DeliverySkipped-for-an-alarm-worthy-reason
+// additionally emit a coarse `{ Stage }`-only rollup entry, which is what feedbackDeliveryFailures
+// and feedbackDeliveryMisconfigured (infra/alarms.ts) actually read - see
+// buildFeedbackDeliveryFailureMetrics / buildFeedbackDeliverySkippedMetrics below.
 
 const FEEDBACK_DELIVERY_NAMESPACE = 'Lumina5/FeedbackDelivery';
 
 export const FeedbackDeliveryMetrics = {
-  DELIVERY_ATTEMPTED: 'DeliveryAttempted',
   DELIVERY_SUCCEEDED: 'DeliverySucceeded',
   DELIVERY_FAILED: 'DeliveryFailed',
   DELIVERY_SKIPPED: 'DeliverySkipped',
 } as const;
 
 // Skip reasons that mean "enabled but actually broken" - worth paging on. 'disabled' and
-// 'nonprod_unconfigured' are deliberate, expected-silent operator choices, not incidents.
-const ALARM_WORTHY_SKIP_REASONS: readonly FeedbackDeliverySkipReason[] = ['unconfigured_webhook', 'no_recipients'];
+// 'nonprod_unconfigured' are deliberate, expected-silent operator choices, not incidents. Exported
+// so callers deciding LOG severity (not just metric emission) can reuse the same taxonomy instead
+// of drifting from it - see pages/api/feedback/index.ts's isIncident check.
+export const ALARM_WORTHY_SKIP_REASONS: readonly FeedbackDeliverySkipReason[] = [
+  'unconfigured_webhook',
+  'no_recipients',
+];
 
 export async function emitFeedbackDeliveryMetric(
   metricName: string,

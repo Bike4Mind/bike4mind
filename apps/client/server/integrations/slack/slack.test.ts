@@ -275,6 +275,13 @@ describe('postFeedbackToSlack', () => {
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
+  it('records a failure metric when the settings load itself rejects (e.g. a Mongo timeout), before any route is resolved', async () => {
+    mocks.getSettingsMap.mockRejectedValue(new Error('mongo timeout'));
+    const result = await postFeedbackToSlack(...args);
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unhandled', 'production');
+    expect(result).toEqual({ outcome: 'failed', reason: 'error' });
+  });
+
   it('the non-prod stage marker never touches the redacted Prompt Meta section', async () => {
     mocks.config.STAGE = 'pr-1234';
     mocks.getSettingsMap.mockResolvedValue({

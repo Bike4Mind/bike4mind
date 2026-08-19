@@ -44,5 +44,7 @@ premium/libreoncology/src/components/marketing/HomePage\.tsx.*mailto
 
 # False positive: the feedback delivery skip-reason literal 'nonprod_unconfigured' contains
 # "prod_" followed by 10+ alphanumeric characters, which coincidentally matches the Stripe
-# prod_ID pattern. It is a status string, not a Stripe product identifier.
-nonprod_unconfigured
+# prod_ID pattern. It is a status string, not a Stripe product identifier. Path-anchored to the
+# four files that actually use this literal, not a bare token that would suppress the pattern on
+# any unrelated line anywhere in the scanned tree.
+(slack|cloudwatch|FeedbackTypes|alarms)\.ts.*nonprod_unconfigured

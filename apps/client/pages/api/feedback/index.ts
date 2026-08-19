@@ -21,6 +21,7 @@ import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
+  ALARM_WORTHY_SKIP_REASONS,
 } from '@server/utils/cloudwatch';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
@@ -298,11 +299,19 @@ const handler = baseApi()
       delivered: slack.outcome === 'delivered' || email.outcome === 'delivered',
       channels: { slack, email },
     };
-    if (!delivery.delivered) {
-      Logger.error('[feedback] no delivery path fired for a submitted feedback record', {
+    // Reuse the alarm's own taxonomy so log severity can't drift from alarm severity: a
+    // deliberately-silent skip (both channels disabled, or a non-prod stage with no webhook
+    // configured) is expected and logs at most a warning, while a hard failure or an
+    // enabled-but-actually-broken skip is the incident the alarm pages on.
+    const isIncident = (c: FeedbackChannelDelivery): boolean =>
+      c.outcome === 'failed' || (c.outcome === 'skipped' && ALARM_WORTHY_SKIP_REASONS.some(r => r === c.reason));
+    if ([slack, email].some(isIncident)) {
+      Logger.error('[feedback] delivery failed for a submitted feedback record', {
         feedbackId: newFeedback.id,
         delivery,
       });
+    } else if (!delivery.delivered) {
+      Logger.warn('[feedback] no delivery path configured', { feedbackId: newFeedback.id, delivery });
     }
 
     // newFeedback.toJSON() (not a spread of the hydrated doc) - the schema sets

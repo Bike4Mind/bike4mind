@@ -1,5 +1,5 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { IFeedbackDocument, CreateFeedbackResponse } from '@bike4mind/common';
+import type { IFeedbackDocument, CreateFeedbackResponse } from '@bike4mind/common';
 
 export const getFeedbackFromServer = async () => {
   const response = await api.get<IFeedbackDocument[]>(`/api/feedback`);

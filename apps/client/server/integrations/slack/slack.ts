@@ -157,6 +157,11 @@ export async function postFeedbackToSlack(
     await recordFeedbackDeliverySuccess('slack', route.stageClass);
     return { outcome: 'delivered' };
   } catch (error) {
+    // Reached before `route` exists (e.g. getSettingsMap rejects on a Mongo timeout), so classify
+    // from Config.STAGE directly rather than route.stageClass. Without this, a settings-store
+    // outage is invisible to feedbackDeliveryFailures - the submitter gets the warning toast, but
+    // the alarm never sees it.
+    await recordFeedbackDeliveryFailure('slack', classifyStage(Config.STAGE), 'unhandled', Config.STAGE);
     Logger.error('Error posting feedback to Slack:', error);
     return { outcome: 'failed', reason: 'error' };
   }
