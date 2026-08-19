@@ -280,12 +280,22 @@ export function usePermanentDeleteDataLake() {
 }
 
 /**
- * Lakes whose purge the server ACCEPTED (202) but whose background sweep may not have run yet, so
- * GET /api/data-lakes/deleted still lists them. Clearing the row from the cache alone is not
- * enough: the next read of that list re-adds it, and there are two easy triggers - re-expanding
- * the Deleted section, and any sibling lake mutation, since they all invalidate this key
- * (see useLifecycleMutation). Consulted by useGetDeletedDataLakes, which self-prunes each id once
- * a response that could see the purge stops listing it.
+ * Lakes whose purge the server ACCEPTED (202), held hidden until a fetch confirms they are gone.
+ *
+ * KEPT DELIBERATELY, and narrowed in what it is for (#1744). The server now claims
+ * `deleted -> purging` at accept time, so `GET /api/data-lakes/deleted` stops listing a purged lake
+ * immediately and every other tab, session and future consumer is covered without this map. What is
+ * still left for it is the gap this side owns and the server cannot see: the in-flight requests
+ * around the accept - a deleted-list fetch that STARTED before the purge can land after it, carrying
+ * a payload that still names the lake. Removing it would trade a small, purely local guard for a
+ * visible flicker of a row the user just purged. The two mechanisms are a documented pair now, not
+ * belt-and-braces by accident.
+ *
+ * Clearing the row from the cache alone is not enough: the next read of that list re-adds it, and
+ * there are two easy triggers - re-expanding the Deleted section, and any sibling lake mutation,
+ * since they all invalidate this key (see useLifecycleMutation). Consulted by
+ * useGetDeletedDataLakes, which self-prunes each id once a response that could see the purge stops
+ * listing it.
  *
  * The value is a sequence number, and it is load-bearing for the prune: a response from a request
  * that STARTED before the purge says nothing about whether the sweep has run, so pruning on it would
@@ -293,7 +303,9 @@ export function usePermanentDeleteDataLake() {
  * orders them exactly - a wall clock cannot, since both can land inside the same millisecond.
  *
  * Module-scoped so it survives the section remounting. Deliberate consequence: if a sweep fails
- * permanently (message DLQs), the row stays hidden until a reload rather than reappearing.
+ * permanently (message DLQs), the row stays hidden until a reload rather than reappearing - which
+ * since #1744 is only a display lag, since the consumer releases a guard-refused purge back to
+ * `deleted` and the next fetch prunes the id anyway.
  */
 const purgingLakes = new Map<string, number>();
 let purgeOrderTick = 0;
@@ -313,11 +325,13 @@ export function __resetPurgingLakesForTests() {
  * Phase 2 of permanent delete: irreversible hard-delete sweep.
  *
  * The only lifecycle action that answers 202-queued rather than doing the work inline: the sweep
- * runs in a background consumer (see the timeout note in pages/api/data-lakes/[id]/lifecycle.ts),
- * so the lake is still `status: 'deleted'` when this mutation resolves. Refetching the deleted
- * list here would therefore re-render the very row it was meant to clear, which is what kept a
- * purged lake visible until the section was collapsed and re-expanded. Clear the row from the
- * cache and hold the id in `purgingLakes` until the server agrees it is gone.
+ * runs in a background consumer (see the timeout note in pages/api/data-lakes/[id]/lifecycle.ts).
+ * The server does now move the lake to `status: 'purging'` before answering (#1744), so a refetch
+ * that STARTS after this resolves correctly omits the row - but one already in flight does not, and
+ * this mutation cannot tell the two apart. So the cache write stays: clear the row and hold the id
+ * in `purgingLakes` until a response that could see the purge stops listing it. Before the server
+ * fix this was the only thing hiding the row at all, which is why it is written as a guard rather
+ * than an optimization.
  */
 export function useCleanupDataLake() {
   const queryClient = useQueryClient();
