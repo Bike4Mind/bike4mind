@@ -124,6 +124,12 @@ const handler = baseApi()
         if (!dataLakeService.canManageLake(lake, actor, grants)) {
           return res.status(403).json({ error: 'You do not have permission to clean up this data lake' });
         }
+        // 'purging' gets its own refusal ahead of the generic one, for the same reason restore does:
+        // the generic message reads as a transient state problem when this one is permanent - the
+        // purge is already accepted and its sweep is irreversible (#1744).
+        if (lake.status === 'purging') {
+          return res.status(400).json({ error: 'This data lake is already being permanently deleted' });
+        }
         if (lake.status !== 'deleted') {
           return res.status(400).json({ error: 'Data lake must be soft-deleted before cleanup' });
         }
