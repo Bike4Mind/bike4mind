@@ -3,9 +3,10 @@ import {
   Box,
   Button,
   Chip,
-  Divider,
   Dropdown,
   Input,
+  ListDivider,
+  ListItem,
   ListItemContent,
   ListItemDecorator,
   Menu,
@@ -143,7 +144,7 @@ export default function DataLakeLakePicker({
           {showSearch && (
             /* The menu owns arrow-key navigation and typeahead, both of which would steal the
                keystrokes meant for this box, so its keydowns stop here. */
-            <Box sx={{ px: '4px', pb: '6px' }} onKeyDown={e => e.stopPropagation()}>
+            <ListItem sx={{ px: '4px', pb: '6px' }} onKeyDown={e => e.stopPropagation()}>
               <Input
                 size="sm"
                 autoFocus
@@ -152,20 +153,21 @@ export default function DataLakeLakePicker({
                 onChange={e => setQuery(e.target.value)}
                 startDecorator={<SearchIcon sx={{ fontSize: 16 }} />}
                 slotProps={{ input: { 'data-testid': 'datalake-lake-picker-search' } }}
+                sx={{ width: '100%' }}
               />
-            </Box>
+            </ListItem>
           )}
 
           {isLoading ? (
-            <Box data-testid="datalake-lake-picker-loading" sx={{ px: 1, py: 0.5 }}>
+            <ListItem data-testid="datalake-lake-picker-loading" sx={{ display: 'block', px: 1, py: 0.5 }}>
               {[0, 1, 2].map(i => (
                 <Skeleton key={i} variant="text" level="body-sm" sx={{ my: 1.25 }} />
               ))}
-            </Box>
+            </ListItem>
           ) : isError ? (
             // A failed read must not render as an empty list: an empty picker beside a
             // "create your first lake" tree is exactly the lie #1645 removed.
-            <Box data-testid="datalake-lake-picker-error" sx={{ px: 1, py: 1 }}>
+            <ListItem data-testid="datalake-lake-picker-error" sx={{ display: 'block', px: 1, py: 1 }}>
               <Typography level="body-sm" sx={{ color: 'danger.400', mb: 1 }}>
                 {copy.lakesErrorTitle}
               </Typography>
@@ -179,7 +181,7 @@ export default function DataLakeLakePicker({
               >
                 Retry
               </Button>
-            </Box>
+            </ListItem>
           ) : (
             <>
               {/* All-lakes stays an explicit ROW rather than an unlabelled default, so
@@ -203,9 +205,11 @@ export default function DataLakeLakePicker({
               </MenuItem>
 
               {filtered.length === 0 ? (
-                <Typography level="body-xs" sx={{ px: 1, py: 1, color: 'text.tertiary' }}>
-                  {query ? 'No matches' : `No ${copy.allLakesLabel.toLowerCase()} yet`}
-                </Typography>
+                <ListItem>
+                  <Typography level="body-xs" sx={{ px: 1, py: 1, color: 'text.tertiary' }}>
+                    {query ? 'No matches' : `No ${copy.allLakesLabel.toLowerCase()} yet`}
+                  </Typography>
+                </ListItem>
               ) : (
                 filtered.map(lake => {
                   const count = lakeFileCounts?.[lake.datalakeTag];
@@ -252,7 +256,7 @@ export default function DataLakeLakePicker({
             </>
           )}
 
-          {(onCreate || onDiscover) && <Divider sx={{ my: '6px' }} />}
+          {(onCreate || onDiscover) && <ListDivider sx={{ my: '6px' }} />}
           {onCreate && (
             <MenuItem onClick={onCreate} data-testid="datalake-lake-picker-create-btn">
               <ListItemDecorator>
@@ -279,15 +283,17 @@ export default function DataLakeLakePicker({
           {/* Count of reachable lakes: the honest answer to "do I have lakes?", withheld while
               loading or erroring so it never reads as a confident zero. */}
           {!isLoading && !isError && (
-            <Chip
-              size="sm"
-              variant="soft"
-              color="neutral"
-              data-testid="datalake-lake-picker-lake-count"
-              sx={{ fontSize: '11px', mt: '6px', ml: '4px' }}
-            >
-              {lakes?.length ?? 0} {lakes?.length === 1 ? 'lake' : 'lakes'}
-            </Chip>
+            <ListItem sx={{ mt: '6px' }}>
+              <Chip
+                size="sm"
+                variant="soft"
+                color="neutral"
+                data-testid="datalake-lake-picker-lake-count"
+                sx={{ fontSize: '11px' }}
+              >
+                {lakes?.length ?? 0} {lakes?.length === 1 ? 'lake' : 'lakes'}
+              </Chip>
+            </ListItem>
           )}
         </Menu>
       </Dropdown>
