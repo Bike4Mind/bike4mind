@@ -601,6 +601,12 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
         // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        // A removal can still reach activateIfDraft's draft -> active flip (see
+        // removeFileFromDataLake), which records a `system`-principal config-history row. Inert
+        // today because this hook fires from the file wizard, where the History observer is
+        // unmounted - invalidated anyway for the same reason the lifecycle hook does it: the cost
+        // is nothing, and reasoning about which paths qualify is what rots.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       }
       // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
       // files only, so removing a file that was in the lake by prefix alone drops a row from
