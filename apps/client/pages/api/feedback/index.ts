@@ -89,32 +89,39 @@ const handler = baseApi()
       : promptMeta;
 
     // Use the same resolved id already computed for the saved document, not the raw request-body
-    // userId: an untrusted body value that isn't a valid ObjectId throws a Mongoose CastError deep
-    // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already succeeded.
-    if (authenticated)
-      await logEvent(
-        { userId: newFeedback.userId, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
-        { ability: req.ability }
-      );
-
-    // Send feedback to Slack if enabled. This is a notification side-effect on an already-saved
-    // record -- a Slack outage must not turn a successful save into a 5xx that prompts a duplicate
-    // retry, so log and continue rather than let a rejection propagate.
-    if (getSettingsValue('EnableFeedBackToSlack', settings)) {
-      console.log('Sending feedback to Slack is enabled');
+    // userId: an untrusted body value that isn't a valid ObjectId threw a Mongoose CastError deep
+    // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already
+    // succeeded. The resolved id removes that specific trigger, but logEvent is still a post-save
+    // side-effect that can fail for other reasons (e.g. a transient write failure inside
+    // incrementUserCounter) -- same containment as the Slack/email side-effects below.
+    if (authenticated) {
       try {
-        await postFeedbackToSlack(
-          type || 'CS',
-          organization,
-          newFeedback.username,
-          newFeedback.userEmail ?? '',
-          newFeedback.userId,
-          content,
-          promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+        await logEvent(
+          {
+            userId: newFeedback.userId,
+            type: FeedbackEvents.CREATE_FEEDBACK,
+            metadata: { id: newFeedback.id, content },
+          },
+          { ability: req.ability }
         );
       } catch (error) {
-        req.logger.error('Failed to post feedback to Slack', error);
+        req.logger.error('Failed to log feedback analytics event', error);
       }
+    }
+
+    // Send feedback to Slack if enabled. postFeedbackToSlack already wraps its entire body and
+    // never rejects (slack.ts), so no containment is needed at this call site.
+    if (getSettingsValue('EnableFeedBackToSlack', settings)) {
+      console.log('Sending feedback to Slack is enabled');
+      await postFeedbackToSlack(
+        type || 'CS',
+        organization,
+        newFeedback.username,
+        newFeedback.userEmail ?? '',
+        newFeedback.userId,
+        content,
+        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+      );
     }
 
     // Find all of the settings that have a tag 'feedbackEmail'

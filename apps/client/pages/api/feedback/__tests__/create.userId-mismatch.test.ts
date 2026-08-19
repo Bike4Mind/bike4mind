@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, User, UserActivityCounter, Organization } from '@bike4mind/database';
+import { FeedbackModel, User, UserActivityCounter, Organization, CounterLog } from '@bike4mind/database';
 import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
 
@@ -48,10 +48,18 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   return {
     ...actual,
     getSettingsMap: vi.fn().mockResolvedValue({}),
-    // Slack enabled (email left off) so the identity-resolution fix in the Slack call is actually
-    // exercised -- previously this always returned undefined, so that block never ran and the
-    // newFeedback.username/userEmail/userId substitutions there had no coverage at all.
-    getSettingsValue: vi.fn((key: string) => (key === 'EnableFeedBackToSlack' ? true : undefined)),
+    // Slack and email both enabled so the identity-resolution fix in each egress block is actually
+    // exercised -- with both off, neither block ran and the resolved-identity substitutions had no
+    // coverage at all.
+    getSettingsValue: vi.fn((key: string) =>
+      key === 'EnableFeedBackToSlack'
+        ? true
+        : key === 'EnableFeedBackToEmail'
+          ? true
+          : key === 'FeedbackReceiveEmail'
+            ? 'ops@example.com'
+            : undefined
+    ),
   };
 });
 
@@ -147,6 +155,12 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     expect(slackUsername).toBe(realUser.username);
     expect(slackEmail).toBe(realUser.email);
     expect(slackUserId).toBe(realUser.id);
+
+    // Same identity substitution went into the notification email's HTML body -- pin that too,
+    // not just the Slack half, since the two egress points share the same underlying fix.
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).toContain(realUser.username);
+    expect(emailBody).toContain(realUser.id);
   });
 
   it('resolves organization from the authenticated identity, not a client-supplied decoy email', async () => {
@@ -196,20 +210,23 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     expect(saved!.organization).toBe('Real Org');
   });
 
-  it('still returns 201 with the feedback saved when the Slack notification fails', async () => {
-    mockPostFeedbackToSlack.mockRejectedValueOnce(new Error('Slack is down'));
+  it('still returns 201 with the feedback saved when the email notification fails', async () => {
+    // Not Slack: postFeedbackToSlack wraps its entire body and never rejects (slack.ts), so it needs
+    // no containment at the call site. EmailEvents.Send.publish goes straight to eventBridge.send
+    // with no internal catch (eventBus.ts) -- that is the side-effect that can genuinely fail.
+    mockEmailPublish.mockRejectedValueOnce(new Error('EventBridge is down'));
 
     const realUser = await User.create({
-      username: 'e2e-slack-failure-user',
-      name: 'Slack Failure User',
-      email: 'slack-failure-user@example.com',
+      username: 'e2e-email-failure-user',
+      name: 'Email Failure User',
+      email: 'email-failure-user@example.com',
     });
 
     const { req, res } = createMocks({
       method: 'POST',
       body: {
         userId: realUser.id,
-        content: 'slack outage should not mask this save',
+        content: 'email outage should not mask this save',
         tags: [],
         username: 'reporter',
         userEmail: 'reporter@example.com',
@@ -227,11 +244,54 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     await runHandler(req, res);
 
-    // A Slack outage is a notification side-effect on an already-saved record, not part of the
-    // write's contract -- it must not turn a successful save into a 5xx that prompts a duplicate retry.
+    // An email/EventBridge outage is a notification side-effect on an already-saved record, not
+    // part of the write's contract -- it must not turn a successful save into a 5xx that prompts a
+    // duplicate retry.
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'slack outage should not mask this save' });
+    const saved = await FeedbackModel.findOne({ content: 'email outage should not mask this save' });
     expect(saved).not.toBeNull();
+  });
+
+  it('still returns 201 with the feedback saved when the analytics write fails', async () => {
+    // A faithful stand-in for a transient Mongo failure on the second analytics write, strictly
+    // after newFeedback.save() has already committed -- the masked-save shape the ticket is about,
+    // just via a different trigger than the original CastError.
+    const createSpy = vi.spyOn(CounterLog, 'create').mockRejectedValueOnce(new Error('connection timed out'));
+
+    const realUser = await User.create({
+      username: 'e2e-analytics-failure-user',
+      name: 'Analytics Failure User',
+      email: 'analytics-failure-user@example.com',
+    });
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: realUser.id,
+        content: 'analytics write failure should not mask this save',
+        tags: [],
+        username: 'reporter',
+        userEmail: 'reporter@example.com',
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => true;
+    (req as unknown as { user: { id: string; username: string; email: string } }).user = {
+      id: realUser.id,
+      username: realUser.username,
+      email: realUser.email,
+    };
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
+
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ content: 'analytics write failure should not mask this save' });
+    expect(saved).not.toBeNull();
+
+    createSpy.mockRestore();
   });
 });
