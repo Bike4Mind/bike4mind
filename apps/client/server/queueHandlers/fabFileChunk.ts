@@ -17,7 +17,11 @@ import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fa
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@server/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   isBatchComplete,
@@ -45,11 +49,6 @@ const ChunkFabFilePayload = z.object({
   // (haltable) from real-time user uploads (never halted). Absent => user work.
   ...provenancePayloadShape,
 });
-
-/** Attempts at the paused marker before giving up; see the write's own note for why it retries. */
-const MARK_PAUSED_MAX_ATTEMPTS = 3;
-/** Linear backoff base, in ms. Small: the handler is otherwise doing nothing and holds no lease. */
-const MARK_PAUSED_RETRY_DELAY_MS = 150;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -79,13 +78,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
-    // Retried in-process, then best-effort. Failing the DELIVERY is still not an option - the switch
-    // is still on, so SQS would redeliver into this same branch until the message expired - but the
-    // realistic failure here is a transient one (a pool timeout, a stepdown, a blip), and one attempt
-    // gave it a single chance. Losing the write loses the ONE signal that tells "its passages were
-    // deleted" from "it never had any", and the message is gone, so nothing retries it later.
-    // Bounded and short on purpose: this runs inside a Lambda invocation that has already decided to
-    // do no work, and the ERROR log remains the trail if every attempt fails.
+    // Retried in-process, then FAILED to SQS rather than acked. Losing this write loses the ONE
+    // signal that tells "its passages were deleted" from "it never had any" - and the producer has
+    // already deleted them, so acking a lost marker strands the file invisibly with nothing left to
+    // retry it. The in-process attempts handle the realistic case (a pool timeout, a stepdown, a
+    // blip); the throw handles the rest.
+    //
+    // Throwing is safe and bounded, which is why it beats acking here:
+    //  - Nothing destructive has run in this branch, so a redelivery is idempotent - it re-reads the
+    //    switch and either marks again or, if the switch has since gone OFF, rebuilds the file for
+    //    real, which is a better outcome than any marker.
+    //  - It cannot spin: fabFileChunkQueue sets `dlq: { retry: 3 }` (infra/queues.ts), so this is at
+    //    most three receives before the message lands in fabFileChunkQueueDLQ - which is already in
+    //    DLQ_DESCRIPTORS and dlqRegistry, so it alarms and is replayable from admin. A permanently
+    //    invisible file becomes a bounded retry and then a visible operational signal.
+    //
+    // Note the 60-minute visibility timeout on that queue: a redelivery is an hour away, so this
+    // guarantees eventual correctness, NOT a short window. Closing the window itself needs the
+    // marker to be atomic with the reset that creates the state, which is a separate change - the
+    // producer cannot reuse THIS marker for that, because a file merely awaiting a normal rebuild
+    // would then read to every reader as permanently paused.
     for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
       try {
         await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_CHUNK_NOTE });
@@ -94,9 +106,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
           logger.error(
             `[convergenceKillSwitch] could not mark ${fabFileId} as paused mid-rechunk after ` +
-              `${MARK_PAUSED_MAX_ATTEMPTS} attempts: ${err}`
+              `${MARK_PAUSED_MAX_ATTEMPTS} attempts; failing the delivery so SQS retries rather than ` +
+              `stranding the file invisibly: ${err}`
           );
-          break;
+          throw err;
         }
         await new Promise(resolve => setTimeout(resolve, MARK_PAUSED_RETRY_DELAY_MS * attempt));
       }

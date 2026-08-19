@@ -7,6 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // chunkCount:0), then re-throw so SQS retries then routes to the DLQ.
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
+  // Declared, not spread from the real module: this mock exists to keep `utils`' import-time
+  // Config/DB wiring out of the test. Any NEW export the handler starts importing has to be added
+  // here too, or it arrives as undefined and the handler misbehaves silently.
+  MARK_PAUSED_MAX_ATTEMPTS: 3,
+  MARK_PAUSED_RETRY_DELAY_MS: 0, // 0 so the backoff does not add real delay to the suite
 }));
 
 type PreparedStub = { args: unknown[] };
@@ -771,13 +776,31 @@ describe('fabFileChunk handler - convergence kill switch', () => {
     expect(h.fabFileUpdate).toHaveBeenCalledWith({ id: 'ff1', notes: PAUSED_CHUNK_NOTE });
   });
 
-  // The marker is best-effort: failing the delivery would only retry it against a switch that is
-  // still on. An unmarked file is the pre-existing invisible state, and the ERROR log is its trail.
-  it('still drops the message when the marker write fails, and logs it', async () => {
-    h.fabFileUpdate.mockRejectedValue(new Error('mongo down'));
+  // A transient failure must not cost the marker, so the write is retried in-process before the
+  // delivery is failed. This pins that the retry is what handles the realistic case.
+  it('retries the marker write and acks once it succeeds', async () => {
+    h.fabFileUpdate.mockRejectedValueOnce(new Error('pool timeout')).mockResolvedValueOnce(undefined);
 
     await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.fabFileUpdate).toHaveBeenCalledTimes(2);
+    expect(mockLogger.error).not.toHaveBeenCalled();
+  });
+
+  // This assertion used to be `resolves.toBeUndefined()`, on the reasoning that failing the delivery
+  // would "only retry it against a switch that is still on". That does not hold: fabFileChunkQueue
+  // sets `dlq: { retry: 3 }`, so the message cannot spin - it is retried at most three times and then
+  // lands in fabFileChunkQueueDLQ, which alarms and is replayable. Acking instead strands the file
+  // invisibly with its passages already deleted and NOTHING left to retry it, which is strictly
+  // worse. A redelivery is also idempotent here: this branch has done nothing destructive, and if the
+  // switch has since gone off the redelivery rebuilds the file for real.
+  it('fails the delivery when the marker write keeps failing, so SQS retries instead of stranding it', async () => {
+    h.fabFileUpdate.mockRejectedValue(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).rejects.toThrow('mongo down');
     expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('could not mark ff1'));
+    // Still no destructive work, which is what makes the redelivery safe.
+    expect(h.prepareFabFileChunks).not.toHaveBeenCalled();
+    expect(h.fabFileFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
   // A customer upload carries no origin and must never be halted - and must not be marked either.
