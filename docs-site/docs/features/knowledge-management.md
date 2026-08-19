@@ -290,11 +290,21 @@ What happens when you transfer:
   transfer is therefore the new owner's call, which is why it asks you to confirm.
 - The lake's creator never changes. Ownership rides on the grant, so the audit trail of who
   originally created the lake stays intact.
+- **If the lake is gated** on an access tag or a required entitlement, the confirmation says so. A
+  new owner reads everything in the lake whether or not they satisfy that gate - ownership overrides
+  it - and the picker deliberately lists every eligible member rather than only gate-holders, since
+  someone taking the lake on does not need pre-existing access. Transferring a gated lake is allowed,
+  but it is a deliberate handover of gated content, which is why it is spelled out before you
+  confirm. (Publishing a gated lake, by contrast, is refused outright: an app-wide audience has no
+  named recipient to hold accountable.)
 
 Who you can choose is resolved by the server from the membership of the organization that owns the
 lake - the billing owner, appointed admins, and everyone on the member list - minus the current
 owner. An organization admin acting only in that capacity cannot name **themselves**: succession is a
-reassignment to another member, not a way to take a colleague's lake and then publish it.
+reassignment to another member, not a way to take a colleague's lake and then publish it. You must
+also still belong to that organization yourself: leaving an organization does not strip the grants
+you held on its lakes, so the transfer gate checks current membership rather than trusting the grant
+alone.
 
 **A personal lake has no one to transfer to.** With no organization behind it there is no member list
 to choose from, and the picker says so rather than showing an empty list. Move the lake into an
@@ -327,10 +337,11 @@ lists your teammates.
 - **There is no Transfer ownership button.** It is gated more tightly than the rest of the view: only
   the lake's owner, an admin of the owning organization, or a platform admin sees it. A curator can
   read the whole access view without being able to hand the lake on.
-- **The transfer picker is empty.** Two different causes, and it tells you which. On a **personal**
+- **The transfer picker is empty.** Three different causes, and it tells you which. On a **personal**
   lake there is no organization membership to list, so move the lake into an organization first. On an
   organization lake it means the organization has no other eligible member yet - add them to the
-  organization, then transfer.
+  organization, then transfer. If the member list simply failed to load, it says that instead - an
+  error is never presented as "nobody is eligible".
 - **A teammate is missing from the transfer picker.** The picker excludes the current owner (handing a
   lake to whoever already owns it does nothing) and, if you are acting purely as an organization
   admin, yourself. It also drops anyone whose user account no longer resolves. Note that this list is

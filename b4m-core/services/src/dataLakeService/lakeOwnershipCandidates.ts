@@ -1,4 +1,5 @@
 import type {
+  AccessContext,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IOrganizationDocument,
@@ -41,6 +42,17 @@ export function isOrgOwnershipCandidate(
   return !!userId && listOrgOwnershipCandidateIds(org).includes(userId);
 }
 
+/**
+ * The acting principal for a transfer decision: `ManageActor` plus the actor's CURRENT org
+ * membership, which the transfer rule needs and `canManageLake` does not.
+ *
+ * `organizationIds` is deliberately REQUIRED rather than optional-with-a-fallback: an absent
+ * membership set would silently re-open the stale-grant path below, and every caller already holds a
+ * full `AccessContext` (the routes build one via `toAccessContext`), so requiring it costs nothing
+ * and turns a forgotten thread into a compile error instead of a quiet widening.
+ */
+export type LakeTransferActor = ManageActor & Pick<AccessContext, 'organizationIds'>;
+
 /** Who, if anyone, the actor is authorized to transfer a lake as - and by which rung. */
 export interface LakeTransferAuthority {
   allowed: boolean;
@@ -64,6 +76,15 @@ export interface LakeTransferAuthority {
  * current effective owner, or an admin of the lake's own org (the orphaned-creator succession path).
  * A curator manages but does not own, so cannot hand ownership away.
  *
+ * On an ORG lake every rung additionally requires the actor to still BELONG to that org. Grants are
+ * not revoked when someone leaves an organization (the only grant-removal path in the tree is lake
+ * deletion), so an owner grant outlives the membership that motivated it - and without this check
+ * that stale grant would keep answering "yes" here, which the candidate listing turns into a live
+ * read of the org's present-day roster with work emails attached. Org-admin rights count as
+ * membership on their own: an appointed admin (`adminUserIds`) or team manager need not sit on the
+ * org's `users[]` ACL, so requiring the ACL alone would close the succession path this rule exists
+ * for. A platform admin is exempt (global superuser), and a personal lake has no org to belong to.
+ *
  * Pure and sync over pre-fetched active grants, so the write path (`transferLakeOwnership`), the
  * candidate listing, and the access view's viewer-capability flag all decide from one rule instead of
  * three. A fallback (hardcoded registry) lake is never transferable - it has no document to hang an
@@ -71,15 +92,16 @@ export interface LakeTransferAuthority {
  */
 export function resolveLakeTransferAuthority(
   lake: Pick<IDataLakeDocument, 'id' | 'createdByUserId' | 'organizationId'>,
-  actor: ManageActor,
+  actor: LakeTransferActor,
   grants: readonly LakeGrant[] = []
 ): LakeTransferAuthority {
   if (isFallbackLake(lake)) return { allowed: false, isOwner: false, viaOrgAdminOnly: false };
   const isOwner = isEffectiveOwner(lake, actor, grants);
   const lakeOrg = normalizeId(lake.organizationId);
   const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
+  const inLakeOrg = !lakeOrg || isOrgAdminOfLake || (actor.organizationIds ?? []).includes(lakeOrg);
   return {
-    allowed: !!actor.isAdmin || isOwner || isOrgAdminOfLake,
+    allowed: !!actor.isAdmin || (inLakeOrg && (isOwner || isOrgAdminOfLake)),
     isOwner,
     viaOrgAdminOnly: !actor.isAdmin && !isOwner && isOrgAdminOfLake,
   };
@@ -108,16 +130,32 @@ export interface ListLakeOwnershipCandidatesAdapters {
  *  - the actor themselves when authorized solely as an org admin - the consent guard in
  *    `transferLakeOwnership` refuses that, so offering it would be an option that always fails.
  *
- * The CALLER owns the read gate (the actor must already be able to manage the lake); this applies the
- * narrower transfer rule on top and returns an empty list rather than throwing when it does not hold.
+ * This function owns its OWN gate and does not assume the caller applied one: the route ahead of it
+ * applies only the not-found-style READ gate (`assertLakeAccess`), never `canManageLake`, so the
+ * narrower transfer rule below is the only thing standing between a mere reader and a list of
+ * teammates' work emails. It returns an empty list rather than throwing when that rule does not hold,
+ * so a caller who may read but not transfer simply sees no picker.
  */
 export async function listLakeOwnershipCandidates(
-  lake: Pick<IDataLakeDocument, 'id' | 'createdByUserId' | 'organizationId'>,
-  actor: ManageActor,
+  lake: Pick<
+    IDataLakeDocument,
+    'id' | 'createdByUserId' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement'
+  >,
+  actor: LakeTransferActor,
   { db }: ListLakeOwnershipCandidatesAdapters
 ): Promise<LakeOwnershipCandidateList> {
   const lakeOrg = normalizeId(lake.organizationId);
   const scope = lakeOrg ? 'organization' : 'personal';
+  // Carried on every shape the picker actually renders from (org-scoped and authorized), so the
+  // confirmation can say that ownership bypasses this gate - see `LakeOwnershipCandidateList.gate`.
+  // The refused and personal shapes below omit it: neither offers an action for it to qualify.
+  const gate =
+    lake.requiredUserTag || lake.requiredEntitlement
+      ? {
+          ...(lake.requiredUserTag ? { requiredUserTag: lake.requiredUserTag } : {}),
+          ...(lake.requiredEntitlement ? { requiredEntitlement: lake.requiredEntitlement } : {}),
+        }
+      : undefined;
 
   const grants = await loadActiveLakeGrants(lake, { db });
   const authority = resolveLakeTransferAuthority(lake, actor, grants);
@@ -134,7 +172,7 @@ export async function listLakeOwnershipCandidates(
   if (authority.viaOrgAdminOnly && actor.userId) excluded.add(actor.userId);
   const candidateIds = listOrgOwnershipCandidateIds(org).filter(id => !excluded.has(id));
   if (candidateIds.length === 0) {
-    return { scope, candidates: [], organizationName: org.name };
+    return { scope, candidates: [], organizationName: org.name, ...(gate ? { gate } : {}) };
   }
 
   // Email is carried here, unlike the access view's `userDisplayName` (which withholds it on
@@ -147,5 +185,5 @@ export async function listLakeOwnershipCandidates(
     .map(user => ({ userId: user.id, name: user.name || user.username || undefined, email: user.email ?? undefined }))
     .sort((a, b) => (a.name ?? a.email ?? a.userId).localeCompare(b.name ?? b.email ?? b.userId));
 
-  return { scope, candidates, organizationName: org.name };
+  return { scope, candidates, organizationName: org.name, ...(gate ? { gate } : {}) };
 }

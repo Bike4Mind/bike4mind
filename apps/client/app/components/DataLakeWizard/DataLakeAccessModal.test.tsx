@@ -14,7 +14,7 @@ let viewState: {
   isError: boolean;
   error?: unknown;
 };
-let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean };
+let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
 const transferMutate = vi.fn();
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -223,6 +223,58 @@ describe('DataLakeAccessModal', () => {
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
       await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
       expect(screen.getByTestId('datalake-transfer-no-candidates')).toHaveTextContent(/Acme/);
+    });
+
+    it('says the member list could not be loaded rather than claiming the org has nobody', async () => {
+      // The failure mode this guards: "no other member can receive this lake" is a factual claim
+      // about the organization, and a request that never arrived cannot support it.
+      viewState = loaded(fullView, true);
+      candidatesState = { data: undefined, isLoading: false, isError: true };
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+
+      expect(screen.getByTestId('datalake-transfer-error')).toHaveTextContent(/try again/i);
+      expect(screen.queryByTestId('datalake-transfer-no-candidates')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('datalake-transfer-personal')).not.toBeInTheDocument();
+      expect(screen.getByTestId('datalake-transfer-confirm-btn')).toBeDisabled();
+    });
+
+    it("warns that ownership overrides the lake's content gate, naming it", async () => {
+      withCandidates();
+      candidatesState.data = { ...candidatesState.data!, gate: { requiredUserTag: 'phi' } };
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+
+      const warning = screen.getByTestId('datalake-transfer-gate-warning');
+      expect(warning).toHaveTextContent(/phi/);
+      expect(warning).toHaveTextContent(/whether or not they satisfy it/i);
+      // The gate must not remove the option - it is disclosed, not enforced, on this path.
+      expect(screen.getByTestId('datalake-transfer-owner-select')).toBeInTheDocument();
+    });
+
+    it('shows no gate warning for an ungated lake', async () => {
+      withCandidates();
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      expect(screen.queryByTestId('datalake-transfer-gate-warning')).not.toBeInTheDocument();
+    });
+
+    it('keeps the dialog open when the transfer is refused, so another member can be picked', async () => {
+      withCandidates();
+      transferMutate.mockRejectedValue(new Error('nope'));
+      const onClose = vi.fn();
+      render(<DataLakeAccessModal lake={lake} onClose={onClose} />, { wrapper: Wrapper });
+
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await userEvent.click(screen.getByTestId('datalake-transfer-owner-select'));
+      await userEvent.click(screen.getByTestId('datalake-transfer-option-u9'));
+      await userEvent.click(screen.getByTestId('datalake-transfer-confirm-btn'));
+
+      expect(transferMutate).toHaveBeenCalled();
+      expect(screen.getByTestId('datalake-transfer-modal')).toBeInTheDocument();
+      // The rejection is the mutation's to report (its onError toasts the server's refusal text);
+      // this dialog's only job is not to close and not to throw.
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 });

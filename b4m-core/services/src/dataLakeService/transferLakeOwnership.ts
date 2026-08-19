@@ -5,10 +5,14 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
-import { resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
+import { resolveEffectiveOwnerIds } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
-import { isOrgOwnershipCandidate, resolveLakeTransferAuthority } from './lakeOwnershipCandidates';
+import {
+  isOrgOwnershipCandidate,
+  resolveLakeTransferAuthority,
+  type LakeTransferActor,
+} from './lakeOwnershipCandidates';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { ownershipChange } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
@@ -56,11 +60,30 @@ export interface TransferLakeOwnershipResult {
  * owner exposing their own lake. A platform admin is unconstrained (global superuser by definition).
  *
  * Refused for a fallback (hardcoded registry) lake, which has no backing document to hang a grant on
- * (`assertLakeGrantable`). For an org-scoped lake the new owner must belong to that org - membership
- * never crosses organizations (epic decision 12).
+ * (`assertLakeGrantable`). For an org-scoped lake BOTH parties must belong to that org - the new
+ * owner by the candidate predicate below, the actor by `resolveLakeTransferAuthority`'s membership
+ * requirement (a grant outlives the membership that motivated it) - membership never crosses
+ * organizations (epic decision 12).
+ *
+ * The lake's own content gate (`requiredUserTag` / `requiredEntitlement`) is deliberately NOT applied
+ * to the recipient: ownership bypasses it (`classifyLakeAccess` returns on the owner arm), so a
+ * transfer can hand gated content to a member who does not satisfy the gate. That is allowed because
+ * refusing it would leave a gated lake with no succession path at all, but it is disclosed rather
+ * than silent - the candidate list carries the gate and the confirmation names it, so the owner makes
+ * the call knowingly. Contrast `setLakeVisibility`, which hard-refuses publishing a gated lake:
+ * exposing it app-wide has no named recipient to hold accountable, a handover does.
+ *
+ * NOT ATOMIC: the recipient's grant, each demotion, the actor stamp and the audit row are separate
+ * writes with no session. A session IS available in this layer (db-core's `withTransaction`, whose
+ * AsyncLocalStorage enrolls repo writes automatically), but it is not taken here because this service
+ * is adapter-injected and connection-free by design; wrapping belongs at the route seam if we want
+ * it. The consequence is a failure mid-loop leaving the lake with two effective owners and no
+ * transfer row to explain it in the very view this feature exists to make trustworthy. Mitigated,
+ * not solved, by every write being idempotent (retrying the same transfer converges) and by the
+ * ordering: the audit is written LAST so it can never claim a transfer that failed partway.
  */
 export const transferLakeOwnership = async (
-  actor: ManageActor,
+  actor: LakeTransferActor,
   dataLakeId: string,
   newOwnerUserId: string,
   { db, logger }: TransferLakeOwnershipAdapters

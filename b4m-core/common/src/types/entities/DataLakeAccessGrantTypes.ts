@@ -106,6 +106,18 @@ export interface LakeOwnershipCandidateList {
   candidates: LakeOwnershipCandidate[];
   /** The owning organization's name, for the UI's explanatory copy. Absent for a personal lake. */
   organizationName?: string;
+  /**
+   * The lake's content gate, when it has one. Carried so a transfer confirmation can SAY that
+   * ownership bypasses it: `classifyLakeAccess` returns on the owner arm before the requirement arm
+   * ever runs, so a new owner reads the whole lake whether or not they hold the tag/entitlement, and
+   * the candidate set is deliberately unfiltered by it (owning a lake grants its own access). The
+   * transfer is still allowed - this is the disclosure that keeps it a deliberate choice rather than
+   * a silent one. Absent for an ungated lake.
+   */
+  gate?: {
+    requiredUserTag?: string;
+    requiredEntitlement?: string;
+  };
 }
 
 export interface IDataLakeAccessGrantRepository extends IBaseRepository<IDataLakeAccessGrantDocument> {

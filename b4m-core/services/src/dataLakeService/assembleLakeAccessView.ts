@@ -13,18 +13,19 @@ import type {
   LakeAccessView,
   LakeGrantStatus,
 } from '@bike4mind/common';
+import { ORG_MEMBERSHIP_ACL_PERMISSIONS } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 
 /** Default cap on audit events read for the history aggregation - see `historyTruncated`. */
 export const LAKE_ACCESS_VIEW_HISTORY_LIMIT = 2000;
 
 /**
- * The org `users[]` permissions that count as membership - IDENTICAL to the DB gate's
- * `MEMBER_PERMISSIONS` (OrganizationModel `findMembershipOrgIds`, #1674). Must stay in lockstep:
- * the org channel's `holderCount` counts exactly the members the gate would admit, so an owner is
- * never shown a member total larger than the set that can actually read.
+ * The org `users[]` permissions that count as membership, DERIVED from the one shared definition
+ * rather than hand-copied: the org channel's `holderCount` must count exactly the members the DB gate
+ * (`OrganizationModel`'s `findMembershipOrgIds`) would admit, or an owner is shown a member total
+ * larger than the set that can actually read - false reassurance a compliance reader cannot detect.
  */
-const ORG_MEMBER_PERMISSIONS = new Set(['read', 'write']);
+const ORG_MEMBER_PERMISSIONS = new Set<string>(ORG_MEMBERSHIP_ACL_PERMISSIONS);
 
 /**
  * Whether a grant is live at `now`. IDENTICAL boundary to the DB `buildActiveGrantFilter` and the

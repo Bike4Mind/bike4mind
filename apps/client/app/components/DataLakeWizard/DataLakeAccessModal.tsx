@@ -24,6 +24,7 @@ import type {
   LakeAccessGrantView,
   LakeAccessHistoryEntry,
   LakeAccessView,
+  LakeOwnershipCandidateList,
 } from '@bike4mind/common';
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import type { ColorPaletteProp } from '@mui/joy';
@@ -126,6 +127,19 @@ function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
 }
 
 /**
+ * What the lake's content gate demands, in prose, for the transfer confirmation. Returns null for an
+ * ungated lake. Deliberately quotes the raw tag/entitlement key: it is what an owner sees on the
+ * lake's own settings, so an invented friendly name would be a second vocabulary for one thing.
+ */
+function describeLakeGate(gate: LakeOwnershipCandidateList['gate']): string | null {
+  if (!gate) return null;
+  const parts: string[] = [];
+  if (gate.requiredUserTag) parts.push(`the access tag "${gate.requiredUserTag}"`);
+  if (gate.requiredEntitlement) parts.push(`the entitlement "${gate.requiredEntitlement}"`);
+  return parts.length > 0 ? parts.join(' and ') : null;
+}
+
+/**
  * Hand this lake to another member of its organization.
  *
  * Confirm-gated because the actor demotes THEMSELVES: the outgoing owner stays on as a curator, so
@@ -139,12 +153,13 @@ function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
  * picker (see `listLakeOwnershipCandidates`).
  */
 function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose: () => void }) {
-  const { data: candidateList, isLoading } = useLakeOwnershipCandidates(lakeId);
+  const { data: candidateList, isLoading, isError } = useLakeOwnershipCandidates(lakeId);
   const transfer = useTransferLakeOwnership();
   const [newOwnerUserId, setNewOwnerUserId] = useState<string | null>(null);
 
   const candidates = candidateList?.candidates ?? [];
   const orgName = candidateList?.organizationName;
+  const gateDescription = describeLakeGate(candidateList?.gate);
 
   const handleConfirm = async () => {
     if (!newOwnerUserId) return;
@@ -168,6 +183,14 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }} data-testid="datalake-transfer-loading">
                 <CircularProgress size="sm" />
               </Box>
+            ) : isError ? (
+              // A failed fetch must NOT fall through to the empty-candidates branch below: "no other
+              // member can receive this lake" is a claim about the organization's membership, and a
+              // request that never arrived cannot support it. The query is retry: false, so one
+              // failure is the final answer until the dialog is reopened.
+              <Alert color="danger" variant="soft" data-testid="datalake-transfer-error">
+                Couldn&apos;t load the member list, so there is no one to choose from here. Close this and try again.
+              </Alert>
             ) : candidateList?.scope === 'personal' ? (
               <Alert color="neutral" variant="soft" data-testid="datalake-transfer-personal">
                 This lake is personal, so there is no team to transfer it within. Move it into an organization first
@@ -185,6 +208,17 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
                   The new owner takes over this lake. You stay on as a curator - you keep managing it, but only the
                   owner can transfer it again or change how it is shared.
                 </Typography>
+                {/* Ownership bypasses the lake's own content gate (the owner arm of the read decision
+                    returns before the tag/entitlement arm runs), and the picker deliberately offers
+                    every org member rather than only gate-holders. Saying so is what keeps handing
+                    gated content to someone who does not qualify a deliberate choice - contrast
+                    publishing a gated lake, which is refused outright. */}
+                {gateDescription && (
+                  <Alert color="warning" variant="soft" data-testid="datalake-transfer-gate-warning">
+                    This lake is gated on {gateDescription}. Ownership overrides that gate: whoever you choose can read
+                    everything in the lake, whether or not they satisfy it today.
+                  </Alert>
+                )}
                 <Select
                   placeholder="Choose a new owner"
                   value={newOwnerUserId}
