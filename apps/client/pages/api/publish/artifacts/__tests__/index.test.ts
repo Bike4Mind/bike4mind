@@ -102,6 +102,10 @@ beforeEach(() => {
         { _id: 'passphrase', n: 2 },
       ],
       withComments: [{ n: 1 }],
+      byTag: [
+        { _id: 'ionq', n: 6 },
+        { _id: 'security', n: 3 },
+      ],
     },
   ]);
   buildListVisibilityFilter.mockReturnValue(VIS);
@@ -203,6 +207,7 @@ describe('GET /api/publish/artifacts — projection', () => {
         visibility: { public: 38 },
         gate: { none: 39, passphrase: 2 },
         comments: 1,
+        tag: { ionq: 6, security: 3 },
       },
     });
   });

@@ -313,6 +313,50 @@ export type ReportArtifactRequest = z.infer<typeof ReportArtifactRequestSchema>;
 
 // ─── The published-artifact aggregate ──────────────────────────────────────────
 
+/** Upper bounds on a tag. Freeform, so the only limits are the ones that keep the field
+ *  usable: long enough for a real phrase, short enough to render as a chip. */
+export const PUBLISH_TAG_MAX_LENGTH = 40;
+export const PUBLISH_TAGS_MAX = 20;
+
+/**
+ * Normalize one tag: trim, collapse internal whitespace, lowercase.
+ *
+ * Lowercasing is a deliberate trade. It loses the author's capitalisation ("IonQ" stores as
+ * "ionq"), and in exchange every downstream use becomes an exact match: the filter is a plain
+ * equality query that can use an index, the vocabulary groups without a case-folding pass, and
+ * "Security" cannot sit beside "security" as two chips meaning the same thing. Case-preserving
+ * storage with case-insensitive comparison would need a collation or a parallel folded field on
+ * every read path, which is a lot of machinery to keep one capital letter.
+ *
+ * Shared by the write paths and the client so a tag typed in the UI, sent by the CLI, or set
+ * through the API all normalize identically - the alternative is two spellings of one tag
+ * depending on which door it came through.
+ */
+export function normalizePublishTag(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Normalize a whole list, drop blanks, dedupe (stable, first occurrence wins), and cap. */
+export function normalizePublishTags(raw: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of raw) {
+    const tag = normalizePublishTag(t);
+    if (!tag || tag.length > PUBLISH_TAG_MAX_LENGTH || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= PUBLISH_TAGS_MAX) break;
+  }
+  return out;
+}
+
+/**
+ * A tag list as it arrives from a caller. Deliberately NOT a `.transform()` - the API-contract
+ * conventions forbid those in a public request schema - so callers validate here and normalize
+ * explicitly with normalizePublishTags at the write site.
+ */
+export const PublishTagsSchema = z.array(z.string().min(1).max(PUBLISH_TAG_MAX_LENGTH)).max(PUBLISH_TAGS_MAX);
+
 export const PublishedArtifactSchema = z.object({
   /** Short opaque id for short URLs (`/p/r/{publicId}`, `/p/f/{publicId}`) and lookups. */
   publicId: z.string(),
@@ -324,6 +368,12 @@ export const PublishedArtifactSchema = z.object({
 
   title: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
+
+  /** Freeform owner-supplied labels, normalized by normalizePublishTags. Shares a vocabulary
+   *  with AppFile tags (see GET /api/publish/tags) so one label means one thing across the app,
+   *  but stored per artifact rather than in a central tag table - there is no tag entity to keep
+   *  in sync, and a tag nobody uses simply stops appearing. */
+  tags: PublishTagsSchema.prefault([]),
 
   visibility: VisibilitySchema.prefault('private'),
   /** Group id a viewer must belong to when gated cross-scope. */
@@ -430,6 +480,9 @@ export const UploadUrlRequestSchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
   visibility: VisibilitySchema.optional(),
+  /** Optional at publish time so a client that already knows its labels - the CLI publish
+   *  skill - can set them in the same call instead of a follow-up PATCH. */
+  tags: PublishTagsSchema.optional(),
   gatedToGroupId: z.string().optional(),
   /** Who may annotate the published artifact. Defaults to `none` (read-only). */
   commentPolicy: CommentPolicySchema.optional(),

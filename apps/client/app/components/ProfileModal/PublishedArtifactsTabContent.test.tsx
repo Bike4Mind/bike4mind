@@ -5,17 +5,25 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
-const { mockList, mockExport, mockDownloadData, mockToastError, mockToastSuccess, mockRefresh, mockPrint } = vi.hoisted(
-  () => ({
-    mockList: vi.fn(),
-    mockExport: vi.fn(),
-    mockDownloadData: vi.fn(),
-    mockToastError: vi.fn(),
-    mockToastSuccess: vi.fn(),
-    mockRefresh: vi.fn(),
-    mockPrint: vi.fn(),
-  })
-);
+const {
+  mockList,
+  mockExport,
+  mockDownloadData,
+  mockToastError,
+  mockToastSuccess,
+  mockRefresh,
+  mockPrint,
+  mockUpdateTags,
+} = vi.hoisted(() => ({
+  mockList: vi.fn(),
+  mockUpdateTags: vi.fn(),
+  mockExport: vi.fn(),
+  mockDownloadData: vi.fn(),
+  mockToastError: vi.fn(),
+  mockToastSuccess: vi.fn(),
+  mockRefresh: vi.fn(),
+  mockPrint: vi.fn(),
+}));
 
 vi.mock('sonner', () => ({ toast: { error: mockToastError, success: mockToastSuccess } }));
 
@@ -24,6 +32,8 @@ vi.mock('@client/app/utils/publishApi', () => ({
   deletePublishedArtifact: vi.fn(),
   updatePublishedVisibility: vi.fn(),
   updatePublishedCommentPolicy: vi.fn(),
+  updatePublishedTags: (...a: unknown[]) => mockUpdateTags(...a),
+  fetchMyTagVocabulary: () => Promise.resolve(mockVocabulary),
   restorePreviousVersion: vi.fn(),
   toArtifactSharePath: (_t: string, s: string, slug: string) => `/p/u/${s}/${slug}`,
   fetchPublishedExport: (...a: unknown[]) => mockExport(...a),
@@ -74,12 +84,15 @@ const bundleRow = {
 const replyRow = { ...bundleRow, publicId: 'pub-2', title: 'My Reply', source: { kind: 'reply' } };
 
 /** listMyPublishedArtifacts returns a page envelope, not a bare array. */
+/** Tag suggestions the autocomplete offers; freeform, so this only shapes suggestions. */
+let mockVocabulary: Array<{ tag: string; count: number }> = [];
+
 const page = (rows: unknown[], over: Record<string, unknown> = {}) => ({
   artifacts: rows,
   total: rows.length,
   limit: 25,
   skip: 0,
-  facets: { kind: {}, visibility: {}, gate: {}, comments: 0 },
+  facets: { kind: {}, visibility: {}, gate: {}, comments: 0, tag: {} },
   ...over,
 });
 
@@ -99,6 +112,8 @@ beforeEach(() => {
   mockToastError.mockReset();
   mockToastSuccess.mockReset();
   mockPrint.mockReset();
+  mockUpdateTags.mockReset().mockResolvedValue(undefined);
+  mockVocabulary = [];
 });
 
 describe('PublishedArtifactsTabContent - manage toggle', () => {
@@ -330,7 +345,7 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
 
   it('filters on a facet chip and turns the filter off when clicked again', async () => {
     mockList.mockResolvedValue(
-      page([bundleRow], { facets: { kind: { bundle: 3 }, visibility: {}, gate: {}, comments: 0 } })
+      page([bundleRow], { facets: { kind: { bundle: 3 }, visibility: {}, gate: {}, comments: 0, tag: {} } })
     );
     renderTab();
     await screen.findByTestId('published-artifacts-facet-kind-bundle');
@@ -368,7 +383,7 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
     // Staying on page 3 of a narrower result set is how you end up looking at an empty list you
     // did not ask for.
     mockList.mockResolvedValue(
-      page([bundleRow], { total: 60, facets: { kind: { bundle: 60 }, visibility: {}, gate: {}, comments: 0 } })
+      page([bundleRow], { total: 60, facets: { kind: { bundle: 60 }, visibility: {}, gate: {}, comments: 0, tag: {} } })
     );
     renderTab();
     await screen.findByTestId('published-artifacts-pager');
@@ -403,6 +418,99 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
   });
 });
 
+/**
+ * Tags. Freeform by design, so what matters is that a label typed anywhere lands in its canonical
+ * form, that the chip on a row is a way INTO the filter, and that clearing tags is possible at all
+ * (a merge-semantics PATCH would make removal impossible).
+ */
+describe('PublishedArtifactsTabContent - tags and covers', () => {
+  const lastQuery = () => mockList.mock.calls[mockList.mock.calls.length - 1][0] as Record<string, unknown>;
+  const tagged = { ...bundleRow, tags: ['ionq', 'weekly'] };
+
+  it('shows a generated cover for every row, so no row is ever an empty frame', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(screen.getByTestId('published-artifact-cover-pub-1')).not.toBeNull();
+  });
+
+  it('shows tag chips on the collapsed row', async () => {
+    mockList.mockResolvedValue(page([tagged]));
+    renderTab();
+    await screen.findByTestId('published-artifact-tags-pub-1');
+    expect(screen.getByTestId('published-artifact-tag-pub-1-ionq')).not.toBeNull();
+  });
+
+  it('filters by a tag when its chip on a row is clicked', async () => {
+    // Seeing a label and wanting everything sharing it is one impulse, so the chip is the control.
+    mockList.mockResolvedValue(page([tagged]));
+    renderTab();
+    await screen.findByTestId('published-artifact-tag-pub-1-ionq');
+
+    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-1-ionq'));
+
+    await waitFor(() => expect(lastQuery().tag).toBe('ionq'));
+  });
+
+  it('filters from a toolbar tag chip and toggles it off again', async () => {
+    mockList.mockResolvedValue(
+      page([tagged], { facets: { kind: {}, visibility: {}, gate: {}, comments: 0, tag: { ionq: 6 } } })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-facet-tag-ionq');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-tag-ionq'));
+    await waitFor(() => expect(lastQuery().tag).toBe('ionq'));
+
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-tag-ionq'));
+    await waitFor(() => expect(lastQuery().tag).toBeUndefined());
+  });
+
+  it('offers the tag editor only in the expanded row', async () => {
+    mockList.mockResolvedValue(page([tagged]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    expect(screen.queryByTestId('published-artifact-tag-input-pub-1')).toBeNull();
+    expandRow('pub-1');
+    expect(screen.getByTestId('published-artifact-tag-input-pub-1')).not.toBeNull();
+  });
+
+  it('normalizes a typed tag with the same helper the server uses', async () => {
+    // The chips the owner sees must be what gets stored - otherwise a tag silently re-spells on
+    // reload and looks like a bug.
+    mockList.mockResolvedValue(page([{ ...bundleRow, tags: [] }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    expandRow('pub-1'); // collapse
+
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+    // And it does not reappear on re-expand - collapsing closed it, rather than merely hiding it.
+    expandRow('pub-1');
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('does not PATCH when the tag list has not actually changed', async () => {
+    mockList.mockResolvedValue(page([tagged]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const input = screen.getByTestId('published-artifact-tag-input-pub-1');
+    // Re-entering an existing tag normalizes to the same list; a write here would be a pointless
+    // round trip and a spurious "Tags updated" toast.
+    fireEvent.change(input, { target: { value: 'ionq' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockToastSuccess).not.toHaveBeenCalled());
+    expect(mockUpdateTags).not.toHaveBeenCalled();
+  });
+});
+
 /** Regressions from review on #1961. Both were on ordinary paths and neither had coverage. */
 describe('PublishedArtifactsTabContent - review regressions', () => {
   /** The most recent LIST call, ignoring the separate facet-counts query. */
@@ -424,7 +532,7 @@ describe('PublishedArtifactsTabContent - review regressions', () => {
     expandRow('pub-1'); // collapse
 
     expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
-    // And it does not reappear on re-expand - collapsing closed it, rather than merely hiding it.
+    // And it does not reappear on re-expand - collapsing closed it rather than merely hiding it.
     expandRow('pub-1');
     expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
   });

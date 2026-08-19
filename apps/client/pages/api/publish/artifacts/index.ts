@@ -10,7 +10,7 @@ import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from 
  * Query params (all optional):
  *   mine, sourceArtifactId  - scoping, as before
  *   q                       - substring match on title + description
- *   kind, visibility, gate, comments - facet filters
+ *   kind, visibility, gate, comments, tag - facet filters
  *   sort                    - newest (default) | oldest | views | versions | updated | title
  *   facets                  - 'true' to also compute the facet counts. OFF by default: they are
  *                             group-bys over the caller's whole scope, and the existence check the
@@ -82,6 +82,7 @@ const handler = baseApi().get(async (req, res) => {
     visibility: typeof req.query.visibility === 'string' ? req.query.visibility : undefined,
     gate: typeof req.query.gate === 'string' ? req.query.gate : undefined,
     comments: typeof req.query.comments === 'string' ? req.query.comments : undefined,
+    tag: typeof req.query.tag === 'string' ? req.query.tag : undefined,
     sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
   };
   const { match, sort } = buildListQuery(params);
@@ -124,6 +125,7 @@ const handler = baseApi().get(async (req, res) => {
               slug: 1,
               title: 1,
               description: 1,
+              tags: 1,
               visibility: 1,
               commentPolicy: 1,
               // Needed by the share dialog to seed its "List in search engines" switch. Without
@@ -151,6 +153,15 @@ const handler = baseApi().get(async (req, res) => {
               byVisibility: [{ $group: { _id: '$visibility', n: { $sum: 1 } } }],
               byGate: [{ $group: { _id: { $ifNull: ['$accessGate.kind', 'none'] }, n: { $sum: 1 } } }],
               withComments: [{ $match: { commentPolicy: { $in: ['open', 'restricted'] } } }, { $count: 'n' }],
+              // Sorted by count then name so the row is stable between requests, and capped: a
+              // library can carry far more distinct tags than belong in a toolbar, and the full
+              // vocabulary is available from GET /api/publish/tags.
+              byTag: [
+                { $unwind: '$tags' },
+                { $group: { _id: '$tags', n: { $sum: 1 } } },
+                { $sort: { n: -1, _id: 1 } },
+                { $limit: 24 },
+              ],
             }
           : {}),
       },
@@ -173,6 +184,7 @@ const handler = baseApi().get(async (req, res) => {
       visibility: buckets(result?.byVisibility),
       gate: buckets(result?.byGate),
       comments: result?.withComments?.[0]?.n ?? 0,
+      tag: buckets(result?.byTag),
     },
   });
 });

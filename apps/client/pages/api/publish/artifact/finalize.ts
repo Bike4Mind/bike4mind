@@ -10,6 +10,7 @@ import {
   type ArtifactFile,
   type PublishResult,
   type ValidationViolation,
+  normalizePublishTags,
 } from '@bike4mind/common';
 import {
   validateBundle,
@@ -47,6 +48,7 @@ const DraftManifestSchema = z.object({
   slug: z.string(),
   title: z.string(),
   description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
   visibility: z.enum(['private', 'project', 'organization', 'public']),
   gatedToGroupId: z.string().optional(),
   commentPolicy: z.enum(['none', 'open', 'restricted']).optional(),
@@ -333,6 +335,9 @@ const handler = baseApi().post(async (req, res) => {
         publicId,
         title: manifest.title,
         description: manifest.description,
+        // Already normalized when the draft was created; re-running is idempotent and keeps the
+        // invariant local to the write rather than trusting the draft record.
+        ...(manifest.tags ? { tags: normalizePublishTags(manifest.tags) } : {}),
         visibility: manifest.visibility,
         gatedToGroupId: manifest.gatedToGroupId,
         commentPolicy: manifest.commentPolicy ?? 'none',

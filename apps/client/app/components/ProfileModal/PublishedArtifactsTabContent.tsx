@@ -14,6 +14,7 @@ import {
   Link,
   Input,
   Button,
+  Autocomplete,
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkIcon from '@mui/icons-material/Link';
@@ -31,6 +32,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import LockIcon from '@mui/icons-material/Lock';
 import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { PublishVisibility } from '@bike4mind/common';
@@ -46,7 +48,11 @@ import {
   refreshPublishedFromSource,
   type ManagedArtifact,
   type ManagedListFacets,
+  updatePublishedTags,
+  fetchMyTagVocabulary,
 } from '@client/app/utils/publishApi';
+import { ArtifactCover } from '@client/app/components/common/ArtifactCover';
+import { normalizePublishTags, PUBLISH_TAGS_MAX } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
 import { downloadData } from '@client/app/utils/download';
@@ -70,6 +76,7 @@ const SORTS: Array<{ value: string; label: string }> = [
 
 /** The filter state the toolbar owns. `null` means "not filtering on this axis". */
 interface Filters {
+  tag: string | null;
   kind: string | null;
   visibility: string | null;
   gate: string | null;
@@ -77,11 +84,11 @@ interface Filters {
   sort: string;
 }
 
-const NO_FILTERS: Filters = { kind: null, visibility: null, gate: null, comments: null, sort: 'newest' };
+const NO_FILTERS: Filters = { tag: null, kind: null, visibility: null, gate: null, comments: null, sort: 'newest' };
 
 /** True when anything is narrowing the list - drives the "no matches" copy and Clear button. */
 function isFiltering(f: Filters, q: string): boolean {
-  return Boolean(q.trim() || f.kind || f.visibility || f.gate || f.comments);
+  return Boolean(q.trim() || f.tag || f.kind || f.visibility || f.gate || f.comments);
 }
 
 /** Compact date for the row meta line: same-year dates drop the year. */
@@ -123,6 +130,7 @@ export default function PublishedArtifactsTabContent() {
   const query = useMemo(
     () => ({
       q: debouncedQ,
+      tag: filters.tag ?? undefined,
       kind: filters.kind ?? undefined,
       visibility: filters.visibility ?? undefined,
       gate: filters.gate ?? undefined,
@@ -131,7 +139,7 @@ export default function PublishedArtifactsTabContent() {
       limit: PAGE_SIZE,
       skip,
     }),
-    [debouncedQ, filters.kind, filters.visibility, filters.gate, filters.comments, filters.sort, skip]
+    [debouncedQ, filters.tag, filters.kind, filters.visibility, filters.gate, filters.comments, filters.sort, skip]
   );
 
   const { data, isLoading, isError } = useQuery({
@@ -156,7 +164,13 @@ export default function PublishedArtifactsTabContent() {
   const artifacts = data?.artifacts ?? [];
   const total = data?.total ?? 0;
 
-  const facets: ManagedListFacets = facetData?.facets ?? { kind: {}, visibility: {}, gate: {}, comments: 0 };
+  const facets: ManagedListFacets = facetData?.facets ?? {
+    kind: {},
+    visibility: {},
+    gate: {},
+    comments: 0,
+    tag: {},
+  };
   const filtering = isFiltering(filters, q);
 
   /** Change a filter. Always resets to the first page - staying on page 4 of a narrower result
@@ -170,6 +184,13 @@ export default function PublishedArtifactsTabContent() {
     setFilter(key, (filters[key] === value ? null : value) as Filters[K]);
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+
+  // The caller's own tag vocabulary, for autocomplete. Loaded once and refreshed whenever tags
+  // change, since editing tags is exactly what grows it.
+  const { data: tagVocabulary = [] } = useQuery({
+    queryKey: ['published-artifacts', 'mine', 'tag-vocabulary'],
+    queryFn: fetchMyTagVocabulary,
+  });
 
   const visibilityMut = useMutation({
     mutationFn: (v: { publicId: string; visibility: PublishVisibility }) =>
@@ -205,6 +226,14 @@ export default function PublishedArtifactsTabContent() {
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Refresh failed')),
   });
+  const tagsMut = useMutation({
+    mutationFn: (v: { publicId: string; tags: string[] }) => updatePublishedTags(v.publicId, v.tags),
+    onSuccess: () => {
+      toast.success('Tags updated');
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(apiError(e, 'Failed to update tags')),
+  });
   const deleteMut = useMutation({
     // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
     // read from a ref: it decides whether this delete empties the current page.
@@ -222,6 +251,7 @@ export default function PublishedArtifactsTabContent() {
   });
 
   const busy =
+    tagsMut.isPending ||
     visibilityMut.isPending ||
     commentsMut.isPending ||
     restoreMut.isPending ||
@@ -359,6 +389,19 @@ export default function PublishedArtifactsTabContent() {
           {/* Facet chips. Counts come from the whole library, not the filtered page, so a chip
               still tells you how many there are after you have clicked it. */}
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+            {Object.entries(facets.tag).map(([tag, n]) => (
+              <Chip
+                key={`tag-${tag}`}
+                size="sm"
+                variant={filters.tag === tag ? 'solid' : 'outlined'}
+                color={filters.tag === tag ? 'primary' : 'neutral'}
+                startDecorator={<LocalOfferIcon sx={{ fontSize: 12 }} />}
+                onClick={() => toggleFilter('tag', tag)}
+                slotProps={{ action: { 'data-testid': `published-artifacts-facet-tag-${tag}` } }}
+              >
+                {tag} {n}
+              </Chip>
+            ))}
             {Object.entries(facets.kind).map(([kind, n]) => (
               <Chip
                 key={kind}
@@ -448,6 +491,14 @@ export default function PublishedArtifactsTabContent() {
                     scroll. Copy-link stays out here because it is the verb people actually reach
                     for; the rest is one click away. */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                  {/* Generated cover: costs nothing, always exists, and is stable per artifact so
+                      the eye can find a row it has seen before. Real screenshots replace it later. */}
+                  <ArtifactCover
+                    publicId={a.publicId}
+                    title={a.title}
+                    size={26}
+                    data-testid={`published-artifact-cover-${a.publicId}`}
+                  />
                   <Tooltip title="Opens in a new tab">
                     <Link
                       href={url}
@@ -470,6 +521,33 @@ export default function PublishedArtifactsTabContent() {
                       <span>{a.title}</span>
                     </Link>
                   </Tooltip>
+
+                  {/* Tags are clickable: seeing a label and wanting everything sharing it is the
+                      same impulse, so the chip filters rather than being decoration. */}
+                  {(a.tags ?? []).length > 0 && (
+                    <Box
+                      sx={{ display: 'flex', gap: 0.25, flexWrap: 'nowrap', overflow: 'hidden', flex: '0 1 auto' }}
+                      data-testid={`published-artifact-tags-${a.publicId}`}
+                    >
+                      {(a.tags ?? []).slice(0, 3).map(tag => (
+                        <Chip
+                          key={tag}
+                          size="sm"
+                          variant="outlined"
+                          color="neutral"
+                          onClick={() => setFilter('tag', tag)}
+                          slotProps={{ action: { 'data-testid': `published-artifact-tag-${a.publicId}-${tag}` } }}
+                        >
+                          {tag}
+                        </Chip>
+                      ))}
+                      {(a.tags ?? []).length > 3 && (
+                        <Chip size="sm" variant="plain" color="neutral">
+                          +{(a.tags ?? []).length - 3}
+                        </Chip>
+                      )}
+                    </Box>
+                  )}
 
                   <Box
                     sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', ml: 'auto' }}
@@ -543,6 +621,38 @@ export default function PublishedArtifactsTabContent() {
                     </Tooltip>
                   </Box>
                 </Box>
+
+                {isOpen && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <LocalOfferIcon sx={{ fontSize: 15, opacity: 0.6 }} />
+                    {/* freeSolo because tags are freeform: the vocabulary SUGGESTS, it does not
+                        restrict. Suggestions merge published-artifact and AppFile tags so one
+                        label means one thing across the app. */}
+                    <Autocomplete
+                      size="sm"
+                      multiple
+                      freeSolo
+                      disableClearable
+                      placeholder={(a.tags ?? []).length ? '' : 'Add tags'}
+                      options={tagVocabulary.map(t => t.tag)}
+                      value={a.tags ?? []}
+                      disabled={busy}
+                      onChange={(_e, next) => {
+                        // Normalize with the SAME helper the server uses, so the chips the owner
+                        // sees are what gets stored - no surprise re-spelling on reload.
+                        const tags = normalizePublishTags(next as string[]);
+                        const current = a.tags ?? [];
+                        if (tags.length === current.length && tags.every((t, i) => t === current[i])) return;
+                        tagsMut.mutate({ publicId: a.publicId, tags });
+                      }}
+                      slotProps={{ input: { 'data-testid': `published-artifact-tag-input-${a.publicId}` } }}
+                      sx={{ flex: 1, minWidth: 200 }}
+                    />
+                    <Typography level="body-xs" sx={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
+                      {(a.tags ?? []).length}/{PUBLISH_TAGS_MAX}
+                    </Typography>
+                  </Box>
+                )}
 
                 {isOpen && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>

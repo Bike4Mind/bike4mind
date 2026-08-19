@@ -2,7 +2,13 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact } from '@bike4mind/database';
-import { VisibilitySchema, CommentPolicySchema, EMBED_ORIGINS_MAX } from '@bike4mind/common';
+import {
+  VisibilitySchema,
+  CommentPolicySchema,
+  EMBED_ORIGINS_MAX,
+  PublishTagsSchema,
+  normalizePublishTags,
+} from '@bike4mind/common';
 import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
@@ -41,6 +47,9 @@ const AccessGatePatchSchema = z.union([
 const PatchSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
+  // Full replace, not a merge: `[]` clears every tag. A merge semantics would leave no way to
+  // REMOVE a tag through the API, which is half of the CRUD the owner needs.
+  tags: PublishTagsSchema.optional(),
   visibility: VisibilitySchema.optional(),
   commentPolicy: CommentPolicySchema.optional(),
   // Search-engine opt-in. Accepted at any visibility (owners commonly set it before
@@ -123,6 +132,10 @@ const handler = baseApi()
     }
     if (parsed.data.title !== undefined) artifact.title = parsed.data.title;
     if (parsed.data.description !== undefined) artifact.description = parsed.data.description;
+    // Normalize at the write site rather than in the schema: the API conventions forbid a
+    // top-level .transform() in a public request schema, and every other write path (the publish
+    // call, the UI) runs the same helper so one label cannot end up stored two ways.
+    if (parsed.data.tags !== undefined) artifact.tags = normalizePublishTags(parsed.data.tags);
     // "Open public" = cacheable, anonymous, ungated. Adding a gate to a public
     // artifact leaves `visibility` alone but must still purge the CDN, so track
     // the gate in the before/after comparison, not just the visibility level.

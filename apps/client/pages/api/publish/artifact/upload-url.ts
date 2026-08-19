@@ -7,6 +7,7 @@ import {
   ALLOWED_MIME_PREFIXES,
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
+  normalizePublishTags,
 } from '@bike4mind/common';
 import {
   checkScopePermission,
@@ -129,6 +130,9 @@ const handler = baseApi().post(async (req, res) => {
     slug: body.slug,
     title: body.title,
     description: body.description,
+    // Carried on the draft so finalize can write them with the artifact - one publish call sets
+    // the tags, rather than the caller having to follow up with a PATCH.
+    tags: body.tags ? normalizePublishTags(body.tags) : undefined,
     visibility: viz.visibility,
     gatedToGroupId: body.gatedToGroupId,
     commentPolicy: body.commentPolicy ?? 'none',
