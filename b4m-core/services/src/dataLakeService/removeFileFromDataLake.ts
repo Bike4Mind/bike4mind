@@ -13,7 +13,12 @@ interface RemoveFileFromDataLakeAdapters {
   /** Forwarded into the stats recompute so an audit-write failure there is logged at `error` like
    *  every other config-write path, instead of falling through to a bare console.error. Removing a
    *  file can still reach activateIfDraft's draft->active flip, so this call site really can emit an
-   *  audit row - it is not merely parity with its siblings. */
+   *  audit row - it is not merely parity with its siblings.
+   *
+   *  That only holds while the CALLER also supplies `db.lakeConfigChangeEvents`: without it
+   *  `recordLakeConfigChange` returns at its own guard, no event is attempted, and this logger has
+   *  nothing to report. The route spreads `lakeConfigAuditDb` for exactly that reason, and a test
+   *  there pins it - a test in this package cannot, since its fixture supplies the repos itself. */
   logger?: LakeConfigAuditLogger;
 }
 
