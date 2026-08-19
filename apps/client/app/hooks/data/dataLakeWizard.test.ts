@@ -732,9 +732,10 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     expect(uploadProgress.totalFiles).toBe(0);
   });
 
-  it('deletes the lake it just created when the connect is refused, leaving no orphan', async () => {
+  it('rolls the lake it just created back when the connect is refused, leaving no visible orphan', async () => {
     // The acceptance criterion the whole deferral exists for: an attempt that cannot finish must
-    // leave neither a lake nor a connection row.
+    // leave the user with neither a lake nor a connection row. The route archives rather than hard
+    // deletes, which is what keeps it out of every list (verified live on local self-host).
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
       if (url === '/api/data-lakes/drive-sync') {
@@ -761,7 +762,7 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     );
   });
 
-  it('still reports the refusal when the rollback delete also fails', async () => {
+  it('still reports the refusal when the rollback archive also fails', async () => {
     // Cleanup is best-effort; it must never mask the error the user needs to read.
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });

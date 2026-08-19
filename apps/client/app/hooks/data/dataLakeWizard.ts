@@ -706,9 +706,11 @@ export function useBatchUpload() {
  *
  * The upload pipeline (useBatchUpload) cannot serve this: it creates the lake as a side effect of a
  * batch and refuses an empty file set. This is the same create call, followed by the connect, with
- * one rule the upload path shares - a commit that cannot be completed leaves NOTHING behind, so a
- * refused connect (Personal-scope lake, non-manager, folder already claimed) deletes the lake it
- * just made rather than stranding an empty one.
+ * one rule the upload path shares - a commit that cannot be completed leaves nothing the user can
+ * see, so a refused connect (Personal-scope lake, non-manager, folder already claimed) rolls the
+ * lake it just made back rather than stranding a visible empty one. DELETE /api/data-lakes/:id is
+ * a reversible ARCHIVE, so the row survives out of the user's lists - same as the upload path's
+ * total-failure rollback, which archives too.
  *
  * Reuses uploadProgress for its status/error state so the Complete and Failed screens, the error
  * classification, and the retry toast are the same ones the upload path uses; UploadStep tells the
@@ -749,7 +751,8 @@ export function useCreateLakeFromDrive() {
       try {
         await connectPendingDriveFolder(dataLakeId, pendingDriveFolder);
       } catch (err) {
-        // Best-effort, and deliberately not awaited into the error: a cleanup failure must not mask
+        // Archives the lake (the route is a reversible archive, not a hard delete), which is enough
+        // to keep it out of every list the user sees. Best-effort: a cleanup failure must not mask
         // the refusal the user needs to read.
         await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
         throw err;

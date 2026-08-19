@@ -92,14 +92,22 @@ function DriveOnlyCommitStatus({
     gap: 2,
   } as const;
 
+  // Whole sentences, not JSX text interleaved with {DATA_LAKE} expressions: JSX drops the space
+  // between an expression and the text that follows it, which shipped a live "Data Lakeslist".
+  // One string per sentence also keeps the copy greppable. Curly quotes as escapes per CLAUDE.md.
+  const quoted = `\u201c${folderLabel}\u201d`;
+  const syncingSentence =
+    `Google Drive ingest is running in the background for ${quoted}. ` +
+    `Files appear in this ${DATA_LAKE} as they are pulled in - the ${DATA_LAKES} list shows the connection's status.`;
+  const idleSentence = `Ready to create this ${DATA_LAKE} and sync ${quoted}.`;
+
   if (status === 'complete') {
     return (
       <Box sx={centered} data-testid="drive-only-commit-complete">
         <CheckCircleIcon sx={{ fontSize: 64, color: 'success.500' }} />
         <Typography level="title-lg">{DATA_LAKE} Created</Typography>
         <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
-          Google Drive ingest is running in the background for &ldquo;{folderLabel}&rdquo;. Files appear in this{' '}
-          {DATA_LAKE} as they are pulled in - the {DATA_LAKES} list shows the connection&apos;s status.
+          {syncingSentence}
         </Typography>
         <Button variant="solid" color="primary" onClick={onDone}>
           Done
@@ -119,9 +127,10 @@ function DriveOnlyCommitStatus({
           {errorMessage || 'The Google Drive folder could not be connected. Please try again.'}
         </Typography>
         {/* The rollback is the reason this can be retried from Configure with no cleanup: a failed
-            connect deletes the lake it just created (see useCreateLakeFromDrive). */}
+            connect archives the lake it just created (see useCreateLakeFromDrive). Archived, not
+            erased - so this says what the user can observe, and does not promise a hard delete. */}
         <Typography level="body-xs" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
-          No {DATA_LAKE} was created.
+          The new {DATA_LAKE} was rolled back - nothing was added to your list.
         </Typography>
         <Button variant="outlined" color="neutral" onClick={onBack}>
           Back to Configuration
@@ -142,7 +151,7 @@ function DriveOnlyCommitStatus({
   return (
     <Box sx={centered} data-testid="drive-only-commit-idle">
       <Typography level="title-md" color="neutral">
-        Ready to create this {DATA_LAKE} and sync &ldquo;{folderLabel}&rdquo;.
+        {idleSentence}
       </Typography>
     </Box>
   );

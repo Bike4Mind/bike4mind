@@ -236,13 +236,25 @@ describe('UploadStep - Drive-only commit (#1916)', () => {
     expect(screen.queryByText('Upload Complete!')).toBeNull();
   });
 
-  it('surfaces the refusal and states that no lake survived it', () => {
-    // Matches useCreateLakeFromDrive's rollback: a failed connect deletes the lake it created, so
-    // the user has nothing to clean up before retrying.
+  // Pins the word spacing, not just the words. Built from JSX text interleaved with {DATA_LAKE}
+  // expressions, this sentence rendered live as "Data Lakeslist" - JSX drops the space between an
+  // expression and the text after it, and toHaveTextContent's substring match never saw it.
+  it('keeps the spaces around the branded nouns in the syncing sentence', () => {
+    renderDriveCommit('complete');
+    const text = screen.getByTestId('drive-only-commit-complete').textContent ?? '';
+    expect(text).toContain('Files appear in this Data Lake as they are pulled in');
+    expect(text).toContain('the Data Lakes list shows');
+    expect(text).not.toMatch(/Data Lakes\S/);
+  });
+
+  it('surfaces the refusal and says the new lake was rolled back', () => {
+    // Matches useCreateLakeFromDrive's rollback: a failed connect archives the lake it created, so
+    // the user has nothing to clean up before retrying. Archive, not erase - the copy must not
+    // promise a hard delete (verified live: the row survives with status 'archived').
     renderDriveCommit('error', { errorMessage: 'This Drive folder is already connected to another data lake' });
     const failed = screen.getByTestId('drive-only-commit-error');
     expect(failed).toHaveTextContent('This Drive folder is already connected to another data lake');
-    expect(failed).toHaveTextContent('No Data Lake was created.');
+    expect(failed).toHaveTextContent('The new Data Lake was rolled back');
   });
 
   it('sends a failed commit back to Configure, where the name and prefix can be fixed', () => {
