@@ -1,5 +1,6 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 
 export const API_REFERENCE_CONTENT = `
 # ${getBrandName()} API Reference
@@ -262,7 +263,8 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| fileId | string | Yes | File ID to chunk |
+| fabFileId | string | Yes | File ID to chunk |
+| chunkSize | integer | Yes | Passage target in tokens. Must be an integer between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive. |
 
 #### File Endpoints Summary
 

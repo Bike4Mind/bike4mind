@@ -1,4 +1,4 @@
-import type { AccessContext, IDataLakeAccessGrant, IDataLakeDocument } from '@bike4mind/common';
+import type { AccessContext, IDataLakeAccessGrant, IDataLakeDocument, LakeManageRung } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 
 /**
@@ -106,4 +106,51 @@ export function canManageLake(
       (g.role === 'owner' || g.role === 'curator') &&
       administeredOrgIds.includes(g.principalId)
   );
+}
+
+/**
+ * WHICH rung of `canManageLake` authorized this actor, for the config-change audit trail. Returns
+ * `null` for an actor who cannot manage the lake at all, so it is exactly `canManageLake` with the
+ * winning rung named instead of collapsed to `true`.
+ *
+ * Reports the FIRST rung that grants, in `canManageLake`'s own short-circuit order, so several
+ * applicable rungs report the most privileged one - which is the honest answer to "what let them
+ * do this": a platform admin who also happens to own the lake could have done it either way, and
+ * the admin rung is the one worth surfacing.
+ *
+ * MUST stay in sync with `canManageLake` above; a test pins agreement across both directions
+ * (a rung implies manage, and no-rung implies no-manage), so a new rung added there without one
+ * here fails rather than silently recording every write under an older rung.
+ */
+export function resolveLakeManageRung(
+  lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
+  actor: ManageActor,
+  grants: readonly LakeGrant[] = []
+): LakeManageRung | null {
+  if (actor.isAdmin) return 'platform-admin';
+  if (!actor.userId) return null;
+
+  // Split where isEffectiveOwner does not: an `owner` USER grant supersedes the creator, so the two
+  // arms answer different questions after a transfer (who it was moved to vs. the original author
+  // acting on a lake that has never been transferred).
+  if (grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')) {
+    return 'grant-owner';
+  }
+  if (isEffectiveOwner(lake, actor, grants)) return 'creator';
+
+  if (grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'curator')) {
+    return 'grant-curator';
+  }
+
+  const administeredOrgIds = actor.administeredOrgIds ?? [];
+  const lakeOrg = normalizeId(lake.organizationId);
+  if (lakeOrg && administeredOrgIds.includes(lakeOrg)) return 'org-admin';
+
+  const hasOrgGrant = grants.some(
+    g =>
+      g.principalType === 'organization' &&
+      (g.role === 'owner' || g.role === 'curator') &&
+      administeredOrgIds.includes(g.principalId)
+  );
+  return hasOrgGrant ? 'org-grant' : null;
 }

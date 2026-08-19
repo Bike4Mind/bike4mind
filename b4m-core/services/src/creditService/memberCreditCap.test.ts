@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { IOrganizationDocument } from '@bike4mind/common';
-import { getMemberUsedCredits, isMemberAtOrOverCap, isMemberCreditCapExceeded } from './memberCreditCap';
+import {
+  getMemberUsedCredits,
+  isMemberAtOrOverCap,
+  isMemberCreditCapExceeded,
+  isMemberCreditCapError,
+  MemberCreditCapError,
+} from './memberCreditCap';
 
 const org = (overrides: Partial<IOrganizationDocument>): IOrganizationDocument =>
   ({
@@ -80,5 +86,31 @@ describe('isMemberAtOrOverCap', () => {
 
   it('treats an untracked member as 0 used, so a positive cap does not block them', () => {
     expect(isMemberAtOrOverCap(org({ maxCreditsPerMember: 10 }), 'stranger')).toBe(false);
+  });
+});
+
+describe('isMemberCreditCapError', () => {
+  it('is true for a bare MemberCreditCapError', () => {
+    expect(isMemberCreditCapError(new MemberCreditCapError())).toBe(true);
+  });
+
+  it('is true when the error is wrapped via .cause, surviving a rewrap that changes the message', () => {
+    const wrapped = new Error('Subagent execution failed', { cause: new MemberCreditCapError() });
+    expect(isMemberCreditCapError(wrapped)).toBe(true);
+  });
+
+  it('is true through multiple levels of .cause wrapping', () => {
+    const innerWrapped = new Error('retry exhausted', { cause: new MemberCreditCapError() });
+    const outerWrapped = new Error('request failed', { cause: innerWrapped });
+    expect(isMemberCreditCapError(outerWrapped)).toBe(true);
+  });
+
+  it('is false for an unrelated error, even one with a matching message string', () => {
+    expect(isMemberCreditCapError(new Error('Organization member credit limit reached'))).toBe(false);
+  });
+
+  it('is false for a non-Error value', () => {
+    expect(isMemberCreditCapError('Organization member credit limit reached')).toBe(false);
+    expect(isMemberCreditCapError(undefined)).toBe(false);
   });
 });

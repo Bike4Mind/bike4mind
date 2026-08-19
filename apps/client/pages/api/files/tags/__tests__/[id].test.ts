@@ -35,6 +35,11 @@ vi.mock('@bike4mind/database', () => ({
   fileTagRepository: { __repo: 'fileTags' },
   dataLakeRepository: { __repo: 'dataLakes' },
   userRepository: { __repo: 'users' },
+  // The config-audit repos this route now wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because this mock REPLACES the whole module: an unlisted export is an import-time
+  // failure, not a silent undefined, and the file reports zero tests rather than a failed one.
+  lakeConfigChangeEventRepository: { __repo: 'lakeConfigChangeEvents' },
+  adminSettingsRepository: { __repo: 'adminSettings' },
 }));
 
 import handler from '../[id]';
@@ -58,6 +63,12 @@ describe('PUT /api/files/tags/[id]', () => {
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
     expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
     expect(adapters.db.users).toEqual({ __repo: 'users' });
+    // Both config-audit repos, asserted by identity: a rename can flip a draft lake to active, and
+    // both reach recomputeLakeStats through this single `db` literal. They are OPTIONAL on the
+    // service, so a route that stopped spreading lakeConfigAuditDb would still compile and record
+    // nothing at all, with no other assertion here going red.
+    expect(adapters.db.lakeConfigChangeEvents).toEqual({ __repo: 'lakeConfigChangeEvents' });
+    expect(adapters.db.adminSettings).toEqual({ __repo: 'adminSettings' });
   });
 
   it('acts as the authenticated user, never a userId supplied in the body', async () => {
@@ -122,6 +133,10 @@ describe('DELETE /api/files/tags/[id]', () => {
     expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
     expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
+    // Same reason as the rename above: a prefix-arm delete can drive an auto-activate, and the
+    // audit repos are optional, so dropping them would be silent.
+    expect(adapters.db.lakeConfigChangeEvents).toEqual({ __repo: 'lakeConfigChangeEvents' });
+    expect(adapters.db.adminSettings).toEqual({ __repo: 'adminSettings' });
   });
 
   it('takes the tag id from the query string', async () => {

@@ -1,6 +1,7 @@
 import { Box, Button, Chip, Skeleton, Typography, useTheme } from '@mui/joy';
 import { alpha } from '@mui/system';
 import AddIcon from '@mui/icons-material/Add';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import ChatIcon from '@mui/icons-material/Chat';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import { REDUCED_MOTION_OFF, driftFloat, inkFor, ringPing } from '@client/app/components/datalake/surfaceChrome';
@@ -19,15 +20,31 @@ interface QuickDive {
   count: number;
 }
 
+/**
+ * Which "nothing to read" situation the pane is in. Passed explicitly rather than inferred from
+ * which callbacks happen to be set: the create-first CTA used to key off `onCreate`'s presence,
+ * which the caller derived from an EMPTY-SCOPE test, so a user with lakes was told to create their
+ * first one (#1645). The distinction the caller cannot fudge is now in the type.
+ *
+ * `lakes-error` is separate from `no-lakes` on purpose - a failed read must never render as a
+ * confident zero.
+ */
+export type DataLakeEmptyVariant = 'no-selection' | 'no-lakes' | 'lakes-error' | 'lake-empty' | 'all-lakes-empty';
+
 interface DataLakeArticleProps {
   file: IFabFileDocument | null;
   onAskAbout: (prompt: string) => void;
   /** Richest categories, surfaced as one-click dives in the empty state. */
   quickDives?: QuickDive[];
   onDive?: (path: string[]) => void;
-  /** When set, the empty state offers a create-first CTA (zero-lake bootstrap, #837).
-   *  The caller only passes this in the true zero-state, so its presence is the signal. */
+  /** Defaults to `no-selection`, the pick-a-branch state chat mode has always shown. */
+  emptyVariant?: DataLakeEmptyVariant;
+  /** Create a lake - offered only in `no-lakes`. */
   onCreate?: () => void;
+  /** Re-read the lake list - offered only in `lakes-error`. */
+  onRetryLakes?: () => void;
+  /** Add files to the selected lake - offered only in `lake-empty`. */
+  onAddFiles?: () => void;
 }
 
 function cleanFileName(fileName: string): string {
@@ -59,11 +76,30 @@ const MOTES: {
   { left: '48%', top: '18%', size: 3, hue: 'accent', duration: 9.5, delay: 2.4 },
 ];
 
+/** Title/hint per variant, so the copy choice is a lookup rather than nested ternaries. */
+function emptyCopyFor(variant: DataLakeEmptyVariant, copy: DataLakeSurfaceCopy): { title: string; hint: string } {
+  switch (variant) {
+    case 'no-lakes':
+      return { title: copy.zeroTitle, hint: copy.zeroHint };
+    case 'lakes-error':
+      return { title: copy.lakesErrorTitle, hint: copy.lakesErrorHint };
+    case 'lake-empty':
+      return { title: copy.lakeEmptyTitle, hint: copy.lakeEmptyHint };
+    case 'all-lakes-empty':
+      return { title: copy.allLakesEmptyTitle, hint: copy.allLakesEmptyHint };
+    case 'no-selection':
+      return { title: copy.emptyTitle, hint: copy.emptyHint };
+  }
+}
+
 function EmptyState({
   isDark,
   quickDives,
   onDive,
+  variant,
   onCreate,
+  onRetryLakes,
+  onAddFiles,
   theme,
   copy,
   taxonomy,
@@ -71,12 +107,20 @@ function EmptyState({
   isDark: boolean;
   quickDives: QuickDive[];
   onDive?: (path: string[]) => void;
+  variant: DataLakeEmptyVariant;
   onCreate?: () => void;
+  onRetryLakes?: () => void;
+  onAddFiles?: () => void;
   theme: DataLakeSurfaceTheme;
   copy: DataLakeSurfaceCopy;
   taxonomy: DataLakeSurfaceTaxonomy;
 }) {
   const accent = inkFor(theme.accent, isDark);
+  const { title, hint } = emptyCopyFor(variant, copy);
+  // Quick dives are a browse shortcut, so they only make sense when there IS something to browse.
+  // In the zero/error/empty-lake states the tree is empty anyway, and showing category chips
+  // beside "you have no lakes" is the same kind of contradiction this variant split removes.
+  const showQuickDives = variant === 'no-selection' && quickDives.length > 0 && !!onDive;
   return (
     <Box
       data-testid="datalake-article-empty"
@@ -152,15 +196,15 @@ function EmptyState({
           level="title-lg"
           sx={{ fontWeight: 700, letterSpacing: '0.02em', color: 'text.secondary', mb: 0.5 }}
         >
-          {onCreate ? copy.zeroTitle : copy.emptyTitle}
+          {title}
         </Typography>
         <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 380 }}>
-          {onCreate ? copy.zeroHint : copy.emptyHint}
+          {hint}
         </Typography>
       </Box>
 
-      {/* Create-first CTA: only shown in the true zero-lake state (caller passes onCreate). */}
-      {onCreate && (
+      {/* One action per variant, so the offer always matches what the copy just said. */}
+      {variant === 'no-lakes' && onCreate && (
         <Button
           data-testid="datalake-empty-create-btn"
           variant="solid"
@@ -172,9 +216,33 @@ function EmptyState({
           {copy.createLabel}
         </Button>
       )}
+      {variant === 'lakes-error' && onRetryLakes && (
+        <Button
+          data-testid="datalake-empty-retry-btn"
+          variant="outlined"
+          color="neutral"
+          startDecorator={<RefreshIcon />}
+          onClick={onRetryLakes}
+          sx={{ zIndex: 1 }}
+        >
+          Retry
+        </Button>
+      )}
+      {variant === 'lake-empty' && onAddFiles && (
+        <Button
+          data-testid="datalake-empty-addfiles-btn"
+          variant="solid"
+          color="primary"
+          startDecorator={<AddIcon />}
+          onClick={onAddFiles}
+          sx={{ zIndex: 1 }}
+        >
+          Add files
+        </Button>
+      )}
 
       {/* Quick dives */}
-      {quickDives.length > 0 && onDive && (
+      {showQuickDives && (
         <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: 'center', zIndex: 1, maxWidth: 520 }}>
           {quickDives.map(dive => (
             <Chip
@@ -209,7 +277,16 @@ function EmptyState({
   );
 }
 
-export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive, onCreate }: DataLakeArticleProps) {
+export default function DataLakeArticle({
+  file,
+  onAskAbout,
+  quickDives = [],
+  onDive,
+  emptyVariant = 'no-selection',
+  onCreate,
+  onRetryLakes,
+  onAddFiles,
+}: DataLakeArticleProps) {
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
   const { theme, copy, icons, taxonomy } = useDataLakeSurface();
@@ -223,7 +300,10 @@ export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onD
         isDark={isDark}
         quickDives={quickDives}
         onDive={onDive}
+        variant={emptyVariant}
         onCreate={onCreate}
+        onRetryLakes={onRetryLakes}
+        onAddFiles={onAddFiles}
         theme={theme}
         copy={copy}
         taxonomy={taxonomy}

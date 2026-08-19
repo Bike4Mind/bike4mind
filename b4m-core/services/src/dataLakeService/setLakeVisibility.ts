@@ -4,6 +4,8 @@ import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule'
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
  * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
@@ -11,8 +13,14 @@ import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
  */
 export type LakeVisibility = 'private' | 'organization' | 'public';
 
-interface SetLakeVisibilityAdapters {
-  db: {
+interface SetLakeVisibilityAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
@@ -42,7 +50,7 @@ export const setLakeVisibility = async (
   actor: ManageActor & { organizationId?: string },
   dataLakeId: string,
   visibility: LakeVisibility,
-  { db }: SetLakeVisibilityAdapters
+  { db, logger }: SetLakeVisibilityAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -138,5 +146,46 @@ export const setLakeVisibility = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after visibility change');
   }
+
+  // Reuses the grants already loaded for the gate above, so the recorded rung is the one that
+  // actually authorized this write rather than a second, later read of the grant set.
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'visibility',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      // `undefined` rather than the write's `null`: the write needs `null` to actually unset the
+      // field in Mongo, while `diffLakeConfig` collapses `null` and `undefined` onto the same
+      // "not set" value, so the recorded change is identical either way.
+      changes: diffLakeConfig(existing, {
+        ...existing,
+        organizationId: targetOrg ?? undefined,
+        isPublic: targetIsPublic,
+      }),
+      // An EXPOSING write was authorized by ownership and nothing else: the gate above is
+      // deliberately `isEffectiveOwner`, "WITHOUT the admin / curator / org-admin bypasses this must
+      // exclude". Left to `resolveLakeManageRung`, its first branch (`if (actor.isAdmin) return
+      // 'platform-admin'`) would record admin for an admin who is ALSO the owner - naming an
+      // authority that could not have passed this particular gate. The rung is an authorization
+      // fact, so it must name the branch that actually let the call through. Same reasoning, and the
+      // same shape, as transferLakeOwnership's override.
+      //
+      // Demotion to private is NOT overridden: that path stays full `canManageLake`, so the
+      // resolver's wider ladder is the honest answer there.
+      manageRung: exposes
+        ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
+          ? 'grant-owner'
+          : 'creator'
+        : undefined,
+    },
+    { db, logger }
+  );
+
   return updated;
 };

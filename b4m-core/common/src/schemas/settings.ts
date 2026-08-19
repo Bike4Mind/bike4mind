@@ -13,6 +13,11 @@ import {
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
 } from '../constants/lakeAccessAudit';
+import {
+  LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+} from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
@@ -191,6 +196,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakeVectorSearch',
   'PauseLakeConvergence',
   'EnforceLakeReadGrants',
+  'EnableDataLakeDrivePoll',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -301,10 +307,13 @@ export const SettingKeySchema = z.enum([
   'dataLakeEmbeddingBudgetPeriodHours',
   'dataLakeEmbeddingMaxCallsPerMinute',
   'dataLakeVectorizeChunkBatchSize',
+  'dataLakeEmbeddingTierMultiplierIndividual',
+  'dataLakeEmbeddingTierMultiplierOrganization',
 
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
+  'LakeConfigAuditRetentionDays',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -758,6 +767,25 @@ export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
+
+/**
+ * Cost TIERS (#1675): an individual-owned lake and an organization-owned one are different
+ * economic cases and must not share one number. The tier is expressed as a multiplier on the
+ * per-run and per-lake budgets rather than a second set of budget settings, so the thing an
+ * operator tunes over time is literally "the ratio between them" - and so a change to the base
+ * budget still moves both tiers together.
+ *
+ * Only the two per-resource budgets are tiered. The per-period budget and the rate limit meter
+ * the whole platform through a single shared window, so they have no owner to tier by; the period
+ * length and the chunk batch size are not spend values at all.
+ *
+ * Multiplier semantics follow the spend levers they scale: 0 is a valid "this tier spends nothing"
+ * and the effective budget is clamped to the same MAX_* rail as the untiered value, so raising a
+ * tier can never push spend past the platform ceiling ("adjustable is not unbounded").
+ */
+export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
+export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1377,7 +1405,8 @@ export const API_SERVICE_GROUPS = {
     name: 'Data Lake Cost Governance',
     description:
       'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
-      'Budgets are USD; 0 means stop spending, not "use the default".',
+      'Budgets are USD; 0 means stop spending, not "use the default". The two tier multipliers ' +
+      'scale the per-run and per-lake budgets by whether a lake is individual- or organization-owned.',
     icon: 'Savings',
     settings: [
       { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
@@ -1387,6 +1416,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeEmbeddingBudgetPeriodHours', order: 5 },
       { key: 'dataLakeEmbeddingMaxCallsPerMinute', order: 6 },
       { key: 'dataLakeVectorizeChunkBatchSize', order: 7 },
+      { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 8 },
+      { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 9 },
     ],
   },
   VOICE_SESSION: {
@@ -1730,12 +1761,14 @@ export const API_SERVICE_GROUPS = {
   },
   DATA_LAKE_AUDIT: {
     id: 'dataLakeAuditService',
-    name: 'Data Lake Access Audit',
-    description: 'Retention for the lake access audit trail and its opt-in query-text log',
+    name: 'Data Lake Audit',
+    description:
+      'Retention for the lake audit trail: who READ a lake (plus the opt-in query-text log) and who CHANGED its configuration',
     icon: 'Security',
     settings: [
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+      { key: 'LakeConfigAuditRetentionDays', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -1864,9 +1897,9 @@ export const settingsMap = {
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
     name: 'Data Lakes: Slack "@datalake add" path',
-    defaultValue: false,
+    defaultValue: true,
     description:
-      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". On by default. Turn OFF to make the Slack command inert - it is still intercepted deterministically, so the bot stays silent rather than falling through to the LLM.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 90,
@@ -1930,6 +1963,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeDrivePoll: makeBooleanSetting({
+    key: 'EnableDataLakeDrivePoll',
+    name: 'Data Lakes: Google Drive auto re-sync poll',
+    defaultValue: false,
+    description:
+      'Server-side gate for the scheduled poll that keeps connected Google Drive folders in sync with their data lakes (adds/edits/removals). Off by default - a connected folder still syncs on demand via the Re-sync button; turn this on to also reconcile it automatically on a schedule.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 95,
     dependsOn: 'EnableDataLakes',
   }),
   EnableBriefcase: makeBooleanSetting({
@@ -3215,6 +3259,25 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
     order: 2,
   }),
+  LakeConfigAuditRetentionDays: makeNumberSetting({
+    key: 'LakeConfigAuditRetentionDays',
+    name: 'Lake Config Change Audit Retention (days)',
+    defaultValue: LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+    // Same enforcement shape as the access retention above: the admin API rejects a save below
+    // this, and the write path (lakeConfigChangeEventRepository.record) clamps to it
+    // unconditionally regardless of what is stored.
+    min: LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake CONFIG-change event (who changed a lake, what they changed, and which ' +
+      'manage rung authorized it) is retained, in days. Floored at 1095 days - deliberately ' +
+      'longer than the access-audit retention above, because a config change is rare and alters ' +
+      'every future answer the lake gives, where a read is one turn. Platform-wide, not ' +
+      'per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 3,
+  }),
   // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
   // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only
   // when a setting is absent, and resolveSpendLevers (dataLakeService) halts - never resumes at
@@ -3300,6 +3363,36 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 7,
+  }),
+  // Cost tiers (#1675). Multipliers, not budgets, so the tunable value is the RATIO between the
+  // two economic cases. Same spend-lever discipline as the budgets they scale: 0 is a valid stop.
+  dataLakeEmbeddingTierMultiplierIndividual: makeNumberSetting({
+    key: 'dataLakeEmbeddingTierMultiplierIndividual',
+    name: 'Cost Tier Multiplier - Individual-Owned Lakes',
+    defaultValue: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+    description:
+      'Scales the per-run and per-lake embedding budgets for lakes owned by an individual user. ' +
+      '1 means those lakes get exactly the configured budgets; 0 stops them spending at all. ' +
+      'The effective budget is still capped by the same hard rail as the untiered value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 8,
+  }),
+  dataLakeEmbeddingTierMultiplierOrganization: makeNumberSetting({
+    key: 'dataLakeEmbeddingTierMultiplierOrganization',
+    name: 'Cost Tier Multiplier - Organization-Owned Lakes',
+    defaultValue: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+    description:
+      'Scales the per-run and per-lake embedding budgets for lakes owned by an organization, ' +
+      'which serve a whole team rather than one person. 0 stops org-owned lakes spending at all. ' +
+      'The effective budget is still capped by the same hard rail as the untiered value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 9,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

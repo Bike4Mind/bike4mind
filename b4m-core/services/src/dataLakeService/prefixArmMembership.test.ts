@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MembershipLake } from './lakeMembership';
 import {
   couldMatchTagPrefixArmLoosely,
+  findOtherLakeClaims,
   findPrefixArmChanges,
+  hasOtherLakeClaim,
   loadPrefixArmCandidateLakes,
 } from './prefixArmMembership';
 
@@ -186,6 +188,114 @@ describe('findPrefixArmChanges - joins', () => {
     );
     expect(leaves.map(l => l.lake.id)).toEqual(['departing']);
     expect(joins.map(j => j.lake.id)).toEqual(['arriving']);
+  });
+});
+
+// The gate a hard delete has to pass. BOTH arms of buildDataLakeMembershipFilter, because a file a
+// human curated into a second lake through THAT lake's fileTagPrefix carries no `datalake:` tag for
+// it - a meta-tag-only gate reads that as "nobody else wants this" and evicts a full member.
+describe('findOtherLakeClaims', () => {
+  const leaving = { id: 'lake1', datalakeTag: 'datalake:lake1' };
+
+  it('finds a second lake that claims the file ONLY through its prefix arm', async () => {
+    const other = lake({ id: 'lake-b', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'acme:' });
+    const claims = await findOtherLakeClaims(
+      { userId: 'owner', tagNames: ['acme:q3'] },
+      leaving,
+      makeAdapters([other])
+    );
+    expect(claims.metaTagNames).toEqual([]);
+    expect(claims.prefixArmLakes).toEqual([other]);
+    expect(hasOtherLakeClaim(claims)).toBe(true);
+  });
+
+  it('finds a second lake through its meta-tag', async () => {
+    const claims = await findOtherLakeClaims(
+      { userId: 'owner', tagNames: ['datalake:lake-b'] },
+      leaving,
+      makeAdapters([])
+    );
+    expect(claims.metaTagNames).toEqual(['datalake:lake-b']);
+    expect(hasOtherLakeClaim(claims)).toBe(true);
+  });
+
+  it('is clear when nothing but the leaving lake ever held the file', async () => {
+    const claims = await findOtherLakeClaims(
+      { userId: 'owner', tagNames: ['plain-tag'] },
+      leaving,
+      makeAdapters([lake({ fileTagPrefix: 'acme:' })])
+    );
+    expect(hasOtherLakeClaim(claims)).toBe(false);
+  });
+
+  // The prefix arm's ownership conjunct: a lake reaches a prefixed tag only on a file its own creator
+  // owns. Without it, minting a lake with prefix `acme:` would speak for every file tagged `acme:*`.
+  it('ignores a prefix match on a lake whose creator does not own the file', async () => {
+    const claims = await findOtherLakeClaims(
+      { userId: 'someone-else', tagNames: ['acme:q3'] },
+      leaving,
+      makeAdapters([lake({ id: 'lake-b', createdByUserId: 'owner', fileTagPrefix: 'acme:' })])
+    );
+    expect(hasOtherLakeClaim(claims)).toBe(false);
+  });
+
+  it('never counts the leaving lake itself, by either arm', async () => {
+    const self = lake({ id: 'lake1', datalakeTag: 'datalake:lake1', fileTagPrefix: 'acme:' });
+    const claims = await findOtherLakeClaims(
+      { userId: 'owner', tagNames: ['datalake:lake1', 'acme:q3'] },
+      leaving,
+      makeAdapters([self])
+    );
+    expect(hasOtherLakeClaim(claims)).toBe(false);
+  });
+
+  // Folded, matching the rest of the reserved-namespace comparisons: a mixed-case variant of the
+  // leaving lake's OWN tag is that lake's, not a stranger's.
+  it('folds case when deciding a meta-tag belongs to another lake', async () => {
+    const mine = await findOtherLakeClaims(
+      { userId: 'owner', tagNames: ['DATALAKE:Lake1'] },
+      leaving,
+      makeAdapters([])
+    );
+    expect(hasOtherLakeClaim(mine)).toBe(false);
+    const theirs = await findOtherLakeClaims(
+      { userId: 'owner', tagNames: ['DATALAKE:Other'] },
+      leaving,
+      makeAdapters([])
+    );
+    expect(theirs.metaTagNames).toEqual(['DATALAKE:Other']);
+  });
+
+  it('skips the lake query when no tag could carry a prefix arm', async () => {
+    const find = vi.fn();
+    // Every usable fileTagPrefix ends in ':', so a colon-free tag set is unreachable by that arm.
+    const claims = await findOtherLakeClaims({ userId: 'owner', tagNames: ['plain', 'another'] }, leaving, {
+      db: { dataLakes: { find } },
+    });
+    expect(find).not.toHaveBeenCalled();
+    expect(hasOtherLakeClaim(claims)).toBe(false);
+  });
+
+  it('skips the prefix arm for an unowned file (nothing to anchor the conjunct to)', async () => {
+    const find = vi.fn();
+    const claims = await findOtherLakeClaims({ userId: null, tagNames: ['acme:q3'] }, leaving, {
+      db: { dataLakes: { find } },
+    });
+    expect(find).not.toHaveBeenCalled();
+    expect(hasOtherLakeClaim(claims)).toBe(false);
+  });
+
+  it('re-filters a batch-supplied candidate set by owner instead of querying', async () => {
+    const find = vi.fn();
+    const claims = await findOtherLakeClaims({ userId: 'owner', tagNames: ['acme:q3'] }, leaving, {
+      db: { dataLakes: { find } },
+      candidateLakes: [
+        lake({ id: 'lake-b', createdByUserId: 'owner', fileTagPrefix: 'acme:' }),
+        lake({ id: 'lake-c', createdByUserId: 'stranger', fileTagPrefix: 'acme:' }),
+      ],
+    });
+    expect(find).not.toHaveBeenCalled();
+    expect(claims.prefixArmLakes.map(l => l.id)).toEqual(['lake-b']);
   });
 });
 

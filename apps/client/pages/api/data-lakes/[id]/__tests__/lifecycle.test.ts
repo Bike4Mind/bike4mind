@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   assertLakeWritable: vi.fn(),
   archiveDataLake: vi.fn(),
   deleteDataLake: vi.fn(),
+  unarchiveDataLake: vi.fn(),
+  restoreDeletedDataLake: vi.fn(),
   cleanupDeletedDataLake: vi.fn(),
   // Real admin-or-creator logic (not a bare stub) so the cleanup action's canManageLake call
   // behaves identically to production for these tests, including the blank-identity case.
@@ -38,6 +40,8 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeWritable: h.assertLakeWritable,
     archiveDataLake: h.archiveDataLake,
     deleteDataLake: h.deleteDataLake,
+    unarchiveDataLake: h.unarchiveDataLake,
+    restoreDeletedDataLake: h.restoreDeletedDataLake,
     cleanupDeletedDataLake: h.cleanupDeletedDataLake,
     canManageLake: h.canManageLake,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
@@ -46,6 +50,14 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
@@ -133,6 +145,34 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
     h.archiveDataLake.mockResolvedValue({ id: 'lake1', status: 'archived' });
     h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
+    h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+    h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+  });
+
+  // The audit repos are wired through one shared helper (lakeConfigAuditDb) precisely so the four
+  // lake routes cannot drift into wiring three and forgetting the fourth. The service types now make
+  // the event repo required, so a route that dropped it fails to COMPILE - this pins the other half,
+  // `adminSettings`, which stays optional (the retention read is best-effort) and would otherwise go
+  // missing silently, leaving every event on the floor default.
+  it.each([
+    ['archive', 'archiveDataLake'],
+    ['unarchive', 'unarchiveDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+    ['delete', 'deleteDataLake'],
+  ])('%s wires the config-audit repositories into the service', async (action, serviceName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h[serviceName as keyof typeof h]).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      })
+    );
   });
 
   it('archive passes retrievalIndex: undefined when self-host OpenSearch is off', async () => {

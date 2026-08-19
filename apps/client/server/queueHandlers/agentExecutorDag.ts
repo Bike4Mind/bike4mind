@@ -384,9 +384,10 @@ export function isDagAggregationWake(args: {
  * This only bounds the PARENT's own further iterations. A DAG fan-out, or a
  * `background: true` subagent, dispatched from within that one grace iteration
  * is a separate fresh execution gated independently by `processSubagentDispatch`'s
- * own per-member cap check. A plain (non-background) `delegate_to_agent` call
- * runs in-process instead and is NOT covered by that gate - a pre-existing gap
- * (in-process delegation was never capped by anything), tracked in #1824.
+ * own per-member cap check. A plain (non-background) `delegate_to_agent` or
+ * `coordinate_task` call runs in-process instead and used to run past this bound
+ * uncapped - closed by `checkMemberCreditCap` on the in-process orchestrator path
+ * (see `ServerSubagentOrchestrator.delegateToAgent`).
  */
 export function clampMaxIterationsForOverCapAggregationWake(args: {
   isAggregationOnlyWake: boolean;

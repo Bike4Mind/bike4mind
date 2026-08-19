@@ -13,6 +13,7 @@ export * from './EmbeddingCacheModel';
 export * from './LakeAccessEventModel';
 export * from './DataLakeSpendNotificationModel';
 export * from './LakeAccessQueryTextModel';
+export * from './LakeConfigChangeEventModel';
 export * from './LatticeModel';
 export * from './McpServerModel';
 export * from './MemoryLedgerEventModel';

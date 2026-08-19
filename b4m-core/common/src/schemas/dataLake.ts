@@ -4,8 +4,11 @@ import {
   hasBlankTagPrefixSegment,
   isReservedTagPrefix,
   DATA_LAKE_GROUNDING_MODES,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
 // Slug validation
 
@@ -28,8 +31,10 @@ export const CreateDataLakeRequestInput = z.object({
     // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
     // and " acme:" stored raw would desynchronize them.
     .trim()
-    .min(2)
-    .max(30)
+    // Bounds shared with the wizard (tagPrefixIssue, the Start Upload gate, and the prefix it
+    // derives from a lake name) so a value the form offers is never one this rejects.
+    .min(MIN_TAG_PREFIX_LENGTH)
+    .max(MAX_TAG_PREFIX_LENGTH)
     .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
     // A prefix with a blank segment ("::", "a::", ":a:", "a: :", or zero-width characters)
     // gives every derived tag a blank tree segment, which the tag-tree UIs can only paper
@@ -119,6 +124,17 @@ export const UpdateDataLakeRequestInput = z.object({
   // recompute, best-effort index removal) always run.
 });
 export type UpdateDataLakeRequestInputType = z.infer<typeof UpdateDataLakeRequestInput>;
+
+/**
+ * COMPILE-TIME PIN: every field this endpoint can write must be audited by the config-change event.
+ * Unused at runtime - its only job is to fail the build if the two drift, because a settable field
+ * missing from LAKE_CONFIG_DOCUMENT_FIELDS would have its edits land silently and never appear in
+ * the owner-facing history. Adding a field above without classifying it in LAKE_CONFIG_FIELD_AUDIT
+ * breaks here, which is the moment to make that decision rather than discover it later.
+ */
+export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdatableField<
+  keyof UpdateDataLakeRequestInputType
+>;
 
 export const DataLakeListRequestInput = z.object({
   organizationId: z.string().optional(),

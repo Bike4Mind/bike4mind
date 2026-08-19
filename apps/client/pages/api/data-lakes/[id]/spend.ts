@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeService } from '@bike4mind/services';
+import { dataLakeService, scopedSettingsService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
   dataLakeAccessGrantRepository,
@@ -45,8 +45,16 @@ const handler = baseApi()
       throw new ForbiddenError("You do not have access to this data lake's spend");
     }
 
+    // Resolve the levers against THIS lake's cost tier, not the platform-wide pair: the gate
+    // enforces the tiered budgets (scopeForLake is the one place that derivation lives), so a view
+    // that omitted the owner type would fall to the restrictive unknown-owner tier and quote an
+    // org-owned lake a ceiling it is not actually held to.
     const [levers, ledger] = await Promise.all([
-      dataLakeService.resolveSpendLevers({ adminSettings: adminSettingsRepository }, req.logger),
+      dataLakeService.resolveSpendLevers(
+        { adminSettings: adminSettingsRepository },
+        req.logger,
+        scopedSettingsService.scopeForLake(lake).owner?.type
+      ),
       usageEventRepository.lakeUsageSummary(lake.id, days),
     ]);
 
@@ -59,6 +67,7 @@ const handler = baseApi()
       perLakeBudgetMicroUsd: levers.perLakeBudgetMicroUsd,
       perPeriodBudgetMicroUsd: levers.perPeriodBudgetMicroUsd,
       periodHours: levers.periodHours,
+      tierMultiplier: levers.tierMultiplier,
       ledger,
     };
 

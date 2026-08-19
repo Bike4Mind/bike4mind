@@ -1,4 +1,4 @@
-import { detectSkillMentions } from '@bike4mind/common';
+import { detectAgentMentions, detectSkillMentions } from '@bike4mind/common';
 
 /**
  * Blog intent in the message itself. Two branches: a word-boundary match on `blog` and its close
@@ -90,4 +90,65 @@ export function shouldOfferSkillTool(input: {
   // the tool that could explain why.
   if (detectSkillMentions(input.message.toLowerCase()).length > 0) return true;
   return hasPriorToolUse(input.priorToolNames, ['skill']);
+}
+
+/**
+ * Normalizes an agent handle for comparison. `ServerAgentStore` names its built-ins with
+ * underscores (`code_review`, `github_manager`) while the mention parser accepts hyphens too, so
+ * `@code-review` must resolve to `code_review` rather than silently dropping delegation.
+ */
+function normalizeAgentHandle(handle: string): string {
+  return handle.toLowerCase().replace(/-/g, '_');
+}
+
+/**
+ * True when this turn's message @-mentions an agent that the delegation store can actually run.
+ *
+ * The previous gate was "the message contains any @mention at all", which fired on every
+ * `@teammate`, pasted social handle, or `@here` in ordinary prose - attaching the
+ * `delegate_to_agent` schema (~786 tokens, measured against the provider tokenizer) plus the
+ * agent-directory section of the tool prompt to chats that had no delegatable target, and
+ * re-opening the self-delegation side-channel that gating this tool was meant to close.
+ *
+ * A mention that resolves to a *persona* agent (the `agents` collection, matched by trigger word
+ * in AgentDetectionFeature) is deliberately NOT a delegation signal: personas are applied as a
+ * system prompt, and `delegate_to_agent`'s `agent` enum only ever contains the store's own
+ * definitions, so offering the tool for them would name a target it cannot reach.
+ */
+export function mentionsDelegatableAgent(message: string, delegatableAgentNames: readonly string[]): boolean {
+  const mentions = detectAgentMentions(message);
+  if (mentions.length === 0) return false;
+  const delegatable = new Set(delegatableAgentNames.map(normalizeAgentHandle));
+  return mentions.some(mention => delegatable.has(normalizeAgentHandle(mention)));
+}
+
+/**
+ * Whether `delegate_to_agent` should be offered on this chat turn.
+ *
+ * Delegation is opt-in: without a signal the model would auto-delegate on benign prompts and burn
+ * subagent runs the user never asked for. A hard veto plus three opt-in signals, cheap-first:
+ *   - `disableUserIntegrations` hard-vetoes everything (a curated surface must never delegate);
+ *   - an explicit `allowedAgents` allowlist from the caller (persona surfaces scoping the set) -
+ *     an *empty* allowlist means "no delegation requested", not "delegation to nothing";
+ *   - an agent attached to the session via the UI;
+ *   - an @mention naming an agent this store can actually run.
+ *
+ * Deliberately NO prior-turn continuation rescue, unlike the blog and skill gates above. Those
+ * rescue a cheap tool whose worst case is a wasted schema; this one would re-arm autonomous
+ * subagent spawning for the rest of a conversation off a single earlier delegation, which is the
+ * expensive failure mode the gate exists to prevent (one such run rolled up ~18k credits). A
+ * multi-turn delegated workflow is instead carried by `session.agentIds`, which
+ * AgentDetectionFeature persists for every summon that resolves to a real agent.
+ */
+export function shouldOfferDelegation(input: {
+  disableUserIntegrations: boolean;
+  allowedAgents: readonly string[] | undefined;
+  sessionAgentIds: readonly string[] | undefined;
+  message: string;
+  delegatableAgentNames: readonly string[];
+}): boolean {
+  if (input.disableUserIntegrations) return false;
+  if ((input.allowedAgents?.length ?? 0) > 0) return true;
+  if ((input.sessionAgentIds?.length ?? 0) > 0) return true;
+  return mentionsDelegatableAgent(input.message, input.delegatableAgentNames);
 }

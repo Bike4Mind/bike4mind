@@ -10,6 +10,7 @@ import {
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const TransferOwnershipInput = z.object({
   newOwnerUserId: z.string().min(1),
@@ -42,6 +43,7 @@ const handler = baseApi()
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
         organizations: organizationRepository,
+        ...lakeConfigAuditDb,
       },
       logger: req.logger,
     });

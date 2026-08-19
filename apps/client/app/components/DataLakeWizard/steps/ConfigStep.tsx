@@ -22,7 +22,7 @@ import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
-import { tagPrefixIssue } from '@bike4mind/common';
+import { submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
@@ -36,7 +36,9 @@ export default function ConfigStep() {
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
   // Append mode inherits the target lake's prefix, which by definition already coexists with it.
-  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  // The overlap lookup needs the submitted form: normalizeTagPrefix drops a colon-less value,
+  // so "acme" would match no lake and its collision with an existing "acme:" go unreported.
+  const duplicatePrefixLake = useDuplicatePrefixLake(submittedTagPrefix(config.tagPrefix), !!targetLake);
   const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
