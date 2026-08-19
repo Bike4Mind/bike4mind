@@ -74,10 +74,22 @@ const fmtDate = (d: Date | string): string => new Date(d).toLocaleDateString(und
  * producer's way of recording a set or a clear without a sentinel - so it renders as "not set"
  * rather than as an empty cell a reader would mistake for a rendering bug.
  */
-export function describeLakeConfigValue(value: LakeConfigLiteralValue | undefined): string {
+export function describeLakeConfigValue(
+  value: LakeConfigLiteralValue | undefined,
+  /** Resolves a user id to a display name; absent ids fall back to the raw id. */
+  userNames?: Record<string, string>
+): string {
   if (value === undefined || value === null || value === '') return 'not set';
   if (typeof value === 'boolean') return value ? 'on' : 'off';
-  return String(value);
+  const raw = String(value);
+  if (!userNames) return raw;
+  // Comma-joined because a transfer records the whole prior-owner set in one scalar - see
+  // ownershipChange. Each part degrades to its own raw id, so one unresolvable member of the set
+  // does not take the resolvable ones down with it.
+  return raw
+    .split(',')
+    .map(part => userNames[part] ?? part)
+    .join(', ');
 }
 
 /**
@@ -99,12 +111,21 @@ export function describeLakeConfigFingerprint(change: LakeConfigHistoryFingerpri
 }
 
 /** The right-hand cell for one changed field, per arm of the discriminated union. */
-export function describeLakeConfigChange(change: LakeConfigHistoryFieldChange): string {
+/** The fields whose values are user ids - the only ones a name lookup may be applied to. Must stay
+ *  in sync with IDENTITY_VALUE_FIELDS in assembleLakeConfigHistory, which decides what gets
+ *  resolved server-side; a field listed here but not there simply renders its raw id. */
+const IDENTITY_VALUE_FIELDS = new Set<LakeConfigChangeField>(['effectiveOwnerUserId', 'createdByUserId']);
+
+export function describeLakeConfigChange(
+  change: LakeConfigHistoryFieldChange,
+  userNames?: Record<string, string>
+): string {
   if (change.kind === 'fingerprint') {
     return describeLakeConfigFingerprint(change);
   }
+  const names = IDENTITY_VALUE_FIELDS.has(change.field) ? userNames : undefined;
   const clipped = change.truncated ? ' (clipped)' : '';
-  return `${describeLakeConfigValue(change.before)} -> ${describeLakeConfigValue(change.after)}${clipped}`;
+  return `${describeLakeConfigValue(change.before, names)} -> ${describeLakeConfigValue(change.after, names)}${clipped}`;
 }
 
 /**
@@ -121,7 +142,7 @@ const fieldLabel = (field: LakeConfigChangeField): string => FIELD_LABEL[field] 
 
 const actionLabel = (action: LakeConfigChangeAction): string => ACTION_LABEL[action] ?? action;
 
-function ChangeRow({ entry }: { entry: LakeConfigHistoryEntry }) {
+function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNames: Record<string, string> }) {
   const rung = rungLabel(entry.manageRung);
   return (
     <tr data-testid="datalake-config-history-row">
@@ -156,7 +177,7 @@ function ChangeRow({ entry }: { entry: LakeConfigHistoryEntry }) {
                 {fieldLabel(change.field)}
               </Typography>
               <Typography level="body-xs" textColor="text.tertiary">
-                {describeLakeConfigChange(change)}
+                {describeLakeConfigChange(change, userNames)}
               </Typography>
             </Box>
           ))}
@@ -217,7 +238,7 @@ export function LakeConfigHistorySection({ view, isLoading, error }: LakeConfigH
               </thead>
               <tbody>
                 {view.entries.map(entry => (
-                  <ChangeRow key={entry.eventId} entry={entry} />
+                  <ChangeRow key={entry.eventId} entry={entry} userNames={view.userNames} />
                 ))}
               </tbody>
             </Table>
