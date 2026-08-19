@@ -119,10 +119,22 @@ function stripIpv6Brackets(hostname: string): string {
  * are left in place rather than deleted.
  */
 function normalizeIpv6(ip: string): string {
-  const bare = stripIpv6Brackets(ip);
+  // A bracketed literal may carry a port (`[fe80::1]:8080`), which `stripIpv6Brackets` leaves alone
+  // because it requires the string to END in `]` - so the address inside used to reach the arms still
+  // bracketed and matched nothing. A zone index (`fe80::1%eth0`) is likewise not part of the address.
+  // Both are stripped here rather than in `stripIpv6Brackets`, whose other two callers are handed
+  // hostnames where a `%` or a trailing `:port` is not ours to reinterpret.
+  const ported = ip.match(/^(\[[^\]]*\]):\d+$/);
+  const bare = stripIpv6Brackets(ported ? ported[1] : ip).replace(/%.*$/, '');
 
   const halves = bare.split('::');
   if (halves.length > 2) return bare;
+
+  // A dotted quad is only legal as the LAST two hextets. When it appears in the head half instead
+  // (`2001:db8:1.2.3.4::`) the zero-fill index below over-counts by one, because the popped token is
+  // still in `halves[0]` - the result canonicalises to a different address than the input names. Such
+  // input is not valid IPv6, so bail out and let it keep whatever verdict the raw string earns.
+  if (halves.length === 2 && halves[0].includes('.')) return bare;
 
   const tokens = halves.flatMap(half => (half === '' ? [] : half.split(':')));
   const dotted = tokens.length > 0 && tokens[tokens.length - 1].includes('.') ? tokens.pop() : undefined;
@@ -168,10 +180,13 @@ function isPrivateIPv6(ip: string): boolean {
   // Every arm below is a prefix test, so a NAME that happens to share a family's leading characters
   // reads as an address in it: `isPrivateIP` sends everything non-dotted-quad here ("Assume IPv6"), so
   // without this gate `fetch.example.com` matches the fe00::/8 arm, and `ffmpeg.org` / `fdic.gov` match
-  // multicast and ULA. Requiring a colon costs nothing real - every IPv6 spelling has one - and callers
-  // that need name-based blocking use `isPrivateOrInternalHostname`, which does its own name checks
-  // before dispatching here.
-  if (!normalized.includes(':')) return false;
+  // multicast and ULA. A colon alone is not enough - `fedex.com:8080` has one - so the charset has to
+  // hold too: an IPv6 literal is only hex digits, colons, and an optional dotted tail. Names whose every
+  // character happens to be hex (`face.cafe:80`) still slip past this and are refused if they share a
+  // family prefix; that is the safe direction and the reason the arms are not the place to fix it.
+  // Callers that need name-based blocking use `isPrivateOrInternalHostname`, which does its own name
+  // checks before dispatching here.
+  if (!normalized.includes(':') || !/^[0-9a-f:.]+$/.test(normalized)) return false;
 
   // ::1 - Loopback, and :: - unspecified. The written-out spellings cannot match any more: a string
   // equal to one of them is well-formed, so `normalizeIpv6` compresses it to `::1` / `::` first. They
@@ -208,9 +223,14 @@ function isPrivateIPv6(ip: string): boolean {
   // `::ffff:169.254.169.254` to the hex form `::ffff:a9fe:a9fe`, which is the cloud metadata endpoint,
   // i.e. instance credentials. When the tail is dotted we judge the embedded IPv4 exactly; when it is
   // hex we refuse rather than decode, which is what the sibling `ssrfGuard.ts` does too.
+  //
+  // The tail must be an EXACT dotted quad to be decoded. Taking the last hextet whenever a dot appeared
+  // anywhere let `::ffff:1:2:3:8.8.8.8` be judged by its trailing `8.8.8.8` and pass as public, even
+  // though hextets 4-6 are non-zero so it is not a mapped address at all - it is ordinary reserved
+  // 0000::/16 space, and it now falls through to the refusal below.
   if (normalized.startsWith('::ffff:')) {
-    const tail = normalized.split(':').pop() ?? '';
-    return tail.includes('.') ? isPrivateIPv4(tail) : true;
+    const tail = normalized.slice('::ffff:'.length);
+    return /^\d+\.\d+\.\d+\.\d+$/.test(tail) ? isPrivateIPv4(tail) : true;
   }
 
   // ::/96 - IPv4-COMPATIBLE IPv6 (`::x.y.z.w`), the deprecated sibling of the mapped form above.
@@ -231,14 +251,16 @@ function isPrivateIPv6(ip: string): boolean {
   // `::/8` is IANA-reserved (RFC 4291), and `::1` and `::` are exact-matched above.
   if (normalized.startsWith('::')) {
     const tail = normalized.slice(2);
-    return tail.includes('.') ? isPrivateIPv4(tail) : true;
+    return /^\d+\.\d+\.\d+\.\d+$/.test(tail) ? isPrivateIPv4(tail) : true;
   }
 
   // 0000::/16 - the rest of the reserved low space, reached when canonicalisation moves the zero run.
   // RFC 5952 compresses the LONGEST run, not the leading one, so `::1:0:0:0:0:0` canonicalises to
   // `0:0:1::` and no longer starts with `::` - it would fall past the branch above that exists to
-  // refuse exactly this space. A zero first hextet is inside 0000::/16, which is IANA-reserved in full
-  // (RFC 4291), and global unicast is 2000::/3, so nothing routable can reach this line.
+  // refuse exactly this space. A zero first hextet is inside 0000::/16, which RFC 4291 reserves, and
+  // global unicast is 2000::/3, so no routable address reaches this line. Note what this arm does NOT
+  // decide: the two branches above run first and own every `::`-leading form, including the mapped one -
+  // this catches only what canonicalisation moved out of their reach.
   if (normalized.startsWith('0:')) return true;
 
   // The zero-padded alternates in the four arms below (`2001:0db8:`, `2001:0000:`, `0064:ff9b:`,
@@ -246,6 +268,20 @@ function isPrivateIPv6(ip: string): boolean {
   // are NOT dead code: input that does not parse as IPv6 takes the bail-out and arrives raw, so
   // `2001:0db8:zz::1` still reaches the padded arm and is refused. Deleting them as unreachable would
   // quietly loosen the guard for malformed input - there is a test pinning that.
+
+  // 3fff::/20 - additional documentation prefix (RFC 9637) and 5f00::/16 - SRv6 SID space (RFC 9602).
+  // Both were assigned in 2024, after this arm list was last reviewed, which is the same way the older
+  // gaps got here. Documentation space is already refused below for 2001:db8::/32, and an SRv6 SID block
+  // is intra-domain by definition, so an outbound fetch has no business reaching either.
+  //
+  // 3fff::/20 is tested as a RANGE rather than a `3fff:` prefix: the prefix form would also refuse
+  // 3fff:1000-3fff:ffff, which is unassigned global unicast that IANA can still allocate.
+  if (normalized.startsWith('5f00:')) return true;
+  if (normalized.startsWith('3fff:')) {
+    const rest = normalized.slice('3fff:'.length);
+    const secondHextet = rest.startsWith(':') ? 0 : parseInt(rest.split(':')[0], 16);
+    if (secondHextet <= 0x0fff) return true;
+  }
 
   // 2001:db8::/32 - Documentation
   if (normalized.startsWith('2001:db8:') || normalized.startsWith('2001:0db8:')) return true;
