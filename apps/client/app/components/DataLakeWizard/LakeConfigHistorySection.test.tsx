@@ -117,6 +117,43 @@ describe('describeLakeConfigChange', () => {
   });
 });
 
+describe('identity values in describeLakeConfigChange', () => {
+  const ADA = '000000000000000000000011';
+  const GRACE = '000000000000000000000022';
+  const names = { [ADA]: 'Ada Lovelace', [GRACE]: 'Grace Hopper' };
+  const owner = (before: string | undefined, after: string) =>
+    ({ field: 'effectiveOwnerUserId', kind: 'literal', before, after }) as LakeConfigHistoryFieldChange;
+
+  it('renders a transfer as names, not as two opaque ObjectIds', () => {
+    expect(describeLakeConfigChange(owner(ADA, GRACE), names)).toBe('Ada Lovelace -> Grace Hopper');
+  });
+
+  it('falls back to the raw id for an id the server could not resolve', () => {
+    // Rows outlive the accounts they name - retention is up to 3650 days - so an unresolvable id
+    // must render as itself rather than as "not set" or an empty cell.
+    expect(describeLakeConfigChange(owner(ADA, '000000000000000000000099'), names)).toBe(
+      'Ada Lovelace -> 000000000000000000000099'
+    );
+  });
+
+  it('renders a comma-joined prior-owner set as a list of names', () => {
+    expect(describeLakeConfigChange(owner(`${ADA},${GRACE}`, ADA), names)).toBe(
+      'Ada Lovelace, Grace Hopper -> Ada Lovelace'
+    );
+  });
+
+  it('leaves a NON-identity field alone even when its value looks like a resolvable id', () => {
+    // organizationId is an id of another entity. Feeding it through a user-name map would produce a
+    // confidently wrong name, which is worse than the raw id it replaced.
+    const org = { field: 'organizationId', kind: 'literal', before: ADA, after: GRACE } as LakeConfigHistoryFieldChange;
+    expect(describeLakeConfigChange(org, names)).toBe(`${ADA} -> ${GRACE}`);
+  });
+
+  it('renders raw ids when no name map is supplied at all', () => {
+    expect(describeLakeConfigChange(owner(ADA, GRACE))).toBe(`${ADA} -> ${GRACE}`);
+  });
+});
+
 describe('LakeConfigHistorySection', () => {
   it('renders one row per recorded change', () => {
     renderSection({ view: view({ entries: [entry({ eventId: 'a' }), entry({ eventId: 'b' })] }) });
