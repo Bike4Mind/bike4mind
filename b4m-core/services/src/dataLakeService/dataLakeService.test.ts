@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -2311,6 +2312,24 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const adapters = makeAdapters('deleted');
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
+  it("lets a mid-sweep failure escape as a NON-BadRequestError, which is what makes the consumer's release safe (#1744)", async () => {
+    // Pins an invariant the consumer's release path depends on and cannot check for itself:
+    // cleanupDeletedDataLake throws BadRequestError ONLY from its two entry guards, before anything
+    // is destroyed. dataLakeCleanup.ts releases 'purging' -> 'deleted' on BadRequestError, so if a
+    // BadRequestError were ever raised from inside the sweep instead, that release would advertise
+    // a HALF-PURGED lake as restorable. Anything failing after the guards must therefore surface as
+    // some other error, so the consumer rethrows it to the DLQ rather than releasing.
+    const adapters = makeAdapters('purging');
+    adapters.db.fabFiles.hardDeleteByIds = vi.fn().mockRejectedValue(new Error('mongo went away'));
+    const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BadRequestError);
+    // The lake record must still be there: a sweep that died mid-way has not finished the job.
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
 
   it('purges chunks, files, batches, then the lake when soft-deleted', async () => {
