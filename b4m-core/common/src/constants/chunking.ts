@@ -159,5 +159,12 @@ export const CONVERGENCE_PAUSED_CHUNK_NOTE =
  * retrieval without three separate string comparisons drifting apart.
  */
 export function isConvergencePausedNote(notes?: string | null): boolean {
-  return notes === CONVERGENCE_PAUSED_NOTE || notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
+  return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
 }
+
+/**
+ * Datastore mirror of `isConvergencePausedNote`, for a Mongo `notes: { $in: [...] }`. Exported so a
+ * query and the in-memory predicate cannot drift: adding a third stall marker to this array reaches
+ * both. Declared after the two constants it names so the function above can close over it.
+ */
+export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;

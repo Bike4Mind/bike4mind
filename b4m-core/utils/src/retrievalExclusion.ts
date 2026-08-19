@@ -1,4 +1,4 @@
-import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
+import { isConvergencePausedNote } from '@bike4mind/common';
 import { escapeRegex } from './escapeRegex';
 
 /**
@@ -84,18 +84,24 @@ export function isRetrievalExcluded(
   file: { fileName?: string | null; vectorized?: boolean; notes?: string | null },
   opts: RetrievalExclusionOptions
 ): boolean {
-  // The `vectorizedOnly` arm is exempted for exactly one shape, and the exemption is load-bearing.
-  // A member whose passages a HALTED convergence wave deleted is `vectorized: false` - not because
-  // it is an image or a failed job, but because the corpus now has a hole where it was. Dropping it
-  // here happens strictly UPSTREAM of `partitionByIndexAvailability`, so on a vectorizedOnly lake
-  // the file would never reach the withhold, the turn would answer around the hole, and it would
-  // report full coverage while doing it - the exact silent degradation that partition exists to
-  // prevent, on the highest-traffic surface. It stays a candidate so it can be REFUSED and named.
+  // The `vectorizedOnly` arm is exempted for files the convergence kill switch stalled, and the
+  // exemption is load-bearing. Such a member is unvectorized not because it is an image or a failed
+  // job, but because the corpus now has a hole where it was. Dropping it here happens strictly
+  // UPSTREAM of `partitionByIndexAvailability`, so on a vectorizedOnly lake the file would never
+  // reach the withhold, the turn would answer around the hole, and it would report full coverage
+  // while doing it - the exact silent degradation that partition exists to prevent, on the
+  // highest-traffic surface. It stays a candidate so it can be REFUSED and named.
+  //
+  // EITHER arm, via the shared predicate, not the chunk marker alone. The vectorize arm's file
+  // usually survives this filter anyway because `vectorized` stays true while `vectorizedChunkCount`
+  // is 0 - which is precisely the kind of accident this should not depend on: the two fields are
+  // written by different paths, and the day that flag is corrected to false the exemption would go
+  // missing exactly where the guarantee is advertised as strongest.
   //
   // Filename-marker exclusion is deliberately NOT exempted below: that one says the surface must
   // never retrieve or NAME this document, which outranks reporting a hole in it.
-  const passagesRemoved = file.notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
-  if (opts.vectorizedOnly && !file.vectorized && !passagesRemoved) return true;
+  const stalledByConvergence = isConvergencePausedNote(file.notes);
+  if (opts.vectorizedOnly && !file.vectorized && !stalledByConvergence) return true;
   const re = buildFilenameMarkerRegex(opts.excludeFilenameMarkers);
   return !!re && re.test((file.fileName ?? '').toLowerCase());
 }

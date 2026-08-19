@@ -67,6 +67,16 @@ describe('detectUnderChunkedFiles', () => {
     expect(result.map(r => r.fabFileId)).toEqual(['stranded-1', 'f1']);
   });
 
+  // The two reads CAN overlap now that stranded covers the vectorize arm: such a file is
+  // `chunked:true`, so findChunkedFilesByScope returns it, and one of its chunks can also be
+  // oversized. One entry per file, because the caller enqueues one chunk job per entry and the count
+  // is rendered to the owner as a file count.
+  it('reports a file that is BOTH stranded and under-chunked exactly once', async () => {
+    const deps = makeDeps([{ id: 'f1', userId: 'u' }], ['f1'], [{ id: 'f1', userId: 'u' }]);
+    const result = await detectUnderChunkedFiles(lake, deps);
+    expect(result).toEqual([{ fabFileId: 'f1', userId: 'u' }]);
+  });
+
   it('passes the lake file ids and the default threshold to the chunk query', async () => {
     const files = [
       { id: 'f1', userId: 'u' },

@@ -78,9 +78,15 @@ describe('isRetrievalExcluded', () => {
     expect(isRetrievalExcluded(marked, { vectorizedOnly: true, excludeFilenameMarkers: ['MARK'] })).toBe(true);
   });
 
-  it('does not exempt the vectorize-arm marker - that file keeps its chunks and is served', () => {
+  it('exempts the vectorize-arm marker too, so it reaches the withhold on a vectorizedOnly lake', () => {
+    // This assertion used to be the opposite, on the premise that a vectorize-arm file "keeps its
+    // chunks and is served". QA disproved it live: the search read path requires
+    // `vector: {$exists: true, $ne: []}`, so a file with chunks and zero vectors returns nothing while
+    // its neighbours are re-ranked into the top-K - the answer confidently contradicted the missing
+    // document. Both arms must reach partitionByIndexAvailability to be refused and NAMED.
     const vectorizePaused = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_NOTE };
-    expect(isRetrievalExcluded(vectorizePaused, { vectorizedOnly: true })).toBe(true);
+    expect(isRetrievalExcluded(vectorizePaused, { vectorizedOnly: true })).toBe(false);
+    expect(filterRetrievalExcluded([vectorizePaused], { vectorizedOnly: true })).toEqual([vectorizePaused]);
   });
 
   it('combines both rules (either triggers exclusion)', () => {

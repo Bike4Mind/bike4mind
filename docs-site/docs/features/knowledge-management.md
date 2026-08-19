@@ -93,9 +93,13 @@ Check these in order, all of them visible in the plan the button reads:
   single lake. Starting a run while it is already paused changes nothing at all - it is refused
   before any file is touched. If the pause lands on a wave that is *already* running, the files it
   had reached keep their place in the queue but are not rebuilt: they are marked as having no
-  passages, reported that way in lake health, withheld from search results (which say so, and say
-  that waiting will not fix it), and re-offered by the next convergence run once the pause is
-  lifted. They do not rebuild themselves - someone has to run convergence again, or reprocess them.
+  searchable passages, reported that way in lake health, withheld from search results (which say so,
+  and say that waiting will not fix it), and offered by **Rebuild passages** once the pause is
+  lifted. They do not rebuild themselves - someone has to rebuild the lake's passages, or reprocess
+  the files individually. Note that convergence itself may report nothing left to do for them: a file
+  the pause caught after its passages were rewritten is already *at* the target, so it is conformant
+  as far as convergence is concerned even though none of it is searchable. Repair is the rebuild
+  door's job, not the policy door's.
 :::
 
 Before it rewrites a large share of a lake, convergence **asks**. Rewriting most of a lake at once is

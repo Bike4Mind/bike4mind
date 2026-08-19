@@ -173,6 +173,14 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   const hasError = typeof member.error === 'string' && member.error.length > 0;
   // The kill switch marks an abandoned vectorize with `notes` and never with `error`, so this is the
   // second terminal-stall signal, not a redundant one. See LakeHealthMemberInput.notes.
+  //
+  // Correct WITHOUT a `chunkCount` guard of its own, but only because `commitFabFileChunks` clears
+  // the marker in the same transaction as the chunks it writes. Without that clear, a file the
+  // RESCUE SWEEP had already rebuilt would still carry the marker while legitimately mid-vectorize,
+  // be forced to settled here, and fail P3 on its real ratio - a normal rebuild flashing red, this
+  // block's own failure mode reached by another route. The clear is transactional, so it cannot be
+  // lost while the rebuild it describes lands; if it is ever made best-effort, this needs the guard
+  // `passagesRemoved` uses below.
   const abandonedByKillSwitch = isConvergencePausedNote(member.notes);
   // The CHUNK arm of the same switch, and the one case where absent rollups are not "unmeasured".
   // `resetChunkStateByIds` nulls all four rollups in the write that deletes the file's passages, so

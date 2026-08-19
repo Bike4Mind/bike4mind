@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
-import { ChunkClaimLostError } from '@bike4mind/common';
+import { ChunkClaimLostError, CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -307,6 +307,43 @@ describe('chunkFabfile', () => {
     };
     expect(updatedFile.serverTextHash).toBeNull();
     expect(updatedFile.serverTextHash).not.toBe(stale);
+  });
+
+  // The root-cause half of the "repaired file stays withheld forever" defect. The RESCUE SWEEP
+  // enqueues without a reset, and resetChunkStateByIds is the only other writer of `notes: ''`, so
+  // before this a fully re-chunked and re-vectorized file kept its kill-switch marker - and every
+  // reader keying on that note went on treating it as broken.
+  it('clears a convergence kill-switch marker when a rebuild succeeds', async () => {
+    for (const marker of [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE]) {
+      mockAdapter.db.fabFiles.update.mockClear();
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes: marker });
+
+      await chunkFabfile(
+        mockUser,
+        { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+        mockAdapter as never
+      );
+
+      const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { notes?: string };
+      expect(updatedFile.notes).toBe('');
+    }
+  });
+
+  // The payload is a `$set` of named fields, so an unconditional `notes: ''` would erase an unrelated
+  // note on EVERY ordinary re-chunk. The key must be absent, not empty - `toBeUndefined` alone would
+  // also pass for `notes: undefined`, which Mongoose would still strip, so assert the key is missing.
+  it('leaves an unrelated note untouched - the clear is conditional, not an unconditional wipe', async () => {
+    const unrelated = 'No extractable text: scanned image';
+    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes: unrelated });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
+    expect('notes' in updatedFile).toBe(false);
   });
 });
 

@@ -1,4 +1,4 @@
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, isMemberIndexingInFlight } from '@bike4mind/common';
+import { isConvergencePausedNote, isMemberIndexingInFlight } from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
 
 /**
@@ -91,17 +91,35 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
   const withheld: T[] = [];
   for (const file of files) {
     const chunkCount = file.chunkCount ?? 0;
-    // The chunkless EXCEPTION: a file the kill switch stalled mid-RE-CHUNK has no chunks because its
-    // own were deleted, so the "nothing to contribute either way" reasoning above does not apply -
-    // it had content and the corpus now has a hole where it was. Withheld, so the hole is reported
-    // rather than answered around.
+    // The kill-switch EXCEPTION to the `chunkCount > 0` rule above: a file either arm of the switch
+    // stalled has no SEARCHABLE passage even when it has chunks, so "nothing to contribute either
+    // way" does not apply - it had content and the corpus now has a hole where it was. Withheld, so
+    // the hole is reported rather than answered around.
     //
-    // Deliberately the CHUNK marker only, not `isConvergencePausedNote`. The vectorize arm of the
-    // same switch leaves a file with chunks but no vectors, and the decision there is to SERVE it
-    // (see the terminally-failed reasoning above): it is permanent, so withholding would mark every
-    // search on that lake partial forever. This one is different on the point that reasoning turns
-    // on - it is repairable, and the prose below names the repair.
-    if (file.notes === CONVERGENCE_PAUSED_CHUNK_NOTE) withheld.push(file);
+    // The condition is EITHER marker AND zero vectorized chunks, i.e. "marked stalled and nothing of
+    // it is retrievable right now". Both halves are load-bearing, and each was a live defect:
+    //
+    // - Keying on the CHUNK marker alone served the vectorize arm, on the false premise that such a
+    //   file "is served" and is "permanent". Neither holds. The search read path filters
+    //   `vector: {$exists: true, $ne: []}`, so a file with 45 chunks and 0 vectors returns nothing
+    //   while its neighbours are re-ranked into the top-K - measured live, the answer confidently
+    //   contradicted the missing document. And reprocess repairs it in seconds, so it is repairable
+    //   by the same prose the chunk arm already prints.
+    // - Keying on a marker alone, with no vector condition, withheld a REPAIRED file forever: the
+    //   rescue sweep enqueues without a reset, and nothing on that success path used to clear
+    //   `notes`, so a fully re-chunked and re-vectorized file kept its marker and stayed
+    //   permanently unsearchable while every search on the lake reported partial.
+    //
+    // Splitting on the VECTOR COUNT rather than on which marker was written is what makes both
+    // correct at once, and it keeps the one case that genuinely is servable servable: a partially
+    // vectorized file (40 of 90) really does return its embedded passages, so it ranks normally.
+    //
+    // A null count (predates the field) is read as zero and withheld: with the marker present we
+    // cannot show anything is retrievable, and this feature's rule is refuse-and-report over
+    // degrade-silently. `commitFabFileChunks` clearing the marker on a successful rebuild is the
+    // other half of this - see the note there; this guard is what holds if that write is lost.
+    const hasNoRetrievablePassage = (file.vectorizedChunkCount ?? 0) === 0;
+    if (isConvergencePausedNote(file.notes) && hasNoRetrievablePassage) withheld.push(file);
     else if (chunkCount > 0 && isMemberIndexingInFlight({ ...file, chunkCount })) withheld.push(file);
     else servable.push(file);
   }
@@ -112,10 +130,13 @@ const nameSample = (files: readonly IndexStateFile[]) =>
   files.slice(0, SAMPLE_CAP).map(f => ({ fileId: f.id, fileName: f.fileName }));
 
 export function buildRetrievalUnavailableReport(withheld: readonly IndexStateFile[]): RetrievalUnavailableReport {
-  // Split by the marker, not by chunk count: the two buckets differ only in whether waiting fixes
-  // them, and that is exactly what the prose below tells the reader to do.
-  const paused = withheld.filter(f => f.notes === CONVERGENCE_PAUSED_CHUNK_NOTE);
-  const indexing = withheld.filter(f => f.notes !== CONVERGENCE_PAUSED_CHUNK_NOTE);
+  // Split on "was the kill switch what stopped this", not on chunk count and not on WHICH arm: the
+  // two buckets differ only in whether waiting fixes them, and that is exactly what the prose below
+  // tells the reader to do. Both arms are alike on that point and neither auto-resumes - a dropped
+  // vectorize message has no producer that will re-send it - so bucketing the vectorize arm as
+  // `indexing` would print "they will return on their own" about a file that never will.
+  const paused = withheld.filter(f => isConvergencePausedNote(f.notes));
+  const indexing = withheld.filter(f => !isConvergencePausedNote(f.notes));
   return {
     indexing: { count: indexing.length, sample: nameSample(indexing) },
     paused: { count: paused.length, sample: nameSample(paused) },
@@ -151,10 +172,14 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     // keeps this promise honest: convergence refuses a lake whose policy is inherited, so clearing
     // `requiredPassageTokenTarget` would otherwise retract the only repair while this text went on
     // advertising one. "Reprocessed" is the policy-independent door - "Rebuild passages"
-    // (detectUnderChunkedFiles) selects these members by the same marker, on any lake.
+    // (detectUnderChunkedFiles) selects these members by the same marker, on any lake, for BOTH arms.
+    //
+    // Worded for both arms deliberately. The chunk arm's passages were deleted; the vectorize arm's
+    // exist but carry no vector, and the search read path requires one - so "no searchable passages
+    // at all" is literally true of both, while naming the re-chunk specifically was true of one.
     sentences.push(
-      `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: a re-chunk ` +
-        'removed them and was then paused, so they were withheld. Unlike re-indexing files these do NOT return on ' +
+      `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: re-processing ` +
+        'them was paused partway, so they were withheld. Unlike re-indexing files these do NOT return on ' +
         'their own - an administrator has to resume convergence, or the files have to be reprocessed.'
     );
   }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FabFile, FabFileChunk, fabFileRepository, fabFileChunkRepository } from '../models/content/FabFileModel';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import { setupMongoTest } from '../__test__/utils';
 
 const TAG = 'datalake:rebuild-test';
@@ -106,18 +106,39 @@ describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
     await FabFile.deleteMany({});
   });
 
-  it('finds the shape neither other read can see: chunkless, no error, marker set', async () => {
+  it('finds both arms: nothing retrievable, no error, marker set', async () => {
     // What a halted wave leaves behind. `findChunkedFilesByScope` needs chunked:true and
     // `countFailedFilesByScope` needs a non-empty error, so without this read the rebuild door
     // reported underChunkedCount 0 and hid its own button on the lake that needed it.
-    const [stranded] = await FabFile.create([
+    const [strandedChunkArm] = await FabFile.create([
       makeFile({ userId: 'u1', chunked: false, chunkCount: 0, error: null, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+    ]);
+    // The VECTORIZE arm, and the one QA actually hit - it outnumbered the chunk arm ~33 to 1 live.
+    // Chunks exist and are correctly sized, so `chunked:true` puts it in findChunkedFilesByScope's
+    // set but findUnderChunkedFabFileIds has no oversized chunk to flag. It carries no vector, so the
+    // search read path returns nothing for it: QA measured a lake at `Reachable 41%` offering neither
+    // Converge nor Rebuild, because convergence graded these conformant and this read passed over them.
+    const [strandedVectorizeArm] = await FabFile.create([
+      makeFile({
+        userId: 'u1',
+        chunked: true,
+        chunkCount: 45,
+        vectorizedChunkCount: 0,
+        error: null,
+        notes: CONVERGENCE_PAUSED_NOTE,
+      }),
     ]);
     await FabFile.create([
       makeFile({ userId: 'u1', chunked: false, chunkCount: 0 }), // chunkless, but never had passages
       // Marker outlived a rescue-sweep rebuild (that path never resets, so `notes` survives) - the
-      // file is healthy again and must NOT be re-selected.
-      makeFile({ userId: 'u1', chunkCount: 4, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+      // file is healthy again and must NOT be re-selected. vectorizedChunkCount MUST be set to a
+      // positive number here: leaving it at its 0 default describes a file with chunks and no vectors,
+      // which is the stranded vectorize arm above, not a repaired file - so the fixture would pass
+      // against a read that ignores the vector count entirely.
+      makeFile({ userId: 'u1', chunkCount: 4, vectorizedChunkCount: 4, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+      // Partially vectorized: some passages DO rank, so the repair door leaves it alone (same split
+      // partitionByIndexAvailability makes).
+      makeFile({ userId: 'u1', chunkCount: 90, vectorizedChunkCount: 40, notes: CONVERGENCE_PAUSED_NOTE }),
       makeFile({ userId: 'u2', chunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE, isChunking: true }),
       makeFile({ userId: 'u2', chunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE, deletedAt: new Date() }),
       makeFile({
@@ -129,7 +150,9 @@ describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
     ]);
 
     const result = await fabFileRepository.findConvergencePausedFilesByScope(scope);
-    expect(result).toEqual([{ id: stranded._id.toString(), userId: 'u1' }]);
+    expect(result.map(r => r.id).sort()).toEqual(
+      [strandedChunkArm._id.toString(), strandedVectorizeArm._id.toString()].sort()
+    );
   });
 });
 

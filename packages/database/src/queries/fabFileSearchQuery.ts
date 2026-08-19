@@ -1,6 +1,6 @@
 import {
   CODE_FILE_MIME_TYPES,
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  CONVERGENCE_PAUSED_NOTES,
   normalizeTagPrefix,
   type DataLakeMembershipScope,
 } from '@bike4mind/common';
@@ -496,10 +496,11 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   if (options?.vectorizedOnly) {
     // Same exemption, same reason, as `isRetrievalExcluded`'s in-memory arm - and it has to be here
     // too, or the file is dropped by the DB before the authoritative post-filter can spare it. A
-    // member whose passages a halted convergence wave deleted is unvectorized because its content
-    // was taken away; it must reach `partitionByIndexAvailability` to be withheld and REPORTED
-    // rather than silently absent. Keep the two predicates in sync.
-    andConditions.push({ $or: [{ vectorized: true }, { notes: CONVERGENCE_PAUSED_CHUNK_NOTE }] });
+    // member the convergence kill switch stalled is unvectorized because its content was taken away;
+    // it must reach `partitionByIndexAvailability` to be withheld and REPORTED rather than silently
+    // absent. `$in` over CONVERGENCE_PAUSED_NOTES so this covers EITHER arm and cannot drift from
+    // `isConvergencePausedNote`, which the in-memory arm now calls. Keep the two in sync.
+    andConditions.push({ $or: [{ vectorized: true }, { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } }] });
   }
   // Matched against the pre-lowered, indexed `fileNameLower` (no $options:'i' - index-safe).
   const markerRegex = buildFilenameMarkerRegex(options?.excludeFilenameMarkers);

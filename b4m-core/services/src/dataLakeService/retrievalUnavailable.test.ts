@@ -36,11 +36,36 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
     expect(partitionByIndexAvailability([{ ...settled, vectorizedChunkCount: 0, error: 'boom' }]).withheld).toEqual([]);
   });
 
-  // Same reasoning, reached by the other route: the kill switch abandons a vectorize via `notes`
-  // and never sets `error`, and its own log states these do not auto-resume.
-  it('serves a kill-switch-abandoned file rather than withholding it forever', () => {
+  // This assertion was the OPPOSITE, on the premise that such a file "is served" and that the state
+  // is "permanent". QA disproved both live: with zero vectors the search read path
+  // (`vector: {$exists: true, $ne: []}`) returns nothing for it, and reprocess repaired one in ~9s.
+  // Measured on a lake of 8 stranded / 4 healthy, the turn reported no partial flag and drew a
+  // corpus-wide conclusion that every one of the missing notes contradicted. It is the DOMINANT arm
+  // in practice - QA counted ~33 vectorize-arm strandings to 1 chunk-arm - so this was the hole
+  // operators actually hit.
+  it('withholds a kill-switch-abandoned file with zero vectors - nothing of it is retrievable', () => {
     const paused = { ...settled, vectorizedChunkCount: 0, notes: CONVERGENCE_PAUSED_NOTE };
-    expect(partitionByIndexAvailability([paused]).withheld).toEqual([]);
+    expect(partitionByIndexAvailability([paused]).withheld.map(f => f.id)).toEqual(['f1']);
+  });
+
+  // The carve-out that keeps the above from over-withholding: a PARTIALLY vectorized file genuinely
+  // does return its embedded passages, so it ranks normally. This is why the predicate splits on the
+  // vector count rather than on which marker was written.
+  it('serves a partly-vectorized kill-switch-abandoned file - its embedded passages still rank', () => {
+    const partly = { ...settled, chunkCount: 90, vectorizedChunkCount: 40, notes: CONVERGENCE_PAUSED_NOTE };
+    expect(partitionByIndexAvailability([partly]).withheld).toEqual([]);
+  });
+
+  // The other direction, and the defect that had NO test: the marker outlives a rebuild the rescue
+  // sweep performs (it enqueues without a reset), so keying on the note alone withheld a fully
+  // re-chunked and re-vectorized file FOREVER, and reported the whole lake partial with it. The
+  // vector count is what distinguishes repaired from stranded. commitFabFileChunks also clears the
+  // marker now; this asserts the reader holds even if that clear is ever lost.
+  it('serves a REPAIRED file that still carries the marker - it has vectors again', () => {
+    for (const notes of [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE]) {
+      const repaired = { ...settled, chunkCount: 8, vectorizedChunkCount: 8, notes };
+      expect(partitionByIndexAvailability([repaired]).withheld).toEqual([]);
+    }
   });
 
   // The one chunkless file that IS withheld, and the state QA found reaching every surface as
@@ -80,6 +105,22 @@ describe('buildRetrievalUnavailableReport', () => {
     expect(report.paused.count).toBe(1);
     expect(report.paused.sample).toEqual([{ fileId: 'f2', fileName: 'stranded.pdf' }]);
     expect(report.partial).toBe(true);
+  });
+
+  // EITHER arm buckets as paused. Bucketing the vectorize arm as `indexing` would print "they will
+  // return on their own" about a file that never will: a dropped vectorize message has no producer
+  // that re-sends it, which is the one thing this prose must not get wrong.
+  it('buckets a paused-VECTORIZE file as paused, not as merely re-indexing', () => {
+    const report = buildRetrievalUnavailableReport([
+      { id: 'f1', fileName: 'indexing.pdf' },
+      { id: 'f2', fileName: 'novectors.pdf', notes: CONVERGENCE_PAUSED_NOTE },
+    ]);
+    expect(report.indexing.count).toBe(1);
+    expect(report.paused.count).toBe(1);
+    expect(report.paused.sample).toEqual([{ fileId: 'f2', fileName: 'novectors.pdf' }]);
+    const prose = describeRetrievalUnavailable(report);
+    expect(prose).toContain('do NOT return on');
+    expect(prose).toContain('no searchable passages at all');
   });
 
   it('caps the sample but keeps the count exact', () => {

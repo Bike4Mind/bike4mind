@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_NOTES } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
   buildOwnershipConditions,
@@ -741,12 +741,17 @@ describe('buildFabFileSearchQuery', () => {
     const findMarkerClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(c => 'fileNameLower' in c) as
         { fileNameLower: { $not: RegExp } } | undefined;
-    const hasVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
-      ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).some(
-        c =>
-          JSON.stringify(c) ===
-          JSON.stringify({ $or: [{ vectorized: true }, { notes: CONVERGENCE_PAUSED_CHUNK_NOTE }] })
+    // Structural, not a hardcoded literal: the clause's `notes` arm is asserted against
+    // CONVERGENCE_PAUSED_NOTES in the test below, so adding a stall marker fails there rather than
+    // making this matcher silently stop finding the clause.
+    const findVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
+      ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(
+        (c): c is { $or: [{ vectorized: boolean }, { notes: { $in: string[] } }] } =>
+          Array.isArray((c as { $or?: unknown[] }).$or) &&
+          (c as { $or: Record<string, unknown>[] }).$or.some(arm => 'vectorized' in arm)
       );
+    const hasVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
+      findVectorizedClause(result) !== undefined;
 
     it('adds a fileNameLower $not clause with a DocumentDB-safe regex when markers are set', () => {
       const result = buildFabFileSearchQuery(makeParams({ options: { excludeFilenameMarkers: ['MARK'] } }));
@@ -782,13 +787,21 @@ describe('buildFabFileSearchQuery', () => {
       expect(re.test('axb file.pdf')).toBe(false); // '.' is literal, not wildcard
     });
 
-    it('adds a vectorized clause when vectorizedOnly is set, exempting convergence-stranded files', () => {
-      // The exemption is not cosmetic: a member whose passages a halted wave deleted is
-      // `vectorized: false`, and dropping it HERE is upstream of the in-memory post-filter and of
+    it('adds a vectorized clause when vectorizedOnly is set, exempting BOTH convergence-paused arms', () => {
+      // The exemption is not cosmetic: a member the kill switch stalled is unvectorized because its
+      // content was taken away, and dropping it HERE is upstream of the in-memory post-filter and of
       // partitionByIndexAvailability - so a vectorizedOnly lake would answer around the hole and
       // report full coverage. Must stay in sync with isRetrievalExcluded's own arm.
+      //
+      // Asserted against CONVERGENCE_PAUSED_NOTES itself rather than a literal, so adding a third
+      // stall marker cannot leave this passing while the query silently stops exempting it.
       const result = buildFabFileSearchQuery(makeParams({ options: { vectorizedOnly: true } }));
-      expect(hasVectorizedClause(result)).toBe(true);
+      const clause = findVectorizedClause(result);
+      expect(clause).toBeDefined();
+      expect(clause!.$or[0]).toEqual({ vectorized: true });
+      expect(clause!.$or[1].notes.$in).toEqual([...CONVERGENCE_PAUSED_NOTES]);
+      expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_CHUNK_NOTE);
+      expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_NOTE);
     });
 
     it('does NOT clobber a plain-search fileName filter (markers push to $and, not baseFilter)', () => {

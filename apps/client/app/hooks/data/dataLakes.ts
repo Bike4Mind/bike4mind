@@ -779,6 +779,18 @@ export function useConvergeDataLake(dataLakeId: string | null) {
           `Converging ${data.enqueued} file(s) to the lake's chunk policy. ` +
             'They are unsearchable until re-indexing completes.'
         );
+        // A PARTIAL queue failure - some sends landed, some were rejected - takes this arm and never
+        // reaches the `stranded` branch below, so the success toast alone would report only the good
+        // half. The rejected files are in the state that branch describes: reset, their chunk rows
+        // orphaned, out of search, with nothing scheduled to rebuild them. A throttle or a handful of
+        // rejected sends is at least as likely as a total outage, so this is appended rather than
+        // restructuring the chain, which would lose the count of what DID start.
+        if (data.stranded > 0) {
+          toast.error(
+            `${data.stranded} of them could not be started - the chunking queue rejected the request. Those files ` +
+              'are out of search until this run is repeated.'
+          );
+        }
       } else if (data.stranded > 0) {
         // Files were reset and then nothing reached the queue. Checked before the two "nothing to
         // do" branches below: these are sitting at chunked:false / chunkCount:0 with their old chunk
