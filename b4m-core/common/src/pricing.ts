@@ -142,3 +142,36 @@ export const usdToCreditsStochastic = (
   const fraction = raw - base;
   return base + (rng() < fraction ? 1 : 0);
 };
+
+/**
+ * Output tokens the pre-flight credit hold prices when a request's max_tokens
+ * ceiling exceeds it.
+ *
+ * max_tokens is a *ceiling*, not a prediction: adaptive reasoning models stop at
+ * end_turn well short of it, so pricing the hold at the full window (128K on the
+ * flagship models) reserved several thousand credits per turn regardless of answer
+ * length. The excess was always refunded at settlement, but the hold IS the
+ * insufficient-funds gate, so users whose balance sat between their real cost and
+ * the worst case were falsely blocked.
+ *
+ * 16K covers the realistic long answer with headroom - the largest replies seen in
+ * practice are HTML-artifact turns at roughly 10-11K output tokens (see
+ * buildThinkingParams in llm-adapters/thinkingParams.ts, whose max_tokens floor was
+ * sized off the same measurement).
+ *
+ * UNDER-RESERVATION IS ACCEPTED, NOT PREVENTED. A turn that emits more than this
+ * settles as a shortfall debit at reconciliation, which is already a supported path
+ * (see computeSettlementDelta in services/llm/ChatCompletionProcess.ts: provider-basis
+ * settlement could always exceed a hold priced on the local estimate). Worst case a
+ * holder whose balance is exhausted by the shortfall has the remainder written off -
+ * once, since the resulting zero balance blocks the next turn at its own gate.
+ */
+export const PREFLIGHT_RESERVATION_OUTPUT_TOKENS = 16_384;
+
+/**
+ * Output-token figure to price a pre-flight credit hold at, given the max_tokens
+ * this request will actually send. Never raises the caller's ceiling: a request
+ * that asks for less than the cap holds only what it can possibly spend.
+ */
+export const reservationOutputTokens = (requestedMaxTokens: number): number =>
+  Math.min(requestedMaxTokens, PREFLIGHT_RESERVATION_OUTPUT_TOKENS);

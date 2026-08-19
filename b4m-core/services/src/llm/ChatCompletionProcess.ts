@@ -56,6 +56,7 @@ import {
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
+  reservationOutputTokens,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
   getLastBuildDebugInfo,
@@ -2408,7 +2409,12 @@ export class ChatCompletionProcess {
         // Atomic pre-reservation: reserve estimated credits BEFORE streaming begins
         // This prevents race conditions where concurrent requests overdraw the balance.
         // Pattern: bare $inc + check + rollback (consistent with cliCompletions.ts)
-        const usdCost = getTextModelCost(modelInfo, inputTokens, safeMaxTokens);
+        //
+        // Priced on a realistic output size, NOT safeMaxTokens: that is a ceiling the
+        // model usually stops far short of, and holding it would gate the turn on a cost
+        // it will not incur. See reservationOutputTokens for the under-reservation
+        // tradeoff this accepts; settlement below charges actual usage either way.
+        const usdCost = getTextModelCost(modelInfo, inputTokens, reservationOutputTokens(safeMaxTokens));
         const requiredCredits = usdToCredits(usdCost);
 
         // Determine credit holder (user or org)

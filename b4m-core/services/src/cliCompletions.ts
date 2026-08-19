@@ -19,6 +19,7 @@ import {
 import {
   usdToCredits,
   usdToCreditsStochastic,
+  reservationOutputTokens,
   getSettingsMap,
   getSettingsValue,
   getSettingsByNames,
@@ -258,9 +259,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let reservedCredits = 0;
 
   if (enforceCredits && modelInfo) {
-    // Estimate cost based on input message length + maxTokens for output
+    // Estimate cost from the input message length plus a realistic output size -
+    // maxTokens is a ceiling, and holding it would gate the request on a cost it
+    // will not incur (see reservationOutputTokens). Settlement below charges actual usage.
     const estimatedInputTokens = estimateInputTokens(messages);
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, maxTokens);
+    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, reservationOutputTokens(maxTokens));
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
