@@ -110,8 +110,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const activeTab: DataLakeSettingsTab =
     (tab === 'spend' && !showSpendTab) || (tab === 'history' && !showHistoryTab) ? 'settings' : tab;
   const showTabs = showSpendTab || showHistoryTab;
+  // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
+  // them means a future narrow read-only tab silently gets a Save button it must not have.
   // Both non-settings panels are tabular and need the room; the settings form does not.
   const isWideTab = activeTab === 'spend' || activeTab === 'history';
+  const isReadOnlyTab = activeTab === 'spend' || activeTab === 'history';
   const { accounts, selectedAccount } = useAccounts();
   // Promotion targets the active account-switcher org, so the toggle is enabled only in a
   // Team context (a non-personal account selected) - matching what the create/visibility
@@ -473,7 +476,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           </DialogContent>
           {/* Save/Cancel apply to the Settings form only - the read-only Spend and History tabs
               have nothing to save, so these belong to that tab, not the modal as a whole. */}
-          {!isWideTab && (
+          {!isReadOnlyTab && (
             <DialogActions>
               <Button
                 variant="solid"
