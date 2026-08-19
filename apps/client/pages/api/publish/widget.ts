@@ -66,6 +66,9 @@ const WIDGET_JS = String.raw`(function () {
    * per poll, forever, which is precisely the rate-limit exhaustion the lazy design exists to
    * prevent. A page reload clears it, which is the right granularity - if the viewer unlocks the
    * gate in another tab, they reload to see comments anyway.
+   *
+   * NOTE it is a single page-lifetime latch shared by the list, can-comment and the POST, not
+   * one per endpoint: a 401 no credential can fix on any of them stops the others retrying too.
    */
   var authCannotFix = false;
 
@@ -94,6 +97,21 @@ const WIDGET_JS = String.raw`(function () {
   }
 
   /**
+   * The lowest stage known to be NECESSARY on this artifact, learned once per page. Without it
+   * the ladder is re-climbed on every request, and since stage 0 always sees a token held by
+   * then, each cycle takes the force branch and mints a fresh one - the same runaway
+   * authCannotFix exists to end, relocated out of the failure case and into the SUCCESS case.
+   * The reachable configuration is a passphrase-gated artifact the viewer has already unlocked:
+   * the proof is a cookie, so stages 0 and 1 both 401 and only stage 2 ever gets in.
+   *
+   * Only ever latches to 2, never 1. Stages 0 and 1 send byte-identical requests - headers()
+   * reads the module-level token either way - so remembering 1 would save no traffic while
+   * permanently skipping the only branch that re-exchanges a stale token, and a published
+   * artifact page routinely outlives the 30-minute access-token TTL more than once.
+   */
+  var baseStage = 0;
+
+  /**
    * Fetch, escalating only as far as a 401 forces. This is the single place a gated artifact is
    * discovered: the widget is never told the artifact's visibility, it learns from a 401 that
    * the request needed something it had not yet presented.
@@ -116,20 +134,25 @@ const WIDGET_JS = String.raw`(function () {
    * page can produce will help and retrying is pure cost.
    */
   function authedFetch(url, init, stage) {
-    var s = stage || 0;
+    var s = Math.max(stage || 0, baseStage);
     // Copy rather than mutate: opts IS init when init is truthy, so writing headers/credentials
     // onto it would scribble on the caller's object and on the retry's own input.
     var opts = init ? Object.assign({}, init) : {};
     opts.headers = headers(opts.method === 'POST');
     opts.credentials = s >= 2 ? 'same-origin' : 'omit';
     return fetch(url, opts).then(function (r) {
+      // A stage we had to climb to that WORKED is where every later request should start.
+      if (r.ok && s >= 2) baseStage = 2;
       if (r.status !== 401 || authCannotFix) return r;
       if (s === 0) {
         // Force a re-exchange only when we HELD a token that went stale. Holding none means the
         // cached negative stands, so a signed-out viewer makes one attempt per page, not one per
         // poll.
         return ensureToken(!!token).then(function (t) {
-          return t ? authedFetch(url, init, 1) : r;
+          // Escalate to the cookie even with NO token: a passphrase proof needs no session
+          // (checkAccessGate admits on passphraseVerified alone), so an anonymous viewer who
+          // unlocked the gate must reach stage 2 as well.
+          return authedFetch(url, init, t ? 1 : 2);
         });
       }
       if (s === 1) return authedFetch(url, init, 2);
@@ -498,8 +521,10 @@ const WIDGET_JS = String.raw`(function () {
     // Polls hit the cacheable LIST endpoint only (no per-viewer data) so the CDN
     // can collapse the fan-out across viewers. Sends whatever credential we already hold and
     // refreshes it on a 401 (the access token's TTL is far shorter than a page can stay open),
-    // but never ACQUIRES one - a poll must not start auth traffic the page had not already
-    // earned by opening the panel or loading a gated list.
+    // but does not acquire one once the page has settled - a poll must not start auth traffic
+    // the page had not already earned by opening the panel or loading a gated list. (A poll CAN
+    // acquire in one narrow case: if loadList's first request died on a network error rather
+    // than a 401, tokenPromise is still null and stage 0's ensureToken will start an exchange.)
     authedFetch(API, {})
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {

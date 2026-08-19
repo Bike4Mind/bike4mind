@@ -56,8 +56,12 @@ function res(status: number, body: unknown): Response {
  *  - `neverAdmits` 401s the list NO MATTER WHAT, which is the passphrase-gated artifact viewed
  *    by a non-owner: the proof is a cookie, so no Bearer can ever satisfy it. This is the shape
  *    that ran away, re-exchanging once per poll forever.
+ *  - `cookieAdmits` 401s the list until the proof cookie rides along, which is the passphrase-
+ *    gated artifact the viewer has ALREADY UNLOCKED - the configuration the escalation ladder
+ *    exists to serve, and the one where a ladder that is re-climbed every poll runs away in the
+ *    success case rather than the failure one.
  */
-function stubFetch(opts: { signedIn: boolean; gated?: boolean; neverAdmits?: boolean }) {
+function stubFetch(opts: { signedIn: boolean; gated?: boolean; neverAdmits?: boolean; cookieAdmits?: boolean }) {
   const fetchStub = vi.fn((url: string, init?: RequestInit) => {
     calls.push({ url, init });
     const authed = !!(init?.headers as Record<string, string> | undefined)?.Authorization;
@@ -66,6 +70,9 @@ function stubFetch(opts: { signedIn: boolean; gated?: boolean; neverAdmits?: boo
       return Promise.resolve(opts.signedIn ? res(200, { accessToken: 'fresh.token' }) : res(401, {}));
     }
     if (opts.neverAdmits && !url.includes(CAN_COMMENT)) {
+      return Promise.resolve(res(401, { error: 'Passphrase required' }));
+    }
+    if (opts.cookieAdmits && !url.includes(CAN_COMMENT) && init?.credentials !== 'same-origin') {
       return Promise.resolve(res(401, { error: 'Passphrase required' }));
     }
     if (url.includes(CAN_COMMENT)) {
@@ -103,6 +110,10 @@ async function runWidget(): Promise<void> {
 
 function refreshCalls(): StubbedCall[] {
   return calls.filter(c => c.url.includes(REFRESH));
+}
+
+function listCalls(): StubbedCall[] {
+  return calls.filter(c => !c.url.includes(REFRESH) && !c.url.includes(CAN_COMMENT));
 }
 
 function clickLauncher(): void {
@@ -227,6 +238,47 @@ describe('publish comment widget - credential path', () => {
     const listCalls = calls.filter(c => !c.url.includes(REFRESH) && !c.url.includes(CAN_COMMENT));
     expect(listCalls[0]?.init?.credentials).toBe('omit'); // first attempt stays cookie-free
     expect(listCalls.some(c => c.init?.credentials === 'same-origin')).toBe(true);
+  });
+
+  // REGRESSION GUARD, the mirror of the one above. The latch only fired when the top of the
+  // ladder FAILED, so when it SUCCEEDED nothing was remembered: every later request restarted at
+  // stage 0, where a token is always held by then, and minted a fresh one. On a passphrase-gated
+  // artifact the viewer has unlocked - where only the cookie stage ever gets in - that was again
+  // one exchange per poll forever, plus 3x list amplification.
+  it('settles on the stage that worked instead of re-climbing the ladder every poll', async () => {
+    stubFetch({ signedIn: true, cookieAdmits: true });
+
+    await runWidget();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshCalls()).toHaveLength(1);
+    expect(listCalls()).toHaveLength(3); // the ladder, climbed once: omit -> omit+Bearer -> cookie
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // ten closed-panel poll cycles
+
+    // Flat, not growing: the exchange is not repeated, and each poll costs ONE list request
+    // rather than re-walking all three.
+    expect(refreshCalls()).toHaveLength(1);
+    expect(listCalls()).toHaveLength(13);
+    expect(
+      listCalls()
+        .slice(3)
+        .every(c => c.init?.credentials === 'same-origin')
+    ).toBe(true);
+  });
+
+  it('sends the proof cookie for a signed-out viewer who has unlocked the gate', async () => {
+    // checkAccessGate admits on passphraseVerified ALONE, with no user - so escalation to the
+    // cookie must not be conditional on having obtained a token, or the #1811 symptom (existing
+    // comments invisible to a reader allowed to see them) survives on the passphrase rung for
+    // every viewer without a session.
+    stubFetch({ signedIn: false, cookieAdmits: true });
+
+    await runWidget();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(listCalls().some(c => c.init?.credentials === 'same-origin')).toBe(true);
+    expect(document.getElementById('b4m-launch')?.textContent).toContain('1');
+    expect(refreshCalls()).toHaveLength(1); // still exactly one attempt per page
   });
 
   it('keeps the open-public list request cookie-free, since it never 401s', async () => {
