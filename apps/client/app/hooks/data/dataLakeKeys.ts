@@ -77,4 +77,12 @@ export const dataLakeKeys = {
   configHistoryOf: (dataLakeId: string) => ['dataLakeConfigHistory', dataLakeId] as const,
   /** Invalidation prefix covering every lake's config history. */
   configHistoryRoot: ['dataLakeConfigHistory'] as const,
+  /**
+   * One lake's acquisition review queue (GET /api/data-lakes/:id/proposals), #1671. Outside `list`
+   * for the same reason as `spend`: `list` is the shared invalidation prefix for renames and
+   * visibility changes, and the queue has nothing to do with those.
+   */
+  proposals: (dataLakeId: string | null, status?: string) => ['dataLakeProposals', dataLakeId, { status }] as const,
+  /** Invalidation prefix covering every status variant of one lake's queue. */
+  proposalsOf: (dataLakeId: string) => ['dataLakeProposals', dataLakeId] as const,
 };

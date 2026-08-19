@@ -1041,6 +1041,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async findByServerTextHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
+    if (hashes.length === 0) return [];
+    const result = await this.fabFileModel.find({
+      serverTextHash: { $in: hashes },
+      deletedAt: null,
+      archivedAt: null,
+      tags: { $elemMatch: { name: datalakeTag } },
+      // Same orphan-pending exclusion as findByContentHashesInDataLake: a file whose ingest never
+      // completed is not a live member, and treating it as one would suppress a legitimate proposal.
+      status: { $ne: 'pending' },
+    });
+    return result.map(d => d.toJSON());
+  }
+
   async findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
     if (driveFileIds.length === 0) return [];
     // The recursive Drive walk can surface up to 100k children PER folder, so an unchunked $in
@@ -2007,6 +2021,12 @@ FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
+
+// Acquisition dedup (#1671): findByServerTextHashesInDataLake, an $in over the hash bounded by the
+// lake's meta-tag. Deferred from #1679 until this reader existed - the field had no consumer then.
+// Hash-first, not tag-first: the hash is by far the more selective of the two, and `tags.name` is a
+// multikey path that the other lake indexes already lead on.
+FabFileSchema.index({ serverTextHash: 1 });
 
 // Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
 FabFileSchema.index({ driveFileId: 1 });

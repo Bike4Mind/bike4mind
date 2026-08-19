@@ -34,6 +34,8 @@ export enum FabFileSourceType {
   SALESFORCE = 'salesforce',
   GOOGLE_DRIVE = 'google_drive',
   SLACK = 'slack',
+  /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
+  PROPOSAL_APPROVAL = 'proposal_approval',
 }
 
 // Data Lake metadata interface
@@ -891,6 +893,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * admitting a prefix match here would risk the wrong file for no gain.
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Files in a lake whose SERVER-VERIFIED extracted-text hash matches (META-TAG ONLY, mirroring
+   * findByContentHashesInDataLake). The acquisition queue's "the lake already holds this text"
+   * check (#1671): `serverTextHash` is stamped by the admission contract for every door, where
+   * `contentHash` is written by only the two presigned-URL uploads and never verified. Files that
+   * have not chunked yet carry no hash and so cannot match - a miss here means "not known to be
+   * present", never "known absent".
+   */
+  findByServerTextHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
    * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
    * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:
