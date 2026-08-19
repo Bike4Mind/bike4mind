@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const mockPostFeedbackToSlack = vi.fn().mockResolvedValue(undefined);
+const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
 vi.mock('@server/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
