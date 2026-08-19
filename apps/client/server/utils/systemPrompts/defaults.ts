@@ -92,6 +92,17 @@ HOW TO CARRY THIS
  * (replicated across two independent runs) while leaving the underspecified case intact: a request
  * with nothing to derive from still gets "name the missing inputs", not an invented formulation.
  *
+ * MUST STAY IN SYNC WITH `GROUNDED_NO_INVENTION_RULE` (b4m-core/services/src/llm/prompts/index.ts).
+ * That rule is co-resident with this router in every lake session - it is injected on the
+ * forced-retrieval success header and by both retrieval tools - and it says "do not state a specific
+ * ... figure unless it appears there ... say it is not covered rather than supplying one from general
+ * knowledge or assumption". Textually that pulls against the licence to compute below. The two
+ * reconcile through "label derived numbers as derived rather than retrieved": the rule governs facts
+ * asserted as retrieved, this step governs arithmetic presented as arithmetic. Both arms of the
+ * measurement below ran with that rule present, so the reconciliation is empirical, not theoretical -
+ * but if `GROUNDED_NO_INVENTION_RULE` is ever tightened to cover derived figures too, this step stops
+ * working and the tests here will NOT catch it (they assert only the router's own text).
+ *
  * Measured effect of the split, n=65 paired questions, arm W vs shipped in optihashi-eval:
  * composite +1.14 (CI [+0.05, +2.22]), no_invention +0.0000 (CI [-0.028, +0.028] - flat, so the
  * licence to derive does NOT buy invention), correct_refusal +0.050 (CI [+0.001, +0.099]).
@@ -141,6 +152,23 @@ HOW TO CARRY THIS
  * and covers naming what is missing rather than guessing, so the vague-request case is not unhandled.
  * And an instruction that does not fire is worse than an absent one: it reads as a capability in
  * review and in the admin editor while changing nothing at runtime.
+ *
+ * CONDITIONAL, as of the STEP 1 derivation split. ABSTENTION_PROMPT is genuinely always-on
+ * (ChatCompletionProcess.ts injects it on every in-app completion; only a promptMode strips it), and
+ * that first reason held while STEP 1 banned answering specific questions from memory outright. It
+ * does NOT hold once derivation is licensed: an arm carrying a BLANKET derivation licence - no
+ * missing-input clause - scored 90 -> 33 on "we have a lot of data about our supply chain, formalize
+ * the optimization problem", with ABSTENTION_PROMPT present throughout. It formalised an
+ * underspecified request instead of asking. So STEP 1's "name the missing inputs and ask for them"
+ * is load-bearing and is NOT redundant with ABSTENTION_PROMPT - do not delete it on the theory that
+ * the abstention licence already covers the case. It was measured not to.
+ *
+ * Note also that STEP 1's missing-input sentence IS, semantically, a narrow ask-for-what-is-missing
+ * step - scoped to derivations, not to vague requests in general. It trips none of the six spellings
+ * banned by the guard in defaults.test.ts, which is correct rather than lucky: that guard exists to
+ * catch a re-added WITHHOLD-RETRIEVAL step, and this asks for inputs without withholding retrieval.
+ * Recorded so the next reader is not left reconciling a block titled WHY THERE IS NO UNDERSPECIFIED
+ * STEP, a test asserting there is none, and prompt text that asks for missing inputs.
  */
 function buildTriageRouterPrompt(): DefaultSystemPrompt {
   return {
