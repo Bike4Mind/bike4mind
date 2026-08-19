@@ -99,8 +99,79 @@ function stripIpv6Brackets(hostname: string): string {
   return h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
 }
 
+/**
+ * Canonicalize an IPv6 literal to the RFC 5952 form - leading zeros dropped per hextet, longest run of
+ * two or more zero hextets compressed to `::`. That is the shape both feeders already hand this module
+ * (WHATWG `URL.hostname` at the `validateUrlForFetch` call site, and getaddrinfo answers via
+ * `ssrfSafeLookup`), so it is the shape every prefix arm in `isPrivateIPv6` was written against.
+ * Canonicalizing once here is what lets those arms cover a family instead of enumerating its legal
+ * spellings: `0:0:0:0:0:ffff:127.0.0.1` arrives as `::ffff:127.0.0.1` instead of matching nothing.
+ *
+ * A dotted IPv4 tail is deliberately kept dotted, unlike WHATWG which hexifies it. The mapped branch
+ * below decodes a dotted tail exactly through `isPrivateIPv4` and only blanket-refuses when the tail is
+ * hex, so hexifying here would turn `::ffff:8.8.8.8` into an over-block.
+ *
+ * This cannot over-block: dropping leading zeros only shortens hextets below 0x1000, and every
+ * globally routable address is inside 2000::/3 (first hextet 0x2000-0x3fff), which never carries one.
+ * Input that does not parse as IPv6 is returned untouched, so it keeps whatever verdict it has today -
+ * which is also why the redundant zero-padded arms further down (`2001:0db8:`, `2001:0000:`, `0064:ff9b:`,
+ * `0100::`)
+ * are left in place rather than deleted.
+ */
+function normalizeIpv6(ip: string): string {
+  const bare = stripIpv6Brackets(ip);
+
+  const halves = bare.split('::');
+  if (halves.length > 2) return bare;
+
+  const tokens = halves.flatMap(half => (half === '' ? [] : half.split(':')));
+  const dotted = tokens.length > 0 && tokens[tokens.length - 1].includes('.') ? tokens.pop() : undefined;
+  if (!tokens.every(token => /^[0-9a-f]{1,4}$/.test(token))) return bare;
+
+  const compressed = halves.length === 2;
+  const width = tokens.length + (dotted ? 2 : 0); // a dotted tail occupies the last two hextets
+  if (compressed ? width > 8 : width !== 8) return bare;
+
+  const hextets = tokens.map(token => token.replace(/^0+(?=.)/, ''));
+  if (compressed) {
+    const headWidth = halves[0] === '' ? 0 : halves[0].split(':').length;
+    hextets.splice(headWidth, 0, ...new Array(8 - width).fill('0'));
+  }
+
+  const run = { start: -1, length: 0 };
+  for (let i = 0; i < hextets.length; i++) {
+    if (hextets[i] !== '0') continue;
+    let end = i;
+    while (end < hextets.length && hextets[end] === '0') end++;
+    if (end - i > run.length) {
+      run.start = i;
+      run.length = end - i;
+    }
+    i = end;
+  }
+
+  // Only a run of TWO or more may become `::`, per RFC 5952, and that limit is load-bearing here: the
+  // Teredo arms match on a literal `0` second hextet, so compressing a lone zero would erase the very
+  // character they read.
+  const body =
+    run.length >= 2
+      ? `${hextets.slice(0, run.start).join(':')}::${hextets.slice(run.start + run.length).join(':')}`
+      : hextets.join(':');
+
+  if (dotted === undefined) return body;
+  return body.endsWith(':') ? `${body}${dotted}` : `${body}:${dotted}`;
+}
+
 function isPrivateIPv6(ip: string): boolean {
-  const normalized = stripIpv6Brackets(ip);
+  const normalized = normalizeIpv6(ip);
+
+  // Every arm below is a prefix test, so a NAME that happens to share a family's leading characters
+  // reads as an address in it: `isPrivateIP` sends everything non-dotted-quad here ("Assume IPv6"), so
+  // without this gate `fetch.example.com` matches the fe00::/8 arm, and `ffmpeg.org` / `fdic.gov` match
+  // multicast and ULA. Requiring a colon costs nothing real - every IPv6 spelling has one - and callers
+  // that need name-based blocking use `isPrivateOrInternalHostname`, which does its own name checks
+  // before dispatching here.
+  if (!normalized.includes(':')) return false;
 
   // ::1 - Loopback
   if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
@@ -108,26 +179,16 @@ function isPrivateIPv6(ip: string): boolean {
   // :: - Unspecified address
   if (normalized === '::' || normalized === '0:0:0:0:0:0:0:0') return true;
 
-  // fe80::/10 - Link-local
-  if (
-    normalized.startsWith('fe8') ||
-    normalized.startsWith('fe9') ||
-    normalized.startsWith('fea') ||
-    normalized.startsWith('feb')
-  )
-    return true;
-
-  // fec0::/10 - Site-local. Deprecated by RFC 3879, which is exactly why it was missed: the range
-  // above stops at `feb` (fe80::/10 ends at febf) and nothing picked up fec0-feff. Deprecated does
-  // not mean unroutable - stacks still accept these, and an operator can and does use them on
-  // internal networks, so this is the same class of internal destination as fe80::/10.
-  if (
-    normalized.startsWith('fec') ||
-    normalized.startsWith('fed') ||
-    normalized.startsWith('fee') ||
-    normalized.startsWith('fef')
-  )
-    return true;
+  // fe00::/8 - link-local (fe80::/10), site-local (fec0::/10, deprecated by RFC 3879 but still accepted
+  // by stacks and still used on internal networks), and the IETF-reserved remainder fe00::/9. None of
+  // it falls inside 2000::/3 global unicast, so refusing the whole /8 costs nothing and leaves no
+  // unassigned gap for an operator to bind into.
+  //
+  // Written as ONE prefix rather than a list of per-hextet arms because that list is what let two
+  // ranges slip through in turn: it originally stopped at `feb` (fe80::/10 ends at febf), leaving
+  // fec0-feff open, and adding `fec`-`fef` still left fe00-fe7f open. `fe80::/10` reads as covered
+  // while its neighbours quietly are not.
+  if (normalized.startsWith('fe')) return true;
 
   // fc00::/7 - Unique local addresses (ULA) - includes fc00::/8 and fd00::/8
   if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
@@ -171,6 +232,13 @@ function isPrivateIPv6(ip: string): boolean {
     const tail = normalized.slice(2);
     return tail.includes('.') ? isPrivateIPv4(tail) : true;
   }
+
+  // 0000::/16 - the rest of the reserved low space, reached when canonicalisation moves the zero run.
+  // RFC 5952 compresses the LONGEST run, not the leading one, so `::1:0:0:0:0:0` canonicalises to
+  // `0:0:1::` and no longer starts with `::` - it would fall past the branch above that exists to
+  // refuse exactly this space. A zero first hextet is inside 0000::/16, which is IANA-reserved in full
+  // (RFC 4291), and global unicast is 2000::/3, so nothing routable can reach this line.
+  if (normalized.startsWith('0:')) return true;
 
   // 2001:db8::/32 - Documentation
   if (normalized.startsWith('2001:db8:') || normalized.startsWith('2001:0db8:')) return true;
