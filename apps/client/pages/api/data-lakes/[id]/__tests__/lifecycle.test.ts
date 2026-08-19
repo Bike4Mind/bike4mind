@@ -178,6 +178,20 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
+  it('refuses a second purge of a purging lake with a permanent message, not the generic one (#1744)', async () => {
+    // The generic 'must be soft-deleted' reads as a transient state problem, which is wrong here for
+    // the same reason it was wrong on restore: this purge is already accepted and irreversible. The
+    // claim would refuse it anyway, but the caller deserves to know WHY.
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'purging', createdByUserId: 'u1' });
+    const { res, json } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'This data lake is already being permanently deleted' });
+    expect(h.acceptDataLakePurge).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
     h.toAccessContext.mockResolvedValueOnce({ userId: '', isAdmin: false });
     h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: '' });
