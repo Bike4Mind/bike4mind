@@ -12,6 +12,7 @@ const mockChunkMutate = vi.fn();
 
 let messageFiles: IFabFileDocument[] = [];
 let workBenchFiles: IFabFileDocument[] = [];
+let systemFiles: IFabFileDocument[] = [];
 let currentUserId = 'me';
 let sessionUserId = 'me';
 // Keyed so a test can set only the setting it cares about; other keys stay undefined,
@@ -28,7 +29,7 @@ vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
 
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSessionId: 's1', currentSession: { id: 's1', userId: sessionUserId } }),
-  useSystemPromptFiles: () => ({ systemFiles: [], globalSystemFileIds: [], userSystemFileIds: [] }),
+  useSystemPromptFiles: () => ({ systemFiles, globalSystemFileIds: [], userSystemFileIds: [] }),
   useWorkBenchActions: () => ({ setWorkBenchFiles: vi.fn() }),
   useWorkBenchFiles: () => workBenchFiles,
 }));
@@ -67,6 +68,7 @@ describe('FilesSection message-scoped files', () => {
     mockIsPending.mockReturnValue(false);
     messageFiles = [];
     workBenchFiles = [];
+    systemFiles = [];
     currentUserId = 'me';
     sessionUserId = 'me';
     settingsValues = {};
@@ -154,9 +156,23 @@ describe('FilesSection message-scoped files', () => {
     workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
 
     renderPanel();
-    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-w1-workbench'));
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-workbench-w1'));
 
     expect(mockChunkMutate).toHaveBeenCalledOnce();
     expect(mockChunkMutate.mock.calls[0][0]).toMatchObject({ fabFileId: 'w1', chunkSize: 1500 });
+  });
+
+  it('renders distinct reprocess testids when the same file id appears in both lists', () => {
+    // Locks the fix: handleReprocessFile treats a file as possibly present in both the
+    // system and workbench lists, so an unsuffixed testid would collide and getByTestId
+    // would throw on more than one match.
+    settingsValues.defaultEmbeddingModel = 'model-b';
+    systemFiles = [{ ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
+    workBenchFiles = [{ ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
+
+    renderPanel();
+
+    expect(screen.getByTestId('files-section-reprocess-btn-system-dup1')).toBeTruthy();
+    expect(screen.getByTestId('files-section-reprocess-btn-workbench-dup1')).toBeTruthy();
   });
 });

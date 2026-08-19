@@ -459,7 +459,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
-                        data-testid={`files-section-reprocess-btn-${file.id}-system`}
+                        data-testid={`files-section-reprocess-btn-system-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
@@ -563,7 +563,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
-                        data-testid={`files-section-reprocess-btn-${file.id}-workbench`}
+                        data-testid={`files-section-reprocess-btn-workbench-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
