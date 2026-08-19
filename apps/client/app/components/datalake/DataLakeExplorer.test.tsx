@@ -8,7 +8,6 @@ import { getThemeConfig } from '@client/app/utils/themes';
 // way the KnowledgeViewer's close button does.
 import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 import DataLakeExplorer from './DataLakeExplorer';
-import { DataLakeSurfaceProvider } from './surfaceTokens';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
 // and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
@@ -85,8 +84,6 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
     isLoading: false,
   }),
-  // Page mode renders DataLakeArticle, which reads file content.
-  useGetFabFileContent: () => ({ data: null, isLoading: false }),
   useGetDataLakes: () => ({ data: lakesState.value }),
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
@@ -94,7 +91,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   },
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  // Page mode renders DataLakeArticle, which reads the selected file's body.
+  // The rail viewer's KnowledgeViewer reads file content; stubbed so no query client is needed.
   useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));
 
@@ -149,6 +146,10 @@ vi.mock('./DataLakeChatTree', () => ({
     onNavigate: (breadcrumb: string[]) => void;
     selectedFileIds: ReadonlySet<string>;
     onClose?: () => void;
+    subHeader?: React.ReactNode;
+    emptySlot?: React.ReactNode;
+    dropHint?: string;
+    tree: { segment: string }[];
   }) => {
     const file = { id: 'file-123', fileName: 'x.pdf', tags: [{ name: 'datalake:lake-a' }] };
     return (
@@ -156,7 +157,11 @@ vi.mock('./DataLakeChatTree', () => ({
         data-testid="mock-tree"
         data-selected={Array.from(props.selectedFileIds).join(',')}
         data-can-delete={String(props.canDeleteFile(file))}
+        data-drop-hint={props.dropHint ?? ''}
+        data-segments={props.tree.map(n => n.segment).join(',')}
       >
+        {props.subHeader}
+        {props.emptySlot}
         <button data-testid="mock-attach" onClick={() => props.onAttachFile(file)}>
           attach
         </button>
@@ -469,86 +474,28 @@ describe('DataLakeExplorer chat-first surface', () => {
   });
 });
 
-// Page mode (no chatSlot) is the only arrangement that renders the header action row.
-const renderPageExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplorer>> = {}) =>
-  render(
-    <TestWrapper>
-      <DataLakeExplorer source="datalakes" onBack={vi.fn()} {...props} />
-    </TestWrapper>
-  );
-
-describe('DataLakeExplorer - Create primary alongside Manage secondary', () => {
-  it('renders both buttons, Create first, each wired to its own handler', () => {
-    const onCreate = vi.fn();
-    const onManage = vi.fn();
-    renderPageExplorer({ onCreate, onManage });
-
-    const createBtn = screen.getByTestId('datalake-create-btn');
-    const manageBtn = screen.getByTestId('datalake-manage-btn');
-    expect(createBtn.compareDocumentPosition(manageBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    fireEvent.click(createBtn);
-    expect(onCreate).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-
-    fireEvent.click(manageBtn);
-    expect(onManage).toHaveBeenCalledTimes(1);
-  });
-
-  it('gives Create the primary treatment and Manage the secondary one', () => {
-    renderPageExplorer({ onCreate: vi.fn(), onManage: vi.fn() });
-
-    // Joy's variant/color modifier classes are a stable public API (unlike its emotion
-    // hashes), so they are the only way to assert visual hierarchy without a snapshot.
-    const createBtn = screen.getByTestId('datalake-create-btn');
-    expect(createBtn.className).toMatch(/MuiButton-variantSolid/);
-    expect(createBtn.className).toMatch(/MuiButton-colorPrimary/);
-
-    const manageBtn = screen.getByTestId('datalake-manage-btn');
-    expect(manageBtn.className).toMatch(/MuiButton-variantOutlined/);
-    expect(manageBtn.className).toMatch(/MuiButton-colorNeutral/);
-  });
-});
-
 describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
   it('advertises drag-to-add at rest, before any drag has started', () => {
-    render(
-      <TestWrapper>
-        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
-      </TestWrapper>
-    );
+    renderExplorer();
 
-    // No drag is underway, so the drag-active overlay must stay hidden while the
-    // resting affordances carry the invitation.
-    expect(screen.queryByTestId('datalake-dropzone')).not.toBeInTheDocument();
-    expect(screen.getByTestId('datalake-drop-hint')).toHaveTextContent(/drag files here to add/i);
-    expect(screen.getByTestId('datalake-drop-prompt')).toBeInTheDocument();
+    // No drag is underway, so the drag-active overlay must stay hidden while the resting hint -
+    // handed to the tree's footer, the only chrome this surface owns - carries the invitation.
+    expect(screen.queryByTestId('opti-datalake-dropzone')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-drop-hint', 'Drag files here to add');
   });
 
-  it('swaps the resting hint for the drag overlay once a file drag enters', () => {
-    render(
-      <TestWrapper>
-        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
-      </TestWrapper>
-    );
+  it('raises the drag overlay once a file drag enters', () => {
+    renderExplorer();
 
-    fireEvent.dragEnter(screen.getByTestId('datalake-explorer'), {
-      dataTransfer: { types: ['Files'] },
-    });
+    fireEvent.dragEnter(screen.getByTestId('opti-datalake-explorer'), { dataTransfer: { types: ['Files'] } });
 
-    expect(screen.getByTestId('datalake-dropzone')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-drop-hint')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-drop-prompt')).not.toBeInTheDocument();
+    expect(screen.getByTestId('opti-datalake-dropzone')).toBeInTheDocument();
   });
 
   it('confirms a successful drop with a toast naming the file count', async () => {
-    render(
-      <TestWrapper>
-        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
-      </TestWrapper>
-    );
+    renderExplorer();
 
-    fireEvent.drop(screen.getByTestId('datalake-explorer'), {
+    fireEvent.drop(screen.getByTestId('opti-datalake-explorer'), {
       dataTransfer: {
         types: ['Files'],
         items: [],
@@ -560,36 +507,112 @@ describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
   });
 });
 
-describe('DataLakeExplorer - depth trail reads the injected taxonomy (#1077)', () => {
+// The lake rail, the scoped-lake header and the honest empty states came off the retired
+// /data-lakes page into the tree card's own chrome (#1943), so the explorer must hand them down.
+describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
   beforeEach(() => {
-    tagCountsState.tagCounts = [{ tag: 'books:business', count: 4 }];
-    tagCountsState.total = 4;
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+      { id: 'lake-2', name: 'Lake B', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'lakeb', canManage: false },
+    ];
+    tagCountsState.tagCounts = [
+      { tag: 'lakea:notes', count: 2 },
+      { tag: 'lakeb:decks', count: 3 },
+    ];
+    tagCountsState.total = 5;
   });
   afterEach(() => {
     tagCountsState.tagCounts = [];
     tagCountsState.total = 0;
   });
 
-  it('humanizes each depth-stat crumb like the tree instead of showing the raw segment', () => {
-    render(
+  it('offers the lake picker in the tree, opening on the all-lakes scope', () => {
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
+    // Unscoped, so every lake's branches are in the tree.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
+
+  it('scopes the tree to the picked lake and drops the outgoing breadcrumb', () => {
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    // Only lake B's prefix survives - the scoping the standalone page's rail used to do.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakeb');
+  });
+
+  it('shows the scoped lake actions only once a specific lake is picked', () => {
+    renderExplorer();
+    expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(screen.getByTestId('datalake-selected-lake-header')).toBeInTheDocument();
+    // Add files is a manage capability; Configure deep-links the manager either way.
+    expect(screen.getByTestId('datalake-selected-lake-addfiles-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
+  });
+
+  it('falls back to the all-lakes scope when the scoped lake leaves the list', () => {
+    const { rerender } = renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('Lake B');
+
+    // Archiving or deleting the scoped lake through Configure drops it from the list. The scope
+    // must follow, rather than leaving the picker naming a lake nothing else is honouring.
+    lakesState.value = [lakesState.value[0]];
+    // The lake list is a query result, so it changes without any local state change - re-render
+    // the way an invalidation would rather than by driving the UI.
+    rerender(
       <TestWrapper>
-        <DataLakeSurfaceProvider
-          tokens={{
-            taxonomy: { prefixLabels: { books: 'Library' }, categoryLabels: { business: 'Business Strategy' } },
-          }}
-        >
-          <DataLakeExplorer source="datalakes" onBack={vi.fn()} />
-        </DataLakeSurfaceProvider>
+        <DataLakeExplorer {...baseProps} />
       </TestWrapper>
     );
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
 
-    // Depth 0 -> prefixLabels, so the trail must not read the raw 'books'.
-    fireEvent.click(screen.getByTestId('datalake-node-books'));
-    expect(screen.getByText('Library')).toBeInTheDocument();
-    expect(screen.queryByText('books')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
+    expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
 
-    // Depth 1 -> categoryLabels; each crumb is humanized at its own depth.
-    fireEvent.click(screen.getByTestId('datalake-node-business'));
-    expect(screen.getByText('Library : Business Strategy')).toBeInTheDocument();
+  it('withholds Add files on a lake the caller cannot manage', () => {
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(screen.getByTestId('datalake-selected-lake-header')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-selected-lake-addfiles-btn')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
+  it('offers create-first when the caller genuinely has no lakes', () => {
+    lakesState.value = [];
+    renderExplorer({ onCreateLake: vi.fn() });
+
+    const empty = screen.getByTestId('datalake-tree-empty');
+    expect(empty).toHaveAttribute('data-variant', 'no-lakes');
+    expect(screen.getByTestId('datalake-tree-empty-create-btn')).toBeInTheDocument();
+  });
+
+  it('hands the tree no empty state while there is something to browse', () => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ];
+    tagCountsState.tagCounts = [{ tag: 'lakea:notes', count: 2 }];
+    tagCountsState.total = 2;
+    renderExplorer();
+
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
+
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
   });
 });

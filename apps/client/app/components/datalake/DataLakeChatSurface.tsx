@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react';
+import { useSearch } from '@tanstack/react-router';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -12,19 +13,29 @@ import { useManageKnowledge } from './manageKnowledge';
  * session; otherwise renders the chat as-is. Seeds the mode store from the session's
  * forceKnowledgeRetrieval whenever the session identity changes. See datalake-in-chat-mode design.
  *
- * onManage/onCreateLake drive the tree header's gear (Manage Lakes) + blue "+" (Create Lake) via
- * the store-driven wizard/manager modals mounted app-wide in ProviderBundle (FileBrowser); without
- * them those header buttons don't render. Same wiring the retired /data-lakes route used.
+ * This is the app's ONLY Data Lake surface (#1943), so it owns the wiring the retired /data-lakes
+ * page used to: onManage/onCreateLake drive the tree's Manage / Create via the store-driven
+ * wizard/manager modals mounted app-wide in ProviderBundle (FileBrowser), onDiscover opens that
+ * manager's public-lake catalog, and `?article=` deep links (forwarded here by the retired route)
+ * open in the viewer. Without those handlers the corresponding affordances don't render.
  */
 export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode }) {
   const { currentSession } = useSessions();
+  const { article } = useSearch({ strict: false }) as { article?: string };
   const enabled = useDataLakeMode(s => s.enabled);
   const seedFromSession = useDataLakeMode(s => s.seedFromSession);
   // Shared manage-knowledge capability (#841) - the gate and the open-manager wiring live in
-  // core. No `requireAdmin`: as on /data-lakes, these are the user's OWN lakes.
-  const { onManage } = useManageKnowledge();
+  // core. No `requireAdmin`: these are the user's OWN lakes.
+  const { canManage, onManage } = useManageKnowledge();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
+  const openManager = useDataLakeWizardStore(s => s.openManager);
   const createDataLakeSession = useCreateDataLakeSession();
+
+  // Discover shares Manage's gate rather than carrying none: it deep-links the SAME
+  // store-driven manager modal, whose panel renders nothing without EnableDataLakes (and
+  // whose /api/data-lakes/public read is flag-gated too). Ungated it opened a full-screen
+  // modal holding only a close button - the same dead end the manage button had.
+  const onDiscover = canManage ? () => openManager('discover') : undefined;
 
   useEffect(() => {
     seedFromSession(currentSession);
@@ -44,9 +55,11 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
     <DataLakeExplorer
       source="datalakes"
       rootLabel="Data Lakes"
+      articleId={article ?? null}
       chatSlot={chat}
       chatEmbedded
       onManage={onManage}
+      onDiscover={onDiscover}
       onCreateLake={openWizard}
       createSessionForFile={createSessionForFile}
     />

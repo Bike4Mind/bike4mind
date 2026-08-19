@@ -36,9 +36,9 @@ function compareByCategoryThenTitle(a: IFabFileDocument, b: IFabFileDocument): n
 
 /**
  * Everything visual about a tree surface, injected by the shell that owns the look:
- * the page tree derives its chrome from surfaceTokens, the chat tree from treeChrome,
- * the discover viewer keeps its neutral look. TreeView itself owns only logic and
- * structure - if a knob here starts encoding BEHAVIOR, it belongs in TreeView instead.
+ * the chat tree derives its chrome from treeChrome, the discover viewer keeps its neutral
+ * look. TreeView itself owns only logic and structure - if a knob here starts encoding
+ * BEHAVIOR, it belongs in TreeView instead.
  */
 export interface DataLakeTreeChrome {
   /** Outer column: width, borders, background - the surface's visual identity. */
@@ -79,8 +79,8 @@ export interface DataLakeTreeViewProps {
    *  Omit to disable cross-tree search (e.g. a single-lake browser where "across the tree" would
    *  incorrectly reach every accessible lake) - local search within the loaded scope still works. */
   source?: DataLakeBrowseSource;
-  /** File ids to render highlighted - "attached to the prompt" in chat mode, or the single
-   *  file open in the reader in page mode. Not just the most recently clicked file, so an
+  /** File ids to render highlighted - "attached to the prompt" on the chat surface, or the
+   *  single file open in the Viewer's reader. Not just the most recently clicked file, so an
    *  earlier pick stays highlighted after a later one is added. */
   selectedFileIds: ReadonlySet<string>;
   onSelectFile: (file: IFabFileDocument) => void;
@@ -99,6 +99,12 @@ export interface DataLakeTreeViewProps {
   /** Slots above the toolbar / below the scroll pane (the chat tree's header and footer). */
   header?: ReactNode;
   footer?: ReactNode;
+  /**
+   * Stands in for the plain "No categories" line when the host knows WHY the tree is empty
+   * (no lakes, a failed lake read, an empty lake). Never used while searching - "no matches"
+   * is a fact about the query, not about the scope.
+   */
+  emptySlot?: ReactNode;
 }
 
 export default function DataLakeTreeView({
@@ -115,6 +121,7 @@ export default function DataLakeTreeView({
   uncategorized,
   header,
   footer,
+  emptySlot,
 }: DataLakeTreeViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<TreeSortMode>('count');
@@ -275,13 +282,16 @@ export default function DataLakeTreeView({
                 uncategorized!.renderRow(uncategorized!.files.length, () => onNavigate([UNCATEGORIZED_KEY]))}
               {showOwnFiles &&
                 ownFiles.map(f => chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f)))}
-              {showNodeEmpty && (
-                <Box sx={{ p: 2, textAlign: 'center' }}>
-                  <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                    {searchQuery ? 'No matches' : 'No categories'}
-                  </Typography>
-                </Box>
-              )}
+              {showNodeEmpty &&
+                (!searchQuery && emptySlot ? (
+                  emptySlot
+                ) : (
+                  <Box sx={{ p: 2, textAlign: 'center' }}>
+                    <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                      {searchQuery ? 'No matches' : 'No categories'}
+                    </Typography>
+                  </Box>
+                ))}
             </List>
             {treeSearchActive && treeSearchArticles.length > 0 && (
               <>

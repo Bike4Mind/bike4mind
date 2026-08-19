@@ -3,20 +3,37 @@ import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
 
 /**
- * Page object for the Data Lakes surface: the `/data-lakes` explorer, the management
- * panel (list + lifecycle), the create/append wizard, the settings modal, and the
- * lake viewer. Selectors mirror the data-testid attributes in
- * `app/components/datalake/*` and `app/components/DataLakeWizard/*`.
+ * Page object for the Data Lakes surface: the in-chat explorer (reached from the chat header's
+ * Data Lake toggle - the standalone /data-lakes page was retired in #1943), the management panel
+ * (list + lifecycle), the create/append wizard, the settings modal, and the lake viewer.
+ * Selectors mirror the data-testid attributes in `app/components/datalake/*` and
+ * `app/components/DataLakeWizard/*`.
  */
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite against the in-chat Data Lake header toggle once the Phase 3 surface settles.
 export class DataLakePage extends BasePage {
   constructor(page: Page) {
     super(page);
   }
 
   // ── Explorer / manager ──────────────────────────────────────────────────
+  get explorer(): Locator {
+    return this.page.getByTestId('opti-datalake-explorer');
+  }
+  get modeToggle(): Locator {
+    return this.page.getByTestId('datalake-mode-toggle');
+  }
   get manageBtn(): Locator {
     return this.page.getByTestId('datalake-manage-btn');
+  }
+  /** Trigger for the lake-scope picker in the tree card's sub-header. */
+  get lakePickerBtn(): Locator {
+    return this.page.getByTestId('datalake-lake-picker-btn');
+  }
+  get discoverBtn(): Locator {
+    return this.page.getByTestId('datalake-lake-picker-discover-btn');
+  }
+  /** Actions strip for the scoped lake; absent in the all-lakes scope. */
+  get selectedLakeHeader(): Locator {
+    return this.page.getByTestId('datalake-selected-lake-header');
   }
   get listPanel(): Locator {
     return this.page.getByTestId('datalake-list-panel');
@@ -76,15 +93,22 @@ export class DataLakePage extends BasePage {
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  /** Open the `/data-lakes` explorer home and clear startup modals. */
+  /**
+   * Open the Data Lake surface: a fresh chat with Data Lake mode turned on. The mode toggle is
+   * the only entry point since #1943 retired the standalone page, and it hides itself once mode
+   * is on (the tree's close X becomes the off-switch), so a already-on chat skips the click.
+   */
   async gotoDataLakes() {
     // Navigate on 'domcontentloaded', not the default 'load'. Under parallel load the preview's
     // heavy SPA bundles can delay the 'load' event 60s+, hanging goto() on about:blank even though
     // the shell responds in ~2s and the app is otherwise fine. The explorer-visible assertion below
     // is the real readiness gate, so we don't need to block navigation on full 'load'.
-    await this.page.goto('/data-lakes', { waitUntil: 'domcontentloaded' });
+    await this.page.goto('/new', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    await expect(this.page.getByTestId('datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    if (await this.modeToggle.isVisible({ timeout: TIMEOUTS.VISIBLE }).catch(() => false)) {
+      await this.modeToggle.click();
+    }
+    await expect(this.explorer).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
   /** From the explorer, open the management panel (list of lakes + lifecycle). */
@@ -93,7 +117,7 @@ export class DataLakePage extends BasePage {
     await expect(this.listPanel).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
-  /** Convenience: land on `/data-lakes` and open the manager panel. */
+  /** Convenience: open the Data Lake surface and then the manager panel. */
   async openManagerFromHome() {
     await this.gotoDataLakes();
     await this.openManager();
@@ -265,21 +289,19 @@ export class DataLakePage extends BasePage {
   }
 
   // ── Explorer article (deep-linked) ────────────────────────────────────────
-  get article(): Locator {
-    return this.page.getByTestId('datalake-article');
-  }
-  get askAboutBtn(): Locator {
-    return this.page.getByTestId('datalake-ask-about');
-  }
   get sortToggle(): Locator {
     return this.page.getByTestId('datalake-sort-toggle');
   }
 
-  /** Open a lake article directly via the explorer's deep-link search param. */
+  /**
+   * Open a lake article by its shareable deep link. The `/data-lakes` path no longer renders a
+   * page - it redirects into a Data-Lake-mode chat carrying the same `?article=`, which opens the
+   * file in the KnowledgeViewer - so this doubles as the coverage that old links still resolve.
+   */
   async gotoArticle(fabFileId: string) {
-    await this.page.goto(`/data-lakes?article=${fabFileId}`);
+    await this.page.goto(`/data-lakes?article=${fabFileId}`, { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    await expect(this.article).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await expect(this.explorer).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
   /** Close the wizard via the footer Cancel, accepting the unsaved-progress confirm dialog. */

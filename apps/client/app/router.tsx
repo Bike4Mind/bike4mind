@@ -15,6 +15,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
+import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
@@ -69,7 +70,6 @@ const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
-const DataLakesPage = lazy(() => import('./routes/data-lakes'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
@@ -270,11 +270,15 @@ const newRoute = createRoute({
       <NewNotebookPage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { projectId?: string; questmaster?: string; goal?: string } => {
+  validateSearch: (
+    search: Record<string, unknown>
+  ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
     return {
       projectId: search.projectId ? String(search.projectId) : undefined,
       questmaster: search.questmaster ? String(search.questmaster) : undefined,
       goal: search.goal ? String(search.goal) : undefined,
+      // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
+      article: search.article ? String(search.article) : undefined,
     };
   },
 });
@@ -802,21 +806,24 @@ const questsV5Route = createRoute({
   ),
 });
 
-// Data Lakes home - top-level, Opti-independent destination for a user's own lakes
-// (browse + manage). Gated for discovery by the EnableDataLakes admin flag in the
-// sidebar nav; the /api/data-lakes/* endpoints enforce the flag server-side.
+// The standalone Data Lakes page was retired in #1943 - its capabilities live in the in-chat
+// surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
+// deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
+// article in the viewer. There is no page component behind it.
 const dataLakesRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/data-lakes',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <DataLakesPage />
-    </Suspense>
-  ),
   validateSearch: (search: Record<string, unknown>): { article?: string } => ({
     // Shareable deep link to a specific article within a lake.
     article: typeof search.article === 'string' && search.article ? search.article : undefined,
   }),
+  beforeLoad: ({ search }) => {
+    // The store is the mode's source of truth on /new (no session exists yet to carry
+    // forceKnowledgeRetrieval), so flipping it here is what makes the tree open on arrival.
+    useDataLakeMode.getState().setEnabled(true);
+    throw redirect({ to: '/new', search: search.article ? { article: search.article } : {} });
+  },
+  component: () => null,
 });
 
 // The Keep HUD route (local agent command interface)

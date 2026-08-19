@@ -32,7 +32,7 @@ export interface ManageKnowledgeOptions {
    * Require platform admin on top of the `EnableDataLakes` flag.
    *
    * `false` (default) suits a surface where the user manages their OWN lakes - the
-   * standalone `/data-lakes` home. Curated, admin-managed knowledge surfaces (the
+   * in-chat Data Lake surface. Curated, admin-managed knowledge surfaces (the
    * product overlays, whose lakes are seeded per environment) pass `true`; that was
    * the `isAdmin && EnableDataLakes` predicate each of them used to hand-roll.
    */
