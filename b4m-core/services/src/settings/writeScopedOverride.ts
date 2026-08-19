@@ -23,8 +23,8 @@ import { Logger } from '@bike4mind/observability';
  *
  * Cross-instance staleness bound: invalidation here only clears the CURRENT process's
  * `ScopedSettingsCache`. A written or cleared override is visible on this instance's very next
- * resolve (in-process read-your-writes), but another instance/container keeps its own copy until its
- * cache entry expires - up to one TTL (5 minutes in prod, 30s in development; see
+ * resolve (in-process read-your-writes), but another Lambda execution environment keeps its own copy
+ * until its cache entry expires - up to one TTL (5 minutes in prod, 30s in development; see
  * `ScopedSettingsCache`). That bound is accepted for the current single-writer admin assumption; a
  * multi-writer admin surface (epic #1658) should revisit it with a shared cache or a pub/sub
  * invalidation broadcast rather than widening this function's contract.
@@ -62,12 +62,23 @@ export async function writeScopedOverride<K extends SettingKey>(
   if (!parsed.success) {
     throw new Error(`[scopedSettings] value for '${key}' failed validation: ${rawValue}`);
   }
+  // ownerType is meaningful (and required, for attribution) only at the owner rung - enforce the
+  // biconditional here rather than passing it through, or a caller could leave a stale ownerType on
+  // a re-write that omits it (Mongoose drops an `undefined` $set field instead of clearing it).
+  if (ref.scopeLevel === SettingScopeLevel.Owner && !ref.ownerType) {
+    throw new Error(`[scopedSettings] ownerType is required when writing an owner-scoped override for '${key}'`);
+  }
+  if (ref.scopeLevel !== SettingScopeLevel.Owner && ref.ownerType) {
+    throw new Error(`[scopedSettings] ownerType is only meaningful at the owner scope, not '${ref.scopeLevel}'`);
+  }
 
   await db.scopedSettings.upsertOverride({
     scopeLevel: ref.scopeLevel,
     scopeId: ref.scopeId,
     ownerType: ref.ownerType,
     settingName: key,
+    // rawValue, not parsed.data: the overlay stores the raw string (schema.safeParse above is a
+    // validation gate, not a normalization step); the resolver re-parses it via pickOverride on read.
     settingValue: rawValue,
   });
   opts?.logger?.debug?.(`[scopedSettings] wrote '${key}' override at ${ref.scopeLevel}:${ref.scopeId}`);

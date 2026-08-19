@@ -12,6 +12,7 @@ const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, ow
 const NOT_SETTABLE_KEY = 'openaiDemoKey';
 
 const lakeRef = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1' } as const;
+const ownerRef = { scopeLevel: SettingScopeLevel.Owner, scopeId: 'u1' } as const;
 const fullScope = { organizationId: 'o1', owner: { id: 'u1', type: 'User' as const }, lakeId: 'l1' };
 
 /**
@@ -37,6 +38,9 @@ function makeWritableDb(platform: Record<string, string> = {}) {
       return write as IScopedSetting;
     },
     clearOverride: async (ref: { scopeLevel: string; scopeId: string; settingName: string }) => {
+      // Hard-removes from the array here; the real repository soft-deletes (deletedAt stamp via
+      // softDeletePlugin). This mock only needs to match findOverrides' read-side effect (the row is
+      // gone from reads), not the real delete mechanism.
       const i = overrides.findIndex(
         o => o.scopeLevel === ref.scopeLevel && o.scopeId === ref.scopeId && o.settingName === ref.settingName
       );
@@ -77,6 +81,22 @@ describe('writeScopedOverride validation (fails loud, never reaches the db on re
     const db = makeWritableDb();
     const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
     await expect(writeScopedOverride(KEY, lakeRef, '0', db)).rejects.toThrow(/validation/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('refuses an owner-scoped write with no ownerType', async () => {
+    const db = makeWritableDb();
+    const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
+    await expect(writeScopedOverride(KEY, ownerRef, '1000', db)).rejects.toThrow(/ownerType is required/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('refuses ownerType on a non-owner-scoped write', async () => {
+    const db = makeWritableDb();
+    const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
+    await expect(writeScopedOverride(KEY, { ...lakeRef, ownerType: 'User' as const }, '1000', db)).rejects.toThrow(
+      /only meaningful at the owner scope/
+    );
     expect(spy).not.toHaveBeenCalled();
   });
 });

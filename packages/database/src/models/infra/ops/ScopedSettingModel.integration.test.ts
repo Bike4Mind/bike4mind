@@ -142,6 +142,16 @@ describe('ScopedSettingsRepository.upsertOverride / clearOverride (#1728)', () =
     expect(rows[0].settingValue).toBe('2000');
   });
 
+  it('upserting again with a different ownerType updates it, not just settingValue', async () => {
+    const addr = { scopeLevel: SettingScopeLevel.Owner, scopeId: 'u1', settingName: KEY };
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000', ownerType: 'User' });
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000', ownerType: 'Organization' });
+
+    const rows = await scopedSettingsRepository.findOverrides([{ scopeLevel: addr.scopeLevel, scopeId: 'u1' }], [KEY]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerType).toBe('Organization');
+  });
+
   it('clearOverride then upsertOverride at the same address does not throw E11000 (tombstone reinsert)', async () => {
     const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY };
     await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000' });
