@@ -590,12 +590,17 @@ async function resolveKbSearchDefaultResults(context: ToolContext): Promise<numb
  * Unset takes `defaultResults` rather than the floor, matching positiveIntOr in
  * resolveSearchBudgets: `null` and `''` are the model declining to choose, not a request for one
  * result. `defaultResults` is the caller's already-resolved `kbSearchDefaultResults` value, not
- * re-read here, so this stays synchronous.
+ * re-read here, so this stays synchronous. It is still run through the same clamp below: the
+ * setting's own schema already rejects a stored value above KB_SEARCH_MAX_RESULTS, but clamping
+ * here too keeps that ceiling a guarantee of this function, not a fact borrowed from a different
+ * package's validation.
  */
 function clampMaxResults(raw: unknown, defaultResults: number): number {
-  if (raw === undefined || raw === null || raw === '') return defaultResults;
+  if (raw === undefined || raw === null || raw === '') {
+    return Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  }
   const n = Number(raw);
-  if (!Number.isFinite(n)) return defaultResults;
+  if (!Number.isFinite(n)) return Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
   return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
 }
 
@@ -728,8 +733,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
     let lastSkipNotice: string | null = null;
-    // Resolved at most once per completion, same discipline as searchCallCount above - a settings
-    // read on every search_knowledge_base call would re-hit the cache for no benefit.
+    // Resolved at most once per completion, same discipline as searchCallCount above -
+    // getSettingsValue is an uncached read, so a settings read on every search_knowledge_base
+    // call would cost a real DB round-trip for no benefit.
     let defaultResultsPromise: Promise<number> | undefined;
     return {
       toolFn: async value => {

@@ -2043,6 +2043,9 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
         filesInScope: 200,
         scan,
       });
+      // Otherwise an earlier test's warn call in this block satisfies a later
+      // toHaveBeenCalledWith assertion even when that later case never calls warn itself.
+      clampLogger.warn.mockClear();
     });
 
     it('serves the configured count when max_results is omitted', async () => {
@@ -2082,7 +2085,13 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
         } as never,
       });
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
-      expect(clampLogger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchDefaultResults'));
+      // The resolver's own catch block warns with (message, err) - two arguments, matching
+      // resolveForcedRetrievalCharBudget's shape - unlike positiveIntOr's single-argument warn
+      // the "unusable value" test above exercises.
+      expect(clampLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('kbSearchDefaultResults'),
+        expect.anything()
+      );
     });
 
     it('resolves the setting once per completion, not once per search call', async () => {
