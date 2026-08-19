@@ -162,10 +162,8 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
-  // Fall back to the canonical chunker default, not a third hand-copied number. Clamped: a legacy
-  // stored value above the ceiling reaches this raw (the settings-fetch route applies no clamp of
-  // its own), and submitting it unclamped would resolve as a silent false "success" here
-  // (chunkFileUtility swallows the route's rejection) rather than a visible error.
+  // Fall back to the canonical chunker default, not a third hand-copied number.
+  // clamped - see clampChunkSize (chunkSize.ts)
   const defaultChunkSize = clampChunkSize(
     Number(useGetSettingsValue('DefaultChunkSize')) || DEFAULT_PASSAGE_TOKEN_TARGET
   );
@@ -207,7 +205,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
       const isSystemFile = systemFiles.some(sysFile => sysFile.id === file.id);
 
       chunkFile.mutate(
-        { fabFileId: file.id, chunkSize: Number(defaultChunkSize) }, // Use default chunk size from settings
+        { fabFileId: file.id, chunkSize: defaultChunkSize }, // Use default chunk size from settings
         {
           onSuccess: () => {
             toast.success(`Successfully reprocessed "${file.fileName}" with the current embedding model`);
@@ -461,7 +459,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
-                        data-testid={`files-section-reprocess-btn-${file.id}`}
+                        data-testid={`files-section-reprocess-btn-system-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
@@ -565,7 +563,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
-                        data-testid={`files-section-reprocess-btn-${file.id}`}
+                        data-testid={`files-section-reprocess-btn-workbench-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"

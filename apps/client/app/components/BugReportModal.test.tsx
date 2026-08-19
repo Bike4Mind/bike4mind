@@ -47,7 +47,7 @@ describe('BugReportModal', () => {
     );
     renderModal();
 
-    fireEvent.click(screen.getByTestId('bug-report-submit-btn'));
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
 
     expect(toast.success).not.toHaveBeenCalled();
 
@@ -63,7 +63,7 @@ describe('BugReportModal', () => {
     });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('bug-report-submit-btn'));
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
 
     await waitFor(() => expect(toast.warning).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
@@ -73,7 +73,7 @@ describe('BugReportModal', () => {
     h.createFeedbackOnServer.mockResolvedValue({});
     renderModal();
 
-    fireEvent.click(screen.getByTestId('bug-report-submit-btn'));
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.warning).not.toHaveBeenCalled();
@@ -83,7 +83,7 @@ describe('BugReportModal', () => {
     h.createFeedbackOnServer.mockRejectedValue(new Error('network down'));
     renderModal();
 
-    fireEvent.click(screen.getByTestId('bug-report-submit-btn'));
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
@@ -98,7 +98,7 @@ describe('BugReportModal', () => {
     );
     renderModal();
 
-    const button = screen.getByTestId('bug-report-submit-btn');
+    const button = screen.getByTestId('bug-report-modal-submit-btn');
     fireEvent.click(button);
 
     expect(button).toBeDisabled();
