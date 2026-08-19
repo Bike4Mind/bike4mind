@@ -285,6 +285,38 @@ describe('wafPolicy', () => {
       expect(rateLimitRule.Statement.RateBasedStatement.Limit).toBe(2000);
     });
 
+    // 2000 per IP per 5 min is a sane ceiling for API calls and a wrong one for a page load:
+    // roughly 56% of comparable traffic is /_next/static/ assets, and measured on staging the
+    // unscoped form would have counted 331,374 of 517,542 requests in a day, with single IPs
+    // reaching 18k in a 5-minute window. The limit was never the defect; applying it to every
+    // request was. Assert the scope-down so the blanket form cannot come back unnoticed.
+    it('scopes the production rate limit to /api/ so static assets do not consume the budget', () => {
+      const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
+      const parsed = JSON.parse(ruleJson);
+
+      const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
+      const rateBased = (rateLimitRule.Statement as any).RateBasedStatement;
+
+      expect(rateBased.ScopeDownStatement).toBeDefined();
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/api/');
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.PositionalConstraint).toBe('STARTS_WITH');
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.FieldToMatch.UriPath).toBeDefined();
+    });
+
+    // The asset backstop that makes the scope-down above safe: assets stop counting against the
+    // API budget, but are still bounded so they cannot become a free amplification target.
+    it('keeps a separate, higher ceiling for static assets', () => {
+      const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
+      const parsed = JSON.parse(ruleJson);
+
+      const assetRule = parsed.find((rule: WafRule) => rule.Name === 'static-asset-rate-limit');
+      expect(assetRule).toBeDefined();
+
+      const rateBased = (assetRule.Statement as any).RateBasedStatement;
+      expect(rateBased.Limit).toBe(50000);
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/static/');
+    });
+
     it('includes the ai-route-rate-limit rule at Priority 4', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
       const parsed = JSON.parse(ruleJson);

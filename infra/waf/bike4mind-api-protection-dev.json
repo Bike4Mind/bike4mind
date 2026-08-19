@@ -517,7 +517,22 @@
         "RateBasedStatement": {
           "Limit": 2000,
           "EvaluationWindowSec": 300,
-          "AggregateKeyType": "IP"
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "NONE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
         }
       },
       "Action": {

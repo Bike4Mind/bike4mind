@@ -171,7 +171,22 @@
         "RateBasedStatement": {
           "Limit": 2000,
           "EvaluationWindowSec": 300,
-          "AggregateKeyType": "IP"
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "NONE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
         }
       },
       "Action": {
@@ -405,6 +420,40 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "register-rate-limit"
+      }
+    },
+    {
+      "Name": "static-asset-rate-limit",
+      "Priority": 12,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 50000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/_next/static/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "NONE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Block": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "static-asset-rate-limit"
       }
     }
   ],
