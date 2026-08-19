@@ -116,8 +116,9 @@ export const cleanupDeletedDataLake = async (
   // still exist. Clearing this lake's signals off the survivor is what makes the sparing durable:
   // the file keeps its bytes and its chunks, and stops being a member of a lake that is gone.
   //
-  // Runs BEFORE the lake record goes, so a throw here aborts with the lake still in 'deleted' and
-  // a DLQ retry re-runs the whole sweep - by then the survivor is an ordinary member, resolved up
+  // Runs BEFORE the lake record goes, so a throw here aborts with the lake still in 'purging' (the
+  // status the accept claimed - NOT 'deleted', so it is not restorable here) and a DLQ retry
+  // re-runs the whole sweep - by then the survivor is an ordinary member, resolved up
   // front and torn down with its chunks and index entry like any other.
   const survivors = await db.fabFiles.findIdsByDataLakeTag(scope);
   await inChunks(survivors, chunkSize, async id => {
