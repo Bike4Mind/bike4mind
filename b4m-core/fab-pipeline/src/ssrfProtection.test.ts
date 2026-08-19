@@ -222,6 +222,9 @@ describe('SSRF - IPv6 spellings missed by per-hextet prefix arms (fe00::/9, unco
     ['reserved fe00::/9, low end', 'http://[fe00::1]/'],
     ['reserved fe00::/9, midpoint', 'http://[fe40::1]/'],
     ['reserved fe00::/9, high end', 'http://[fe7f::1]/'],
+    // Non-differentiating on purpose, and worth knowing why: WHATWG hexifies the dotted tail, so this
+    // arrives as `[::ffff:7f00:1]` and was already refused before the predicate was fixed. It pins the
+    // feeder's canonicalisation, not the fix - the predicate-level case below is what demonstrates that.
     ['uncompressed IPv4-mapped loopback', 'http://[0:0:0:0:0:ffff:127.0.0.1]/'],
   ])('refuses %s', async (_label, url) => {
     await expect(validateUrlForFetch(url)).resolves.toMatchObject({ valid: false });
@@ -278,6 +281,16 @@ describe('SSRF - IPv6 spellings missed by per-hextet prefix arms (fe00::/9, unco
     expect(isPrivateIP('::ffff:0:0:0:0')).toBe(true);
     expect(isPrivateIP('::fe80:0:0:0:0')).toBe(true);
     expect(isPrivateIP('0:0:1::')).toBe(true);
+  });
+
+  it('still refuses zero-padded spellings that are too malformed to canonicalise', () => {
+    // `normalizeIpv6` returns input it cannot parse untouched, which is the only path that still reaches
+    // the zero-padded prefix arms. Without them these read as public, so this is the guard against
+    // deleting those arms as unreachable.
+    expect(isPrivateIP('2001:0db8:zz::1')).toBe(true);
+    expect(isPrivateIP('2001:0000:zz::1')).toBe(true);
+    expect(isPrivateIP('0064:ff9b:zz::1')).toBe(true);
+    expect(isPrivateIP('0100::zz:1')).toBe(true);
   });
 
   it('does not read a hostname as an address in a family whose letters it shares', () => {
