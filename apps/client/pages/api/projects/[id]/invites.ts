@@ -55,11 +55,12 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid project ID' });
       }
 
-      const body = createInviteBodySchema.parse(req.body);
+      const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          { id, type: InviteType.Project, ...body },
+          // Omit expiresAt when undefined so the service's prefault default applies.
+          { id, type: InviteType.Project, ...restBody, ...(expiresAt !== undefined && { expiresAt }) },
           {
             db: {
               invites: inviteRepository,
@@ -95,7 +96,7 @@ const handler = baseApi()
                   projectId: id,
                   projectName: project.name,
                   memberId: recipientId,
-                  memberRole: (body.permissions || []).join(','),
+                  memberRole: (restBody.permissions || []).join(','),
                 },
               },
               { ability: req.ability }

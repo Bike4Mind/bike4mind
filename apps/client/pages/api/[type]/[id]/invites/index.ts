@@ -126,11 +126,12 @@ const handler = baseApi()
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
 
-      const body = createInviteBodySchema.parse(req.body);
+      const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          { id, type: inviteType, ...body },
+          // Omit expiresAt when undefined so the service's prefault default applies.
+          { id, type: inviteType, ...restBody, ...(expiresAt !== undefined && { expiresAt }) },
           {
             db: {
               invites: inviteRepository,
@@ -188,7 +189,7 @@ const handler = baseApi()
                     projectId: id,
                     projectName: project.name,
                     memberId: recipientId,
-                    memberRole: (body.permissions || []).join(','),
+                    memberRole: (restBody.permissions || []).join(','),
                   },
                 },
                 { ability: req.ability }
@@ -216,7 +217,7 @@ const handler = baseApi()
           documentName,
           typeName,
           inviteLink,
-          body.description
+          restBody.description
         ).catch(error => {
           req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
         });
