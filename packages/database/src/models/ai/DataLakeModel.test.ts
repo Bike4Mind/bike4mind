@@ -1383,6 +1383,69 @@ describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
   });
 });
 
+describe('DataLakeRepository purge-accept claims (#1744)', () => {
+  setupMongoTest();
+
+  it('claims deleted -> purging exactly once', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-once', status: 'deleted' }));
+
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
+    // A second accept (another tab, a duplicate request) must lose rather than re-accept.
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+  });
+
+  it.each(['active', 'archived', 'restoring', 'draft'] as const)(
+    'refuses to claim a lake in %s status',
+    async status => {
+      const created = await dataLakeRepository.create(baseLake({ slug: `purge-from-${status}`, status }));
+      expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  );
+
+  it('LOSES to a restore that got there first, which is the race #1744 turns on', async () => {
+    // The ordering the bug needed: the caller read 'deleted', a restore moved the lake, and the
+    // accept lands afterwards. With a plain status write this would overwrite the restore and the
+    // sweep would later be abandoned; the filter is what turns it into a refusal.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-loses', status: 'deleted' }));
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+  });
+
+  it('claimRestoring loses to a purge that got there first', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'restore-loses', status: 'deleted' }));
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(true);
+
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
+  });
+
+  it('claimRestoring is re-entrant from restoring, so a crashed attempt can retry', async () => {
+    // matchedCount, not modifiedCount: the second call changes nothing and must still be allowed,
+    // or a retry of a crashed restore would be refused as if a purge had won.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'restore-reentrant', status: 'deleted' }));
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+  });
+
+  it('releases purging -> deleted so a refused sweep leaves a visible, retryable lake', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release', status: 'deleted' }));
+    await dataLakeRepository.claimPurging(created.id);
+
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleted');
+  });
+
+  it('releases nothing when the lake is not purging, so it can never resurrect another transition', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'release-noop', status: 'active' }));
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('active');
+  });
+});
+
 describe('DataLakeRepository.activateIfDraft', () => {
   setupMongoTest();
 
