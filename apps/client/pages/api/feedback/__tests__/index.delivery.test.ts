@@ -80,12 +80,15 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.
 const mockRecordSuccess = vi.fn();
 const mockRecordFailure = vi.fn();
 const mockRecordSkipped = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
-  recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
-  recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),
-  recordFeedbackDeliverySkipped: (...args: unknown[]) => mockRecordSkipped(...args),
-  ALARM_WORTHY_SKIP_REASONS: ['unconfigured_webhook', 'no_recipients'],
-}));
+vi.mock('@server/utils/cloudwatch', async () => {
+  const actual = await vi.importActual<typeof import('@server/utils/cloudwatch')>('@server/utils/cloudwatch');
+  return {
+    recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
+    recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),
+    recordFeedbackDeliverySkipped: (...args: unknown[]) => mockRecordSkipped(...args),
+    ALARM_WORTHY_SKIP_REASONS: actual.ALARM_WORTHY_SKIP_REASONS,
+  };
+});
 
 import '../index';
 import { Logger } from '@bike4mind/observability';
@@ -238,6 +241,19 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(body.delivery.delivered).toBe(true);
     expect(body.delivery.channels.email.outcome).toBe('delivered');
     expect(mockRecordFailure).toHaveBeenCalledWith('email', 'production', 'publish_error', 'production');
+  });
+
+  it('logs a partial email failure even though the channel outcome reports delivered', async () => {
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'a@x.com, b@x.com';
+    mockEmailPublish.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('smtp down'));
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(Logger.error).toHaveBeenCalledWith(
+      '[feedback] partial email delivery - some recipients did not receive it',
+      expect.objectContaining({ succeeded: 1, attempted: 2 })
+    );
   });
 
   it('reports email failed and delivered:false when Slack is off and every publish rejects', async () => {

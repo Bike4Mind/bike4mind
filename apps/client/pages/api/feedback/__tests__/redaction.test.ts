@@ -78,12 +78,15 @@ vi.mock('@server/utils/config', () => ({
 
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
-  recordFeedbackDeliverySuccess: vi.fn(),
-  recordFeedbackDeliveryFailure: vi.fn(),
-  recordFeedbackDeliverySkipped: vi.fn(),
-  ALARM_WORTHY_SKIP_REASONS: ['unconfigured_webhook', 'no_recipients'],
-}));
+vi.mock('@server/utils/cloudwatch', async () => {
+  const actual = await vi.importActual<typeof import('@server/utils/cloudwatch')>('@server/utils/cloudwatch');
+  return {
+    recordFeedbackDeliverySuccess: vi.fn(),
+    recordFeedbackDeliveryFailure: vi.fn(),
+    recordFeedbackDeliverySkipped: vi.fn(),
+    ALARM_WORTHY_SKIP_REASONS: actual.ALARM_WORTHY_SKIP_REASONS,
+  };
+});
 
 import '../index';
 

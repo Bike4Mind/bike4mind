@@ -289,6 +289,16 @@ const handler = baseApi()
           ? recordFeedbackDeliveryFailure('email', stageClass, 'publish_error', Config.STAGE)
           : undefined,
       ]);
+      // A partial failure still trips the alarm-worthy metric above, but the channel-level
+      // outcome below reports 'delivered' (some recipients did get it), so isIncident() never
+      // sees it - log it here, the one place that still has the per-recipient counts.
+      if (succeeded > 0 && succeeded < emailResults.length) {
+        Logger.error('[feedback] partial email delivery - some recipients did not receive it', {
+          feedbackId: newFeedback.id,
+          succeeded,
+          attempted: emailResults.length,
+        });
+      }
       // 'email delivered' means the outbound-mail event was enqueued (EmailEvents.Send.publish
       // resolved), not that SMTP actually sent it - the downstream mail consumer that does the
       // real send is a separate, uninstrumented subsystem.
