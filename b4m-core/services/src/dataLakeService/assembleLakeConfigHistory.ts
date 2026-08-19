@@ -58,8 +58,8 @@ const userDisplayName = (u: { name?: string; username?: string } | undefined): s
 
 /**
  * Map one persisted event to its view row, WITHOUT name resolution - pure, so the shape is testable
- * without a user repository. `changes` is passed through by reference: the event is immutable and
- * this view is serialized straight out, so copying it would buy nothing.
+ * without a user repository. Each change is narrowed to its wire form on the way out - see
+ * `toHistoryFieldChange`.
  */
 export function toLakeConfigHistoryEntry(
   event: Pick<
