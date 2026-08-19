@@ -31,7 +31,11 @@ export const deleteSessionMessage = async (
 
   message.deletedAt = new Date();
 
-  await db.chatHistories.update(message);
+  // Only reachable if the message was deleted between the findBySessionIdAndId check above and
+  // this update (or update() encounters some other unmatched-document case) - report it as a real
+  // failure rather than reporting success on a write that touched nothing.
+  const updated = await db.chatHistories.update(message);
+  if (!updated) throw new NotFoundError('Message not found');
 
-  return message;
+  return updated;
 };
