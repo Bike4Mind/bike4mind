@@ -32,8 +32,12 @@ const handler = baseApi()
 
       const params = createFabFileSchema.parse(req.body);
 
-      // Same feature gate as the presign siblings: when this create is bound to a data lake
-      // batch, the feature must actually be on.
+      // Same effective gate as the presign siblings (generate-presigned-url.ts,
+      // generate-presigned-urls-batch.ts): when this create is bound to a data lake batch, the
+      // feature must actually be on. Same 403 + FEATURE_DISABLED code, but not identical
+      // response shape - this route throws ForbiddenError (rendered by errorHandler as
+      // {code, name, error, request_id}), matching generate-presigned-url.ts, while
+      // generate-presigned-urls-batch.ts still hand-rolls res.status(403).json({error, code}).
       if (params.batchId) {
         const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
         if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
