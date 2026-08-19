@@ -10,6 +10,13 @@ export interface AppliedTag {
   strength: number;
 }
 
+// Mirrors ApplyTaxonomyRequestInput's Zod bounds (schemas/dataLake.ts) - a category set built
+// here that exceeds what apply will later accept would get stored as 'ready' and then
+// permanently rejected on every apply attempt, so sanitizing needs to enforce the same caps
+// the request schema does, not just cap what it stores as valid-shaped.
+const MAX_TAGS = 100;
+const MAX_MATCHING_FOLDERS_PER_TAG = 100;
+
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
 const clampStrength = (value: unknown, fallback: number): number =>
@@ -52,7 +59,9 @@ export function sanitizeCategories(
         originalName,
         strength: clampStrength(cat.confidence, 0.7),
         source: 'ai' as const,
-        matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
+        matchingFolders: Array.isArray(cat.matchingFolders)
+          ? cat.matchingFolders.filter(isNonEmptyString).slice(0, MAX_MATCHING_FOLDERS_PER_TAG)
+          : [],
         deleted: false,
       };
     })
@@ -62,7 +71,8 @@ export function sanitizeCategories(
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    });
+    })
+    .slice(0, MAX_TAGS);
 }
 
 export function sanitizeFileAssignments(

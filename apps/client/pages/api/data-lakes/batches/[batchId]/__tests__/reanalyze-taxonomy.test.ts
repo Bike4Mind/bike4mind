@@ -153,17 +153,23 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   });
 
   // Unlike the queue handler, there's no SQS retry safety net on this synchronous path -
-  // an unexpected error must fail the batch immediately with the real reason rather than
-  // leaving it stuck in 'analyzing' until the reconciler's generic timeout kicks in.
-  it('reverts the batch to failed with the real error and rethrows on an unexpected exception', async () => {
+  // an unexpected error must fail the batch immediately rather than leaving it stuck in
+  // 'analyzing' until the reconciler's generic timeout kicks in. The stored taxonomyError is
+  // a curated message (matching every other writer of that field) - the raw exception isn't
+  // user-facing, so it goes to the logger instead.
+  it('reverts the batch to failed with a curated message, logs the real error, and rethrows on an unexpected exception', async () => {
     const boom = new Error('OpenAI request timed out');
     h.analyzeBatchTaxonomy.mockRejectedValue(boom);
     const { res } = makeRes();
+    const request = req('b1');
 
-    await expect(run('b1', res)).rejects.toThrow(boom);
+    await expect((handler as (req: unknown, res: unknown) => Promise<void>)(request, res)).rejects.toThrow(boom);
 
     expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['analyzing'], 'failed', {
-      taxonomyError: 'OpenAI request timed out',
+      taxonomyError: 'Re-analysis failed unexpectedly - try again',
     });
+    expect((request as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('OpenAI request timed out')
+    );
   });
 });

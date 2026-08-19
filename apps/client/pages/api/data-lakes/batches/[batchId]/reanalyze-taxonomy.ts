@@ -62,12 +62,18 @@ const handler = baseApi()
       });
     } catch (error) {
       // Unlike the queue handler, there's no SQS retry available on this synchronous
-      // request/response path - surface the real failure immediately (with a real message)
-      // instead of leaving the batch stuck in 'analyzing' until the reconciler force-fails
-      // it with a generic "Timed out" message ~10 minutes later.
+      // request/response path - fail the batch immediately instead of leaving it stuck in
+      // 'analyzing' until the reconciler force-fails it ~10 minutes later. The stored
+      // taxonomyError is a curated message, matching every other writer of that field
+      // (analyzeBatchTaxonomy's fail(), the daily-cap revert, the reconciler) - the raw
+      // exception (which can be a DB/network error, not something user-facing) goes to the
+      // logger instead of straight to the client.
+      req.logger.error(
+        `Re-analyze taxonomy failed for batch ${batchId}: ${error instanceof Error ? error.message : String(error)}`
+      );
       await dataLakeBatchRepository
         .setTaxonomyStatusIfActive(batchId, ['analyzing'], 'failed', {
-          taxonomyError: error instanceof Error ? error.message : String(error),
+          taxonomyError: 'Re-analysis failed unexpectedly - try again',
         })
         .catch(() => {});
       throw error;

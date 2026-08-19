@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { TaxonomyTag, TaxonomyTagSet } from '../types/entities/DataLakeTypes';
-import { appliedTagsForBatch, folderMatches, tagsForFile } from './dataLakeTaxonomy';
+import { appliedTagsForBatch, folderMatches, sanitizeCategories, tagsForFile } from './dataLakeTaxonomy';
 
 /**
  * Regression coverage: the Taxonomy step used to be pure theater - inference returned
@@ -156,6 +156,24 @@ describe('tagsForFile', () => {
       'acme:'
     );
     expect(names(result)).toEqual(['acme:legal_docs', 'acme:type:contract']);
+  });
+});
+
+describe('sanitizeCategories', () => {
+  it('caps the number of categories at 100, mirroring ApplyTaxonomyRequestInput', () => {
+    const categories = Array.from({ length: 150 }, (_, i) => ({ tagName: `type:cat${i}` }));
+
+    const result = sanitizeCategories(categories, 'acme');
+
+    expect(result).toHaveLength(100);
+  });
+
+  it('caps matchingFolders per category at 100, mirroring ApplyTaxonomyRequestInput', () => {
+    const matchingFolders = Array.from({ length: 150 }, (_, i) => `folder${i}`);
+
+    const result = sanitizeCategories([{ tagName: 'type:contract', matchingFolders }], 'acme');
+
+    expect(result[0]?.matchingFolders).toHaveLength(100);
   });
 });
 
