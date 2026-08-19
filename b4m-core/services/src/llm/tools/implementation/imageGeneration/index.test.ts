@@ -129,17 +129,17 @@ describe('image_generation local-image env gating (self-host only)', () => {
 });
 
 describe('image_generation Gemini branch parameter passthrough', () => {
-  // Regression: Google's generateImages API rejects the mere PRESENCE of `enhancePrompt`/`seed`
-  // in the request, not just an unsupported value. GeminiImageService.buildGenerationConfig()
-  // sets them whenever the option is `!== undefined`, so forwarding prompt_upsampling/seed here -
-  // even `false`/absent-seed - broke every Gemini generation unconditionally. output_format and
-  // safety_tolerance are unaffected and must keep flowing through.
+  // The tool passes safety_tolerance/prompt_upsampling/seed/output_format straight through to
+  // GeminiImageService.generate() - buildGenerationConfig() is the single place that refuses to
+  // forward prompt_upsampling/seed to Google's API (see GeminiImageService's own test suite),
+  // since Google rejects the mere PRESENCE of those two fields. This just confirms the tool isn't
+  // dropping anything before it gets there.
   beforeEach(() => {
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue([]);
   });
 
-  it('omits prompt_upsampling and seed from GeminiImageService.generate, but still forwards output_format/safety_tolerance', async () => {
+  it('forwards prompt_upsampling, seed, safety_tolerance, and output_format to GeminiImageService.generate', async () => {
     const context = createFakeContext();
 
     const { toolFn } = imageGenerationTool.implementation(context, {
@@ -152,13 +152,14 @@ describe('image_generation Gemini branch parameter passthrough', () => {
 
     await toolFn({ prompt: 'a red bike' });
 
-    expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
-    const [, callOptions] = mockGeminiGenerate.mock.calls[0];
-    expect(callOptions).not.toHaveProperty('prompt_upsampling');
-    expect(callOptions).not.toHaveProperty('seed');
-    expect(callOptions).toMatchObject({
-      safety_tolerance: 1,
-      output_format: 'jpeg',
-    });
+    expect(mockGeminiGenerate).toHaveBeenCalledWith(
+      'a red bike',
+      expect.objectContaining({
+        prompt_upsampling: true,
+        seed: 42,
+        safety_tolerance: 1,
+        output_format: 'jpeg',
+      })
+    );
   });
 });

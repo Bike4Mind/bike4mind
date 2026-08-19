@@ -308,10 +308,11 @@ export const imageGenerationTool: ToolDefinition = {
           aspect_ratio: aspect_ratio,
           output_format: output_format ?? 'png',
           safety_tolerance: safety_tolerance,
-          // Deliberately NOT forwarding prompt_upsampling/seed: Google's generateImages API
-          // rejects the mere PRESENCE of `enhancePrompt`/`seed`, not just an unsupported value,
-          // so passing either (even `false`/absent-seed) breaks every Gemini generation
-          // unconditionally. The BFL branch above is unaffected - only Gemini's API rejects these.
+          // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
+          // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
+          // forward them to Google's API, since it rejects their mere presence.
+          prompt_upsampling: prompt_upsampling,
+          seed: seed,
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);

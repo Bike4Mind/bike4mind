@@ -234,7 +234,7 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
   // Regression: safety_tolerance, prompt_upsampling, seed, and output_format were undeclared on
   // GenerateImageIvokeParamsSchema, so Zod stripped them from parsedBody before `...rest` ever
   // reached the queue payload - the user's chosen values were silently replaced by schema defaults.
-  const makeService = (startImageGenerationProcess: ReturnType<typeof vi.fn>) => {
+  const makeInvokeService = (startImageGenerationProcess: ReturnType<typeof vi.fn>) => {
     const findById = vi.fn(async () => ({ id: 'session1' }) as ISessionDocument);
     const create = vi.fn(async (input: any) => ({ id: 'quest1', ...input }));
     const update = vi.fn(async () => undefined);
@@ -247,12 +247,12 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
       },
       startImageGenerationProcess,
     } as any);
-    return service;
+    return { service, create };
   };
 
   it('forwards the user-set safety_tolerance, prompt_upsampling, seed, and output_format to the queue payload', async () => {
     const startImageGenerationProcess = vi.fn(async () => undefined);
-    const service = makeService(startImageGenerationProcess);
+    const { service } = makeInvokeService(startImageGenerationProcess);
 
     await service.invoke({
       body: {
@@ -277,15 +277,35 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
       })
     );
   });
+
+  it('drops a null seed/output_format from promptMeta.parameters instead of persisting null (breaks /api/feedback otherwise)', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cat',
+        model: ImageModels.FLUX_PRO_1_1,
+        fabFileIds: [],
+        seed: null,
+        output_format: null,
+      } as any,
+      userId: 'user1',
+    });
+
+    const questInput = create.mock.calls[0][0];
+    expect(questInput.promptMeta.model.parameters).not.toHaveProperty('seed');
+    expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
+  });
 });
 
 describe('ImageGenerationService.process (Gemini provider-dispatch parameter passthrough)', () => {
-  // Regression: Google's generateImages API rejects the mere PRESENCE of `enhancePrompt`/`seed`
-  // in the request, not just an unsupported value. ImageGenerationBodySchema.prompt_upsampling is
-  // always defined post-parse (prefaulted), so once GenerateImageIvokeParamsSchema stopped
-  // stripping it, process()'s pre-existing (unconditional) forwarding of prompt_upsampling to
-  // geminiService.generate() broke every Gemini generation, even at default settings. seed must
-  // stay omitted too. output_format/safety_tolerance are unaffected and must keep flowing.
+  // process() passes safety_tolerance/prompt_upsampling/seed/output_format straight through to
+  // geminiService.generate() - GeminiImageService.buildGenerationConfig() is the single place
+  // that refuses to forward prompt_upsampling/seed to Google's API (see its own test suite),
+  // since Google rejects the mere PRESENCE of those two fields. This test just confirms process()
+  // isn't dropping anything before it gets there.
   const geminiModelInfo = {
     id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
     type: 'image',
@@ -297,7 +317,7 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
     pricing: { 1: { input: 0, output: 0 } },
   } as unknown as ModelInfo;
 
-  const makeService = () => {
+  const makeProcessService = () => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
     const findById = vi.fn(async () => quest as any);
     const update = vi.fn(async () => undefined);
@@ -319,12 +339,12 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
     return service;
   };
 
-  it('omits prompt_upsampling and seed from GeminiImageService.generate, but still forwards output_format/safety_tolerance', async () => {
+  it('forwards safety_tolerance, prompt_upsampling, seed, and output_format to GeminiImageService.generate', async () => {
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     mockGeminiGenerate.mockReset();
     mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation below
 
-    const service = makeService();
+    const service = makeProcessService();
 
     await service.process({
       body: {
@@ -341,11 +361,14 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
       logger: silentLogger,
     });
 
-    expect(mockGeminiGenerate).toHaveBeenCalledTimes(1);
-    const [, callOptions] = mockGeminiGenerate.mock.calls[0];
-    expect(callOptions).not.toHaveProperty('prompt_upsampling');
-    expect(callOptions).not.toHaveProperty('seed');
-    expect(callOptions).toMatchObject({ output_format: 'jpeg' });
+    expect(mockGeminiGenerate).toHaveBeenCalledWith(
+      'a red bicycle',
+      expect.objectContaining({
+        seed: 42,
+        prompt_upsampling: true,
+        output_format: 'jpeg',
+      })
+    );
   });
 });
 
