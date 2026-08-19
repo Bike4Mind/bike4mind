@@ -156,8 +156,15 @@ export function useUpdateDataLake() {
       const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}`, params);
       return response.data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // This mutation is the ONLY writer of `requiredPassageTokenTarget`, and that value is the sole
+      // input both the health report (#1666) and the convergence plan (#1681) are graded against -
+      // change it and which files are conformant, the reachable-content headline, the convergeable
+      // count and the bulk-change share all move at once. Neither query polls or refetches on focus,
+      // so without this they keep rendering the pre-change verdict against the new policy.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(variables.id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(variables.id) });
       toast.success('Data lake updated');
     },
     onError: (error: Error) => {
@@ -667,10 +674,157 @@ export function useRechunkDataLake(dataLakeId: string | null) {
         // for the whole rebuild while the "to rebuild" chip ticks to zero beside it, which reads as
         // "the rebuild accomplished nothing". The other two lake mutations already invalidate both.
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+        // A rebuild re-chunks files, which restamps the very fields the convergence plan grades
+        // (the chunk target and the largest-chunk length) - so the sibling action's counts move too.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(dataLakeId) });
       }
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to start rebuild');
+    },
+  });
+}
+
+/**
+ * The convergence plan (#1681): what a run WOULD rewrite, what it refuses and why, and whether the
+ * size of the change needs an explicit confirmation. Read-only - safe to fetch for any reader.
+ *
+ * Refusals a caller must render rather than swallow:
+ *  - `refusal: 'policyInherited'` - the lake declares no chunk policy of its own, so it is measured
+ *    by health but never repaired (epic decision 5).
+ *  - `crossLakeConflictCount` - members another lake requires a different chunk target for.
+ *    Repairing them would make the two lakes take turns rewriting the file forever.
+ */
+export interface LakeConvergencePlanResponse {
+  refusal: 'policyInherited' | null;
+  policy: { requiredTarget: number; effectiveRequiredTarget: number; policyChars: number };
+  membersConsidered: number;
+  /** Whole-lake drift, BEFORE the per-wave cross-lake check. Not an action count - see `waveSize`. */
+  convergeableCount: number;
+  /** What a run would actually enqueue now. THE number to label the action with. */
+  waveSize: number;
+  changeShare: number;
+  requiresConfirmation: boolean;
+  bulkChangeShareThreshold: number;
+  skipped: {
+    conformant: number;
+    unmeasured: number;
+    indexingInFlight: number;
+    previouslyFailed: number;
+    irreducibleOvershoot: number;
+  };
+  crossLakeConflicts: {
+    fabFileId: string;
+    fileName?: string;
+    // Both optional: the GET is read-gated and strips them (`redactCrossLakeIdentities`), so typing
+    // `name` as required would have TypeScript vouch for a field the redaction guarantees is absent.
+    conflictingLakes: { lakeId?: string; name?: string; effectiveRequiredTarget: number }[];
+  }[];
+  crossLakeConflictCount: number;
+  scanTruncated: boolean;
+}
+
+export type LakeConvergenceRunResponse = LakeConvergencePlanResponse & {
+  /**
+   * `noop` = the run was allowed but had nothing it could repair (see the toast for why).
+   * `paused` = the convergence kill switch is on, so the run refused BEFORE touching any file.
+   */
+  outcome: 'enqueued' | 'noop' | 'paused' | 'confirmationRequired' | 'policyInherited';
+  detected: number;
+  enqueued: number;
+  /** Members reset but never enqueued (every send failed) - out of search with nothing rebuilding them. */
+  stranded: number;
+};
+
+/** Hook: read a lake's convergence plan. Not polled - it is a preview, refreshed by the mutation. */
+export function useLakeConvergencePlan(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.convergencePlan(dataLakeId ?? ''),
+    queryFn: async (): Promise<LakeConvergencePlanResponse> => {
+      const res = await api.get<LakeConvergencePlanResponse>(`/api/data-lakes/${dataLakeId}/converge`);
+      return res.data;
+    },
+    enabled: enabled && !!dataLakeId,
+  });
+}
+
+/**
+ * Hook: run one bounded convergence wave. `confirm` is only consulted when the plan trips the
+ * bulk-change guard, and the caller must have shown the user the share it is confirming - the guard
+ * exists to stop a mass rewrite nobody looked at, so passing it unconditionally defeats it.
+ */
+export function useConvergeDataLake(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { limit?: number; confirm?: boolean } = {}) => {
+      const res = await api.post<LakeConvergenceRunResponse>(`/api/data-lakes/${dataLakeId}/converge`, vars);
+      return res.data;
+    },
+    onSuccess: data => {
+      if (data.outcome === 'policyInherited') {
+        toast.error('This lake has no chunk policy of its own, so there is nothing to converge toward.');
+      } else if (data.outcome === 'paused') {
+        toast.warning(
+          'Background lake work is paused, so nothing was started. No files were changed - re-run this once ' +
+            'an administrator turns convergence back on.'
+        );
+      } else if (data.outcome === 'confirmationRequired') {
+        // Not an error toast: the guard fired as designed and the dialog now shows the share.
+        toast.warning(
+          `This would rewrite ${Math.round(data.changeShare * 100)}% of the lake (${data.convergeableCount} of ` +
+            `${data.membersConsidered} files). Confirm to continue.`
+        );
+      } else if (data.enqueued > 0) {
+        toast.success(
+          `Converging ${data.enqueued} file(s) to the lake's chunk policy. ` +
+            'They are unsearchable until re-indexing completes.'
+        );
+        // A PARTIAL queue failure - some sends landed, some were rejected - takes this arm and never
+        // reaches the `stranded` branch below, so the success toast alone would report only the good
+        // half. The rejected files are in the state that branch describes: reset, their chunk rows
+        // orphaned, out of search, with nothing scheduled to rebuild them. A throttle or a handful of
+        // rejected sends is at least as likely as a total outage, so this is appended rather than
+        // restructuring the chain, which would lose the count of what DID start.
+        if (data.stranded > 0) {
+          toast.error(
+            `${data.stranded} of them could not be started - the chunking queue rejected the request. Those files ` +
+              'are out of search until this run is repeated.'
+          );
+        }
+      } else if (data.stranded > 0) {
+        // Files were reset and then nothing reached the queue. Checked before the two "nothing to
+        // do" branches below: these are sitting at chunked:false / chunkCount:0 with their old chunk
+        // rows orphaned, so the one thing this must not say is that the lake is fine. An error, not
+        // a warning - unlike a cross-lake refusal this is infrastructure failing, and repeating the
+        // run is the action that fixes it.
+        toast.error(
+          `Could not start convergence for ${data.stranded} file(s) - the chunking queue rejected the request. ` +
+            'Those files are out of search until this run is repeated; if it keeps failing, contact an administrator.'
+        );
+      } else if (data.crossLakeConflictCount > 0) {
+        // Must NOT read as "already converged". The lake still has off-policy files; they simply
+        // cannot be repaired from here, and saying otherwise would send the owner away from the one
+        // action that fixes it (aligning the two lakes' targets).
+        toast.warning(
+          `Nothing could be converged: ${data.crossLakeConflictCount} remaining file(s) belong to another ` +
+            'data lake that requires a different passage target. Align the two lakes, or remove the files from one.'
+        );
+      } else {
+        toast.success("Every measurable file already satisfies this lake's chunk policy.");
+      }
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // A convergence wave mass-mutates the exact rollups health is computed from, and the health
+        // query has no refetchInterval and does not refetch on focus - same reason the rebuild
+        // mutation invalidates it explicitly. Also invalidated on the guard/refusal outcomes, which
+        // enqueue nothing: harmless, and it keeps the invalidation set from depending on the branch.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to start convergence');
     },
   });
 }

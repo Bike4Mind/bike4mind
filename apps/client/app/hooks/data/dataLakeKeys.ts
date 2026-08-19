@@ -40,6 +40,9 @@ export const dataLakeKeys = {
   /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
    *  passages" badge, polled while a rebuild drains. */
   rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,
+  /** One lake's convergence plan (GET /api/data-lakes/:id/converge), #1681 - the preview an owner
+   *  reads before confirming a wave. */
+  convergencePlan: (dataLakeId: string) => ['dataLakeConvergencePlan', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>

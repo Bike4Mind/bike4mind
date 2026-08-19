@@ -12,12 +12,16 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
-import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
 import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@server/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   isBatchComplete,
@@ -54,8 +58,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
   // Convergence kill switch (#1676): re-check inside the SHARED handler so a paused switch stops
   // background work already on the queue. Gated before any DB read, so a user upload (origin absent)
-  // short-circuits with zero I/O. Returning drops the message; the file stays un-chunked (chunkCount
-  // 0), so the rescue sweep re-selects it once convergence resumes - never a lost user upload.
+  // short-circuits with zero I/O.
+  //
+  // Dropping the message is NOT the whole job. By the time this runs, the producer has already reset
+  // the wave's chunk state, so the file sits at chunkCount 0 with no error - and that shape is
+  // indistinguishable from an image or a pending upload, which is how it fell out of health's
+  // denominator, out of the convergence plan, out of the retrieval withhold and past the rescue
+  // sweep's own filter, all at once. So mark it before returning: `CONVERGENCE_PAUSED_CHUNK_NOTE` is
+  // what every one of those readers keys on to tell "its passages were deleted" from "it never had
+  // any". Mirrors what the vectorize handler already does for its half of the same switch.
   if (
     await isConvergenceHalted(
       { origin, lakeId },
@@ -67,10 +78,47 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
+    // Retried in-process, then FAILED to SQS rather than acked. Losing this write loses the ONE
+    // signal that tells "its passages were deleted" from "it never had any" - and the producer has
+    // already deleted them, so acking a lost marker strands the file invisibly with nothing left to
+    // retry it. The in-process attempts handle the realistic case (a pool timeout, a stepdown, a
+    // blip); the throw handles the rest.
+    //
+    // Throwing is safe and bounded, which is why it beats acking here:
+    //  - Nothing destructive has run in this branch, so a redelivery is idempotent - it re-reads the
+    //    switch and either marks again or, if the switch has since gone OFF, rebuilds the file for
+    //    real, which is a better outcome than any marker.
+    //  - It cannot spin: fabFileChunkQueue sets `dlq: { retry: 3 }` (infra/queues.ts), so this is at
+    //    most three receives before the message lands in fabFileChunkQueueDLQ - which is already in
+    //    DLQ_DESCRIPTORS and dlqRegistry, so it alarms and is replayable from admin. A permanently
+    //    invisible file becomes a bounded retry and then a visible operational signal.
+    //
+    // Note the 60-minute visibility timeout on that queue: a redelivery is an hour away, so this
+    // guarantees eventual correctness, NOT a short window. Closing the window itself needs the
+    // marker to be atomic with the reset that creates the state, which is a separate change - the
+    // producer cannot reuse THIS marker for that, because a file merely awaiting a normal rebuild
+    // would then read to every reader as permanently paused.
+    for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
+      try {
+        await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_CHUNK_NOTE });
+        break;
+      } catch (err) {
+        if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
+          logger.error(
+            `[convergenceKillSwitch] could not mark ${fabFileId} as paused mid-rechunk after ` +
+              `${MARK_PAUSED_MAX_ATTEMPTS} attempts; failing the delivery so SQS retries rather than ` +
+              `stranding the file invisibly: ${err}`
+          );
+          throw err;
+        }
+        await new Promise(resolve => setTimeout(resolve, MARK_PAUSED_RETRY_DELAY_MS * attempt));
+      }
+    }
     logger.log(
       `[convergenceKillSwitch] Paused background chunk work for fabFileId ${fabFileId}` +
         (lakeId ? ` (lake ${lakeId})` : '') +
-        ' - kill switch on; message dropped, will re-run when convergence resumes'
+        ' - kill switch on; message dropped and the file marked as having no passages. Convergence' +
+        ' re-selects it (and health reports it) until it is rebuilt.'
     );
     return;
   }
@@ -187,8 +235,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
     if (fabFile.batchId) logger.updateMetadata({ batchId: fabFile.batchId });
 
-    const fabFileChunks = await withTransaction(async () =>
-      fabFilesService.chunkFabfile(
+    const chunkAdapters = {
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        users: User,
+      },
+      storage: {
+        getContentAsBuffer: (filePath: string) => {
+          return getFilesStorage().getContentAsBuffer(filePath);
+        },
+      },
+      logger,
+      searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+    };
+
+    // Two phases, and only the second one is transactional (#1681 constraint 3). The S3 fetch and
+    // full tokenization used to run INSIDE `withTransaction`, which put them under the transaction
+    // lifetime: a member too large to finish aborts with a code `withTransaction` classifies as
+    // transient, so it redid the fetch and the tokenization up to `maxRetries` more times before
+    // failing deterministically. Convergence sweeps the LARGEST documents first, which is exactly
+    // that population. Now a transient write conflict retries the writes alone.
+    const fabFileChunks = await (async () => {
+      const prepared = await fabFilesService.prepareFabFileChunks(
         user,
         {
           fabFileId,
@@ -196,22 +265,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           passageTokenTarget: requestedPassageTokenTarget,
           chunkClaimedAt: claimedAt,
         },
-        {
-          db: {
-            fabFiles: fabFileRepository,
-            fabFileChunks: fabFileChunkRepository,
-            users: User,
-          },
-          storage: {
-            getContentAsBuffer: (filePath: string) => {
-              return getFilesStorage().getContentAsBuffer(filePath);
-            },
-          },
-          logger,
-          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
-        }
-      )
-    ).catch(async (err: unknown) => {
+        chunkAdapters
+      );
+      return withTransaction(async () => fabFilesService.commitFabFileChunks(prepared, chunkAdapters));
+    })().catch(async (err: unknown) => {
       // A stale-claim takeover already reassigned this file to a successor mid-run (#1802 Phase
       // 2) - not a failure, so this delivery must NOT count toward batch failure accounting or
       // reach the DLQ. Returning null (rather than throwing) lets SQS delete the message as
@@ -382,9 +439,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Cross-lake chunk-policy conflict (#1662): record the effective target these chunks were built
     // with and report any member lake whose REQUIRED policy they do not satisfy. A report, not a
     // failure - the file stays chunked at its owner-altitude policy; a lake is only a constraint, so
-    // we never re-chunk to satisfy one lake (which would rewrite shared chunks for non-members and
-    // oscillate a file in two disagreeing lakes). Best-effort: a detection failure must not fail an
-    // otherwise-successful chunk and force a wasted re-chunk on redelivery.
+    // THIS path never re-chunks to satisfy one lake (which would rewrite shared chunks for
+    // non-members and oscillate a file in two disagreeing lakes).
+    //
+    // Owner-triggered convergence (#1681) is the one door that does re-chunk at a lake's required
+    // target, and it is allowed to only because it first proves the disagreement does not exist:
+    // it refuses any member whose OTHER member lakes declare a different effective target. Nothing
+    // here changes - it still just records what the chunks were built with, and the target it
+    // records is the one the convergence message asked for, so the conflict clears on that pass.
+    //
+    // Best-effort: a detection failure must not fail an otherwise-successful chunk and force a
+    // wasted re-chunk on redelivery.
     try {
       const conflict = await dataLakeService.recomputeFileChunkPolicyConflict(
         { id: fabFileId, userId: fabFile.userId, tags: fabFile.tags },

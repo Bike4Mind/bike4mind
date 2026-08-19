@@ -175,6 +175,11 @@ const toManageableConfig = (
   // current selection; absent for a non-editor OR a lake predating the field (the picker then
   // falls back to the default mode, matching how the resolver treats an absent value).
   ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
+  // Editor-only, same gate. Absent when the lake declares no target, which is exactly the state the
+  // settings field renders as blank - and the state in which the lake never converges (#1681).
+  ...(manageable && typeof dl.requiredPassageTokenTarget === 'number'
+    ? { requiredPassageTokenTarget: dl.requiredPassageTokenTarget }
+    : {}),
   // Editor-only, but ALWAYS present (defaulted to 0) when manageable, unlike the fields above -
   // its presence is the client's spend-tab visibility signal, so a zero-spend manageable lake
   // must not look identical to a non-manageable one.

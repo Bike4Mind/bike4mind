@@ -931,6 +931,38 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     }>
   >;
   /**
+   * Per-member facts owner-triggered convergence (#1681) decides on. Deliberately NOT
+   * `findDataLakeHealthMembers`: convergence asks a different question and needs three fields health
+   * does not (the owner `userId` to re-enqueue under, the #1662 stamped chunk target, and the file's
+   * lake meta-tags for the cross-lake oscillation check), while needing none of health's char sums.
+   * Same membership + liveness filter, and the same `isChunking: {$ne: true}` exclusion
+   * `findChunkedFilesByScope` uses so a wave cannot select a file a worker is already mid-run on.
+   *
+   * `limit` fetches one extra row so the caller can report the scan as partial rather than silently
+   * planning against a truncated lake - a truncated denominator would understate `changeShare` and
+   * could slip a mass rewrite past the bulk-change guard.
+   */
+  findLakeConvergenceMembers(
+    scope: DataLakeMembershipScope,
+    limit?: number
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      userId: string;
+      fileName?: string;
+      tags: { name: string }[];
+      chunkCount: number;
+      // Same keep-in-sync rule as findDataLakeHealthMembers: vectorizedChunkCount, error and notes
+      // together decide settled vs in-flight, and a row arriving without one silently disables that
+      // arm of the decision rather than failing.
+      vectorizedChunkCount: number | null;
+      error: string | null;
+      notes: string | null;
+      maxChunkCharLength: number | null;
+      chunkedPassageTokenTarget: number | null;
+    }>
+  >;
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */
@@ -959,6 +991,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already claimed and in-flight (isChunking) so a concurrent wave can't re-select them.
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
+  /**
+   * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
+   * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
+   * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to
+   * "Rebuild passages", the one affordance an owner would actually reach for to repair them. They
+   * are identified by CONVERGENCE_PAUSED_CHUNK_NOTE, the same marker health, convergence and the
+   * retrieval withhold key on. Same in-flight exclusion as `findChunkedFilesByScope`.
+   */
+  findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
    * Reset the chunk/vector flags on a set of files so a re-enqueued chunk job actually re-chunks
    * instead of hitting the "already chunked" guard. Clears `error` too - a file that chunked then
