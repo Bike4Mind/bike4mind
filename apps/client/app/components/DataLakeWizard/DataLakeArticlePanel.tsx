@@ -40,6 +40,14 @@ interface DataLakeArticlePanelProps {
    * read-only public lakes. Absent -> read-only (fail-safe).
    */
   canManage?: boolean;
+  /**
+   * Whether the caller may DESTROY a document of this lake - one rung narrower than `canManage`:
+   * a curator or org admin manages membership, but permanent deletion is the owner's (or a
+   * platform admin's) call, and `purgeDataLakeDocument` enforces the same rule. Separate prop
+   * rather than reusing `canManage`, so a curator never meets a red button that 400s after the
+   * confirmation. Absent -> no purge door (fail-safe).
+   */
+  canPurge?: boolean;
   onAskAbout?: (prompt: string) => void;
   onRemoved?: () => void;
 }
@@ -53,6 +61,7 @@ export default function DataLakeArticlePanel({
   file,
   dataLakeId,
   canManage,
+  canPurge,
   onAskAbout,
   onRemoved,
 }: DataLakeArticlePanelProps) {
@@ -134,7 +143,9 @@ export default function DataLakeArticlePanel({
                   Remove
                 </Button>
               </Tooltip>
-              <PurgeLakeDocumentAction file={file} title={title} dataLakeId={dataLakeId} onPurged={onRemoved} />
+              {canPurge && (
+                <PurgeLakeDocumentAction file={file} title={title} dataLakeId={dataLakeId} onPurged={onRemoved} />
+              )}
             </>
           )}
         </Box>

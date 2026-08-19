@@ -21,13 +21,22 @@ const makeDb = () => {
   const files = new Map<string, unknown>([[FILE.id, { ...FILE }]]);
   let chunkCount = 3;
   return {
+    dataLakeAccessGrants: {
+      listByLake: vi.fn(async () => [] as never),
+    },
+    sessions: {
+      findAllWithKnowledgeId: vi.fn(async () => [] as never),
+      update: vi.fn(async () => ({}) as never),
+    },
     dataLakes: {
       findById: vi.fn(async () => ({ ...LAKE }) as never),
       setStats: vi.fn(async () => {}),
       activateIfDraft: vi.fn(async () => {}),
     },
     fabFiles: {
-      findById: vi.fn(async (id: string) => (files.get(id) ?? null) as never),
+      // No `?? null`: `BaseRepository.findById` really returns `undefined` for a missing row
+      // behind its `T | null` cast, and a mock that normalizes it hides an `=== null` check.
+      findById: vi.fn(async (id: string) => files.get(id) as never),
       hardDeleteByIds: vi.fn(async (ids: string[]) => {
         ids.forEach(id => files.delete(id));
         return ids;
@@ -119,12 +128,109 @@ describe('purgeDataLakeDocument', () => {
     expect(db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
   });
 
-  it('refuses a caller who is neither the lake creator nor an admin', async () => {
+  it('refuses a caller who is neither the lake owner nor an admin', async () => {
     const db = makeDb();
     await expect(
       purgeDataLakeDocument({ userId: 'someone-else', isAdmin: false }, 'lake-1', 'file-1', { db })
-    ).rejects.toThrow(/Only the creator/);
+    ).rejects.toThrow(/Only the owner/);
     expect(db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+  });
+
+  it('follows an ownership transfer: the owner grant destroys, the demoted creator cannot', async () => {
+    // The rung that matters most here. `createdByUserId` never moves, so a creator-only gate would
+    // lock out the new owner and leave the right with the person ownership was taken from.
+    const withTransfer = () => {
+      const db = makeDb();
+      db.dataLakeAccessGrants.listByLake = vi.fn(async () => [
+        { principalType: 'user', principalId: 'new-owner', role: 'owner' },
+      ]) as never;
+      return db;
+    };
+
+    const granted = withTransfer();
+    const receipt = await purgeDataLakeDocument({ userId: 'new-owner', isAdmin: false }, 'lake-1', 'file-1', {
+      db: granted,
+    });
+    expect(receipt.verified).toBe(true);
+
+    const demoted = withTransfer();
+    await expect(
+      purgeDataLakeDocument({ userId: 'owner-1', isAdmin: false }, 'lake-1', 'file-1', { db: demoted })
+    ).rejects.toThrow(/Only the owner/);
+    expect(demoted.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+  });
+
+  it('refuses a curator grant - managing membership is not destroying content', async () => {
+    const db = makeDb();
+    db.dataLakeAccessGrants.listByLake = vi.fn(async () => [
+      { principalType: 'user', principalId: 'curator-1', role: 'curator' },
+    ]) as never;
+
+    await expect(
+      purgeDataLakeDocument({ userId: 'curator-1', isAdmin: false }, 'lake-1', 'file-1', { db })
+    ).rejects.toThrow(/Only the owner/);
+    expect(db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+  });
+
+  it('unlinks the destroyed document from every chat that referenced it', async () => {
+    const db = makeDb();
+    db.sessions.findAllWithKnowledgeId = vi.fn(async () => [
+      { id: 'session-1', knowledgeIds: ['file-1', 'other-file'] },
+      { id: 'session-2', knowledgeIds: ['file-1'] },
+    ]) as never;
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db });
+
+    expect(db.sessions.update).toHaveBeenCalledWith({ id: 'session-1', knowledgeIds: ['other-file'] });
+    expect(db.sessions.update).toHaveBeenCalledWith({ id: 'session-2', knowledgeIds: [] });
+  });
+
+  it('hands the owner, the bytes and the pre-delete tags to onPurged', async () => {
+    // The caller's half of the cleanup: the storage quota to return, and the OTHER lakes whose
+    // stats this service cannot reach. Both need values that no longer exist after the writes.
+    const db = makeDb();
+    db.fabFiles.findById = vi.fn(async (id: string) =>
+      id === 'file-1'
+        ? ({
+            ...FILE,
+            filePath: 'uploads/q3.pdf',
+            fileSize: 27707,
+            tags: [
+              { name: 'datalake:sales', strength: 1 },
+              { name: 'datalake:archive', strength: 1 },
+            ],
+          } as never)
+        : (undefined as never)
+    );
+    const onPurged = vi.fn(async () => {});
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, onPurged });
+
+    expect(onPurged).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      fileSize: 27707,
+      tagNames: ['datalake:sales', 'datalake:archive'],
+    });
+  });
+
+  it('reports no bytes to return for a row that never stored an object', async () => {
+    const db = makeDb();
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+  });
+
+  it('keeps the receipt to its declared fields, so recomputeLakeStats extras cannot ride along', async () => {
+    const db = makeDb();
+    db.fabFiles.computeDataLakeStats = vi.fn(async () => ({
+      fileCount: 4,
+      totalSizeBytes: 900,
+      totalChunkedChars: 29262,
+    })) as never;
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db });
+
+    expect(receipt).not.toHaveProperty('totalChunkedChars');
   });
 
   it('404s on a file the lake does not admit, instead of destroying it', async () => {
@@ -156,7 +262,7 @@ describe('purgeDataLakeDocument', () => {
 
   it('404s when the lake itself is gone', async () => {
     const db = makeDb();
-    db.dataLakes.findById = vi.fn(async () => null);
+    db.dataLakes.findById = vi.fn(async () => undefined as never);
     await expect(purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db })).rejects.toThrow('Data lake not found');
   });
 

@@ -8,6 +8,10 @@ const h = vi.hoisted(() => ({
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   logAuditEvent: vi.fn(async () => {}),
+  recomputeStatsForLakeTags: vi.fn(async () => {}),
+  changeStorageSize: vi.fn(async () => {}),
+  userSave: vi.fn(async () => {}),
+  userFindById: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -31,8 +35,13 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
+  sessionRepository: {},
+  changeStorageSize: h.changeStorageSize,
+  withTransaction: (fn: (session: unknown) => unknown) => fn({}),
+  User: { findById: h.userFindById },
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
@@ -40,6 +49,9 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAcces
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
+}));
+vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
+  recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 
 import handler from '../purge';
@@ -76,7 +88,15 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     h.assertLakeWritable.mockReturnValue(undefined);
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
     h.purgeDataLakeDocument.mockResolvedValue(RECEIPT);
+    h.userFindById.mockReturnValue({ session: () => ({ save: h.userSave }) });
   });
+
+  /** Drive the service's post-destruction hook the way the service itself would. */
+  const runOnPurged = async (purged: { ownerUserId: string; fileSize: number; tagNames: string[] }) => {
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await h.purgeDataLakeDocument.mock.calls[0][3].onPurged(purged);
+  };
 
   it('purges against the RESOLVED lake and returns the receipt verbatim', async () => {
     // The route accepts an id OR a slug; handing the service the raw query value would address
@@ -91,6 +111,52 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith(RECEIPT);
+  });
+
+  it('gates on grants like the reversible sibling, rather than encoding half the rule by omission', async () => {
+    // A narrower gate here than on DELETE would 404 a grant-based reader on the destructive door
+    // only, and drop the org-admin rung the service is allowed to apply.
+    h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: ['org-1'] });
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+
+    expect(h.assertLakeAccess.mock.calls[0][2].db.dataLakeAccessGrants).toBeDefined();
+    expect(h.purgeDataLakeDocument.mock.calls[0][0]).toEqual({
+      userId: 'u1',
+      isAdmin: false,
+      administeredOrgIds: ['org-1'],
+    });
+    expect(h.purgeDataLakeDocument.mock.calls[0][3].db.dataLakeAccessGrants).toBeDefined();
+  });
+
+  it("returns the destroyed bytes to the FILE OWNER's quota, not the caller's", async () => {
+    await runOnPurged({ ownerUserId: 'owner-9', fileSize: 27707, tagNames: [] });
+
+    expect(h.userFindById).toHaveBeenCalledWith('owner-9');
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.anything(), -27707);
+  });
+
+  it('touches no quota when the row stored no bytes', async () => {
+    await runOnPurged({ ownerUserId: 'owner-9', fileSize: 0, tagNames: [] });
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds the stats of every OTHER lake that held the document', async () => {
+    // The service recomputes only the lake purged from; without this the others count it forever.
+    await runOnPurged({ ownerUserId: 'owner-9', fileSize: 10, tagNames: ['datalake:sales', 'datalake:archive'] });
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
+      ['datalake:sales', 'datalake:archive'],
+      expect.objectContaining({ actor: { userId: 'u1', isAdmin: false } })
+    );
+  });
+
+  it('still rebuilds the other lakes when the quota write fails', async () => {
+    // The destruction has already committed; a quota hiccup must not skip the rest of the cleanup.
+    h.changeStorageSize.mockRejectedValueOnce(new Error('mongo down'));
+    await runOnPurged({ ownerUserId: 'owner-9', fileSize: 27707, tagNames: ['datalake:sales'] });
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalled();
   });
 
   it('writes a durable audit event carrying the receipt', async () => {

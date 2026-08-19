@@ -86,6 +86,7 @@ import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibil
 import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
+import { useUser } from '@client/app/contexts/UserContext';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
@@ -135,6 +136,7 @@ function compareByCategoryThenTitle(a: IFabFileDocument, b: IFabFileDocument): n
  * the archived/deleted lifecycle sections. Replaces the old stacked list + viewer modals.
  */
 export default function DataLakeManagerPanel() {
+  const isAdmin = useUser(state => state.isAdmin);
   const { data: dataLakes, isLoading } = useGetDataLakes();
   const { data: activeBatches } = useActiveDataLakeBatches();
   // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
@@ -287,6 +289,10 @@ export default function DataLakeManagerPanel() {
             file={selectedFile}
             dataLakeId={activeLake.id}
             canManage={activeLake.canManage}
+            // Narrower than canManage on purpose - see DataLakeArticlePanel's canPurge. `isOwn` is
+            // the DTO's effective-owner flag (grant-aware), and it is false for an admin acting on
+            // someone else's lake, whom the service does allow.
+            canPurge={activeLake.isOwn || isAdmin}
             onRemoved={() => setSelectedFile(null)}
           />
         ) : (

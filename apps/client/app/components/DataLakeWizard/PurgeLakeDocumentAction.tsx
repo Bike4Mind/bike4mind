@@ -23,8 +23,10 @@ interface PurgeLakeDocumentActionProps {
  * deletion that ran from one that silently did nothing, and it reports the server's own `verified`
  * verdict rather than assuming a 200 means the content is gone.
  *
- * Owner-or-admin only; hosts render it under the same `canManage` gate as the reversible Remove,
- * and the backend enforces the same rule again.
+ * Owner-or-admin only, and one rung narrower than the reversible Remove beside it: hosts gate it on
+ * the lake's effective ownership (`canPurge`), not on `canManage`, so a curator or org admin never
+ * meets a red button that refuses after the confirmation. `purgeDataLakeDocument` enforces the same
+ * rule server-side.
  */
 export default function PurgeLakeDocumentAction({ file, title, dataLakeId, onPurged }: PurgeLakeDocumentActionProps) {
   const purgeFile = usePurgeDataLakeDocument(dataLakeId);

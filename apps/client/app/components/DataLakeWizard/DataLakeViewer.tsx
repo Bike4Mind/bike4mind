@@ -29,7 +29,6 @@ import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parse
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
-import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
 import DataLakeTreeView, {
@@ -423,7 +422,6 @@ function ArticlePanel({
                   Remove
                 </Button>
               </Tooltip>
-              <PurgeLakeDocumentAction file={file} title={title} dataLakeId={dataLakeId} onPurged={onRemoved} />
             </>
           )}
         </Box>

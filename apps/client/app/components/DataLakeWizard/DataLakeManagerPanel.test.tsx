@@ -126,7 +126,19 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 // The right-pane reader and the settings editor have their own suites - stub them so this
 // one exercises only the manager's navigation/affordance wiring.
 vi.mock('./DataLakeArticlePanel', () => ({
-  default: ({ file }: { file: { fileName: string } | null }) => <div data-testid="mock-article">{file?.fileName}</div>,
+  default: ({
+    file,
+    canManage,
+    canPurge,
+  }: {
+    file: { fileName: string } | null;
+    canManage?: boolean;
+    canPurge?: boolean;
+  }) => (
+    <div data-testid="mock-article" data-can-manage={String(!!canManage)} data-can-purge={String(!!canPurge)}>
+      {file?.fileName}
+    </div>
+  ),
 }));
 vi.mock('./DataLakeSettingsModal', () => ({
   DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
@@ -612,6 +624,35 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-addfiles-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-adminview')).toBeInTheDocument();
+  });
+
+  it('withholds the permanent-delete door from a non-owning manager, who can still manage', async () => {
+    // The rung split that matters: a curator or org admin manages membership (canManage) but must
+    // not be shown a destructive button the service will refuse - purge follows ownership.
+    const curatorView = { ...mineLake, canManage: true, isOwn: false };
+    useGetDataLakes.mockReturnValue({ data: [curatorView], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-war'));
+    await user.click(screen.getByTestId('datalake-manager-file-f1'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-manage', 'true');
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'false');
+  });
+
+  it('gives the owner the permanent-delete door', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-war'));
+    await user.click(screen.getByTestId('datalake-manager-file-f1'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'true');
   });
 });
 
