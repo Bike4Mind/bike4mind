@@ -419,7 +419,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 : canShareToOrg
                   ? `Private. \u201COrganization\u201D scopes it to \u201C${activeOrg?.name}\u201D; \u201CPublic\u201D exposes it to everyone.`
                   : belongsToOrg
-                    ? 'Private. Switch to your team account (top-left account switcher) to share with your organization, or make it public.'
+                    ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
       </FormControl>

@@ -19,6 +19,15 @@ import type { DataLakeArticlesParams, DataLakeBrowseSource } from '@client/app/h
 export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
+  /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
+  access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,
+  /**
+   * Who one lake's ownership may be transferred to (GET /api/data-lakes/:id/transfer-ownership).
+   * Deliberately NOT nested under `access`: a completed transfer invalidates both, but the picker's
+   * option set is fetched only while the transfer dialog is open and must not ride along on every
+   * access-view refresh.
+   */
+  ownershipCandidates: (dataLakeId: string) => ['data-lakes', 'ownership-candidates', dataLakeId] as const,
   /** One page-set of the public-lake discovery catalog, per search term. */
   public: (search: string) => ['data-lakes', 'public', { search }] as const,
   archived: ['data-lakes', 'archived'] as const,

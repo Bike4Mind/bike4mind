@@ -324,6 +324,104 @@ Knowledge becomes memory:
 - **HIPAA Compatible** - Healthcare data (Enterprise)
 - **Data Residency** - Choose storage location
 
+### Data lake access and membership view
+
+If you can manage a data lake, its manager view has an **Access** button (next to Settings) that
+opens a compliance surface answering the two questions a lake owner is asked first:
+
+- **Who can see this?**
+  - **Members and grants** - every explicit grant on the lake (owner / curator / reader), who
+    granted it and when, and its expiry. A grant past its expiry is shown as **expired**, resolved
+    live at the moment you open the view - never as if it were still live.
+  - **Access channels** - the gate-based ways in that are not explicit grants: a required tag, a
+    required entitlement, an organization (shown with the number of its members that can actually
+    reach the lake), or public. These are resolved live on every request, so they are shown as
+    channels rather than as member rows.
+- **Who actually has?**
+  - **Access history** - who has read the lake, how many times, when they last read it, and through
+    which surface, aggregated from the access-audit trail. Read this as a **lower bound**: an entry
+    exists only for a retrieval surface that emits access events, the audit write is best-effort by
+    design, and events age out on their own retention window. An empty history means "no reads
+    recorded", not "nobody read this lake".
+
+Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
+same three sections plus a note when the history was truncated.
+
+### Transferring a data lake to someone else
+
+The Access view is where you hand a lake on. **Transfer ownership**, next to *Members and grants*,
+appears only if you are the lake's owner, an admin of the organization that owns it, or a platform
+admin - being able to *manage* a lake (a curator, for instance) is not enough to give it away.
+
+What happens when you transfer:
+
+- The person you choose becomes the owner, and the lake's owner grant moves to them.
+- **You stay on as a curator.** You keep managing the lake - adding files, editing settings,
+  reprocessing - but only the new owner can transfer it again or change how it is shared. Reversing a
+  transfer is therefore the new owner's call, which is why it asks you to confirm.
+- The lake's creator never changes. Ownership rides on the grant, so the audit trail of who
+  originally created the lake stays intact.
+- **If the lake is gated** on an access tag or a required entitlement, the confirmation says so. A
+  new owner reads everything in the lake whether or not they satisfy that gate - ownership overrides
+  it - and the picker deliberately lists every eligible member rather than only gate-holders, since
+  someone taking the lake on does not need pre-existing access. Transferring a gated lake is allowed,
+  but it is a deliberate handover of gated content, which is why it is spelled out before you
+  confirm. (Publishing a gated lake, by contrast, is refused outright: an app-wide audience has no
+  named recipient to hold accountable.)
+
+Who you can choose is resolved by the server from the membership of the organization that owns the
+lake - the billing owner, appointed admins, and everyone on the member list - minus the current
+owner. An organization admin acting only in that capacity cannot name **themselves**: succession is a
+reassignment to another member, not a way to take a colleague's lake and then publish it. You must
+also still belong to that organization yourself: leaving an organization does not strip the grants
+you held on its lakes, so the transfer gate checks current membership rather than trusting the grant
+alone.
+
+**A personal lake has no one to transfer to.** With no organization behind it there is no member list
+to choose from, and the picker says so rather than showing an empty list. Move the lake into an
+organization first: switch to your team account using the profile card at the bottom left, then open
+the lake's **Settings -> Visibility** and choose **Organization**. After that the transfer picker
+lists your teammates.
+
+### Troubleshooting the access view
+
+- **"You must be able to manage this data lake to view its access."** The view is manager-only
+  (owner, curator, org admin, or platform admin). Someone who can only read the lake will see this
+  message - it is not an error.
+- **A channel shows no holder count.** Only the organization channel carries a member count. Tag and
+  entitlement channels deliberately show none: counting their holders would mean scanning every user
+  in the install, which this feature is designed to avoid. A missing count means "not counted", not
+  "zero".
+- **"Showing the most recent reads only".** The history read is capped for performance. When you see
+  this banner, the on-screen list is the most recent window, not the whole trail. The CSV export
+  carries that **same** window, so it is not a way around the cap; the banner and the export both
+  state the instant the window starts.
+- **Access history is empty after someone read the lake.** A read appears here only if it went
+  through a retrieval surface that emits access events, and the audit write is deliberately
+  best-effort - it never fails a user's request, so a transient write failure drops the row rather
+  than the answer. Entries also age out on the audit retention window. The empty state says "no
+  reads recorded" rather than "nobody read this lake" for exactly these reasons.
+- **An organization's member count here is lower than on the organization page.** This count is the
+  members the read gate would actually admit. Members who have not accepted their invitation, or who
+  hold share-only permissions, are counted by the organization page but cannot read the lake, so they
+  are excluded here on purpose - an over-stated count would be the more dangerous error.
+- **There is no Transfer ownership button.** It is gated more tightly than the rest of the view: only
+  the lake's owner, an admin of the owning organization, or a platform admin sees it. A curator can
+  read the whole access view without being able to hand the lake on.
+- **The transfer picker is empty.** Three different causes, and it tells you which. On a **personal**
+  lake there is no organization membership to list, so move the lake into an organization first. On an
+  organization lake it means the organization has no other eligible member yet - add them to the
+  organization, then transfer. If the member list simply failed to load, it says that instead - an
+  error is never presented as "nobody is eligible".
+- **A teammate is missing from the transfer picker.** The picker excludes the current owner (handing a
+  lake to whoever already owns it does nothing) and, if you are acting purely as an organization
+  admin, yourself. It also drops anyone whose user account no longer resolves. Note that this list is
+  deliberately **wider** than the organization channel's member count above it: a new owner does not
+  need pre-existing read access, since owning the lake grants it.
+- **A reader you expected is missing from Members.** Reader-role and organization grants only take
+  effect once the platform enables read-time grant enforcement; until then they are recorded but do
+  not yet open the lake. Tag/entitlement/org access appears under Access channels, not as grants.
+
 ## Coming Soon
 
 - **OCR Enhancement** - Better text extraction

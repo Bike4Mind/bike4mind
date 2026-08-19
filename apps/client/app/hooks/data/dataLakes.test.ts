@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
+// Mocked below (vi.mock is hoisted); imported so the refusal-toast assertion can read the spy.
+import { toast } from 'sonner';
 
 /**
  * Offset paging for the public-lake discovery catalog. The regression this guards: `limit` used
@@ -46,6 +48,7 @@ import {
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
   useRechunkDataLake,
+  useTransferLakeOwnership,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -534,5 +537,51 @@ describe('useRechunkDataLake cache invalidation', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+  });
+});
+
+describe('useTransferLakeOwnership cache invalidation', () => {
+  it('refreshes the access view, the picker and the lake LIST - ownership decides canManage', async () => {
+    // The list matters as much as the view: once the actor is no longer the owner, controls that
+    // were theirs (transfer, the visibility expose gate) must disappear from the panel rather than
+    // linger until something else happens to refetch. `dataLakeKeys.list` is the bare ['data-lakes']
+    // prefix, so this one invalidation also covers the public/archived/deleted catalogs.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u9', demotedUserIds: ['u1'] } });
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u9' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/transfer-ownership', { newOwnerUserId: 'u9' });
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+  });
+
+  it("surfaces the server refusal text, not axios's generic status message", async () => {
+    // These 400s are the actionable kind ("name another member"), and the modal keeps the dialog
+    // open on failure - so the toast is the only thing telling the manager what to do differently.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(
+      Object.assign(new Error('Request failed with status code 400'), {
+        isAxiosError: true,
+        response: { data: { error: 'An organization admin cannot transfer a data lake to themselves' } },
+      })
+    );
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'self' })).rejects.toThrow();
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
   });
 });
