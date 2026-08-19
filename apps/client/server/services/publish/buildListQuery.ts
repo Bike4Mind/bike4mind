@@ -1,13 +1,17 @@
-import type { PublishVisibility } from '@bike4mind/common';
+import type { PublishSourceKind, PublishVisibility } from '@bike4mind/common';
 
 /**
  * Publish - the search/filter/sort half of the list endpoint's query. Pure, so the
  * behaviour that decides what an owner sees is testable without a database.
  *
- * Kept separate from buildListVisibilityFilter, which answers a different question:
- * that one is the AUTHORIZATION clause (what may this caller see at all) and is
- * $and-merged by the route. This one is the caller's own narrowing of that set, and
- * must never be able to widen it - it only ever adds constraints.
+ * Kept separate from buildListVisibilityFilter, which answers a different question: that one is
+ * the AUTHORIZATION clause (what may this caller see at all) and runs as the pipeline's FIRST
+ * $match stage. This one is the caller's own narrowing, and runs as a separate, later $match
+ * inside each $facet branch - the two are never combined into a single object. Sequential $match
+ * stages can only narrow further, so the effect is the same as an $and, but a reader looking for
+ * a merge point will not find one.
+ *
+ * Either way this must never be able to WIDEN the authorized set: it only ever adds constraints.
  */
 
 export interface ListQueryParams {
@@ -43,9 +47,34 @@ const SORTS: Record<SortKey, Record<string, 1 | -1>> = {
   title: { titleSort: 1, publicId: 1 },
 };
 
-const KINDS = new Set(['bundle', 'reply', 'fabfile']);
-const VISIBILITIES = new Set<PublishVisibility>(['private', 'project', 'organization', 'public']);
-const GATES = new Set(['none', 'passphrase', 'domain']);
+/**
+ * Allow-lists, keyed by the shared union TYPES rather than copied as bare string literals.
+ *
+ * `Record<Union, true>` requires every member, so ADDING a source kind or a visibility rung makes
+ * this a compile error rather than a silent gap - which is the failure that matters here: an
+ * unrecognised filter value is dropped, so a list that fell behind its enum would render a chip
+ * that fills in on click and then quietly does nothing server-side, with no error anywhere.
+ *
+ * Types, not runtime values: several suites mock `@bike4mind/common` with a `vi.mock` factory, and
+ * importing a schema object here to read `.options` off would break every one of them the moment
+ * this module is in their import graph. A type-level check costs them nothing and catches more.
+ */
+const KIND_ALLOWED: Record<PublishSourceKind, true> = { bundle: true, reply: true, fabfile: true };
+const VISIBILITY_ALLOWED: Record<PublishVisibility, true> = {
+  private: true,
+  project: true,
+  organization: true,
+  public: true,
+};
+/** 'none' is synthetic - the ABSENCE of a gate - so it has no schema member of its own. The other
+ *  two MUST STAY IN SYNC with AccessGateSubSchema's `kind` enum in PublishedArtifactModel, which
+ *  is declared host-side and exports no union to key off yet. */
+type GateFilter = 'none' | 'passphrase' | 'domain';
+const GATE_ALLOWED: Record<GateFilter, true> = { none: true, passphrase: true, domain: true };
+
+const KINDS: ReadonlySet<string> = new Set(Object.keys(KIND_ALLOWED));
+const VISIBILITIES: ReadonlySet<string> = new Set(Object.keys(VISIBILITY_ALLOWED));
+const GATES: ReadonlySet<string> = new Set(Object.keys(GATE_ALLOWED));
 
 /** Escape a user string for literal use inside a RegExp. Without this a `q` of `.*` would
  *  match everything and `(` would throw at query time. */
@@ -72,7 +101,7 @@ export function buildListQuery(params: ListQueryParams): {
   // would silently return nothing, which reads as "you have no artifacts" instead of "that
   // is not a real filter". Ignoring keeps a stale bookmark showing results.
   if (params.kind && KINDS.has(params.kind)) match['source.kind'] = params.kind;
-  if (params.visibility && VISIBILITIES.has(params.visibility as PublishVisibility)) {
+  if (params.visibility && VISIBILITIES.has(params.visibility)) {
     match.visibility = params.visibility;
   }
   if (params.gate && GATES.has(params.gate)) {

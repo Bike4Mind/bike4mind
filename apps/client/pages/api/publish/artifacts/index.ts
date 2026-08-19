@@ -12,6 +12,9 @@ import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from 
  *   q                       - substring match on title + description
  *   kind, visibility, gate, comments - facet filters
  *   sort                    - newest (default) | oldest | views | versions | updated | title
+ *   facets                  - 'true' to also compute the facet counts. OFF by default: they are
+ *                             group-bys over the caller's whole scope, and the existence check the
+ *                             profile screen makes (limit=1) has no use for them.
  *   limit, skip             - paging. `limit` defaults to LEGACY_LIMIT so callers written
  *                             before paging existed keep their previous behaviour.
  *
@@ -82,6 +85,15 @@ const handler = baseApi().get(async (req, res) => {
     sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
   };
   const { match, sort } = buildListQuery(params);
+  const wantFacets = req.query.facets === 'true' || req.query.facets === '1';
+  // versionsCount/titleSort must precede $sort ONLY when a sort actually orders by them. For every
+  // other sort they are computed inside the rows branch, after $limit, so the $size over versions[]
+  // runs on one page rather than the whole scope.
+  const sortNeedsDerived = 'versionsCount' in sort || 'titleSort' in sort;
+  const derived = {
+    versionsCount: { $size: { $ifNull: ['$versions', []] } },
+    titleSort: { $toLower: '$title' },
+  };
 
   // `versions` can grow unbounded, so compute its length server-side with $size and never
   // ship the array over the wire - the count drives the management tab's version chip and
@@ -92,16 +104,9 @@ const handler = baseApi().get(async (req, res) => {
   // a chip still shows its count after you click it instead of collapsing to itself.
   const [result] = await PublishedArtifact.aggregate([
     { $match: scope },
-    // Derived sort fields must exist BEFORE $sort, which runs ahead of $project - a sort by
-    // version count against a field $project had not created yet would silently order by
-    // nothing. titleSort lowercases so an A-Z sort is not byte-order, where 'Zebra' precedes
-    // 'apple'. Computed once here rather than inside each $facet branch.
-    {
-      $addFields: {
-        versionsCount: { $size: { $ifNull: ['$versions', []] } },
-        titleSort: { $toLower: '$title' },
-      },
-    },
+    // Only when a sort orders by a derived field does it have to exist before $sort (which runs
+    // ahead of $project - ordering by a projected-only field silently orders by nothing).
+    ...(sortNeedsDerived ? [{ $addFields: derived }] : []),
     {
       $facet: {
         rows: [
@@ -109,6 +114,8 @@ const handler = baseApi().get(async (req, res) => {
           { $sort: sort },
           { $skip: skip },
           { $limit: limit },
+          // Cheap placement: after $limit this runs over one page, not the whole scope.
+          ...(sortNeedsDerived ? [] : [{ $addFields: derived }]),
           {
             $project: {
               publicId: 1,
@@ -138,10 +145,14 @@ const handler = baseApi().get(async (req, res) => {
           },
         ],
         total: [{ $match: match }, { $count: 'n' }],
-        byKind: [{ $group: { _id: '$source.kind', n: { $sum: 1 } } }],
-        byVisibility: [{ $group: { _id: '$visibility', n: { $sum: 1 } } }],
-        byGate: [{ $group: { _id: { $ifNull: ['$accessGate.kind', 'none'] }, n: { $sum: 1 } } }],
-        withComments: [{ $match: { commentPolicy: { $in: ['open', 'restricted'] } } }, { $count: 'n' }],
+        ...(wantFacets
+          ? {
+              byKind: [{ $group: { _id: '$source.kind', n: { $sum: 1 } } }],
+              byVisibility: [{ $group: { _id: '$visibility', n: { $sum: 1 } } }],
+              byGate: [{ $group: { _id: { $ifNull: ['$accessGate.kind', 'none'] }, n: { $sum: 1 } } }],
+              withComments: [{ $match: { commentPolicy: { $in: ['open', 'restricted'] } } }, { $count: 'n' }],
+            }
+          : {}),
       },
     },
   ]);

@@ -127,6 +127,8 @@ export default function PublishedArtifactsTabContent() {
       gate: filters.gate ?? undefined,
       comments: filters.comments ?? undefined,
       sort: filters.sort,
+      // The tab renders the chips, so it is the one caller that wants the counts.
+      facets: true,
       limit: PAGE_SIZE,
       skip,
     }),
@@ -144,6 +146,7 @@ export default function PublishedArtifactsTabContent() {
 
   const artifacts = data?.artifacts ?? [];
   const total = data?.total ?? 0;
+
   const facets: ManagedListFacets = data?.facets ?? { kind: {}, visibility: {}, gate: {}, comments: 0 };
   const filtering = isFiltering(filters, q);
 
@@ -194,9 +197,16 @@ export default function PublishedArtifactsTabContent() {
     onError: (e: unknown) => toast.error(apiError(e, 'Refresh failed')),
   });
   const deleteMut = useMutation({
-    mutationFn: (publicId: string) => deletePublishedArtifact(publicId),
-    onSuccess: () => {
+    // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
+    // read from a ref: it decides whether this delete empties the current page.
+    mutationFn: (v: { publicId: string; wasLastOnPage: boolean }) => deletePublishedArtifact(v.publicId),
+    onSuccess: (_d, v) => {
       toast.success('Artifact deleted');
+      // Step back a page when that was the last row on this one. Otherwise `skip` points past the
+      // end of a now-shorter list: the page renders empty and - because `total` has dropped to a
+      // single page - the pager disappears too, leaving no control to get back. Same reasoning as
+      // resetting skip on a filter change, applied to the mutation that can shrink the set.
+      if (v.wasLastOnPage) setSkip(cur => Math.max(0, cur - PAGE_SIZE));
       invalidate();
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
@@ -216,8 +226,13 @@ export default function PublishedArtifactsTabContent() {
   const toggleExpanded = (publicId: string) =>
     setExpanded(cur => {
       const next = new Set(cur);
-      if (next.has(publicId)) next.delete(publicId);
-      else next.add(publicId);
+      if (next.has(publicId)) {
+        next.delete(publicId);
+        // Collapsing must also close this row's sharing panel: the </> button that toggles it
+        // lives inside the disclosure, so leaving the panel open would strand it on screen under
+        // a one-line row with no visible control to dismiss it.
+        setManageOpen(open => (open === publicId ? null : open));
+      } else next.add(publicId);
       return next;
     });
   // publicId+format of an export in flight, so only the clicked button disables.
@@ -389,9 +404,11 @@ export default function PublishedArtifactsTabContent() {
       )}
 
       {artifacts.length === 0 ? (
-        filtering ? (
+        filtering || total > 0 ? (
           <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-no-matches">
-            Nothing matches those filters. Clear them to see your whole library.
+            {filtering
+              ? 'Nothing matches those filters. Clear them to see your whole library.'
+              : 'This page is empty - returning you to the first page.'}
           </Typography>
         ) : (
           <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-empty">
@@ -673,7 +690,7 @@ export default function PublishedArtifactsTabContent() {
                         disabled={busy}
                         onClick={() => {
                           if (window.confirm(`Delete "${a.title}"? The share link will stop working.`)) {
-                            deleteMut.mutate(a.publicId);
+                            deleteMut.mutate({ publicId: a.publicId, wasLastOnPage: artifacts.length <= 1 });
                           }
                         }}
                         data-testid={`published-artifact-delete-${a.publicId}`}
@@ -686,7 +703,7 @@ export default function PublishedArtifactsTabContent() {
 
                 {/* Lazily mounted so the manage-state fetch (gate + embed list) only
                     fires for the row the owner actually opens. */}
-                {manageOpen === a.publicId && (
+                {isOpen && manageOpen === a.publicId && (
                   <Box sx={{ mt: 0.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
                     <ManageSharingPanel
                       publicId={a.publicId}

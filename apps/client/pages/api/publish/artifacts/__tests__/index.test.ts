@@ -182,17 +182,16 @@ describe('GET /api/publish/artifacts — ?mine and default visibility', () => {
 describe('GET /api/publish/artifacts — projection', () => {
   it('computes versionsCount and never ships the versions[] array', async () => {
     await run({ mine: 'true' });
-    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
-    const added = (pipeline.find(st => '$addFields' in st) as { $addFields: Record<string, unknown> }).$addFields;
-    // The $size expression moved up to $addFields, which must precede $sort; $project then
-    // just passes the computed field through.
+    // $addFields now sits inside the rows branch (after $limit) unless a sort needs it earlier;
+    // $project just passes the computed field through, and versions[] never leaves the server.
+    const added = (rowsBranch().find(st => '$addFields' in st) as { $addFields: Record<string, unknown> }).$addFields;
     expect(added.versionsCount).toEqual({ $size: { $ifNull: ['$versions', []] } });
     expect(projectStage().versionsCount).toBe(1);
     expect(projectStage().versions).toBeUndefined();
   });
 
   it('returns the page under { artifacts } alongside total, paging and facet counts', async () => {
-    const res = await run({ mine: 'true' });
+    const res = await run({ mine: 'true', facets: 'true' });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({
       artifacts: [{ publicId: 'p1', versionsCount: 3 }],
@@ -216,9 +215,10 @@ describe('GET /api/publish/artifacts — projection', () => {
     expect(JSON.stringify(project)).not.toContain('passphraseHash');
   });
 
-  it('derives versionsCount and titleSort BEFORE $facet, so $sort can order by them', async () => {
+  it('derives versionsCount and titleSort BEFORE $facet when a sort orders by them', async () => {
     // $project runs after $sort, so a sort key naming a projected-only field orders by nothing.
-    await run({ mine: 'true' });
+    buildListQuery.mockReturnValue({ match: {}, sort: { versionsCount: -1, publicId: 1 } });
+    await run({ mine: 'true', sort: 'versions' });
     const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
     const addIdx = pipeline.findIndex(st => '$addFields' in st);
     const facetIdx = pipeline.findIndex(st => '$facet' in st);
@@ -277,12 +277,36 @@ describe('GET /api/publish/artifacts - paging', () => {
 
   it('computes facet counts WITHOUT the caller selection, so a chip keeps its count once clicked', async () => {
     buildListQuery.mockReturnValue({ match: { 'source.kind': 'reply' }, sort: { publishedAt: -1 } });
-    await run({ mine: 'true', kind: 'reply' });
+    await run({ mine: 'true', kind: 'reply', facets: 'true' });
 
     const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
     const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, Array<Record<string, unknown>>> })
       .$facet;
     // byKind groups straight off the scope - no $match ahead of it.
     expect(facet.byKind).toEqual([{ $group: { _id: '$source.kind', n: { $sum: 1 } } }]);
+  });
+});
+
+describe('GET /api/publish/artifacts - cost', () => {
+  it('skips the facet group-bys unless the caller asks for them', async () => {
+    // They are group-bys over the caller's WHOLE scope. The profile screen's existence check
+    // (limit=1) has no use for them and should not pay for four of them.
+    await run({ mine: 'true' });
+
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, unknown> }).$facet;
+    expect(Object.keys(facet).sort()).toEqual(['rows', 'total']);
+  });
+
+  it('derives the $size over versions[] AFTER $limit when no sort needs it', async () => {
+    // Placed before $facet it runs over every document in scope; after $limit it runs over one page.
+    await run({ mine: 'true' });
+
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(pipeline.some(st => '$addFields' in st)).toBe(false);
+    const rows = rowsBranch();
+    const addIdx = rows.findIndex(st => '$addFields' in st);
+    const limitIdx = rows.findIndex(st => '$limit' in st);
+    expect(addIdx).toBeGreaterThan(limitIdx);
   });
 });

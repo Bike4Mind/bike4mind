@@ -50,6 +50,9 @@ export function toArtifactSharePath(tier: PublishScopeTier, scopeId: string, slu
  *  them reproduces the previous behaviour (newest first, one large page). */
 export interface ManagedListQuery {
   q?: string;
+  /** Ask the server to compute facet counts. Off by default - they are group-bys over the whole
+   *  library, and a caller that only needs a page (or an existence check) should not pay for them. */
+  facets?: boolean;
   kind?: string;
   visibility?: string;
   gate?: string;
@@ -90,6 +93,7 @@ export async function listMyPublishedArtifacts(query: ManagedListQuery = {}): Pr
   if (query.gate) params.set('gate', query.gate);
   if (query.comments) params.set('comments', query.comments);
   if (query.sort) params.set('sort', query.sort);
+  if (query.facets) params.set('facets', 'true');
   if (query.limit != null) params.set('limit', String(query.limit));
   if (query.skip) params.set('skip', String(query.skip));
 

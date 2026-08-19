@@ -398,3 +398,77 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
     expect(screen.getByTestId('published-artifacts-clear-filters')).not.toBeNull();
   });
 });
+
+/** Regressions from review on #1961. Both were on ordinary paths and neither had coverage. */
+describe('PublishedArtifactsTabContent - review regressions', () => {
+  const lastQuery = () => mockList.mock.calls[mockList.mock.calls.length - 1][0] as Record<string, unknown>;
+
+  it('closes the sharing panel when the row collapses', async () => {
+    // The </> button that toggles the panel lives INSIDE the disclosure, so leaving the panel
+    // mounted under a collapsed one-line row left it on screen with no control to dismiss it.
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    fireEvent.click(screen.getByTestId('published-artifact-manage-pub-1'));
+    expect(screen.getByTestId('stub-panel-pub-1')).not.toBeNull();
+
+    expandRow('pub-1'); // collapse
+
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+    // And it does not reappear on re-expand - collapsing closed it, rather than merely hiding it.
+    expandRow('pub-1');
+    expect(screen.queryByTestId('stub-panel-pub-1')).toBeNull();
+  });
+
+  it('steps back a page when the deleted row was the last one on it', async () => {
+    // Otherwise skip points past a now-shorter list: the page renders empty AND the pager
+    // disappears (total has dropped to one page), leaving no way back to page 1.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockList.mockResolvedValue(page([bundleRow], { total: 26 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+
+    await waitFor(() => expect(lastQuery().skip).toBe(0));
+    confirm.mockRestore();
+  });
+
+  it('does not step back when other rows remain on the page', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockList.mockResolvedValue(page([bundleRow, replyRow], { total: 40 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Artifact deleted'));
+    expect(lastQuery().skip).toBe(25);
+    confirm.mockRestore();
+  });
+
+  it('never shows the never-published copy while the library still has artifacts', async () => {
+    // An empty PAGE is not an empty library. Telling an owner with 25 live artifacts that they
+    // have published nothing is the worst version of this bug.
+    mockList.mockResolvedValue(page([], { total: 25 }));
+    renderTab();
+
+    expect(await screen.findByTestId('published-artifacts-no-matches')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifacts-empty')).toBeNull();
+  });
+
+  it('asks the server for facet counts only from the tab that renders them', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expect(lastQuery().facets).toBe(true);
+  });
+});
