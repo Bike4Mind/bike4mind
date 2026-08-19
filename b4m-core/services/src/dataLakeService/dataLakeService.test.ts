@@ -2186,7 +2186,7 @@ describe('acceptDataLakePurge - the accept-time status transition (#1744)', () =
   });
 });
 
-describe('restore and delete against a purge-accepted lake (#1744)', () => {
+describe('restore, delete and archive against a purge-accepted lake (#1744)', () => {
   const owner = { userId: 'owner', isAdmin: false };
 
   it('refuses to restore a purging lake, with a message that says the purge is irreversible', async () => {
@@ -2237,6 +2237,24 @@ describe('restore and delete against a purge-accepted lake (#1744)', () => {
     await expect(deleteDataLake(owner, 'lake1', { db } as never)).resolves.toMatchObject({ status: 'purging' });
     expect(db.dataLakes.update).not.toHaveBeenCalled();
     expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses to archive a purging lake instead of clobbering the claim to archived', async () => {
+    // Without this guard the archive settles on 'archived', and the consumer's rescue release is
+    // conditional on 'purging' so it no-ops - the accepted purge is then silently abandoned, which
+    // is the exact failure #1744 exists to close. Unreachable from the UI; the server is the guard.
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })), update: vi.fn() },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { archiveByDataLakeTag: vi.fn() },
+    };
+    await expect(archiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be archived/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
   });
 });
 
