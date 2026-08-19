@@ -49,7 +49,14 @@ export interface ExtractedLink {
 }
 
 const EXTERNAL_PREFIXES = ['http://', 'https://', 'mailto:', 'tel:', '//'];
-const ASSET_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.pdf', ...VIDEO_EXTENSIONS];
+
+/**
+ * Every extension the Help Center will bundle and render. This is an allowlist:
+ * anything outside it is rejected as an embed, so a format we have no size cap
+ * for can never reach the deploy bundle. Must stay covered by MEDIA_SIZE_LIMITS
+ * (asserted by a test in __tests__/validate-help-content.test.ts).
+ */
+export const ASSET_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.pdf', ...VIDEO_EXTENSIONS];
 
 /**
  * Size caps (bytes) for embedded help media. Bundled media ships in the deploy
@@ -180,6 +187,46 @@ function formatMb(bytes: number): string {
 }
 
 /**
+ * Media policy for one referenced asset: null when it may ship, otherwise the
+ * reason to reject it. The single source of truth for the format and size rules,
+ * so bundle-help-content.ts enforces exactly what validateArticles reports.
+ *
+ * `isImage` gates the allowlist: an embed must be a format we bundle and render,
+ * while a plain hyperlink to an unknown extension is just a link and resolves as
+ * one. The size cap only runs when `readSize` is supplied (callers that have not
+ * yet resolved the file on disk pass format-only), and an unreadable size is
+ * itself a rejection so the cap can never fail open.
+ */
+export function mediaPolicyError(
+  pathPart: string,
+  opts: { isImage: boolean; readSize?: () => number | undefined }
+): string | null {
+  const unsupported = UNSUPPORTED_MEDIA_EXTENSIONS.find(ext => pathPart.toLowerCase().endsWith(ext));
+  if (unsupported) {
+    return `Unsupported media format "${unsupported}" in "${pathPart}": convert to ${VIDEO_EXTENSIONS.join(' or ')} for inline playback`;
+  }
+
+  // Allowlist rejection, not just the blocklist above: an extension in neither
+  // list (.mpg, .3gp, .m2ts) would otherwise pass the format check AND have no
+  // size cap to exceed, shipping unchecked and rendering as a broken <img>.
+  if (opts.isImage && !hasAssetExtension(pathPart)) {
+    return `Unsupported embed format in "${pathPart}": embedded media must use one of ${ASSET_EXTENSIONS.join(', ')}`;
+  }
+
+  const limit = mediaSizeLimit(pathPart);
+  if (!limit || !opts.readSize) return null;
+
+  const size = opts.readSize();
+  if (size === undefined) {
+    return `Could not read the size of "${pathPart}" to enforce the ${formatMb(limit.maxBytes)} ${limit.kind} cap`;
+  }
+  if (size > limit.maxBytes) {
+    return `${limit.kind} "${pathPart}" is ${formatMb(size)}, over the ${formatMb(limit.maxBytes)} ${limit.kind} cap. Shorten it or re-encode (long GIFs should be muted .webm clips)`;
+  }
+  return null;
+}
+
+/**
  * Normalize a resolved path to a canonical article slug, mirroring
  * `filePathToSlug`: a trailing `/index` collapses to its parent directory and a
  * bare `index` collapses to the root. This lets links to `./index.md` resolve to
@@ -307,17 +354,13 @@ export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOp
         continue;
       }
 
-      // Web-unplayable video containers are rejected up front - otherwise a
-      // [link](demo.mov) would fall through to article-link resolution and
-      // produce a confusing "broken link" error.
-      const unsupported = UNSUPPORTED_MEDIA_EXTENSIONS.find(ext => pathPart.toLowerCase().endsWith(ext));
-      if (unsupported) {
-        findings.push({
-          ...base,
-          type: 'media',
-          line: link.line,
-          message: `Unsupported media format "${unsupported}" in "${pathPart}": convert to ${VIDEO_EXTENSIONS.join(' or ')} for inline playback`,
-        });
+      // Format rules run before anything touches disk: a [link](demo.mov) would
+      // otherwise fall through to article-link resolution and produce a
+      // confusing "broken link" error, and an image-syntax reference to an
+      // extension we don't bundle is a format problem, not a missing file.
+      const formatError = mediaPolicyError(pathPart, { isImage: link.isImage });
+      if (formatError) {
+        findings.push({ ...base, type: 'media', line: link.line, message: formatError });
         continue;
       }
 
@@ -342,15 +385,14 @@ export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOp
           });
           continue;
         }
-        const limit = mediaSizeLimit(pathPart);
-        const size = limit ? fileSize(absPath) : undefined;
-        if (limit && size !== undefined && size > limit.maxBytes) {
-          findings.push({
-            ...base,
-            type: 'media',
-            line: link.line,
-            message: `${limit.kind} "${pathPart}" is ${formatMb(size)}, over the ${formatMb(limit.maxBytes)} ${limit.kind} cap. Shorten it or re-encode (long GIFs should be muted .webm clips)`,
-          });
+        // Now that the file is resolved, run the full policy (the format rules
+        // already passed above) so the size cap is applied to real bytes.
+        const policyError = mediaPolicyError(pathPart, {
+          isImage: link.isImage,
+          readSize: () => fileSize(absPath),
+        });
+        if (policyError) {
+          findings.push({ ...base, type: 'media', line: link.line, message: policyError });
         }
         continue;
       }

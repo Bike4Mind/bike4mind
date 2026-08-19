@@ -9,8 +9,11 @@
  * Only bundles files that are referenced in the help-index.json, plus any media
  * assets (images, GIFs, demo videos) those articles reference - copied with the
  * same docs-root-relative path so relative references resolve under
- * /help-content/ at runtime. Existence, format, and size rules for that media
- * are enforced by validate-help-content.ts, not here.
+ * /help-content/ at runtime. Existence is validate-help-content.ts's job; its
+ * format and size rules (mediaPolicyError) are re-checked here as a second line
+ * of defense, because help:build runs the index and bundle steps WITHOUT
+ * help:validate - so nothing else stands between a bad asset and the deploy
+ * bundle at that point.
  *
  * Usage: pnpm --filter @bike4mind/scripts help:bundle-content
  */
@@ -19,7 +22,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { HelpIndex } from './types.js';
-import { extractMarkdownLinks, hasAssetExtension, isExternal, resolveAssetPath } from './validate-help-content.js';
+import {
+  extractMarkdownLinks,
+  hasAssetExtension,
+  isExternal,
+  mediaPolicyError,
+  resolveAssetPath,
+} from './validate-help-content.js';
 
 // ES module compatibility
 const __filename = fileURLToPath(import.meta.url);
@@ -45,6 +54,15 @@ function copyFile(sourcePath: string, destPath: string): void {
   }
 
   fs.copyFileSync(sourcePath, destPath);
+}
+
+/** Size in bytes, or undefined when the file can't be stat'd (mediaPolicyError treats that as a rejection). */
+function fileSize(absPath: string): number | undefined {
+  try {
+    return fs.statSync(absPath).size;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -142,6 +160,8 @@ export async function bundleHelpContent(opts: BundleOptions = {}): Promise<void>
 
   // Collect media/assets referenced by the bundled articles. Broken or escaping
   // references are skipped silently here - the validator reports them as errors.
+  // Format/size violations are skipped loudly: this is the last gate before the
+  // file lands in the deploy bundle.
   const assetRelPaths = new Set<string>();
   for (const file of filesToBundle) {
     const sourcePath = path.join(docsRoot, file);
@@ -153,6 +173,12 @@ export async function bundleHelpContent(opts: BundleOptions = {}): Promise<void>
       if (!link.isImage && !hasAssetExtension(pathPart)) continue;
       const absSource = resolveAssetPath(pathPart, path.dirname(sourcePath), docsRoot);
       if (!absSource || !fs.existsSync(absSource)) continue;
+      const policyError = mediaPolicyError(pathPart, { isImage: link.isImage, readSize: () => fileSize(absSource) });
+      if (policyError) {
+        console.error(`Refusing to bundle asset referenced by ${file}: ${policyError}`);
+        errorCount++;
+        continue;
+      }
       assetRelPaths.add(path.relative(docsRoot, absSource));
     }
   }

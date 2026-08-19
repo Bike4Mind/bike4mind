@@ -7,6 +7,7 @@ import {
   validateFrontmatter,
   validateArticles,
   resolveAssetPath,
+  ASSET_EXTENSIONS,
   MEDIA_SIZE_LIMITS,
 } from '../validate-help-content';
 import type { LoadedHelpArticle } from '../loadHelpArticles';
@@ -305,6 +306,46 @@ describe('validateArticles - media guards', () => {
     expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
     expect(findings[0].message).toContain('escapes');
   });
+
+  it('rejects an embed whose extension is in neither the blocklist nor the size caps', () => {
+    // .mpg is not web-playable but was in no list: without the allowlist it
+    // passed the format check and had no size cap, so an arbitrarily large file
+    // validated clean and shipped as a broken <img>.
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.mpg)')];
+    const findings = validateArticles(articles, {
+      docsRoot: DOCS_ROOT,
+      fileExists: () => true,
+      fileSize: () => 500 * 1024 * 1024,
+    });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings[0].message).toContain('.mpg');
+  });
+
+  it('leaves a plain hyperlink to an unknown extension to link resolution', () => {
+    // The allowlist is embed-only: [text](./x.mpg) is a link, not media.
+    const articles = [makeArticle('features/a.md', '[Download](./media/demo.mpg)')];
+    const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => false });
+    expect(findings.filter(f => f.type === 'media')).toEqual([]);
+    expect(findings.filter(f => f.type === 'link')).toHaveLength(1);
+  });
+
+  it('flags an asset whose size cannot be read rather than skipping its cap', () => {
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.gif)')];
+    const findings = validateArticles(articles, {
+      docsRoot: DOCS_ROOT,
+      fileExists: exists(['features/media/demo.gif']),
+      fileSize: () => undefined,
+    });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings[0].message).toContain('Could not read the size');
+  });
+
+  it('gives every bundleable extension a size cap', () => {
+    // An ASSET_EXTENSIONS entry with no MEDIA_SIZE_LIMITS bucket would bundle
+    // with no cap at all - the exact hole the allowlist above closes.
+    const capped = new Set(Object.values(MEDIA_SIZE_LIMITS).flatMap(l => l.extensions));
+    expect(ASSET_EXTENSIONS.filter(ext => !capped.has(ext))).toEqual([]);
+  });
 });
 
 describe('validateArticles — images', () => {
@@ -319,6 +360,9 @@ describe('validateArticles — images', () => {
       validateArticles(present, {
         docsRoot: DOCS_ROOT,
         fileExists: (p: string) => p === path.join(DOCS_ROOT, 'features/img/pic.png'),
+        // Stub the size too: the fixture path has no real file, so the default
+        // statSync would fail and (correctly) report an unreadable size.
+        fileSize: () => 1024,
       }).filter(f => f.type === 'image')
     ).toEqual([]);
   });

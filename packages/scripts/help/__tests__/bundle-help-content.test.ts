@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { bundleHelpContent } from '../bundle-help-content';
+import { MEDIA_SIZE_LIMITS } from '../validate-help-content';
 
 /**
  * Fixture-driven test of the bundler against a temp docs tree: article copies,
@@ -31,10 +32,13 @@ function writeIndex(filePaths: string[]): void {
 
 const outFile = (relPath: string) => path.join(outputDir(), relPath);
 
+let errorSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'help-bundle-test-'));
   // The bundler narrates every copy; keep test output quiet.
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -104,6 +108,30 @@ describe('bundleHelpContent', () => {
     expect(fs.existsSync(outFile('features/media/demo.gif'))).toBe(false);
     // The emptied media directory is pruned too.
     expect(fs.existsSync(path.dirname(outFile('features/media/demo.gif')))).toBe(false);
+  });
+
+  it('refuses to bundle an asset over its size cap', async () => {
+    writeArticle('features/a.md', '![Demo](./media/demo.gif)\n');
+    write(path.join(docsRoot(), 'features/media/demo.gif'), 'x'.repeat(MEDIA_SIZE_LIMITS.gif.maxBytes + 1));
+    writeIndex(['features/a.md']);
+
+    await bundleHelpContent(opts());
+
+    expect(fs.existsSync(outFile('features/a.md'))).toBe(true);
+    expect(fs.existsSync(outFile('features/media/demo.gif'))).toBe(false);
+    expect(errorSpy.mock.calls.flat().join(' ')).toContain('gif cap');
+  });
+
+  it('refuses to bundle an embed whose format is not on the allowlist', async () => {
+    writeArticle('features/a.md', '![Demo](./media/demo.mpg)\n');
+    writeArticle('features/media/demo.mpg', 'mpeg-bytes');
+    writeIndex(['features/a.md']);
+
+    await bundleHelpContent(opts());
+
+    expect(fs.existsSync(outFile('features/a.md'))).toBe(true);
+    expect(fs.existsSync(outFile('features/media/demo.mpg'))).toBe(false);
+    expect(errorSpy.mock.calls.flat().join(' ')).toContain('Unsupported embed format');
   });
 
   it('throws when the help index is missing', async () => {
