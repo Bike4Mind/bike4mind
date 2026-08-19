@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { isReservedTagPrefix } from '@bike4mind/common';
 import type { TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
-import { slugifyDataLakeName } from '../hooks/data/dataLakeSlug';
+import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
   parseFilesToTree,
   getAllFiles,
@@ -159,12 +159,18 @@ interface DataLakeWizardStore {
   isManagerOpen: boolean;
   /** Which manager tab to show on open: the caller's own lakes, or the public discover catalog. */
   managerTab: ManagerTab;
+  /**
+   * Lake to preselect when the manager opens, so a per-lake action on another surface lands on
+   * that lake instead of the manager root (landing on a list is the friction #1645 is about).
+   * Cleared on close so re-deep-linking the SAME lake still fires the panel's sync effect.
+   */
+  managerLakeId: string | null;
 
   // Navigation
   openWizard: () => void;
   openWizardForLake: (lake: WizardTargetLake) => void;
   closeWizard: () => void;
-  openManager: (tab?: ManagerTab) => void;
+  openManager: (tab?: ManagerTab, lakeId?: string | null) => void;
   closeManager: () => void;
   setStep: (step: WizardStep) => void;
 
@@ -214,6 +220,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   targetLake: null,
   isManagerOpen: false,
   managerTab: 'mine',
+  managerLakeId: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -222,8 +229,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // Management panel (list lakes, add files, lifecycle). Its internal "Create"
   // button calls openWizard, which stacks the wizard on top and returns here on close.
   // An optional tab lets callers deep-link straight to the public discover catalog.
-  openManager: (tab: ManagerTab = 'mine') => set({ isManagerOpen: true, managerTab: tab }),
-  closeManager: () => set({ isManagerOpen: false }),
+  openManager: (tab: ManagerTab = 'mine', lakeId: string | null = null) =>
+    set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
+  closeManager: () => set({ isManagerOpen: false, managerLakeId: null }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values.
@@ -299,7 +307,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       const current = state.config.tagPrefix.trim();
       const isOurs = !current || current === state.autoDerivedTagPrefix;
       if (!isOurs) return state;
-      const prefix = `${slugifyDataLakeName(state.config.name)}:`;
+      // Capped to the server's prefix max (see deriveTagPrefixFromLakeName) - a long name
+      // used to derive a prefix the create endpoint refuses, which is the one value in this
+      // form the user never chose.
+      const prefix = deriveTagPrefixFromLakeName(state.config.name);
       // A lake named "Datalake" derives the reserved membership namespace, which the server
       // rejects and Start Upload gates on - leaving the user blocked over a value they never
       // typed. Leave the field for them to fill instead of seeding one that cannot be used.

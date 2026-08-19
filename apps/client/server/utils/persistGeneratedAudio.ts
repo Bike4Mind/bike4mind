@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
-import { KnowledgeType, extensionFromMimeType } from '@bike4mind/common';
-import { FabFile, User, adminSettingsRepository } from '@bike4mind/database';
+import { KnowledgeType, extensionFromMimeType, type AudioSaveSkippedReason } from '@bike4mind/common';
+import { FabFile, User, adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 
@@ -21,7 +21,7 @@ const FILE_NAME_LABELS: Record<GeneratedAudioSource, string> = {
  */
 export type PersistGeneratedAudioResult =
   | { saved: true; fabFileId: string; fileName: string; fileUrl?: string }
-  | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' };
+  | { saved: false; reason: AudioSaveSkippedReason };
 
 /**
  * Persist generated audio (TTS, sound-effect, or music) as a browsable `AUDIO`
@@ -82,6 +82,7 @@ export async function persistGeneratedAudio(params: {
           adminSettings: adminSettingsRepository,
           fabFiles: FabFile,
           users: User,
+          dataLakes: dataLakeRepository,
         },
         storage: {
           upload: (path, content, options) =>

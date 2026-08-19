@@ -66,7 +66,7 @@ const mockCustomersRetrieve = vi.fn();
 const mockCreateCustomer = vi.fn();
 vi.mock('@server/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
-  CustomerType: { User: 'user' },
+  CustomerType: { User: 'User' },
   stripe: {
     customers: { retrieve: (...args: unknown[]) => mockCustomersRetrieve(...args) },
     prices: { retrieve: (...args: unknown[]) => mockPricesRetrieve(...args) },

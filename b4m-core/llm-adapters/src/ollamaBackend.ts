@@ -20,7 +20,9 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
+import { truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
+import { v4 as uuidv4 } from 'uuid';
 
 /** A tool call normalized across native (message.tool_calls) and content-embedded forms. */
 interface NormalizedToolCall {
@@ -364,10 +366,14 @@ export class OllamaBackend implements ICompletionBackend {
         { parallel: options.parallelToolExecution !== false, maxConcurrency: options.maxParallelTools }
       );
 
+      // Captured index-aligned with `resolved` so executedToolsUsed below can stamp each
+      // entry with the exact observation the model saw, success included.
+      const observations: string[] = [];
       outcomes.forEach((outcome, i) => {
         const { tc } = resolved[i];
         const params = tc.arguments || '{}';
         if (outcome.ok) {
+          observations[i] = outcome.result;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, outcome.result);
         } else {
           // A denied permission must abort, not be fed back as a result.
@@ -375,15 +381,27 @@ export class OllamaBackend implements ICompletionBackend {
           const errorMsg = `Error running ${tc.name}: ${
             outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
           }`;
+          observations[i] = errorMsg;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, errorMsg);
         }
       });
 
       // Only calls we actually ran count as used; hallucinated tool names must
-      // not inflate the reported tool list.
+      // not inflate the reported tool list. Ollama rebuilds this array (rather than
+      // mutating toolsUsed in place like other backends) so returnValue/success are
+      // stamped directly into the rebuild, index-aligned with outcomes/observations.
       const executedToolsUsed = [
         ...priorToolsUsed,
-        ...resolved.map(({ tc }) => ({ name: tc.name, arguments: tc.arguments, id: tc.id })),
+        ...resolved.map(({ tc }, i) => ({
+          name: tc.name,
+          arguments: tc.arguments,
+          id: tc.id,
+          // String(...) matches recordToolResult's own defensive wrap on the other backends -
+          // observations[i] is already a string here (executeToolsBatch<string>), but keeping
+          // the same guard means a future change to that generic can't silently drop it.
+          returnValue: truncateToolResult(String(observations[i])),
+          success: outcomes[i].ok,
+        })),
       ];
 
       // Stop before another round if the request was cancelled mid-flight, rather
@@ -529,12 +547,21 @@ export class OllamaBackend implements ICompletionBackend {
     return { content, toolCalls, completionInfo: { inputTokens, outputTokens, ...(stopReason ? { stopReason } : {}) } };
   }
 
-  /** Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape. */
+  /**
+   * Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape.
+   *
+   * Ids are real uuids, not a position-derived string. A prior version keyed ids off
+   * `accumulated-count + round-local-index`, but the accumulated count is measured AFTER
+   * hallucinated calls are filtered out while the round-local index is assigned BEFORE that
+   * filter runs, so the two can drift and mint the same id for two different real calls across
+   * rounds - replayableToolCalls dedupes by id and silently drops the later one. A uuid makes
+   * the whole collision class unrepresentable, matching how the other backends already mint ids.
+   */
   private normalizeToolCalls(toolCalls: ToolCall[]): NormalizedToolCall[] {
-    return toolCalls.map((tc, i) => ({
+    return toolCalls.map(tc => ({
       name: tc.function.name,
       arguments: JSON.stringify(tc.function.arguments ?? {}),
-      id: `ollama-tool-${i}-${tc.function.name}`,
+      id: `ollama-tool-${uuidv4()}`,
     }));
   }
 
@@ -572,7 +599,8 @@ export class OllamaBackend implements ICompletionBackend {
       const key = `${call.name}:${call.arguments}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      calls.push({ ...call, id: `ollama-content-tool-${calls.length}-${call.name}` });
+      // Real uuid, not a position-derived string - see normalizeToolCalls' doc comment.
+      calls.push({ ...call, id: `ollama-content-tool-${uuidv4()}` });
     }
     return calls;
   }

@@ -8,7 +8,14 @@ import { KnowledgeType } from '@bike4mind/common';
 // fabFileVectorize's success path writes chunk vectors via withTransaction, and a standalone
 // mongod rejects the first write inside a session with MongoServerError code 20.
 import { createMongoReplSet } from '../../../../packages/database/src/__test__/createMongoServer';
-import { User, FabFile, fabFileRepository, fabFileChunkRepository, dataLakeBatchRepository } from '@bike4mind/database';
+import {
+  User,
+  FabFile,
+  fabFileRepository,
+  fabFileChunkRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+} from '@bike4mind/database';
 
 /**
  * End-to-end guard for the #1412 retry-gating fix, driving the REAL fabFileVectorize dispatch
@@ -67,7 +74,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   getAtlasIndexForModel: vi.fn(() => null),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+// Resolves to {} so every spend lever reads as absent -> coded defaults -> the spend gate
+// grants, keeping these tests about retry gating rather than cost governance.
+vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn(async () => ({})) }));
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }) }));
 
 import { dispatch } from './fabFileVectorize';
@@ -105,7 +114,18 @@ async function seed() {
   });
   const userId = user.id;
 
-  const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId, totalFiles: 1 } as never);
+  // A real lake document: the spend gate resolves the batch's lake and meters against it,
+  // so a fake string id would fail the ObjectId cast (and a missing lake denies, fail-closed).
+  const lake = await dataLakeRepository.create({
+    name: 'vectorize-e2e',
+    slug: `vectorize-e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    fileTagPrefix: `ve2e-${Date.now()}:`,
+    datalakeTag: `datalake:ve2e-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    createdByUserId: userId,
+    status: 'active',
+  } as never);
+
+  const batch = await dataLakeBatchRepository.create({ dataLakeId: lake.id, userId, totalFiles: 1 } as never);
 
   const fabFile = await FabFile.create({
     userId,

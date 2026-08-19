@@ -3,6 +3,7 @@ import {
   IFabFileRepository,
   IAdminSettingsRepository,
   IUserRepository,
+  IDataLakeRepository,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -42,6 +43,7 @@ function mapToFabFileAdapters(
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
     users: IUserRepository;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
   }
 ) {
   return {
@@ -51,6 +53,7 @@ function mapToFabFileAdapters(
       },
       adminSettings: db.adminSettings,
       users: db.users,
+      dataLakes: db.dataLakes,
     },
     storage: {
       upload: (
@@ -93,6 +96,7 @@ export async function processAttachments(
       fabFiles: IFabFileRepository;
       adminSettings: IAdminSettingsRepository;
       users: IUserRepository;
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
     };
   },
   organizationId?: string

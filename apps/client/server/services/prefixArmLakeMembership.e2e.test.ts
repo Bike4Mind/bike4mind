@@ -16,12 +16,14 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 
 /**
- * End-to-end guard, against REAL Mongo rather than a mock, for #1263: a file whose ONLY lake
- * membership signal is a `fileTagPrefix` content tag (no `datalake:*` meta-tag) must be gated
- * and stats-recomputed on removal exactly like a meta-tag leave, through BOTH single-file write
- * doors. A mock can assert `removeFileFromLake` was called; only a real aggregate proves the
- * NotFoundError-swallow path it hits (the tag is already gone by the time it runs its own lookup)
- * is actually inert rather than silently skipping the recompute. Lives in apps/client because it
+ * End-to-end guard, against REAL Mongo rather than a mock, for a file whose ONLY lake membership
+ * signal is a `fileTagPrefix` content tag (no `datalake:*` meta-tag): removal is gated and stats-
+ * recomputed exactly like a meta-tag leave, but ONLY through the tag-toggle door
+ * (`fabFilesService.toggleTags`, an explicit single-tag action). The whole-array write door
+ * (`updateFabFile`, the shape `PUT /api/files/:id` sends) can never remove this membership at
+ * all - a whole array cannot distinguish an intentional drop from a stale client's copy, so it
+ * preserves the tag instead. A mock can assert `removeFileFromLake` was (or wasn't) called; only
+ * a real aggregate proves the actual persisted state and stats. Lives in apps/client because it
  * is the only package with both @bike4mind/services and @bike4mind/database as dependencies.
  * Consumes the built dist, so `pnpm turbo:core:build` must be current.
  */
@@ -81,7 +83,9 @@ const storage = {
 };
 
 describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
-  it('drops the prefix tag, clears membership, and recomputes stats to 0', async () => {
+  // The headline bug this ticket fixes: a whole-array write (here, dropping every tag) must
+  // preserve prefix-arm membership rather than reading the absence as an intentional leave.
+  it('preserves the prefix tag and membership when the caller drops it via a whole-array write', async () => {
     const lake = await makeLake();
     const file = await makeFile(['lk:invoices']);
     const user = { id: ownerId, isAdmin: false } as any;
@@ -93,33 +97,33 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     );
 
     const persistedFile = await FabFile.findById(file.id);
-    expect(persistedFile?.tags ?? []).toEqual([]);
+    expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
     const persistedLake = await DataLakeModel.findById(lake.id);
-    expect(persistedLake?.fileCount).toBe(0);
+    expect(persistedLake?.fileCount).toBe(1);
   }, 30000);
 
-  it('refuses a shared editor who is not the lake creator, persisting nothing', async () => {
+  it('preserves membership on a whole-array drop regardless of manage rights', async () => {
     await makeLake();
     const file = await makeFile(['lk:invoices']);
     const editor = { id: editorId, isAdmin: false } as any;
 
-    await expect(
-      fabFilesService.updateFabFile(
-        editor,
-        { id: file.id as string, tags: [] },
-        { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
-      )
-    ).rejects.toThrow(/only the creator can remove/i);
+    await fabFilesService.updateFabFile(
+      editor,
+      { id: file.id as string, tags: [] },
+      { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
+    );
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
   }, 30000);
 
   // A prefix-arm JOIN needs no manage-rights gate on the membership itself (the read-side
-  // predicate grants it purely on the tag), but recomputeLakeStats also flips a draft lake to
-  // active - a one-way publication change. A shared editor tagging the OWNER's file with the
-  // OWNER's own lake prefix must not be able to force-publish a lake they have no relationship to.
-  it('does not publish a draft lake when a shared editor triggers the join', async () => {
+  // predicate grants it purely on the tag), but recomputeLakeStats's activation side effect
+  // also flips a draft lake to active - a one-way publication change. A shared editor tagging
+  // the OWNER's file with the OWNER's own lake prefix must not be able to force-publish a lake
+  // they have no relationship to. Stats still get corrected (real aggregate, not a mock) so they
+  // don't drift until some other door happens to touch this lake again.
+  it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
     const editor = { id: editorId, isAdmin: false } as any;
@@ -132,7 +136,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
 
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
-    expect(persistedLake?.fileCount).toBe(0);
+    expect(persistedLake?.fileCount).toBe(1);
   }, 30000);
 
   it('publishes a draft lake when the OWNER triggers the same join', async () => {
@@ -193,13 +197,13 @@ describe('toggleTags against real Mongo', () => {
           },
         }
       )
-    ).rejects.toThrow(/only the creator can remove/i);
+    ).rejects.toThrow(/do not have permission to remove/i);
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
   }, 30000);
 
-  it('does not publish a draft lake when a shared editor triggers the join', async () => {
+  it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
 
@@ -218,6 +222,6 @@ describe('toggleTags against real Mongo', () => {
 
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
-    expect(persistedLake?.fileCount).toBe(0);
+    expect(persistedLake?.fileCount).toBe(1);
   }, 30000);
 });

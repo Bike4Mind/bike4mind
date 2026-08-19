@@ -130,6 +130,47 @@ export interface GitHubPullRequest {
 }
 
 /**
+ * An OPEN pull request as the PR status digest needs it: the draft flag, assignees
+ * and requested reviewers matter here, and none of them appear on GitHubPullRequest.
+ */
+export interface GitHubOpenPullRequest {
+  number: number;
+  title: string;
+  html_url: string;
+  draft: boolean;
+  user: { login: string } | null;
+  assignees: Array<{ login: string }>;
+  requested_reviewers: Array<{ login: string }>;
+  labels: Array<{ name: string }>;
+}
+
+export interface ListOpenPullRequestsResult {
+  prs: GitHubOpenPullRequest[];
+  /**
+   * True when the bounded page walk stopped before GitHub signalled its last page.
+   * Callers MUST surface this - a silent page cap drops PRs below the digest's
+   * classifier, where its catch-all cannot absorb them.
+   */
+  truncated: boolean;
+}
+
+/**
+ * A throttled GitHub response, carrying the provider's own retry advice. Both
+ * fields are nullable because providers vary: some send `Retry-After`, some only a
+ * reset timestamp, some neither - a throttle with no advice is still a throttle.
+ */
+export class GitHubRateLimitedError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterSeconds: number | null,
+    readonly resetAt: string | null
+  ) {
+    super(message);
+    this.name = 'GitHubRateLimitedError';
+  }
+}
+
+/**
  * GitHub commit representation
  */
 export interface GitHubCommit {
@@ -1279,6 +1320,143 @@ export class GitHubService {
           labels: pr.labels.map(l => ({ name: l.name || '' })),
         }));
     });
+  }
+
+  /**
+   * List OPEN pull requests for the PR status digest, with a BOUNDED page walk.
+   *
+   * Unlike the other list methods here, this one THROWS when the repo is not
+   * allowed instead of returning `[]`. It backs a required signal: an empty array
+   * would render as a complete digest reporting zero open PRs, which is a report
+   * that lies rather than one that errors.
+   *
+   * The walk is bounded rather than exhaustive (`octokit.paginate` would follow
+   * every page): paginating a large repo multiplies request volume against the same
+   * rate-limit budget, and the generate has a synchronous time budget to fit inside.
+   * Reaching the bound is not a failure - it returns `truncated: true` so the caller
+   * can say so in the digest.
+   *
+   * Sorted OLDEST FIRST on purpose. A page cap drops PRs below the classifier, where
+   * the catch-all cannot absorb them, so the sort decides WHICH PRs vanish. Ascending
+   * order sheds the freshest instead of the oldest, most-stuck ones - the opposite
+   * order would silently drop exactly the PRs a nudge digest exists to surface.
+   */
+  async listOpenPullRequests(
+    repo: string,
+    options: { maxPages?: number; perPage?: number } = {}
+  ): Promise<ListOpenPullRequestsResult> {
+    if (!this.isRepoAllowed(repo)) {
+      // Security logging handled by isRepoAllowed.
+      throw new Error('Repository is not permitted for this connection');
+    }
+
+    const { owner, repo: repoName } = this.parseRepo(repo);
+    const perPage = options.perPage ?? 100;
+    const maxPages = options.maxPages ?? 2;
+
+    return this.executeWithMetrics(async () => {
+      const prs: GitHubOpenPullRequest[] = [];
+      let truncated = false;
+      let pages = 0;
+
+      try {
+        const iterator = this.octokit.paginate.iterator(this.octokit.pulls.list, {
+          owner,
+          repo: repoName,
+          state: 'open',
+          sort: 'created',
+          direction: 'asc',
+          per_page: perPage,
+        });
+
+        for await (const { data } of iterator) {
+          for (const pr of data) {
+            prs.push({
+              number: pr.number,
+              title: pr.title,
+              html_url: pr.html_url,
+              draft: pr.draft ?? false,
+              user: pr.user ? { login: pr.user.login } : null,
+              assignees: (pr.assignees ?? []).map(a => ({ login: a.login })),
+              // ALWAYS an array, never undefined. The report's roster gate treats an
+              // absent field as a configuration error rather than an open gate, so
+              // this must not degrade to undefined on a PR with no reviewers.
+              requested_reviewers: (pr.requested_reviewers ?? []).map(r => ({ login: r.login })),
+              labels: pr.labels.map(l => ({ name: (typeof l === 'string' ? l : l.name) || '' })),
+            });
+          }
+
+          pages++;
+          if (pages >= maxPages) {
+            // A full final page means more almost certainly remain. Over-reporting
+            // truncation on an exact multiple is the safe direction: an unnecessary
+            // advisory line beats a silently short digest.
+            truncated = data.length === perPage;
+            break;
+          }
+        }
+      } catch (error) {
+        throw this.asRateLimitedErrorOrRethrow(error);
+      }
+
+      return { prs, truncated };
+    });
+  }
+
+  /**
+   * PR numbers GitHub considers approved, via ONE repo-wide search rather than a
+   * per-PR reviews call (which would be one request per PR).
+   *
+   * An intentional approximation: the `review:approved` qualifier does not account
+   * for branch protection requiring N>1 approvals, so a 1-of-N PR counts as
+   * approved. Acceptable because the digest is a workflow nudge, not a merge gate.
+   *
+   * Note the search endpoint draws from a much smaller rate-limit budget than the
+   * REST reads, so it is usually the first call to throttle. Callers treat a throttle
+   * here as a degradation, not a failure.
+   */
+  async searchApprovedPullRequestNumbers(repo: string): Promise<Set<number>> {
+    if (!this.isRepoAllowed(repo)) {
+      throw new Error('Repository is not permitted for this connection');
+    }
+
+    const { owner, repo: repoName } = this.parseRepo(repo);
+
+    return this.executeWithMetrics(async () => {
+      try {
+        const result = await this.octokit.search.issuesAndPullRequests({
+          q: `repo:${owner}/${repoName} is:pr is:open review:approved`,
+          per_page: 100,
+        });
+        return new Set(result.data.items.map(item => item.number));
+      } catch (error) {
+        throw this.asRateLimitedErrorOrRethrow(error);
+      }
+    });
+  }
+
+  /**
+   * Convert a throttled GitHub response into a typed error carrying the provider's
+   * own retry advice, so callers can tell the admin WHEN to retry instead of
+   * hammering an already-exhausted budget. Anything else is rethrown untouched.
+   */
+  private asRateLimitedErrorOrRethrow(error: unknown): unknown {
+    const status = (error as { status?: number }).status;
+    if (status !== 403 && status !== 429) return error;
+
+    const headers = (error as { response?: { headers?: Record<string, string> } }).response?.headers ?? {};
+    const info = parseRateLimitHeaders(headers);
+
+    // A 403 is only a throttle when the budget is actually exhausted; otherwise it
+    // is a permissions error and must not be reported as "retry later".
+    const isThrottle = status === 429 || info.remaining === 0 || info.retryAfterMs !== null;
+    if (!isThrottle) return error;
+
+    return new GitHubRateLimitedError(
+      'GitHub rate limit exceeded',
+      info.retryAfterMs === null ? null : Math.ceil(info.retryAfterMs / 1000),
+      info.resetAt ? info.resetAt.toISOString() : null
+    );
   }
 
   // ============================================

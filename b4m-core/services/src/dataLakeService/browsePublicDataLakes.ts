@@ -1,15 +1,17 @@
 import type {
   AccessContext,
   BrowsePublicDataLakesResult,
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   PublicDataLakeSummary,
 } from '@bike4mind/common';
+import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 
 /**
- * The browsing caller. The catalog is per-caller (a gated public lake is discoverable by the
- * users who hold its gate), so the browse actor carries the full access context the repository
- * needs, not just an id.
+ * The browsing caller: the full access context, not just an id. The catalog is per-caller (a
+ * gated public lake is discoverable by the users who hold its gate), and the manage label needs
+ * the org-admin set to honor the org-manageable rung - `ManageActor` is a subset of this.
  */
 type BrowseActor = AccessContext;
 
@@ -31,6 +33,8 @@ interface BrowsePublicDataLakesAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findPublicLakes'>;
     users: { findByIds: (ids: string[]) => Promise<OwnerLookup> };
+    /** Optional: makes the isOwn/canManage labels honor curator + transferred-owner grants. */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
   };
 }
 
@@ -64,8 +68,25 @@ export const browsePublicDataLakes = async (
   const owners = ownerIds.length > 0 ? await db.users.findByIds(ownerIds) : [];
   const nameById = new Map(owners.map(u => [String(u.id), u.name || u.username || undefined]));
 
+  // Active grants for this page's lakes (one query) so the labels honor curator/transferred-owner
+  // grants; empty when no grant repo is wired (labels then use the org-admin rung + creator only).
+  const grantsByLake = new Map<string, LakeGrant[]>();
+  if (db.dataLakeAccessGrants && lakes.length > 0) {
+    const rows = await db.dataLakeAccessGrants.listActiveByLakes(
+      lakes.map(l => l.id),
+      { activeAsOf: new Date() }
+    );
+    for (const row of rows) {
+      const list = grantsByLake.get(row.dataLakeId) ?? [];
+      list.push({ principalType: row.principalType, principalId: row.principalId, role: row.role });
+      grantsByLake.set(row.dataLakeId, list);
+    }
+  }
+
   const data: PublicDataLakeSummary[] = lakes.map((lake: IDataLakeDocument) => {
-    const isOwn = lake.createdByUserId === actor.userId;
+    const grants = grantsByLake.get(lake.id);
+    // isEffectiveOwner, not canManageLake: isOwn has no admin/curator/org-admin bypass.
+    const isOwn = isEffectiveOwner(lake, actor, grants);
     return {
       id: lake.id,
       slug: lake.slug,
@@ -76,7 +97,7 @@ export const browsePublicDataLakes = async (
       fileCount: lake.fileCount ?? 0,
       totalSizeBytes: lake.totalSizeBytes ?? 0,
       isOwn,
-      canManage: actor.isAdmin || isOwn,
+      canManage: canManageLake(lake, actor, grants),
     };
   });
 

@@ -31,7 +31,7 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { agentOpsModelOptions } from '@client/app/utils/agentOpsModels';
+import { agentOpsModelLabels, agentOpsModelOptions } from '@client/app/utils/agentOpsModels';
 
 interface MetaPromptVersion {
   versionNumber: number;
@@ -91,7 +91,9 @@ const AgentOpsTab: React.FC = () => {
 
   const { data: catalogModels } = useModelInfo();
   const modelOptions = React.useMemo(() => agentOpsModelOptions(catalogModels ?? []), [catalogModels]);
-  const modelLabel = (modelId?: string) => modelOptions.find(m => m.id === modelId)?.name ?? modelId ?? 'Unknown';
+  // Names collide across backends (a direct-provider vs Bedrock twin), so disambiguate before display (#1596).
+  const modelLabels = React.useMemo(() => agentOpsModelLabels(modelOptions), [modelOptions]);
+  const modelLabel = (modelId?: string) => (modelId ? modelLabels.get(modelId) : undefined) ?? modelId ?? 'Unknown';
 
   // Modal states
   const [isCreateVersionModalOpen, setIsCreateVersionModalOpen] = useState(false);
@@ -481,7 +483,7 @@ const AgentOpsTab: React.FC = () => {
                   )}
                 {modelOptions.map(model => (
                   <Option key={model.id} value={model.id} disabled={model.disabled}>
-                    {model.name}
+                    {modelLabels.get(model.id) ?? model.name}
                     {model.disabled ? ' (unavailable)' : ''}
                   </Option>
                 ))}

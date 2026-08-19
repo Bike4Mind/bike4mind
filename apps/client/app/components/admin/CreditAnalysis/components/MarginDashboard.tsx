@@ -27,6 +27,7 @@ import {
   ISettlementBreakdown,
   IUserMargin,
 } from '@bike4mind/common';
+import { ReconciliationBanner } from './ReconciliationBanner';
 
 interface MarginResponse<T> {
   targetCreditsPerUsd: number;
@@ -180,7 +181,8 @@ export const MarginDashboard: React.FC = () => {
 
   return (
     <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="margin-dashboard">
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+      <ReconciliationBanner />
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1, mt: 1 }}>
         <Typography level="title-md">Margins (last 30 days)</Typography>
         <Stack direction="row" spacing={1} alignItems="center">
           <Input

@@ -5,19 +5,11 @@ import {
   toDataLakeConfig,
   type DataLakeMembershipScope,
   type IDataLakeRepository,
+  type IOrganizationRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { buildDatalakeTag } from './createDataLake';
+import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope } from './lakeMembershipScope';
-
-/**
- * An id value `normalizeId` resolves: a plain string, a Mongo ObjectId (via `toHexString`), or a
- * populated Mongoose document (`{ _id }` / string `{ id }`). Deliberately excludes a bare
- * `{ toString(): string }` - `normalizeId` ignores that shape and returns undefined - which is why
- * `organizationId` uses this while `id`, still `String()`-coerced, keeps the wider `toString` form.
- */
-type NormalizableId = string | { toHexString(): string } | { _id: unknown } | { id: string };
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -32,19 +24,23 @@ type NormalizableId = string | { toHexString(): string } | { _id: unknown } | { 
 export interface DataLakeAccessContext {
   db: {
     dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    /**
+     * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
+     * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).
+     */
+    organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;
   };
   /**
-   * The caller. `organizationId` scopes org lakes (org-less lakes stay open to all);
-   * `id` is the owner bypass - the caller always retrieves their own lakes (re-checked in
-   * memory against each lake's persisted `createdByUserId`, not assumed from the query), and a
-   * gateless org-less lake is owner-only (Private-by-default). A hydrated user doc carries
-   * ObjectIds, so `organizationId` is resolved via `normalizeId` (string, ObjectId, or populated
-   * `{ _id }` doc) while `id` is `String()`-coerced before querying.
+   * The caller. Membership is resolved internally from `id` via `db.organizations` - there is
+   * NO `organizationId` input here: that field was the selected-org display pointer, which is
+   * not necessarily a membership (#1674). `id` is the owner bypass - the caller always retrieves
+   * their own lakes (re-checked in memory against each lake's persisted `createdByUserId`, not
+   * assumed from the query), and a gateless org-less lake is owner-only (Private-by-default).
+   * An id-less caller resolves to the empty membership set (member of nothing).
    */
   user: {
     id?: string | { toString(): string } | null;
     tags?: string[] | null;
-    organizationId?: NormalizableId | null;
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
@@ -116,11 +112,6 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
 }> {
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a hydrated
-  // user doc may carry an ObjectId - or a populated Organization document - here, and an
-  // ObjectId/document query against a String never matches. normalizeId handles all three shapes;
-  // plain String() would turn a populated doc into "[object Object]" (#1281 / @bike4mind/utils/normalizeId).
-  const organizationId = normalizeId(context.user.organizationId);
   const userId = context.user.id ? String(context.user.id) : undefined;
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw
@@ -134,11 +125,33 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
   if (context.db.dataLakes) {
+    // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
+    // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
+    // only caller (no dataLakes repo) never consumes membership, so it must not pay for, or be
+    // able to throw on, a lookup whose result it can't use (a static-only caller previously ran
+    // this lookup unconditionally).
+    if (typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
+      throw new Error(
+        'getDynamicDataLakeAccess: context.db.organizations.findMembershipOrgIds is required to resolve lake access'
+      );
+    }
+    // Authoritative membership (owner + users[] ACL), resolved here so every construction site
+    // of this context - the chat tools, the retrieval scope, semantic search - cannot disagree
+    // about what "my orgs" means (#1674). Id-less callers are members of nothing.
+    //
+    // Resolved outside the try/catch below on purpose: within THIS resolver, a transient failure
+    // here propagates rather than being silently folded into "member of nothing" by the dataLakes
+    // fail-safe below. That guarantee is local to this function - top-level chat callers
+    // (ChatCompletionProcess.getAccessibleDataLakeAccess, ChatCompletionFeatures) may still catch
+    // this throw and degrade to an empty scope, which is ALSO fail-closed (it denies, never
+    // grants). So the placement buys observability into where a failure originated, not a
+    // stronger deny guarantee than returning [] outright would have given.
+    const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
     try {
       const dbLakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(
         userTags,
         entitlementKeys,
-        organizationId,
+        organizationIds,
         userId
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
@@ -182,15 +195,20 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // this runtime can see (the premium half arrives through an env seam). Requiring
   // self-consistency keeps a second, environment-independent check on the privileged path.
   const accessibleIds = new Set(accessibleLakes.map(dl => dl.id));
-  const isWellFormed = (dl: DataLakeConfig) => dl.datalakeTag === buildDatalakeTag(dl.slug, dl.organizationId);
   const ownedGatedLakes = (dynamicDataLakes ?? []).filter(
-    dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id) && isWellFormed(dl)
+    dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id) && isDatalakeTagWellFormed(dl)
   );
   const resolvedLakes = [...accessibleLakes, ...ownedGatedLakes];
   // Split prefixes by provenance: static-registry lakes are OPEN (shared KB - ownership
   // bypass by design); dynamic (DB) lakes are SCOPED (their user-controlled prefix must be
   // matched ONLY within owner/org access, else a colliding prefix leaks another tenant's
-  // files). A lake is dynamic iff it came from the DB set.
+  // files). A lake is dynamic iff it came from the DB set - deliberately NOT
+  // `openLakeTagPrefix`/`STATIC_LAKE_IDS` (@bike4mind/common), which classify by id membership in
+  // the hardcoded registry instead of by source. Those two answers usually agree, but a DB row can
+  // shadow a registry id (see `isShadowedRegistryTag` below and `resolveDataLakeAccess`'s "DB takes
+  // precedence" rule) - a shadowed row must stay SCOPED, which only the source-based check gets
+  // right; `STATIC_LAKE_IDS.has(dl.id)` would wrongly call it OPEN and turn its user-controlled
+  // prefix into an ownership-bypassing grant. Do not swap this for the shared helper.
   const dynamicIds = new Set((dynamicDataLakes ?? []).map(d => d.id));
   // The meta-tag arm is an ownership bypass, safe only because a lake's datalakeTag is
   // globally unique. A DB row can still carry a tag the static registry owns (the registry

@@ -1,10 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { ApplyTaxonomyRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordTaxonomyTagsApplySkipped } from '@server/utils/cloudwatch';
 
 // The guarded 'ready' -> 'applying' claim already means only one apply per completed
@@ -22,12 +28,18 @@ const handler = baseApi()
     const { batchId } = req.query as { batchId: string };
     const data = ApplyTaxonomyRequestInput.parse(req.body);
 
+    const ctx = await toAccessContext(req);
     const result = await dataLakeService.applyTaxonomySuggestions(
-      { userId: req.user.id, isAdmin: req.user.isAdmin },
+      ctx,
       batchId,
       data.tags.filter(t => !t.deleted),
       {
-        db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          batches: dataLakeBatchRepository,
+          fabFiles: fabFileRepository,
+        },
         logger: console,
         metrics: { recordTagsApplySkipped: recordTaxonomyTagsApplySkipped },
       }

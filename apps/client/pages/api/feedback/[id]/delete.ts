@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { toRedactedFeedback } from '@server/utils/redactedFeedback';
 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -25,7 +26,7 @@ const handler = baseApi().delete(
 
     await logEvent({ userId, type: FeedbackEvents.DELETE_FEEDBACK, metadata: { id } }, { ability: req.ability });
 
-    return res.status(200).json(deletedFeedbackItem);
+    return res.status(200).json(toRedactedFeedback(deletedFeedbackItem));
   })
 );
 

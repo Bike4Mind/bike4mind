@@ -19,6 +19,36 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
+// The users[] ACL permission values that constitute org membership. 'write' implies membership
+// even when 'read' was never explicitly granted - the #1674 read-side set (findMembershipOrgIds)
+// already treats it so, and search() must agree or a write-only member can reach an org they
+// cannot find. Consumed only by orgMembershipFilter below, which is what keeps them agreeing.
+//
+// 'write' is deliberately NOT a Permission enum member: adding it broke apps/client typecheck
+// (SkillShareDialog's Record<Permission, string> must be exhaustive) and would widen
+// UserShareableSchema's validator plus the public share/invite contracts. This array exists
+// only to match legacy/out-of-band rows - every app write path persists ['read'], so a
+// write-only row can only come from a raw-driver insert or old data.
+const MEMBER_PERMISSIONS = ['read', 'write'] as const;
+
+/**
+ * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.
+ *
+ * Both call sites must describe the same membership or an org becomes selectable-but-unreadable:
+ * `search()` backs the account-switcher list, which is where BOTH data-lake write paths (create and
+ * visibility promotion, via `resolveActiveOrg`) get the org id they stamp, while
+ * `findMembershipOrgIds` backs the read scope (`AccessContext.organizationIds`) that decides which
+ * org lakes list. #1648 was exactly that disagreement - a lake created in the
+ * switched-to org was invisible in its creator's own manager - so the shape lives here once rather
+ * than as two hand-synced `$or` blocks that a new arm could widen on one side only.
+ *
+ * Deliberately NO groups arm, unlike the shareable ACL (`findAccessibleById`) that the write-side
+ * `resolveActiveOrg` validates against; see that function's note on the wider write predicate.
+ */
+const orgMembershipFilter = (userId: string): Record<string, unknown> => ({
+  $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
+});
+
 const OrganizationSchema = new Schema<IOrganizationDocument>(
   {
     ...ShareableDocumentSchema,
@@ -158,9 +188,16 @@ OrganizationSchema.plugin(softDeletePlugin);
 // Per CLAUDE.md MongoDB guideline: performance indexes declared together here,
 // never as `index: true` on field definitions. `userId` (billing owner) and
 // `managerId` back `findIdsAdministeredBy`'s `$or`, which is on the hot path of
-// every `/api/skills` list call.
+// every `/api/skills` list call. `adminUserIds` backs the third arm of
+// `findIdsWithAdminRights`'s `$or` (#1668) - Mongo index-unions an `$or` only when EVERY
+// branch is index-supported, so without this the org-admin resolution `toAccessContext` runs
+// on every non-admin data-lake request would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
 OrganizationSchema.index({ managerId: 1 });
+// Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
+// membership question collscanned. The owner arm rides the existing { userId: 1 } index.
+OrganizationSchema.index({ 'users.userId': 1 });
+OrganizationSchema.index({ adminUserIds: 1 });
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??
@@ -203,9 +240,11 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * (#1239). Concurrency-safe by construction:
    *  - the `users.userId != member` filter is idempotent (a racing duplicate add matches no
    *    doc and returns null), and
-   *  - `seats` is raised with `$max` to the real POST-add member count (`$size users + 1`,
-   *    the same `users.length` accounting `addMember` uses), never blindly incremented - so N
-   *    racing joins land N members with `seats` equal to that count, never a double-raise past it.
+   *  - `seats` is raised with `$max` to the POST-add owner-inclusive team size (`$size users + 2`:
+   *    the owner is not a `users[]` row but still holds a seat, plus the member being added), the
+   *    same owner-inclusive accounting `addMember`/`validateSeatChange` use (#1423). Never blindly
+   *    incremented - so N racing joins land N members with `seats` equal to that size, never a
+   *    double-raise past it.
    *
    * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
    * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
@@ -222,9 +261,11 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * force-reverted by the next `customer.subscription.updated` webhook. `applyPartnerRuleMembership`
    * routes Stripe-billed orgs to `addMemberIfUnderCeiling` instead.
    *
-   * CLAMP (#1424): the `$size(users) < MAX_SEATS` guard caps the raise at the ceiling. Without it a
-   * full org grew a `seats` floor above `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later
-   * `setSeats` (floor `users.length + 1` > ceiling MAX, so no value satisfies both). At MAX the add
+   * CLAMP (#1424): the `$size(users) < MAX_SEATS - 1` guard caps the raise at the ceiling. MAX is an
+   * owner-inclusive ceiling (`validateSeatChange` clamps the owner+members+pending floor at it), so the
+   * post-add owner-inclusive size (`$size users + 2`) must stay <= MAX, i.e. pre-add members must be
+   * < MAX - 1 (#1423). Without a clamp a full org grew a `seats` floor above
+   * `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later `setSeats`. At the ceiling the add
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
@@ -237,13 +278,13 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS] },
+        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1] },
       },
       [
         {
           $set: {
             users: { $concatArrays: ['$users', [member]] },
-            seats: { $max: ['$seats', { $add: [{ $size: '$users' }, 1] }] },
+            seats: { $max: ['$seats', { $add: [{ $size: '$users' }, 2] }] },
             updatedAt: '$$NOW',
           },
         },
@@ -259,8 +300,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * webhook, so such an org keeps its ceiling and a candidate past it is rejected (the caller then
    * alerts an admin to add seats through the billing-aware path).
    *
-   * The `$expr` capacity guard (`$size users < seats`, the same `users.length < seats` accounting
-   * `addMember` uses) is evaluated inside the atomic match, so the fit check can't race the write.
+   * The `$expr` capacity guard (`$size users + 1 < seats`: owner + members must leave room for one
+   * more, the same owner-inclusive accounting `addMember`/`validateSeatChange` use, #1423) is
+   * evaluated inside the atomic match, so the fit check can't race the write.
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
@@ -273,7 +315,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $size: '$users' }, '$seats'] },
+        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1] }, '$seats'] },
       },
       [
         {
@@ -322,14 +364,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       }
 
       if (filters.userId) {
-        q.$and = [
-          {
-            $or: [
-              { userId: filters.userId },
-              { users: { $elemMatch: { userId: filters.userId, permissions: { $in: ['read'] } } } },
-            ],
-          },
-        ];
+        q.$and = [orgMembershipFilter(filters.userId)];
 
         if (q.$or) {
           (q.$and as unknown[]).push({ $or: q.$or });
@@ -388,6 +423,23 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return orgs.map(org => org._id.toString());
   }
 
+  async findMembershipOrgIds(userId: string): Promise<string[]> {
+    const docs = await this.organizationModel.find(orgMembershipFilter(userId), { _id: 1 }).lean();
+    return docs.map(d => String(d._id));
+  }
+
+  async findIdsWithAdminRights(userId: string): Promise<string[]> {
+    // Billing owner OR team manager OR an appointed org admin (adminUserIds). Broader than
+    // findIdsAdministeredBy, which omits appointed admins - see the interface doc for why this is a
+    // separate method. Matches the org-admin semantics of assertCanManageOrgGroups (billing owner +
+    // adminUserIds), extended with managerId for parity with findIdsAdministeredBy.
+    const orgs = await this.organizationModel
+      .find({ $or: [{ userId }, { managerId: userId }, { adminUserIds: userId }] })
+      .select('_id')
+      .lean();
+    return orgs.map(org => org._id.toString());
+  }
+
   async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
     await this.organizationModel.findByIdAndUpdate(organizationId, [
       {
@@ -402,10 +454,13 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Seed a zero-usage `userDetails` row for a member if one is not already present. Idempotent by
-   * construction: the `userDetails.id != member.id` guard means a member who already has a row
-   * matches no document and the `$push` is skipped, so this is safe to call on every membership
-   * grant and as a self-heal before a spend.
+   * Seed a zero-usage `userDetails` row for a member if one is not already present. Safe to call on
+   * every membership grant and as a self-heal before a spend: the `userDetails.id != member.id`
+   * guard means a member who already has a row matches no document and the `$push` is skipped.
+   * Not fully atomic - two concurrent calls for the same brand-new member can both pass the `$ne`
+   * guard and push, leaving a duplicate row (the positional `$inc` then tracks only the first). The
+   * window is a single member's first-ever spend and the downside is undercounting, not overcharge,
+   * so it is accepted rather than guarded with a unique index (same tradeoff as `addMember`'s `$ne`).
    *
    * WHY THIS EXISTS: `updateUserDetails` increments via the positional `$` operator, which can only
    * update an element that already exists - it cannot create the row it positions on. A member with

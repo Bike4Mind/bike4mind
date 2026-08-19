@@ -12,8 +12,18 @@ import {
   maskSensitiveSettingValue,
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
+  ABSTENTION_PROMPT,
 } from './settings';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+} from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+} from '../constants/lakeAccessAudit';
+import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -430,5 +440,116 @@ describe('DefaultChunkSize agrees with the chunker', () => {
     // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
     // 0 silently instead of throwing. Pin it.
     expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('cannot be set above the under-chunked detection threshold (#1804)', () => {
+    // Above it, a file re-chunks to a size that is correct per policy and STILL trips detection
+    // (findUnderChunkedFabFileIds matches tokenCount $gt threshold), so "Rebuild passages" never
+    // converges and each click destructively re-chunks and re-embeds the same files.
+    expect(settingsMap.DefaultChunkSize.max).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    expect(() => settingsMap.DefaultChunkSize.schema.parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD + 1)).toThrow();
+    // Detection is $gt, so the threshold ITSELF is convergent and must stay accepted.
+    expect(settingsMap.DefaultChunkSize.schema.parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)).toBe(
+      OVERSIZED_PASSAGE_TOKEN_THRESHOLD
+    );
+  });
+
+  it('CLAMPS an already-stored oversized value, so the bound is retroactive (#1804)', () => {
+    // `max` only rejects new writes. A value saved before this shipped would otherwise keep
+    // resolving at its stored size and keep the badge non-convergent, which is the actual defect.
+    const clamp = settingsMap.DefaultChunkSize.scope?.clamp;
+    expect(clamp).toBeDefined();
+    expect(clamp!(8192)).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    expect(clamp!(2048)).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    // Still clamps up at the floor, and leaves an in-range value alone.
+    expect(clamp!(1)).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    expect(clamp!(DEFAULT_PASSAGE_TOKEN_TARGET)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
+
+describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#1831)', () => {
+  // Same drift class as DefaultChunkSize above: before this setting existed, the char budget was a
+  // hand-copied literal (12000) in ChatCompletionFeatures.ts. Both now import
+  // FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT from the same constants module, so this pins that the
+  // setting's default cannot silently diverge from the coded fallback a settings outage returns to.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.forcedRetrievalCharBudget.defaultValue).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('is platform-only: declares no scope, unlike its sibling dataLakeSearchMaxFiles/MaxChunks', () => {
+    // Deliberate, not an oversight - see the setting's own description. This path reads the setting
+    // directly rather than through the scoped-settings resolver, so a settableAt block here would be
+    // inert at best and could arm the resolver's fail-loud owner check at worst.
+    expect(settingsMap.forcedRetrievalCharBudget.scope).toBeUndefined();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(undefined)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('rejects a value below the declared floor at write time', () => {
+    // Same pattern as DefaultChunkSize above: the write path (settings/update.ts) calls
+    // schema.parse and throws on failure, so this is what actually stops an admin from saving an
+    // unusably small budget - positiveIntOr's own floor is defense-in-depth, not the real gate.
+    expect(settingsMap.forcedRetrievalCharBudget.min).toBe(1_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(999)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(1_000)).toBe(1_000);
+  });
+
+  it('rejects a value above the declared ceiling at write time (#1860 P2-1)', () => {
+    // Without this, a fat-fingered extra zero (24000 -> 240000) passed write-time validation
+    // cleanly and silently shed conversation history via ChatCompletionProcess's overflow-recovery
+    // loop before eventually hard-erroring - the retrieval block itself is never shed, only prior
+    // turns are.
+    expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
+});
+
+describe('LakeAccessAuditRetentionDays cannot be configured below the floor', () => {
+  // Same drift class as DefaultChunkSize: the floor is enforced in two places (this schema's
+  // `min`, and the write path's unconditional clamp), and both must agree with the exported
+  // constant or an admin could save a value the write path silently overrides without complaint.
+  it('min matches the exported floor constant', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.min).toBe(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS);
+  });
+
+  it('rejects a save below the floor and accepts the floor itself', () => {
+    expect(() =>
+      settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS - 1)
+    ).toThrow();
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS
+    );
+  });
+
+  it('prefaults to the default constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(undefined)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS
+    );
+  });
+});
+
+describe('AbstentionPrompt default carries the anti-invention licence', () => {
+  // The always-on backstop is the ONLY anti-invention text on a normal turn that answers WITHOUT
+  // searching the knowledge base. (A promptMode session strips it like any authored prompt, so that
+  // surface is an uncovered gap by design - not something this backstop routes around.) Guard that
+  // its default still both licenses abstention AND bars volunteering a specific unsourced fact. The
+  // grounded-surface half ships two tests; without this, blanking this clause would pass unnoticed.
+  it('licenses saying "not enough to answer" instead of inventing', () => {
+    expect(ABSTENTION_PROMPT).toContain('I do not have enough to answer that');
+    expect(ABSTENTION_PROMPT).toMatch(/never invent facts/i);
+  });
+
+  it('bars stating - or citing a source for - a specific customer/competitor/deal/figure', () => {
+    for (const noun of ['customer', 'competitor', 'deal', 'figure']) {
+      expect(ABSTENTION_PROMPT.toLowerCase()).toContain(noun);
+    }
+    expect(ABSTENTION_PROMPT).toMatch(/cite a source/i);
+  });
+
+  it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
   });
 });

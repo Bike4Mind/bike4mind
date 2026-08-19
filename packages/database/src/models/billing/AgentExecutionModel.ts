@@ -284,6 +284,12 @@ export interface IAgentExecution {
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
+  /**
+   * Memory gates resolved once at execution start and persisted so the read, write, and
+   * stop-at-gate paths all observe one verdict via `resolveExecutionMementoGates` (#1525).
+   * Absent for per-request opt-outs (`enableMementos === false`) and legacy executions.
+   */
+  resolvedMementoGates?: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean };
 
   // Execution state
   status: AgentExecutionStatus;
@@ -626,6 +632,20 @@ const AgentExecutionSchema = new mongoose.Schema(
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
     usedMementoIds: [{ type: String }],
+    // Memory gates resolved once at execution start and persisted so read/write/
+    // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
+    // sub-schema (not Mixed) so the three booleans are enforced at the DB layer.
+    resolvedMementoGates: {
+      type: new mongoose.Schema(
+        {
+          v1: { type: Boolean, required: true },
+          v2: { type: Boolean, required: true },
+          v2OptInLookupFailed: { type: Boolean, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
 
     // Execution state
     status: {
@@ -1234,6 +1254,19 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async persistMementoIds(id: string, mementoIds: string[]): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { usedMementoIds: mementoIds } });
+  }
+
+  /**
+   * Persist the memory gates resolved at execution start so continuation Lambdas
+   * and the stop-at-gate WS handler read the same verdict rather than re-deriving
+   * it from mutable state (see `resolveExecutionMementoGates`). Written once, on
+   * the first invocation, before any handoff could resume the execution.
+   */
+  async persistResolvedMementoGates(
+    id: string,
+    gates: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean }
+  ): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
   }
 
   async updatePermissionState(

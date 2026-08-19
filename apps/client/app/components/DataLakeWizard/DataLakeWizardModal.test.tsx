@@ -35,6 +35,17 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
 }));
+// SourceSelectionStep now renders DriveConnectAction, which pulls in React Query (useConfig /
+// lake-connection hooks); stub it so this wizard test needs no QueryClientProvider.
+vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+  default: () => null,
+}));
+// ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
+// wizard test needs no QueryClientProvider. Empty values are enough - the estimate renders
+// nothing without a resolved spendEnabled/budget/model, which is not what this file tests.
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: () => undefined,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -135,6 +146,106 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(btn).toBeDisabled();
     btn.click();
     expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // Mirrors the server's blank-segment schema refine: without this gate the user runs
+  // hashing/dedup and only then gets a 422 at the final step.
+  it('disables Start Upload when the tag prefix has a blank segment, and clicking it is a no-op', () => {
+    useDataLakeWizardStore.setState(state => ({ config: { ...state.config, tagPrefix: 'legal::' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // The inverse gate: append mode inherits a stored prefix the user cannot edit on the
+  // Config step, so a legacy lake predating the blank-segment rule must keep accepting
+  // uploads rather than being locked out with no way to clear the error.
+  it('leaves Start Upload enabled in append mode even when the inherited prefix has a blank segment', () => {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: { id: 'lake-1', name: 'Legacy Lake', fileTagPrefix: 'legal::' } as never,
+      config: { ...state.config, tagPrefix: 'legal::' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).not.toBeDisabled();
+  });
+
+  // The reported failure (#1817): a hand-typed prefix past the server's 30-char cap used to
+  // leave Start Upload enabled, so the whole upload died on a 422 at the last step.
+  it('disables Start Upload when the tag prefix exceeds the server maximum', () => {
+    useDataLakeWizardStore.setState(state => ({
+      config: { ...state.config, tagPrefix: 'triage-router-dry-run-test-ken-delete-after:' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // Same inverse as the blank-segment gate: a stored prefix the Config step cannot edit must
+  // not lock its own lake out of uploads.
+  it('leaves Start Upload enabled in append mode even when the inherited prefix is too long', () => {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: { id: 'lake-1', name: 'Legacy Lake', fileTagPrefix: 'a'.repeat(40) + ':' } as never,
+      config: { ...state.config, tagPrefix: 'a'.repeat(40) + ':' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
+  // The gate has to size the value the request CARRIES: useBatchUpload closes it with ":",
+  // so 30 colon-less characters arrive as 31 and are refused - the same 422 this fix exists
+  // to prevent, reached by a hand-typed prefix instead of a derived one.
+  it('disables Start Upload when the prefix is at the max but has no trailing colon', () => {
+    useDataLakeWizardStore.setState(state => ({
+      config: { ...state.config, tagPrefix: 'a'.repeat(30) },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // The same rule in the other direction: a bare "a" is submitted as the perfectly legal
+  // "a:", so gating on the field's own length blocked a prefix the server accepts.
+  it('leaves Start Upload enabled for a one-character prefix, which submits as a legal two', () => {
+    useDataLakeWizardStore.setState(state => ({ config: { ...state.config, tagPrefix: 'a' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
   });
 
   it('leaves Start Upload enabled when the prefix is free', () => {

@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import {
   NotebookExportFormat,
   ExportedNotebook,
@@ -11,27 +12,96 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
+import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
 import type { IChatHistoryItem } from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
+
+/** A notebook the import can address: found by name, or just created. */
+interface NotebookRef {
+  id: string;
+  userId: string;
+}
+
+/**
+ * Write-only: the created document is discarded and the locally generated id recorded instead.
+ * `Record<string, unknown>` states no shape because the payloads do not currently match the
+ * schemas behind them - typing them is a behaviour fix, not a typing one.
+ */
+interface AttachmentRepository {
+  create: (data: Record<string, unknown>) => Promise<unknown>;
+}
 
 export interface NotebookImportAdapters {
-  sessionRepository: any; // SessionRepository
+  // Property syntax throughout, not method shorthand: methods are compared bivariantly, so an
+  // implementation demanding a narrower argument than the service passes would still compile.
+  sessionRepository: {
+    /**
+     * `Record<string, unknown>` rather than the notebook shape, and that hides a real mismatch:
+     * `BaseRepository.create` declares `Omit<T, 'id' | ...>` while this service always passes `id`.
+     * `id` is not a SessionSchema path - it is Mongoose's getter-only `_id` virtual - so the field
+     * is dropped and `preserveIds` does not preserve a notebook's id. Confirmed on a deployed
+     * worker: importing with preserveIds on created a notebook under a freshly minted id, not the
+     * exported one. Typing the payload would make that a compile error, which is a behaviour fix
+     * and not this change.
+     */
+    create: (data: Record<string, unknown>) => Promise<NotebookRef>;
+    find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+  };
   /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
   chatHistoryRepository: {
-    bulkCreate(items: IChatHistoryItem[]): Promise<unknown>;
-    deleteMany(filter: { sessionId: string }): Promise<unknown>;
+    bulkCreate: (items: IChatHistoryItem[]) => Promise<unknown>;
+    deleteMany: (filter: { sessionId: string }) => Promise<unknown>;
   };
-  knowledgeRepository: any; // KnowledgeRepository
-  artifactRepository: any; // ArtifactRepository
-  toolRepository: any; // ToolRepository
-  agentRepository: any; // AgentRepository
-  fileStorageService: any; // FileStorageService
-  userRepository: any; // UserRepository
-  logger: any; // Logger
-  generateId: () => string; // ID generation function
+  knowledgeRepository: AttachmentRepository;
+  artifactRepository: AttachmentRepository;
+  toolRepository: AttachmentRepository;
+  agentRepository: AttachmentRepository;
+  fileStorageService: {
+    uploadFile: (path: string, content: Buffer) => Promise<unknown>;
+  };
+  /** Only checked for existence - the import never reads a field off the user. */
+  userRepository: {
+    findById: (id: string) => Promise<unknown>;
+  };
+  logger: ILogger;
+  generateId: () => string;
 }
+
+/** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
+ * know would otherwise fail the write and lose the file. */
+function toKnowledgeType(raw: string | undefined): KnowledgeType {
+  return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
+}
+
+// Declared here rather than imported: `types.ts` is re-exported wholesale from the package entry
+// point, so exporting it there would put a one-word generic name in this package's public API.
+type Expect<T extends true> = T;
+
+/**
+ * Fails typecheck if a whole slot is re-loosened to `any` - every one of them used to be. Lives in
+ * src, not a test: tsconfig excludes *.test.ts, so only `turbo:typecheck` enforces it. Sibling
+ * guard: notebookExportService's NotebookExportTypesStayNarrowed.
+ *
+ * It only sees the slot type, so a nested `any` (say a method parameter) slips past it. The
+ * file-level `no-explicit-any: error` at the top covers that case; the rule is repo-wide `warn`,
+ * and `lint:check` runs `--quiet`, so warnings alone would print nothing.
+ */
+export type NotebookImportAdaptersStayNarrowed = Expect<
+  0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
+>;
 
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
+
+  /**
+   * Attachment failures. Deliberately not `errors`: the handler rolls the whole import back on a
+   * non-empty `errors`, so one unreadable file would discard every notebook that imported cleanly.
+   */
+  private attachmentWarnings: string[] = [];
+
+  /** Attachments actually persisted, as opposed to the count the export file claims. */
+  private attachmentsWritten = 0;
 
   async importNotebooks(
     targetUserId: string,
@@ -64,6 +134,9 @@ export class NotebookImportService {
         newNotebookIds: [],
       };
 
+      this.attachmentWarnings = [];
+      this.attachmentsWritten = 0;
+
       // Process each notebook
       for (const notebook of parsedData.notebooks) {
         try {
@@ -72,7 +145,6 @@ export class NotebookImportService {
           if (importedNotebookId) {
             result.importedNotebooks++;
             result.importedMessages += notebook.chatHistory.length;
-            result.importedAttachments += this.countAttachments(notebook);
             result.newNotebookIds!.push(importedNotebookId);
           } else {
             result.skippedNotebooks++;
@@ -86,6 +158,9 @@ export class NotebookImportService {
           });
         }
       }
+
+      result.importedAttachments = this.attachmentsWritten;
+      result.warnings!.push(...this.attachmentWarnings);
 
       // Determine overall success
       result.success = result.errors!.length === 0 || result.importedNotebooks > 0;
@@ -171,6 +246,12 @@ export class NotebookImportService {
       sessionData.agentIds = await this.importAgents(notebook.agents, targetUserId, options);
     }
 
+    this.attachmentsWritten +=
+      sessionData.knowledgeIds.length +
+      sessionData.artifactIds.length +
+      sessionData.toolIds.length +
+      sessionData.agentIds.length;
+
     // Create session
     const createdSession = await this.adapters.sessionRepository.create(sessionData);
 
@@ -186,7 +267,7 @@ export class NotebookImportService {
     notebook: ExportedNotebook,
     targetUserId: string,
     options: NotebookImportOptions
-  ): Promise<any> {
+  ): Promise<NotebookRef | null> {
     // Try to find by exact name match
     const existingSessions = await this.adapters.sessionRepository.find({
       userId: targetUserId,
@@ -197,7 +278,7 @@ export class NotebookImportService {
   }
 
   private async handleExistingSession(
-    existingSession: any,
+    existingSession: NotebookRef,
     notebook: ExportedNotebook,
     options: NotebookImportOptions
   ): Promise<string | null> {
@@ -308,21 +389,38 @@ export class NotebookImportService {
           throw new Error('No content or URL provided for file');
         }
 
-        // Create knowledge record
+        // No `id`: FabFile has no such path, so the store assigns one.
         const knowledgeData = {
-          id: newFileId,
           userId: targetUserId,
-          name: file.name,
+          fileName: file.name,
           mimeType: file.mimeType,
-          size: file.size,
-          path: filePath,
-          uploadedAt: new Date(file.uploadedAt),
-          metadata: file.metadata,
+          fileSize: file.size,
+          filePath,
+          type: toKnowledgeType(file.type),
+          // The S3 scan that would flip this cannot see the row: it is written inside the import's
+          // transaction and the scan gives up after ~7.5s, long before a real import commits, so a
+          // 'pending' file would be unservable forever. Safe to mark clean here because the export
+          // only emits content for a file that was already clean at source.
+          moderationStatus: 'clean',
         };
+        // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
-        await this.adapters.knowledgeRepository.create(knowledgeData);
-        importedIds.push(newFileId);
+        // The store's id, not `newFileId`: knowledgeIds must resolve to real documents.
+        const created = (await this.adapters.knowledgeRepository.create(knowledgeData)) as { id?: string } | null;
+        if (!created?.id) {
+          throw new Error('knowledge store returned no id');
+        }
+        importedIds.push(String(created.id));
+
+        // After the write, not before: the file has to have landed for "imported as FILE" to be
+        // true, and a file that then failed would otherwise be reported twice. Absent is expected
+        // of older exports; present-but-unknown is format drift worth saying.
+        if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
+          this.attachmentWarnings.push(`Imported "${file.name}" as FILE: unrecognised knowledge type "${file.type}"`);
+        }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.attachmentWarnings.push(`Failed to import knowledge file "${file.name}": ${message}`);
         this.adapters.logger.warn('Failed to import knowledge file', {
           fileName: file.name,
           error,
@@ -358,6 +456,9 @@ export class NotebookImportService {
         await this.adapters.artifactRepository.create(artifactData);
         importedIds.push(newArtifactId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import artifact', {
           artifactName: artifact.name,
           error,
@@ -392,6 +493,9 @@ export class NotebookImportService {
         await this.adapters.toolRepository.create(toolData);
         importedIds.push(newToolId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import tool "${tool.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import tool', {
           toolName: tool.name,
           error,
@@ -426,6 +530,9 @@ export class NotebookImportService {
         await this.adapters.agentRepository.create(agentData);
         importedIds.push(newAgentId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import agent "${agent.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import agent', {
           agentName: agent.name,
           error,
@@ -462,13 +569,11 @@ export class NotebookImportService {
     }
   }
 
-  private async copyFileFromUrl(sourceUrl: string, targetUserId: string, newFileId: string): Promise<string> {
-    // Not yet implemented - returns the source URL as a fallback.
-    return sourceUrl;
-  }
-
-  private countAttachments(notebook: ExportedNotebook): number {
-    return notebook.knowledge.length + notebook.artifacts.length + notebook.tools.length + notebook.agents.length;
+  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<string> {
+    // Throws rather than returning the source URL: handing back the exporter's own storage key
+    // records a file the importing user has no copy of, and counts it as imported. The caller
+    // turns this into a per-file warning, so the notebook still imports.
+    throw new Error('importing a knowledge file by URL reference is not implemented');
   }
 }
 

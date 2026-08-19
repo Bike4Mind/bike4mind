@@ -1,20 +1,39 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  userRepository,
+  adminSettingsRepository,
+} from '@bike4mind/database';
 import { CreateDataLakeRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { resolveActiveOrg } from '@server/dataLakes/resolveActiveOrg';
+import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET /api/data-lakes - list accessible data lakes
   .get(async (req: Request, res) => {
+    const ctx = await toAccessContext(req);
+    // The `users` adapter labels lakes the caller does not own with the creator's name: the
+    // manager list is "lakes I can reach", not "lakes I own" (org lakes, others' public lakes,
+    // and - for an admin - every tenant's lakes surface here), so a not-own lake is marked to
+    // prevent an admin from managing someone else's by mistake.
+    const db = {
+      dataLakes: dataLakeRepository,
+      users: userRepository,
+      // Grant repo: makes isOwn/canManage labels grant-aware and surfaces a transferred/granted lake.
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      // Settings repo: read-time grant cutover flag (#1673). Keeps the list in lockstep with the
+      // single gate - reader-granted lakes list only once EnforceLakeReadGrants is on (report-only off).
+      settings: adminSettingsRepository,
+    };
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
-    const dataLakes = req.user.isAdmin
-      ? await dataLakeService.listAllDataLakes({ db: { dataLakes: dataLakeRepository } })
-      : await dataLakeService.listDataLakes(await toAccessContext(req), { db: { dataLakes: dataLakeRepository } });
+    const dataLakes = ctx.isAdmin
+      ? await dataLakeService.listAllDataLakes(ctx, { db })
+      : await dataLakeService.listDataLakes(ctx, { db });
 
     return res.json({ data: dataLakes });
   })
@@ -30,7 +49,10 @@ const handler = baseApi()
     const dataLake = await dataLakeService.createDataLake(
       userId,
       params,
-      { db: { dataLakes: dataLakeRepository } },
+      {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        logger: req.logger,
+      },
       organizationId
     );
 

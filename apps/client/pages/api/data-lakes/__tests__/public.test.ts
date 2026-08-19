@@ -9,12 +9,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * rejected query never reaches the service, and an accepted one arrives coerced.
  */
 
-const { mockBrowse, mockToAccessContext, LAKES_REPO, USERS_REPO } = vi.hoisted(() => ({
+const { mockBrowse, LAKES_REPO, USERS_REPO, GRANTS_REPO, mockToAccessContext, mockRecord } = vi.hoisted(() => ({
   mockBrowse: vi.fn(),
-  mockToAccessContext: vi.fn(),
   // Distinguishable sentinels so the adapter case can assert identity pass-through.
   LAKES_REPO: { __tag: 'dataLakeRepository' },
   USERS_REPO: { __tag: 'userRepository' },
+  GRANTS_REPO: { __tag: 'dataLakeAccessGrantRepository' },
+  mockToAccessContext: vi.fn(),
+  mockRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
 // The route is baseApi().use(...).get(fn), so `use` must return the chain and `get` returns the
@@ -30,10 +32,27 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { browsePublicDataLakes: mockBrowse } }));
-vi.mock('@bike4mind/database', () => ({ dataLakeRepository: LAKES_REPO, userRepository: USERS_REPO }));
-// Stands in for the real resolver (which reads subscriptions): what matters at this seam is that
-// the route builds the actor through toAccessContext, so the catalog is gated per caller.
+vi.mock('@bike4mind/services', async () => ({
+  dataLakeService: {
+    browsePublicDataLakes: mockBrowse,
+    recordLakeAccessEvent: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
+  },
+}));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: LAKES_REPO,
+  userRepository: USERS_REPO,
+  dataLakeAccessGrantRepository: GRANTS_REPO,
+  lakeAccessEventRepository: { record: mockRecord },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+}));
+// Real toAccessContext pulls in entitlements/subscription lookups that are out of scope for this
+// query-bounds test; stub it. What matters at this seam is that the route builds the actor
+// through toAccessContext, so the catalog is gated per caller.
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 
 import handler from '@pages/api/data-lakes/public';
@@ -50,6 +69,7 @@ const ACCESS_CONTEXT = { userId: 'u1', isAdmin: false, userTags: ['opti'], entit
 const makeReq = (query: Record<string, string | string[]>, user: Record<string, unknown> = { id: 'u1' }) => ({
   query,
   user,
+  logger: { warn: vi.fn(), error: vi.fn() },
 });
 
 const makeRes = () => {
@@ -155,6 +175,7 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     await route(makeReq({}), makeRes());
     expect(browseArgs()[2].db.dataLakes).toBe(LAKES_REPO);
     expect(browseArgs()[2].db.users).toBe(USERS_REPO);
+    expect(browseArgs()[2].db.dataLakeAccessGrants).toBe(GRANTS_REPO);
   });
 
   it('returns the service result as JSON', async () => {
@@ -163,5 +184,42 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     const res = makeRes();
     await route(makeReq({}), res);
     expect(res.json).toHaveBeenCalledWith(result);
+  });
+});
+
+describe('GET /api/data-lakes/public access-event audit', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('records an event with every browsed lake id, no attribution step needed', async () => {
+    mockBrowse.mockResolvedValue({ data: [{ id: 'lake1' }, { id: 'lake2' }], total: 2 });
+
+    await route(makeReq({ q: 'sales' }, { id: 'u1' }), makeRes());
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake1', 'lake2'],
+        surface: 'data-lake-public-browse',
+        queryText: 'sales',
+      })
+    );
+  });
+
+  it('does not record an event on an empty result page', async () => {
+    mockBrowse.mockResolvedValue({ data: [], total: 0 });
+
+    await route(makeReq({}), makeRes());
+
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('still returns the response when the audit write rejects', async () => {
+    mockBrowse.mockResolvedValue({ data: [{ id: 'lake1' }], total: 1 });
+    mockRecord.mockRejectedValueOnce(new Error('mongo blip'));
+    const res = makeRes();
+
+    await route(makeReq({}), res);
+
+    expect(res.json).toHaveBeenCalledWith({ data: [{ id: 'lake1' }], total: 1 });
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.62",
+  "version": "0.1.65",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -33,6 +33,7 @@
     "test:email-ingestion": "tsx testEmailIngestLambda.ts",
     "test:api-usage": "tsx test-api-usage-monitoring.ts",
     "test:agent-execute-ws": "tsx testAgentExecuteWs.ts",
+    "test:kb-refusal": "tsx testKnowledgeToolRefusal.ts",
     "create-prod-release": "tsx src/createProductionRelease.ts",
     "help:ingest-datalake": "tsx help/ingest-help-datalake.ts",
     "help:build-index": "tsx help/build-help-index.ts",
@@ -46,9 +47,11 @@
     "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
-    "tavern:upload-icons": "tsx src/uploadTavernIcons.ts"
+    "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
+    "count-tokens-probe": "tsx count-tokens-probe.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-lambda": "^3.1080.0",
     "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/client-sqs": "^3.1080.0",
