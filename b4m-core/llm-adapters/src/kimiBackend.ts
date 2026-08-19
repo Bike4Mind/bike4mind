@@ -6,11 +6,13 @@ import {
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -88,7 +90,10 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.7 Code',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        // Half the window, deliberately, and the same output ceiling the K3 row above
+        // carries. At the full 262144 the server's context - output - buffer went
+        // negative, which empties the prompt; every K2.x row has to keep it positive.
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // $0.95 / 1M in, $4 / 1M out, $0.19 / 1M cache read.
@@ -109,7 +114,7 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.7 Code (High Speed)',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // Same model on faster infrastructure at 2x the rate: $1.90 / $8.00.
@@ -130,7 +135,7 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.6',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // $0.95 / 1M in, $4 / 1M out, $0.16 / 1M cache read.
@@ -151,7 +156,7 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.5',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // $0.60 / 1M in, $3 / 1M out, $0.10 / 1M cache read.
@@ -174,7 +179,7 @@ export class KimiBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
 
@@ -193,7 +198,8 @@ export class KimiBackend implements ICompletionBackend {
       this.logger.warn(`⚠️ Max tool calls limit (${maxToolCalls}) reached. Disabling tools to prevent infinite loops.`);
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         { ...options, tools: undefined, _internal: options._internal },
         callback,
         toolsUsed
@@ -338,6 +344,12 @@ export class KimiBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -376,17 +388,22 @@ export class KimiBackend implements ICompletionBackend {
 
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -600,6 +617,12 @@ export class KimiBackend implements ICompletionBackend {
             this.logger.warn(`JSON parse error for ${name} arguments (streaming)`);
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
@@ -638,17 +661,22 @@ export class KimiBackend implements ICompletionBackend {
 
         for (const outcome of outcomes) {
           if (outcome.ok) {
+            const resultStr = outcome.result.toString();
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              outcome.result.toString()
+              resultStr
             );
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              observation
             );
           }
         }

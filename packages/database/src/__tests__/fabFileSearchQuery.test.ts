@@ -271,6 +271,24 @@ describe('buildFabFileSearchQuery', () => {
       expect(conditions).toHaveLength(4);
     });
 
+    describe('excludePersonalShares', () => {
+      it('drops the personal-share arm, keeping only the owned-file arm', () => {
+        const conditions = buildOwnershipConditions('user1', { excludePersonalShares: true });
+        expect(conditions).toEqual([{ userId: 'user1' }]);
+      });
+
+      it('keeps the group arm when userGroups is also set', () => {
+        const conditions = buildOwnershipConditions('user1', {
+          excludePersonalShares: true,
+          userGroups: ['g1'],
+        });
+        expect(conditions).toEqual([
+          { userId: 'user1' },
+          { groups: { $elemMatch: { groupId: { $in: ['g1'] }, permissions: { $in: ['read', 'write'] } } } },
+        ]);
+      });
+    });
+
     // ── Cross-tenant leak guard ──────────────────────────────
     // OPEN prefixes (static registry: opti:/acme:) are an ownership bypass by design
     // (shared KB). SCOPED prefixes (dynamic, user-created lakes) must be matched ONLY
@@ -522,6 +540,34 @@ describe('buildFabFileSearchQuery', () => {
       expect(patterns[0].flags).toBe('i');
       expect(patterns[0].test('Research')).toBe(true);
       expect(patterns[1].test('Robotics')).toBe(true);
+    });
+
+    // These are whole tag names picked from the tag list, not a search term. Unanchored, the list
+    // covered files the count aggregate - which groups on the exact stored name - does not.
+    it('matches the whole tag name, not a neighbour that merely contains it', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { tags: ['test'] } }));
+      const andConditions = result.filter.$and as Record<string, unknown>[];
+      const tagCondition = andConditions.find(
+        c => 'tags' in c && JSON.stringify(c).includes('$elemMatch') && JSON.stringify(c).includes('$in')
+      ) as { tags: { $elemMatch: { name: { $in: RegExp[] } } } };
+
+      const pattern = tagCondition.tags.$elemMatch.name.$in[0];
+      expect(pattern.test('test')).toBe(true);
+      expect(pattern.test('TEST')).toBe(true);
+      expect(pattern.test('testing')).toBe(false);
+      expect(pattern.test('unit-test')).toBe(false);
+    });
+
+    it('treats regex metacharacters in a tag name literally', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { tags: ['.*'] } }));
+      const andConditions = result.filter.$and as Record<string, unknown>[];
+      const tagCondition = andConditions.find(
+        c => 'tags' in c && JSON.stringify(c).includes('$elemMatch') && JSON.stringify(c).includes('$in')
+      ) as { tags: { $elemMatch: { name: { $in: RegExp[] } } } };
+
+      const pattern = tagCondition.tags.$elemMatch.name.$in[0];
+      expect(pattern.test('.*')).toBe(true);
+      expect(pattern.test('anything')).toBe(false);
     });
   });
 

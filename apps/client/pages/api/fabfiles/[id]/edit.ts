@@ -1,4 +1,10 @@
-import { ChatModels, Permission, SupportedFabFileMimeTypes, isImageServeable } from '@bike4mind/common';
+import {
+  ChatModels,
+  Permission,
+  SupportedFabFileMimeTypes,
+  isImageServeable,
+  FAB_FILE_CONTENT_REWRITE_PATCH,
+} from '@bike4mind/common';
 import { FabFile, withTransaction, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -356,7 +362,15 @@ Return only the edited content without any markdown code blocks or explanations.
             // concurrent edit can't silently clobber this one (its bytes are just orphaned).
             const claimed = await FabFile.findOneAndUpdate(
               { _id: file._id, filePath: s3Key },
-              { $set: { filePath: newFilePath, fileSize: newBuffer.length, versions, updatedAt: now } }
+              {
+                $set: {
+                  filePath: newFilePath,
+                  fileSize: newBuffer.length,
+                  versions,
+                  updatedAt: now,
+                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
+                },
+              }
             );
             if (!claimed) {
               throw new BadRequestError('File was modified by another edit. Please reload and try again.');
@@ -372,6 +386,7 @@ Return only the edited content without any markdown code blocks or explanations.
                 $set: {
                   updatedAt: new Date(),
                   fileSize: Buffer.byteLength(editedContent, 'utf8'),
+                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
                 },
               }
             );

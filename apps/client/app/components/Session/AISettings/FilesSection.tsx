@@ -4,7 +4,13 @@ import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typog
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  IFabFileDocument,
+  MimeType,
+  isImageAttachment,
+  isImageServeable,
+} from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
@@ -20,6 +26,7 @@ import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
+import { clampChunkSize } from '@client/app/utils/chunkSize';
 import { renameDuplicateFiles } from '@client/app/utils/fabFileUtils';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { useQueryClient } from '@tanstack/react-query';
@@ -155,7 +162,13 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
-  const defaultChunkSize = useGetSettingsValue('DefaultChunkSize') || 2000;
+  // Fall back to the canonical chunker default, not a third hand-copied number. Clamped: a legacy
+  // stored value above the ceiling reaches this raw (the settings-fetch route applies no clamp of
+  // its own), and submitting it unclamped would resolve as a silent false "success" here
+  // (chunkFileUtility swallows the route's rejection) rather than a visible error.
+  const defaultChunkSize = clampChunkSize(
+    Number(useGetSettingsValue('DefaultChunkSize')) || DEFAULT_PASSAGE_TOKEN_TARGET
+  );
   const chunkFile = useChunkFile();
   const queryClient = useQueryClient();
 
@@ -448,6 +461,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
@@ -551,6 +565,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"

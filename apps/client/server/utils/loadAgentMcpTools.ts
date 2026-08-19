@@ -4,10 +4,18 @@ import type { Logger } from '@bike4mind/observability';
 import { generateMcpToolsFromCache } from '@bike4mind/services';
 
 export interface LoadAgentMcpToolsDeps {
-  mcpServers: { find(query: { enabled: boolean; userId: string }): Promise<IMcpServerDocument[]> };
-  getMcpClient: (
-    server: IMcpServerDocument
-  ) => Promise<{ callTool: (toolName: string, toolArgs: unknown) => Promise<unknown> }>;
+  mcpServers: {
+    find(query: { enabled: boolean; userId: string }): Promise<IMcpServerDocument[]>;
+    update(doc: {
+      id: string;
+      tools: string[];
+      toolSchemas: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
+    }): Promise<unknown>;
+  };
+  getMcpClient: (server: IMcpServerDocument) => Promise<{
+    getTools: () => Promise<Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>>;
+    callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
+  }>;
   logger: Logger;
 }
 
@@ -38,16 +46,45 @@ export async function loadAgentMcpTools(
   const servers = await deps.mcpServers.find({ enabled: true, userId: opts.userId });
 
   for (const server of servers) {
-    if (!server.toolSchemas?.length) {
-      logger.warn(`[AgentExecutor][MCP] No tool schemas for ${server.name} - skipping (reconnect to populate)`);
-      continue;
-    }
     try {
+      let schemas = server.toolSchemas;
+
+      // Live-fetch when cached schemas are missing (e.g. OAuth callback tool
+      // fetch failed on a Lambda cold start). Mirrors the fallback in
+      // ToolBuilder.buildMcpTools so agents get the same recovery path.
+      if (!schemas?.length) {
+        try {
+          logger.info(`[AgentExecutor][MCP] No cached tool schemas for ${server.name} - fetching live`);
+          const client = await deps.getMcpClient(server);
+          const liveTools = await client.getTools();
+          if (Array.isArray(liveTools) && liveTools.length > 0) {
+            schemas = liveTools;
+            await deps.mcpServers.update({
+              id: server.id,
+              tools: liveTools.map((t: { name: string }) => t.name),
+              toolSchemas: liveTools,
+            });
+            logger.info(
+              `[AgentExecutor][MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`
+            );
+          }
+        } catch (fetchError) {
+          logger.warn(`[AgentExecutor][MCP] Live tool fetch failed for ${server.name} - skipping`, {
+            error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+          });
+        }
+      }
+
+      if (!schemas?.length) {
+        logger.warn(`[AgentExecutor][MCP] No tool schemas for ${server.name} - skipping (reconnect to populate)`);
+        continue;
+      }
+
       const callTool = async (toolName: string, toolArgs: unknown) => {
         const client = await deps.getMcpClient(server);
         return client.callTool(toolName, toolArgs);
       };
-      mcpToolsByServer[server.name] = generateMcpToolsFromCache(server.name, server.toolSchemas, callTool);
+      mcpToolsByServer[server.name] = generateMcpToolsFromCache(server.name, schemas, callTool);
     } catch (err) {
       // Isolate per server: a malformed cached schema for one server must not drop the others' tools.
       logger.warn(`[AgentExecutor][MCP] Failed to build tools for ${server.name} - skipping`, {

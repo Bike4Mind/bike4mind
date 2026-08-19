@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import MFAModal from '@client/app/components/common/MFAModal';
-import { Box, Typography, Alert, CircularProgress } from '@mui/joy';
+import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -34,12 +34,34 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
 
-  const isImpersonating = useAccessToken(s => !!s.returnToken);
+  const isImpersonating = useAccessToken(s => s.impersonating);
 
   // MFA mutations
   const setupMFA = useSetupMFA();
-  const { mutate: setupMFAMutate, isPending: setupMFAIsPending, data: setupMFAData } = setupMFA;
+  const {
+    mutate: setupMFAMutate,
+    isPending: setupMFAIsPending,
+    data: setupMFAData,
+    isError: setupMFAIsError,
+  } = setupMFA;
   const verifyMFASetup = useVerifyMFASetup();
+
+  // Shared by the auto-start effect and the manual retry button (see the enforced-block
+  // screen). Calling mutate() clears the mutation's error state, so a retry re-opens the path
+  // the `!setupMFAIsError` guard closes after a failure.
+  const startMfaSetup = useCallback(() => {
+    setupMFAMutate(undefined, {
+      onSuccess: () => {
+        setShowMFASetup(true);
+        toast.info('Please complete MFA setup to continue');
+      },
+      onError: (error: any) => {
+        // Extract the actual error message from axios response
+        const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
+        toast.error(errorMessage);
+      },
+    });
+  }, [setupMFAMutate]);
 
   useEffect(() => {
     if (showMFASetup) {
@@ -85,19 +107,13 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     // If MFA is enforced and user doesn't have it configured, force setup.
     // When enforced it applies to ALL users (no "internal" distinction).
     if (enforceMFA && (!mfaStatus?.enabled || !currentUser.mfa?.totpEnabled)) {
-      // Auto-start MFA setup
-      if (!showMFASetup && !setupMFAIsPending && !setupMFAData) {
-        setupMFAMutate(undefined, {
-          onSuccess: () => {
-            setShowMFASetup(true);
-            toast.info('Please complete MFA setup to continue');
-          },
-          onError: (error: any) => {
-            // Extract the actual error message from axios response
-            const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
-            toast.error(errorMessage);
-          },
-        });
+      // Auto-start MFA setup. The `!setupMFAIsError` guard is load-bearing: on a persistent
+      // /api/mfa/setup failure onError only toasts, so setupMFAData stays undefined and
+      // setupMFAIsPending cycles true->false - both are effect deps, so without this guard the
+      // settle re-runs the effect and re-fires the mutation at network speed, forever. Firing
+      // once and stopping (the user gets a toast; a reload remounts and retries) is correct.
+      if (!showMFASetup && !setupMFAIsPending && !setupMFAData && !setupMFAIsError) {
+        startMfaSetup();
       }
     }
   }, [
@@ -111,9 +127,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     mfaStatusQuery.data,
     mfaQueryFailed,
     showMFASetup,
-    setupMFAMutate,
+    startMfaSetup,
     setupMFAIsPending,
     setupMFAData,
+    setupMFAIsError,
     adminSettings,
     adminSettingsLoading,
   ]);
@@ -157,13 +174,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             // cross-tab background-tab UX.
             window.location.replace(buildLoginRedirectUrl('session_revoked', window.location));
             return;
-          }
-
-          // Update tokens if new attempt count provided (for next try)
-          if (errorData?.accessToken && errorData?.refreshToken) {
-            // Still mid-MFA (next attempt): keep mfaPending true via the named action so the
-            // invariant can't be dropped.
-            useAccessToken.getState().setMfaPendingTokens(errorData.accessToken, errorData.refreshToken);
           }
 
           // Show error with attempts remaining
@@ -232,9 +242,23 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           access the application.
         </Alert>
 
-        <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
-          We&apos;re setting up MFA for your account. Please wait...
-        </Typography>
+        {setupMFAIsError ? (
+          // A failed setup used to dead-end here on "please wait" forever (the auto-retry
+          // guard intentionally won't re-fire, and the only signal was a toast that has
+          // faded). Give the user an explicit way back in.
+          <>
+            <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
+              We couldn&apos;t start MFA setup. Please try again.
+            </Typography>
+            <Button data-testid="mfa-enforcement-retry-btn" onClick={startMfaSetup} loading={setupMFAIsPending}>
+              Retry MFA setup
+            </Button>
+          </>
+        ) : (
+          <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
+            We&apos;re setting up MFA for your account. Please wait...
+          </Typography>
+        )}
 
         {/* MFA Setup Modal */}
         {showMFASetup && setupMFAData && (

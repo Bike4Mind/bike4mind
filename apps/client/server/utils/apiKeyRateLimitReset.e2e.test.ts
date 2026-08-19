@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
@@ -34,20 +34,34 @@ afterEach(async () => {
 
 describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
   it('unblocks a key that genuinely hit its ceiling, opening a fresh window', async () => {
-    // Drive the enforcer to the minute ceiling: 2 allowed, 3rd rejected.
-    expect((await checkApiKeyRateLimit(keyId, rateLimit)).allowed).toBe(true);
-    expect((await checkApiKeyRateLimit(keyId, rateLimit)).allowed).toBe(true);
-    const blocked = await checkApiKeyRateLimit(keyId, rateLimit);
-    expect(blocked.allowed).toBe(false);
-    expect(blocked.limitType).toBe('minute');
+    // Freeze the clock (Date only - Mongo's real timers/IO are untouched) so the enforcer's
+    // fixed wall-clock window can't roll over mid-test. On a starved CI runner the three
+    // sequential awaits below could otherwise span >60s, expiring the window and letting the
+    // "blocked" call through - a false red in the runner, not the code. All calls must see one
+    // window. The frozen instant must be in the real-clock FUTURE: the cache collection has a
+    // TTL index on expiresAt, and mongod's sweeper runs on its own real clock (not the faked
+    // Date), so a past instant would make the window doc immediately TTL-eligible and delete it
+    // mid-test - the same starved-runner flake, reintroduced via TTL.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+    try {
+      // Drive the enforcer to the minute ceiling: 2 allowed, 3rd rejected.
+      expect((await checkApiKeyRateLimit(keyId, rateLimit)).allowed).toBe(true);
+      expect((await checkApiKeyRateLimit(keyId, rateLimit)).allowed).toBe(true);
+      const blocked = await checkApiKeyRateLimit(keyId, rateLimit);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.limitType).toBe('minute');
 
-    await resetApiKeyRateLimit(keyId);
+      await resetApiKeyRateLimit(keyId);
 
-    // Fresh window: allowed again, counter restarted at 1.
-    const afterReset = await checkApiKeyRateLimit(keyId, rateLimit);
-    expect(afterReset.allowed).toBe(true);
-    expect(afterReset.headers['X-RateLimit-Remaining-Minute']).toBe(rateLimit.requestsPerMinute - 1);
-    expect(afterReset.headers['X-RateLimit-Remaining-Day']).toBe(rateLimit.requestsPerDay - 1);
+      // Fresh window: allowed again, counter restarted at 1.
+      const afterReset = await checkApiKeyRateLimit(keyId, rateLimit);
+      expect(afterReset.allowed).toBe(true);
+      expect(afterReset.headers['X-RateLimit-Remaining-Minute']).toBe(rateLimit.requestsPerMinute - 1);
+      expect(afterReset.headers['X-RateLimit-Remaining-Day']).toBe(rateLimit.requestsPerDay - 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clears both window docs for the target key only; unrelated cache keys survive', async () => {

@@ -16,6 +16,7 @@ import {
   ImageModerationIncident,
   IUsageEventRepository,
   IOrganizationRepository,
+  ILakeAccessEventRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -39,7 +40,32 @@ export interface KbScope {
   fileIds: string[];
 }
 
+/**
+ * Token + cost report for a single tool-internal `llm.complete()` call. Tools that
+ * generate via their own LLM (deep_research, blog_draft, edit_file, ...) emit one of
+ * these through `ToolContext.onToolLlmUsage` so a billing host can fold nested spend
+ * into its ledger. `costUsd` is priced with the tool's OWN model (see
+ * recordToolOperationalUsage), so consumers must accumulate the USD directly rather
+ * than re-pricing the tokens at some other model's rate.
+ *
+ * The agent executor accumulates these into `ToolUsageTotals`
+ * (apps/client agentExecutor.iterationBilling.ts) - same five fields, kept in sync by
+ * hand. Keep both in step on a rename.
+ */
+export type ToolLlmUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+};
+
 export interface ToolContext {
+  /** The only principal signal a tool call carries - identical whether this turn is a live chat
+   * message or an autonomous agent-executor run. Lake access audit events (recordLakeAccessEvent)
+   * record every ToolContext-driven read as principalKind: 'user' for this reason; distinguishing
+   * an agent run would need a new marker threaded through here first. */
   userId: string;
   user: IUserDocument; // Full user document for tools that need user data (e.g., blog integration)
   /**
@@ -57,10 +83,16 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    fabfilechunks?: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+    fabfilechunks?: Pick<
+      IFabFileChunkRepository,
+      'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+    >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
-    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    dataLakes?: Pick<
+      IDataLakeRepository,
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+    >;
     /** Optional skill repository - present when the host wires `/api/skills`. Used by the `skill` LLM tool. */
     skills?: Pick<ISkillRepository, 'findAccessibleByNameForUser' | 'listAccessibleInvocableForUser'>;
     /**
@@ -76,8 +108,17 @@ export interface ToolContext {
      * where recording degrades to a no-op.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
-    /** Owner lookup for usage attribution; findById is all the recorder needs. */
-    organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
+     * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
+     * an absent resolver would silently drop every org lake from retrieval.
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    /**
+     * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
+     * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
+     */
+    lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side
@@ -101,13 +142,32 @@ export interface ToolContext {
    * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
    *
    * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
-   * (reject / restrict to scope.fileIds) - today only search_knowledge_base and
-   * retrieve_knowledge_content do, and the embed surface stays safe only because its tool
-   * resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base,
+   * retrieve_knowledge_content and count_knowledge_base do, and the embed surface stays safe only
+   * because its tool resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
    * per-repository, so a new fabfiles tool added to a scoped surface without this handling
    * would silently read unscoped.
    */
   kbScope?: KbScope;
+  /**
+   * FabFile ids attached to THIS session whose text was actually delivered into this turn's
+   * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
+   * silently dropped by `processFabFilesServer` - see `buildDataSources`'s
+   * `actuallyInlinedKnowledgeIds`). The knowledge tools use this to tell a caller "that file's
+   * content is already above" without lying about a deferred OR undeliverable (audio,
+   * unserveable image, unsupported/corrupted file) attachment. Absent/empty on non-chat surfaces
+   * (agent executor, embed) where nothing is inlined this way.
+   */
+  inlinedAttachmentIds?: string[];
+  /**
+   * Subset of `inlinedAttachmentIds` whose ENTIRE content is in the prompt - excludes a cosine
+   * excerpt or a raw-content read truncated to fit the token budget (see `buildDataSources`'s
+   * `fullyInlinedAttachmentIds`). A file can be in `inlinedAttachmentIds` but NOT here, meaning
+   * only part of it reached the prompt; only THIS set is safe to tell a caller "you already have
+   * everything, no need to search/retrieve further" (#1163 review: that claim was being made for
+   * a merely-inlined, possibly-partial file).
+   */
+  fullyInlinedAttachmentIds?: string[];
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
@@ -122,6 +182,20 @@ export interface ToolContext {
    * where cost degrades to 0 but the usage event is still written.
    */
   availableModels?: ModelInfo[];
+  /**
+   * Optional sink for tool-internal LLM spend. Invoked by recordToolOperationalUsage
+   * after a tool's own `llm.complete()` call so a billing host (the agent executor)
+   * can fold nested generation into iteration billing instead of charging it at zero
+   * (#630). Absent on hosts that don't fold nested tool spend into a customer charge -
+   * e.g. the chat path, which records tool COGS as analytics-only operational usage and
+   * leaves this unset (its up-front credit enforcement covers only image_generation /
+   * edit_image, not the text-gen tools this callback measures).
+   *
+   * Must not throw: recordToolOperationalUsage invokes it inside its best-effort
+   * try/catch, so a throwing callback is swallowed AND drops the subsequent analytics
+   * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
+   */
+  onToolLlmUsage?: (usage: ToolLlmUsage) => void;
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.

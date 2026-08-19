@@ -15,6 +15,7 @@
 
 import { withWebSocketContext } from '@server/websocket/utils';
 import {
+  adminSettingsRepository,
   agentExecutionRepository,
   organizationRepository,
   sessionRepository,
@@ -24,8 +25,9 @@ import {
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
-import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
 import { Resource } from 'sst';
@@ -33,7 +35,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
-import { GenerateImageToolCallSchema } from '@bike4mind/common';
+import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -134,6 +136,12 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // Consumed only by `buildSubagentToolConfig`; never enters the checkpoint, so
   // it doesn't reintroduce the prior `structuredClone` failure.
   imageConfig: GenerateImageToolCallSchema.partial().optional(),
+  // User's selected audio-generation config, forwarded so the audio_generation
+  // tool resolves the user's saved provider/voice/format instead of its built-in
+  // defaults (the agent-mode analogue of imageConfig). Same lifecycle: consumed
+  // only by `buildSubagentToolConfig`, never enters the checkpoint. `.partial()`
+  // because the client may omit fields.
+  audioConfig: AudioGenerationToolCallSchema.partial().optional(),
   // Provenance of the routing decision. Persisted on the
   // dispatch-time Quest so the client renders the `AutoRouteBadge` over
   // classifier-routed responses on reload. Pure metadata - the executor
@@ -178,8 +186,10 @@ const lambdaClient = new LambdaClient({});
  * because they're a downstream effect of an already-counted parent.
  *
  * TODO: Make this configurable per organization or plan tier.
+ *
+ * The value itself lives in `@server/utils/executionLimits` so the QuestMaster
+ * v5 node runner enforces the same cap - see that module.
  */
-const MAX_CONCURRENT_EXECUTIONS_PER_USER = 3;
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -319,7 +329,6 @@ async function handleStart(
   // pays the DB hit. Threshold cooperates with the 20-min sweep window -
   // a 60s memo can't hide a stale execution from the next sweep more than
   // 60s past its eligibility.
-  const STALE_ACTIVE_MS = 20 * 60 * 1000;
   const now = Date.now();
   const lastSweptAt = lastSweptAtByUser.get(userId) ?? 0;
   if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {
@@ -401,6 +410,9 @@ async function handleStart(
     // Snapshot the user's image config so image tools resolve a model on the
     // first AND continuation iterations (#agent-mode-image-gen).
     imageConfig: cmd.imageConfig,
+    // Snapshot the user's audio config so the audio_generation tool resolves the
+    // saved provider/voice/format on the first AND continuation iterations.
+    audioConfig: cmd.audioConfig,
   });
 
   const executionId = execution.id;
@@ -765,9 +777,9 @@ async function handleGateResponse(
     );
     // Memento parity with chat_completion. Stop-at-gate is also a
     // terminal `completed` write, so fire the same event the executor's
-    // natural completion path fires. Guarded inside the helper on
-    // `enableMementos` and `parentExecutionId`.
-    await publishMementoCompletion(execution, logger);
+    // natural completion path fires. Resolve gates through the shared authority
+    // and hand them over; the helper guards on the gates and `parentExecutionId`.
+    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }

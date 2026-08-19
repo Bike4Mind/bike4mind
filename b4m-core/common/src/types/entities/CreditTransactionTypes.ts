@@ -20,7 +20,13 @@ const BaseCreditTransaction = z.object({
    */
   credits: z.number(),
   description: z.string().optional(),
-  metadata: z.record(z.string(), z.any()).optional(), // For additional context
+  /**
+   * Free-form per-type context; the key set depends on the transaction `type`, so there is no
+   * writer-side contract. Values are `unknown` deliberately - readers must narrow rather than
+   * dereference straight through. Kept that way by CreditMetadataValuesStayNarrowed at the
+   * bottom of this file.
+   */
+  metadata: z.record(z.string(), z.unknown()).optional(),
   /**
    * Where this transaction originated - used to break down usage in reports.
    * Optional because legacy rows (and non-completion transactions like
@@ -202,6 +208,12 @@ export const SoundEffectsUsageTransaction = BaseCreditTransaction.extend({
   sessionId: z.string(),
 });
 
+export const MusicGenerationUsageTransaction = BaseCreditTransaction.extend({
+  type: z.literal('music_generation_usage'),
+  model: z.string(),
+  sessionId: z.string(),
+});
+
 export const TransferCreditTransaction = BaseCreditTransaction.extend({
   type: z.literal('transfer_credit'),
   recipientId: z.string(),
@@ -212,10 +224,12 @@ export const TransferCreditTransaction = BaseCreditTransaction.extend({
  * Credit transaction
  *
  * IMPORTANT: When adding a new transaction type here, you MUST also update:
- * 1. packages/database/src/models/CreditTransactionModel.ts - Add to the `type` enum
- * 2. packages/database/src/models/CreditTransactionModel.ts - Add any new fields to schema
- * 3. packages/services/src/creditService/subtractCredits.ts - Add handler in switch statement
- * 4. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
+ * 1. packages/database/src/models/billing/CreditTransactionModel.ts - Add to the `type` enum
+ * 2. packages/database/src/models/billing/CreditTransactionModel.ts - Add any new fields to schema
+ * 3. b4m-core/services/src/creditService/subtractCredits.ts - Add a handler for a deduct type
+ * 4. b4m-core/services/src/creditService/addCredits.ts - Add a handler for an add type; without one
+ *    the new type falls through that branch chain and is written as `generic_add`
+ * 5. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
  *
  * Failure to sync these files will cause validation errors in MongoDB.
  */
@@ -234,6 +248,7 @@ export const CreditTransaction = z.discriminatedUnion('type', [
   SpeechToTextUsageTransaction,
   TextToSpeechUsageTransaction,
   SoundEffectsUsageTransaction,
+  MusicGenerationUsageTransaction,
   TransferCreditTransaction,
   ReceivedCreditTransaction,
 ]);
@@ -260,6 +275,7 @@ export type ICompletionApiUsageTransaction = z.infer<typeof CompletionApiUsageTr
 export type ISpeechToTextUsageTransaction = z.infer<typeof SpeechToTextUsageTransaction>;
 export type ITextToSpeechUsageTransaction = z.infer<typeof TextToSpeechUsageTransaction>;
 export type ISoundEffectsUsageTransaction = z.infer<typeof SoundEffectsUsageTransaction>;
+export type IMusicGenerationUsageTransaction = z.infer<typeof MusicGenerationUsageTransaction>;
 export type ITransferCreditTransaction = z.infer<typeof TransferCreditTransaction>;
 export type IReceivedCreditTransaction = z.infer<typeof ReceivedCreditTransaction>;
 
@@ -292,6 +308,7 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'speech_to_text_usage',
   'text_to_speech_usage',
   'sound_effects_usage',
+  'music_generation_usage',
   'transfer_credit',
   'generic_deduct',
 ] as const;
@@ -464,3 +481,20 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
    */
   sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ISourceUsage[]>;
 }
+
+// True only for `any`: `1 & any` collapses to `any`, so `0 extends any` holds.
+type IsAny<T> = 0 extends 1 & T ? true : false;
+type Expect<T extends true> = T;
+
+/**
+ * Compile-time guard: metadata values must stay `unknown`. `Record<string, any>` here silently
+ * disables checking for every consumer of the published declarations, so re-loosening it should
+ * break the build rather than rely on review. Same kind of guard, and the same placement reason, as
+ * the ones in modelCatalog.ts - test files are outside tsconfig's include, so it lives in src.
+ *
+ * Interim: the general fix is a lint rule banning `z.any()` in entity schemas, which would retire
+ * this. Do not replicate it per field.
+ */
+export type CreditMetadataValuesStayNarrowed = Expect<
+  IsAny<NonNullable<ICreditTransaction['metadata']>[string]> extends true ? false : true
+>;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ModelPrice, modelPriceRepository } from './ModelPriceModel';
+import { ModelPrice, modelPriceRepository, rowsInForcePipeline } from './ModelPriceModel';
 import { SEED_NOTE } from '../../seeds/seedModelPrices';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -81,6 +81,25 @@ describe('ModelPriceRepository', () => {
     const history = await modelPriceRepository.historyForModel('gpt-x');
     expect(history).toHaveLength(2);
     expect(history[0].effectiveFrom.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+  });
+
+  it('serves rowsInForce from an index with no blocking in-memory sort', async () => {
+    // Without a dedicated { effectiveFrom: -1 } index this read COLLSCANs and sorts in
+    // memory on every model-list cache rebuild and on every voice settlement.
+    const base = { modelId: 'gpt-x', unit: 'per_token' as const, pricing: { '200000': tier } };
+    await modelPriceRepository.append({ ...base, effectiveFrom: new Date('2026-06-01T00:00:00Z') });
+    await modelPriceRepository.append({ ...base, effectiveFrom: new Date('2026-07-01T00:00:00Z') });
+    await ModelPrice.ensureIndexes();
+
+    const plan = await ModelPrice.collection
+      .aggregate(rowsInForcePipeline(new Date('2026-07-15T00:00:00Z')))
+      .explain('queryPlanner');
+
+    const planned = JSON.stringify(plan);
+    // Naming the index matters: asserting IXSCAN alone would also pass on the compound
+    // unique index, which cannot serve an effectiveFrom-only range or sort.
+    expect(planned).toContain('"indexName":"effectiveFrom_-1"');
+    expect(planned).not.toContain('"stage":"SORT"');
   });
 
   it('rejects units outside the enum', async () => {

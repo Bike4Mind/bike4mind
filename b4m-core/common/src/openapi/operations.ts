@@ -1,93 +1,47 @@
-import { registry } from './registry';
-import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
-import {
-  CompletionRequest,
-  CompletionStreamEvent,
-  ToolExecutionRequest,
-  ToolExecutionResponse,
-  ErrorResponse,
-} from './schemas';
+import { registerContract } from './registerContract';
+import { assertUniqueOperations } from './assertUniqueOperations';
+import { CONTRACTS } from '../api-contract';
+import type { EndpointContract } from '../api-contract/types';
+import { assertContractConventions } from '../api-contract/assertContractConventions';
+
+const registered: EndpointContract[] = [];
 
 /**
- * Operation (path) registrations for the versioned `/v1` surface.
- *
- * operationIds are stable camelCase - they become SDK method names, so treat
- * them as a public contract. Per-operation required scopes and code samples are
- * attached as vendor extensions (`x-required-scopes`, `x-codeSamples`) in
- * document.ts after generation, keyed by operationId.
+ * The contracts actually registered against the shared registry. document.ts
+ * derives its per-operation metadata from this rather than from CONTRACTS: since
+ * `registerContracts` takes an explicit array, the registry can hold a different
+ * set than CONTRACTS, and a document must describe what was registered.
  */
+export function registeredContracts(): readonly EndpointContract[] {
+  return registered;
+}
 
-registry.registerPath({
-  method: 'post',
-  path: '/api/ai/v1/completions',
-  operationId: 'createCompletion',
-  summary: 'Create a chat completion',
-  description:
-    'OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), ' +
-    'regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying ' +
-    '`usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status ' +
-    'stays 200 and failures arrive as an in-band `error` event. Authenticate with an API key ' +
-    '(`b4m_live_`) or a JWT.',
-  tags: ['AI'],
-  security: SECURITY_REQUIREMENT,
-  request: {
-    body: {
-      required: true,
-      content: { 'application/json': { schema: CompletionRequest } },
-    },
-  },
-  responses: {
-    200: {
-      description: 'SSE stream of completion events (see CompletionStreamEvent).',
-      content: { 'text/event-stream': { schema: CompletionStreamEvent } },
-    },
-    400: {
-      description: 'Malformed JSON body (rejected before the stream opens).',
-      content: { 'application/json': { schema: ErrorResponse } },
-    },
-  },
-});
+/**
+ * Operation (path) registrations for the versioned public surface.
+ *
+ * Every public endpoint is a contract in CONTRACTS (../api-contract); registering
+ * it here is the whole job. operationIds are stable camelCase - they become SDK
+ * method names, so treat them as a public contract. Per-operation required scopes
+ * and code samples are derived from each contract and attached as vendor
+ * extensions (`x-required-scopes`, `x-codeSamples`) in document.ts after generation.
+ *
+ * Both guards run BEFORE registration, so a violating contract fails the spec
+ * build instead of being published and then flagged. registerContract is the only
+ * registerPath caller and REQUIRED_SCOPES is empty, so CONTRACTS is the complete
+ * operation set - there are no hand-registered ops left to fold in.
+ *
+ * Exported (rather than inlined at module scope) so a test can prove the guards
+ * actually run here: called with a violating array it must throw, having
+ * registered nothing. Inline, deleting a guard line broke no test at all.
+ */
+export function registerContracts(contracts: readonly EndpointContract[] = CONTRACTS): void {
+  assertUniqueOperations(contracts.map(c => ({ operationId: c.operationId, method: c.method, path: c.path })));
+  assertContractConventions(contracts);
 
-registry.registerPath({
-  method: 'post',
-  path: '/api/ai/v1/tools',
-  operationId: 'executeTool',
-  summary: 'Execute a server-side tool',
-  description:
-    'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and ' +
-    'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
-    'accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the ' +
-    'X-Request-ID response header.',
-  tags: ['AI'],
-  security: JWT_SECURITY_REQUIREMENT,
-  request: {
-    body: {
-      required: true,
-      content: { 'application/json': { schema: ToolExecutionRequest } },
-    },
-  },
-  responses: {
-    200: {
-      description: 'Tool executed successfully (`success` is always true here).',
-      content: { 'application/json': { schema: ToolExecutionResponse } },
-    },
-    400: {
-      description: 'Missing/invalid `toolName` or `input`.',
-      content: { 'application/json': { schema: ErrorResponse } },
-    },
-    401: {
-      description: 'Missing or invalid JWT (an API key is rejected here).',
-      content: { 'application/json': { schema: ErrorResponse } },
-    },
-    429: {
-      description: 'Rate limit exceeded (100 requests/hour).',
-      content: { 'application/json': { schema: ErrorResponse } },
-    },
-    500: {
-      // The handler returns the full ToolExecutionResponse (`success: false`) on a
-      // failed-but-executed tool, not the bare ErrorResponse - match that shape.
-      description: 'Tool execution failed; body carries `success: false` with `error`.',
-      content: { 'application/json': { schema: ToolExecutionResponse } },
-    },
-  },
-});
+  for (const contract of contracts) {
+    registerContract(contract);
+    registered.push(contract);
+  }
+}
+
+registerContracts();

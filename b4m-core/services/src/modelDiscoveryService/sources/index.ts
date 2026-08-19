@@ -22,4 +22,5 @@ export * from './litellm';
 export * from './modelsDev';
 export * from './ollama';
 export * from './openai';
+export * from './openaiDocs';
 export * from './xai';

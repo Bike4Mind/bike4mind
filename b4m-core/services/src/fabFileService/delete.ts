@@ -15,12 +15,24 @@ const deleteFabFileSchema = z.object({
 
 type DeleteFabFileParameters = z.infer<typeof deleteFabFileSchema>;
 
-export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found';
+export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found' | 'denied';
 
 export interface DeleteFabFileResult {
   action: DeleteFabFileAction;
   fabFile: IFabFileDocument | null;
 }
+
+export type PublicDeleteFabFileAction = Exclude<DeleteFabFileAction, 'denied'>;
+
+/**
+ * Maps deleteFabFile's action to what's safe to expose to a caller. Collapses 'denied' into
+ * 'not_found' so a response can never be used to tell "doesn't exist" apart from "exists but you
+ * can't access it" - the same no-enumeration convention as get.ts, edit.ts, addFavorite.ts, et al.
+ * Every consumer that returns deleteFabFile's action to a client must go through this, rather than
+ * re-deriving the fold inline, so a future action value can't slip through unmapped.
+ */
+export const toPublicDeleteAction = (action: DeleteFabFileAction): PublicDeleteFabFileAction =>
+  action === 'denied' ? 'not_found' : action;
 
 export interface DeleteFabFileAdapter {
   db: {
@@ -28,7 +40,7 @@ export interface DeleteFabFileAdapter {
       IFabFileRepository,
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctEmbeddingModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
   };
@@ -36,6 +48,11 @@ export interface DeleteFabFileAdapter {
     delete: (path: string) => Promise<unknown>;
   };
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
+  /**
+   * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
+   * would survive as permanent orphans in its embeddingModel's OpenSearch index.
+   */
+  searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
 export const deleteFabFile = async (
@@ -43,7 +60,7 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete } = adapter;
+  const { db, storage, onDeleteComplete, searchIndex } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -69,8 +86,19 @@ export const deleteFabFile = async (
       }
     }
 
+    // Resolve BEFORE the Mongo chunks are deleted below - their per-chunk embeddingModel is the
+    // only place this survives once they're gone. A re-embedded file's chunks can span more
+    // than one model (see IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the
+    // file's CURRENT model only - would miss an OpenSearch index left by an earlier embed.
+    const chunkEmbeddingModels = searchIndex
+      ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([ownedFile.id])
+      : [];
+
     // Handle deletion of new FabFileChunks
     await db.fabFileChunks.deleteManyByFabFileId(ownedFile.id);
+    if (searchIndex) {
+      await Promise.all(chunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(ownedFile.id, model)));
+    }
 
     // Unlink the deleted fabFile from all associated sessions
     const sessions = await db.sessions.findAllWithKnowledgeId(ownedFile.id);
@@ -101,11 +129,12 @@ export const deleteFabFile = async (
 
   const userShareIndex = sharedFile.users?.findIndex(u => u.userId.toString() === userId);
   if (userShareIndex === undefined || userShareIndex === -1) {
-    // File exists but user has no direct share - may be group-shared or data-lake
+    // File exists but user has no direct share - may be group-shared or data-lake. Distinct from
+    // genuine absence: callers must not report this identically to a no-op (see bulk-delete.ts).
     Logger.globalInstance.warn(
       `[deleteFabFile] File exists but user is not in share list — fileId: ${id}, userId: ${userId}. Cannot unshare.`
     );
-    return { action: 'not_found', fabFile: null };
+    return { action: 'denied', fabFile: null };
   }
 
   // 3. Remove the user from the share list (self-unshare)

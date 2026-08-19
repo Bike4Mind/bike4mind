@@ -11,6 +11,15 @@ export interface IHearthActorDoc {
   userId: Types.ObjectId;
   kind: ActorKind;
   displayName: string;
+  /**
+   * Friendly name for rendering, when it differs from the identity name.
+   *
+   * Deliberately OUTSIDE the identity index: `displayName` is the find-or-create
+   * key, so a value that can be renamed (a notebook's name, which B4M also
+   * auto-titles) would mint a new actor - and a new per-channel cursor - the
+   * moment it changed. Surfaces render `displayLabel ?? displayName`.
+   */
+  displayLabel?: string;
   /** Capability strings, e.g. 'cli.exec:<device>', 'gate.approve'. */
   capabilities: string[];
   reachability: Array<{ transport: string; address: string; priority: number }>;
@@ -30,6 +39,7 @@ const HearthActorSchema = new Schema<IHearthActorDoc>(
       enum: actorKindSchema.options,
     },
     displayName: { type: String, required: true, maxlength: 200 },
+    displayLabel: { type: String, maxlength: 200 },
     capabilities: { type: [String], default: [] },
     reachability: {
       type: [

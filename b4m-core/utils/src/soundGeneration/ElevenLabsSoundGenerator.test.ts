@@ -1,8 +1,18 @@
 import { Logger } from '@bike4mind/observability';
 import { describe, expect, it, vi } from 'vitest';
-import { ElevenLabsSoundGenerator } from './ElevenLabsSoundGenerator';
+import { ElevenLabsSoundGenerator, SOUND_GENERATION_TIMEOUT_MS } from './ElevenLabsSoundGenerator';
 
 const logger = { error: vi.fn() } as unknown as Logger;
+
+// The hosted serving function's own cap (infra/web.ts). The provider deadline
+// must stay strictly under it - that ordering IS the credit-loss guarantee.
+const SERVING_FUNCTION_TIMEOUT_MS = 60_000;
+
+/** Never settles on its own; only the caller's AbortSignal can end it. */
+const hangingFetch: typeof fetch = (_url, init) =>
+  new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject((init.signal as AbortSignal).reason));
+  });
 
 function mockFetch(body: string, ok = true, status = 200): typeof fetch {
   const bytes = new TextEncoder().encode(body);
@@ -63,5 +73,27 @@ describe('ElevenLabsSoundGenerator', () => {
     const generator = new ElevenLabsSoundGenerator({ apiKey: 'secret', logger, fetchImpl });
 
     await expect(generator.generate('boom')).rejects.toThrow(/failed: 401 quota exceeded/);
+  });
+
+  it('aborts a stalled provider round-trip so the route can refund the reservation', async () => {
+    const generator = new ElevenLabsSoundGenerator({
+      apiKey: 'secret',
+      logger,
+      fetchImpl: hangingFetch,
+      timeoutMs: 20,
+    });
+
+    await expect(generator.generate('rain')).rejects.toMatchObject({ name: 'TimeoutError' });
+  }, 2_000);
+
+  it('arms the default deadline, and that deadline fits inside the serving function budget', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const generator = new ElevenLabsSoundGenerator({ apiKey: 'secret', logger, fetchImpl: mockFetch('x') });
+
+    await generator.generate('rain');
+
+    expect(timeoutSpy).toHaveBeenCalledWith(SOUND_GENERATION_TIMEOUT_MS);
+    expect(SOUND_GENERATION_TIMEOUT_MS).toBeLessThan(SERVING_FUNCTION_TIMEOUT_MS);
+    timeoutSpy.mockRestore();
   });
 });

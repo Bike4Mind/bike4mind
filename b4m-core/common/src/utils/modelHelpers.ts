@@ -40,6 +40,19 @@ export function isBflImageModel(model?: string | null): boolean {
   return (BFL_IMAGE_MODELS as readonly string[]).includes(model);
 }
 
+/**
+ * Image models offering a prompt-enhancement toggle, where the provider rewrites and expands the
+ * prompt before generating. BFL takes it as `prompt_upsampling`; GeminiImageService maps the same
+ * flag onto Google's `enhancePrompt` (text-to-image only - its `edit()` path builds no generation
+ * config). OpenAI discards the parameter, so GPT-Image and DALL-E are excluded.
+ *
+ * One predicate on purpose: the settings UI, the reset defaults and the image-template snapshot all
+ * have to agree about this field, and they previously did so through three separate BFL checks.
+ */
+export function supportsPromptUpsampling(model?: string | null): boolean {
+  return isBflImageModel(model) || isGeminiImageModel(model);
+}
+
 /** Returns true specifically for gpt-image-2 (including versioned snapshots like gpt-image-2-2026-04-21). */
 export function isGPTImage2Model(model?: string | null): boolean {
   if (!model) return false;

@@ -1,5 +1,6 @@
 import { CreditHolderType, type ApiKeyBillingOwnerType, type IEmbedBranding } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { getUserEntitlements } from './index';
@@ -23,11 +24,24 @@ export interface EmbedKeyOwnerRef {
  * bypass would silently white-label every org whose billing owner is a staff
  * admin. Fails closed - any lookup error or missing owner resolves to false
  * (callers treat false as "branding shows").
+ *
+ * A lookup error warns before failing closed: on the write paths the symptom is
+ * wrong persisted data (hideBranding silently stripped to false behind a 200),
+ * not a visible error, so a transient DB fault would otherwise leave no trace.
+ * `keyId` is only for that log line - absent on the create path, where the key
+ * does not exist yet.
  */
-export async function embedKeyOwnerHasEntitlement(info: EmbedKeyOwnerRef, key: EntitlementKey): Promise<boolean> {
+export async function embedKeyOwnerHasEntitlement(
+  info: EmbedKeyOwnerRef,
+  key: EntitlementKey,
+  keyId?: string
+): Promise<boolean> {
+  // The branch and the failure log read one predicate, so the log can never
+  // name a different owner than the one resolution actually went after.
+  const orgBilled = info.billingOwnerType === CreditHolderType.Organization;
+  let ownerUserId = info.userId;
   try {
-    let ownerUserId = info.userId;
-    if (info.billingOwnerType === CreditHolderType.Organization) {
+    if (orgBilled) {
       // Org-billed key: the entitlement is the org billing owner's, never the
       // minter's. Assert positive ownership rather than falling through - a
       // missing organizationId (which create-time invariants forbid, but assert
@@ -42,7 +56,16 @@ export async function embedKeyOwnerHasEntitlement(info: EmbedKeyOwnerRef, key: E
     if (!owner) return false;
     const entitlements = await getUserEntitlements(owner);
     return entitlements.includes(normalizeTag(key));
-  } catch {
+  } catch (error) {
+    Logger.globalInstance.warn('[embedKeyEntitlement] owner entitlement lookup failed; failing closed', {
+      keyId: keyId ?? '(unsaved key)',
+      entitlement: key,
+      billingOwner: orgBilled ? `org:${info.organizationId}` : `user:${info.userId}`,
+      // The org billing owner once resolved; still the minter if the org lookup
+      // itself threw, which is what makes it worth logging separately.
+      ownerUserId,
+      error,
+    });
     return false;
   }
 }
@@ -69,11 +92,12 @@ export async function embedKeyOwnerHasEntitlement(info: EmbedKeyOwnerRef, key: E
 export async function gateEmbedBrandingWrite(
   owner: EmbedKeyOwnerRef,
   branding: IEmbedBranding | undefined,
-  storedHideBranding = false
+  storedHideBranding = false,
+  keyId?: string
 ): Promise<IEmbedBranding | undefined> {
   if (!branding || branding.hideBranding !== true) return branding;
   if (storedHideBranding === true) return branding; // echo, not an elevation
-  const entitled = await embedKeyOwnerHasEntitlement(owner, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false);
+  const entitled = await embedKeyOwnerHasEntitlement(owner, EMBED_WHITELABEL_ENTITLEMENT_KEY, keyId).catch(() => false);
   if (entitled) return branding;
   return { ...branding, hideBranding: false };
 }

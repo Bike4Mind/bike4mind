@@ -10,6 +10,7 @@ import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -25,6 +26,17 @@ const handler = baseApi()
 
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
+    }
+
+    // Restrict the Stripe success/cancel redirect to the deployed app origin. An
+    // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
+    // checkout page. The schema only guarantees a parseable URL, so this origin check
+    // is what actually confines the redirect - and it matters more now that the
+    // success redirect carries the completed checkout session id. Same pairing in
+    // pages/api/subscriptions/subscribe.ts, pages/api/stripe/portal.ts and
+    // pages/api/admin/organizations/[id]/convert-to-paid.ts - keep them in sync.
+    if (!isAllowedCallbackOrigin(callbackUrl)) {
+      throw new BadRequestError('callbackUrl must point to the deployed application origin');
     }
 
     // Check for existing active subscription
@@ -60,7 +72,12 @@ const handler = baseApi()
         await organizationRepository.update(organization);
       }
 
-      minSeats = Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1);
+      // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
+      // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
+      minSeats = Math.min(
+        Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
+        ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+      );
       customerId = organization.stripeCustomerId;
     } else {
       customer = await createCustomer({
@@ -98,7 +115,9 @@ const handler = baseApi()
           },
         },
       ],
-      success_url: `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}subscription_success=true`,
+      // Carries the Stripe session id alongside the existing success marker so the
+      // returning client can report revenue (see api/subscriptions/checkout-session.ts).
+      success_url: appendSuccessParams(callbackUrl),
       cancel_url: callbackUrl,
       subscription_data: {
         metadata,

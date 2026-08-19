@@ -1,5 +1,5 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User } from '@bike4mind/database';
+import { User, authSessionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { randomUUID } from 'crypto';
 import { omit } from 'lodash';
@@ -220,6 +220,16 @@ const authenticateUser = async (
         currentTokenVersion: user.tokenVersion,
       });
       await User.updateOne({ _id: user._id }, update);
+
+      // Invariant: a tokenVersion bump must also revoke AuthSessions, or an opaque refresh token
+      // (which carries no tokenVersion and is never checked against it) would rotate straight into a
+      // fresh access token stamped with the NEW version, defeating the "link a new provider revokes
+      // other sessions" security bump. applyAccountLink only bumps tokenVersion on a new-provider
+      // link, so gate the revoke on the same condition. Safe to revoke ALL here: the session for THIS
+      // login is minted later, in the callback handler, so it is created fresh and unaffected.
+      if (isNewProvider) {
+        await authSessionRepository.revokeAllByUserId(String(user._id));
+      }
 
       const linkedUser = omit(user, ['password']) as typeof user & {
         tokenVersion?: number;

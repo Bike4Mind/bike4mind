@@ -5,6 +5,7 @@ import { NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
 import qs from 'qs';
 import { secureParameters } from '@bike4mind/utils';
+import { queryBool } from '@bike4mind/common';
 
 const searchSchema = z.object({
   search: z.string().optional(),
@@ -14,7 +15,7 @@ const searchSchema = z.object({
       page: z.coerce.number().positive().int().prefault(1),
     })
     .optional(),
-  all: z.coerce.boolean().prefault(false),
+  all: queryBool,
   sort: z.enum(['asc', 'desc']).prefault('asc'),
 });
 

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import dayjs from 'dayjs';
 
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useModelMetrics } from './hooks/useModelMetrics';
-import { useModelMetricsState } from './hooks/useModelMetricsState';
+import { useSpend } from './hooks/useSpend';
+import { useModelMetricsState, ModelMetricsTabValue } from './hooks/useModelMetricsState';
 import { exportToCSV } from './utils/csvExport';
 import { processChartData } from './utils/chartDataProcessor';
 import { MetricsInfoModal } from './components/MetricsInfoModal';
@@ -13,6 +14,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { OverviewTab } from './components/OverviewTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
 import { RawDataTab } from './components/RawDataTab';
+import { SpendTab } from './components/SpendTab';
 
 const ModelMetricsTab: React.FC = () => {
   // Applied filters state (used for API calls)
@@ -57,8 +59,34 @@ const ModelMetricsTab: React.FC = () => {
     setDateRange,
   } = useModelMetricsState(metrics);
 
+  // Narrowed to the fields the spend query keys on (statusFilter is not applied to
+  // spend), so its react-query key stays stable across unrelated filter changes.
+  const spendFilters = useMemo(
+    () => ({
+      dateFrom: appliedFilters.dateFrom,
+      dateTo: appliedFilters.dateTo,
+      userFilter: appliedFilters.userFilter,
+      modelFilter: appliedFilters.modelFilter,
+    }),
+    [appliedFilters]
+  );
+
+  // Owned here (not inside SpendTab) so the shared Refresh button can bust the
+  // spend cache too; gated on the active tab to keep the query lazy.
+  const {
+    data: spendData,
+    isLoading: isSpendLoading,
+    isError: isSpendError,
+    recache: recacheSpend,
+  } = useSpend(spendFilters, { enabled: activeTab === 'spend' });
+
   const handleRefresh = () => {
-    recache();
+    // Refresh busts the cache for whichever tab's data is on screen.
+    if (activeTab === 'spend') {
+      recacheSpend();
+    } else {
+      recache();
+    }
   };
 
   const handleExportCSV = () => {
@@ -120,7 +148,7 @@ const ModelMetricsTab: React.FC = () => {
       />
 
       {/* Tabs Section */}
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)}>
+      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
         <Box
           sx={{
             display: 'flex',
@@ -153,6 +181,13 @@ const ModelMetricsTab: React.FC = () => {
                 Raw Data
               </Box>
             </Tab>
+            <Tab value="spend">
+              💰{' '}
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                {' '}
+                Spend
+              </Box>
+            </Tab>
           </TabList>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: { xs: 1, sm: 0 } }}>
             <Typography level="body-sm" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
@@ -183,6 +218,11 @@ const ModelMetricsTab: React.FC = () => {
             onSort={handleSort}
             onShowInfoModal={() => setShowInfoModal(true)}
           />
+        </TabPanel>
+
+        {/* Spend Tab */}
+        <TabPanel value="spend" sx={{ p: 1 }}>
+          <SpendTab data={spendData} isLoading={isSpendLoading} isError={isSpendError} />
         </TabPanel>
       </Tabs>
 

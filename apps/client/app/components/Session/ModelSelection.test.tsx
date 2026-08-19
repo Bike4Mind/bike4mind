@@ -1,5 +1,5 @@
 import React from 'react';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
@@ -8,6 +8,7 @@ import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 // The real store, not a stub: it must stay reachable from ModelSelection without
 // dragging in AdminPage (the import cycle this module split exists to prevent).
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
+import { getThemeConfig } from '@client/app/utils/themes';
 import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND } from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
@@ -64,7 +65,7 @@ vi.mock('@client/app/hooks/useFavoriteModels', () => ({
 }));
 
 vi.mock('@client/app/utils/modelRanking', () => ({
-  sortModelsByCapability: (models: ModelInfo[]) => models,
+  sortModelsForPicker: (models: ModelInfo[]) => models,
 }));
 
 vi.mock('@client/app/utils/commands', () => ({
@@ -76,7 +77,6 @@ vi.mock('@client/app/utils/aiSettingsUtils', () => ({
   isOpenAIModel: (name: string) => name.toLowerCase().includes('gpt'),
   getModelSpeedVariant: () => 'green',
   getModelSpeedTooltip: () => '',
-  getTopUsedModelsFromStats: () => [],
   getModelSpeedFromStats: () => null,
   getPriceTierTooltip: () => '',
   isNewModel: () => false,
@@ -86,13 +86,17 @@ vi.mock('./AISettings/MetaDataChips', () => ({
   default: ({ label }: { label: string }) => <span>{label}</span>,
 }));
 
+// The app theme, not Joy's default: ModelSelection reads custom palette tokens
+// (notebooklist.*) that only exist here.
+const appTheme = extendTheme({ ...getThemeConfig() });
+
 const renderSelection = (props: {
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
 }) =>
   render(
-    <CssVarsProvider>
+    <CssVarsProvider theme={appTheme}>
       <ModelSelection
         model={textModel.id}
         setModel={props.setModel ?? vi.fn()}
@@ -110,10 +114,12 @@ describe('ModelSelection apply behavior', () => {
     setLLM.mockClear();
   });
 
+  // lastUsedTextModel / lastUsedImageModel now ride along in buildModelSelectionPatch, which the
+  // setModel callback applies - covered in utils/__tests__/aiSettingsUtils.test.ts.
   it.each([
-    ['text', textModel, 'lastUsedTextModel'],
-    ['image', imageModel, 'lastUsedImageModel'],
-  ] as const)('applies a %s model and completes the selection when its card is clicked', (_, model, memoryKey) => {
+    ['text', textModel],
+    ['image', imageModel],
+  ] as const)('applies a %s model and completes the selection when its card is clicked', (_, model) => {
     const setModel = vi.fn();
     const onSelectionComplete = vi.fn();
     renderSelection({ setModel, onSelectionComplete });
@@ -121,11 +127,13 @@ describe('ModelSelection apply behavior', () => {
     fireEvent.click(screen.getByTestId(`model-card-${model.id}`));
 
     expect(setModel).toHaveBeenCalledWith(model.id);
-    expect(setLLM).toHaveBeenCalledWith({ [memoryKey]: model.id });
     expect(onSelectionComplete).toHaveBeenCalledOnce();
   });
 
-  it('opens View more without completing the selection', () => {
+  // The gear is a preview: it opens the per-model settings screen WITHOUT switching the session's
+  // model, so the "Use this model" button on that screen is the only thing that commits. Selecting
+  // here would make that button permanently read "Current model".
+  it('opens View more without selecting the model or completing the selection', () => {
     const setModel = vi.fn();
     const onSelectionComplete = vi.fn();
     const onSettingsClick = vi.fn();
@@ -133,9 +141,45 @@ describe('ModelSelection apply behavior', () => {
 
     fireEvent.click(screen.getByTestId(`model-view-more-${imageModel.id}`));
 
-    expect(setModel).toHaveBeenCalledWith(imageModel.id);
     expect(onSettingsClick).toHaveBeenCalledWith(imageModel);
+    expect(setModel).not.toHaveBeenCalled();
     expect(onSelectionComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('ModelSelection view mode', () => {
+  it('defaults to list view and toggles to grid and back', () => {
+    renderSelection({});
+
+    const toggle = screen.getByTestId('model-view-mode-toggle');
+    const card = () => screen.getByTestId(`model-card-${textModel.id}`);
+
+    expect(card()).toHaveAttribute('data-view-mode', 'list');
+    // The description is dropped in list view.
+    expect(screen.queryByText(textModel.description)).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(card()).toHaveAttribute('data-view-mode', 'grid');
+    expect(screen.getByText(textModel.description)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(card()).toHaveAttribute('data-view-mode', 'list');
+  });
+});
+
+describe('ModelSelection context summary', () => {
+  it('shows the context window for text models only, with an explanatory tooltip', async () => {
+    renderSelection({});
+
+    // Both fixtures declare contextWindow: 128000, so exactly one "128K" proves the image
+    // model's placeholder value is suppressed rather than both being rendered.
+    expect(screen.getAllByText('128K')).toHaveLength(1);
+    expect(screen.getByTestId(`model-card-${textModel.id}`)).toHaveTextContent('128K');
+    expect(screen.getByTestId(`model-card-${imageModel.id}`)).not.toHaveTextContent('128K');
+
+    // The number is unlabelled, so the tooltip is the only thing that explains it.
+    fireEvent.mouseOver(screen.getByText('128K'));
+    expect(await screen.findByText('128,000 token context window')).toBeInTheDocument();
   });
 });
 

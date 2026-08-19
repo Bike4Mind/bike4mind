@@ -20,7 +20,7 @@ describe('setOrganizationGroupTypes', () => {
       groups: {
         findByOrganization: vi.fn().mockResolvedValue([]),
         createIfMissing: vi.fn(),
-        softDeleteByIds: vi.fn(),
+        delete: vi.fn(),
       },
       users: { removeGroupsFromAllUsers: vi.fn() },
     };
@@ -79,7 +79,7 @@ describe('setOrganizationGroupTypes', () => {
 
     const result = await run(['sales']); // research removed
 
-    expect(db.groups.softDeleteByIds).toHaveBeenCalledWith(['g-research']);
+    expect(db.groups.delete).toHaveBeenCalledWith('g-research');
     expect(db.users.removeGroupsFromAllUsers).toHaveBeenCalledWith(['g-research']);
     expect(db.groups.createIfMissing).not.toHaveBeenCalled();
     expect(result.removed).toEqual(['research']);
@@ -103,13 +103,13 @@ describe('setOrganizationGroupTypes', () => {
     db.users.removeGroupsFromAllUsers.mockImplementation(async () => {
       callOrder.push('removeGroupsFromAllUsers');
     });
-    db.groups.softDeleteByIds.mockImplementation(async () => {
-      callOrder.push('softDeleteByIds');
+    db.groups.delete.mockImplementation(async () => {
+      callOrder.push('delete');
     });
 
     await run(['sales']); // research removed
 
-    expect(callOrder).toEqual(['removeGroupsFromAllUsers', 'softDeleteByIds']);
+    expect(callOrder).toEqual(['removeGroupsFromAllUsers', 'delete']);
   });
 
   it('does not touch groups/members when nothing is revoked', async () => {
@@ -118,7 +118,7 @@ describe('setOrganizationGroupTypes', () => {
 
     await run(['sales']); // no change
 
-    expect(db.groups.softDeleteByIds).not.toHaveBeenCalled();
+    expect(db.groups.delete).not.toHaveBeenCalled();
     expect(db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
     expect(db.groups.createIfMissing).not.toHaveBeenCalled();
   });

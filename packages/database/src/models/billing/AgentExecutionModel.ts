@@ -10,6 +10,7 @@ import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
   type AgentExecutionStatus,
   type GenerateImageToolCall,
+  type AudioGenerationToolCall,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -252,6 +253,18 @@ export interface IAgentExecution {
   imageConfig?: Partial<GenerateImageToolCall>;
 
   /**
+   * The user's selected audio-generation config (TTS provider/voice/format/
+   * language, SFX duration/prompt-influence), forwarded once at dispatch and
+   * persisted so the `audio_generation` tool resolves the saved settings on
+   * every iteration including continuation Lambdas. Same lifecycle as
+   * `imageConfig`: consumed ONLY by `buildSubagentToolConfig`, never injected
+   * into the ReActAgent context. Absent when the user never touched the Audio
+   * tab; the tool then falls back to its built-in defaults. `Partial` because
+   * the client may omit fields.
+   */
+  audioConfig?: Partial<AudioGenerationToolCall>;
+
+  /**
    * When true, the executor fires `LLMEvents.CompletionCompleted` on terminal
    * `completed` status so the same memento-evaluation handler used by the
    * chat-completion flow runs against the user's prompt. Top-level executions
@@ -271,6 +284,12 @@ export interface IAgentExecution {
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
+  /**
+   * Memory gates resolved once at execution start and persisted so the read, write, and
+   * stop-at-gate paths all observe one verdict via `resolveExecutionMementoGates` (#1525).
+   * Absent for per-request opt-outs (`enableMementos === false`) and legacy executions.
+   */
+  resolvedMementoGates?: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean };
 
   // Execution state
   status: AgentExecutionStatus;
@@ -591,10 +610,42 @@ const AgentExecutionSchema = new mongoose.Schema(
       required: false,
     },
 
+    // User's selected audio-generation config. Explicit typed sub-schema (not
+    // Mixed) covering every field the audio_generation tool reads, mirroring
+    // imageConfig above. All optional - a config may carry only a provider.
+    audioConfig: {
+      type: new mongoose.Schema(
+        {
+          ttsProvider: { type: String },
+          voice: { type: String },
+          format: { type: String },
+          languageCode: { type: String },
+          durationSeconds: { type: Number },
+          promptInfluence: { type: Number },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+
     // Feature-parity flags
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
     usedMementoIds: [{ type: String }],
+    // Memory gates resolved once at execution start and persisted so read/write/
+    // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
+    // sub-schema (not Mixed) so the three booleans are enforced at the DB layer.
+    resolvedMementoGates: {
+      type: new mongoose.Schema(
+        {
+          v1: { type: Boolean, required: true },
+          v2: { type: Boolean, required: true },
+          v2OptInLookupFailed: { type: Boolean, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
 
     // Execution state
     status: {
@@ -1205,6 +1256,19 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { usedMementoIds: mementoIds } });
   }
 
+  /**
+   * Persist the memory gates resolved at execution start so continuation Lambdas
+   * and the stop-at-gate WS handler read the same verdict rather than re-deriving
+   * it from mutable state (see `resolveExecutionMementoGates`). Written once, on
+   * the first invocation, before any handoff could resume the execution.
+   */
+  async persistResolvedMementoGates(
+    id: string,
+    gates: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean }
+  ): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
+  }
+
   async updatePermissionState(
     id: string,
     update: {
@@ -1601,6 +1665,69 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * ready set and the partial-completion report without loading checkpoints
    * or iteration billing on every completion handler tick.
    */
+  /**
+   * Batch-read just enough of a set of executions to render them as run
+   * summaries. Deliberately projected and deliberately batched: the caller
+   * (the QuestMaster v5 graph view) polls while a node runs, and a per-node
+   * `findById` would be both an N+1 and a full read of `result`, whose `steps`
+   * array carries the entire iteration trace. Mirrors the intent of
+   * EXECUTION_LIST_PROJECTION - never pull the heavy fields for a list view.
+   */
+  async findRunSummariesByIds(ids: string[]): Promise<
+    Array<{
+      id: string;
+      questId: string | null;
+      status: AgentExecutionStatus;
+      answer: string | null;
+      totalIterations: number | null;
+      totalCreditsUsed: number | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+    }>
+  > {
+    const valid = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (!valid.length) return [];
+
+    const docs = await this.model
+      .find(
+        { _id: { $in: valid.map(id => new mongoose.Types.ObjectId(id)) } },
+        {
+          _id: 1,
+          questId: 1,
+          status: 1,
+          'result.answer': 1,
+          'result.totalIterations': 1,
+          totalCreditsUsed: 1,
+          'error.message': 1,
+          completedAt: 1,
+        }
+      )
+      .lean<
+        Array<{
+          _id: mongoose.Types.ObjectId;
+          questId?: string;
+          status: AgentExecutionStatus;
+          result?: { answer?: string; totalIterations?: number };
+          totalCreditsUsed?: number;
+          error?: { message?: string };
+          completedAt?: Date;
+        }>
+      >();
+
+    return docs.map(doc => ({
+      id: String(doc._id),
+      // The Quest this run wrote. QuestMaster v5 joins a node's artifacts on it -
+      // persistAgentArtifacts stamps `sourceQuestId` with the same value.
+      questId: doc.questId ?? null,
+      status: doc.status,
+      answer: typeof doc.result?.answer === 'string' ? doc.result.answer : null,
+      totalIterations: typeof doc.result?.totalIterations === 'number' ? doc.result.totalIterations : null,
+      totalCreditsUsed: typeof doc.totalCreditsUsed === 'number' ? doc.totalCreditsUsed : null,
+      errorMessage: doc.error?.message ?? null,
+      completedAt: doc.completedAt ?? null,
+    }));
+  }
+
   async findDagChildrenLean(parentExecutionId: string): Promise<
     Array<{
       _id: unknown;

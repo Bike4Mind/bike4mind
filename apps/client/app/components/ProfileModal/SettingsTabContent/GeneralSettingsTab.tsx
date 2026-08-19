@@ -41,6 +41,7 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
+import ActiveSessionsSection from './ActiveSessionsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
@@ -546,6 +547,8 @@ const GeneralSettingsTab = () => {
               </Box>
             </Grid>
           </Grid>
+
+          <ActiveSessionsSection />
         </SectionContainer>
       </Box>
 
@@ -556,6 +559,33 @@ const GeneralSettingsTab = () => {
       {/* Display Settings Section */}
       <SectionContainer title="Display">
         <Grid container spacing={2}>
+          <Grid xs={12} md={6}>
+            <Box
+              sx={theme => ({
+                ...cardSurfaceSx(theme),
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
+                height: '100%',
+              })}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
+                  Splash Screen Cards
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 0.5 }}>
+                  Show prompt suggestion cards on the splash screen
+                </Typography>
+              </Box>
+              <Switch
+                checked={settings.showSplashCards}
+                onChange={e => updatePreferences({ showSplashCards: e.target.checked })}
+              />
+            </Box>
+          </Grid>
+
           <Grid xs={12} md={6}>
             <Box
               sx={theme => ({
@@ -681,8 +711,8 @@ const GeneralSettingsTab = () => {
                   Save Generated Audio
                 </Typography>
                 <Typography level="body-sm" sx={{ mt: 0.5 }}>
-                  Keep text-to-speech and sound-effect audio in your files so you can browse and replay it. Counts
-                  toward your storage limit.
+                  Keep text-to-speech, sound-effect, and music audio in your files so you can browse and replay it.
+                  Counts toward your storage limit.
                 </Typography>
               </Box>
               <Switch

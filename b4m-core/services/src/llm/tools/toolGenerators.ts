@@ -36,7 +36,15 @@ export const generateTools = (
     db,
     retrievalFilter,
     kbScope,
-  }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter']; kbScope?: ToolContext['kbScope'] },
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
+  }: {
+    db: ToolContext['db'];
+    retrievalFilter?: ToolContext['retrievalFilter'];
+    kbScope?: ToolContext['kbScope'];
+    inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
@@ -55,7 +63,8 @@ export const generateTools = (
   entitlementKeys: string[] = [],
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
-  availableModels?: import('@bike4mind/common').ModelInfo[]
+  availableModels?: import('@bike4mind/common').ModelInfo[],
+  onToolLlmUsage?: ToolContext['onToolLlmUsage']
 ): Record<string, ICompletionOptionTools> => {
   const context: ToolContext = {
     userId,
@@ -75,8 +84,11 @@ export const generateTools = (
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
     codeMinifier,
     availableModels,
+    onToolLlmUsage,
   };
 
   return Object.entries(tools).reduce(

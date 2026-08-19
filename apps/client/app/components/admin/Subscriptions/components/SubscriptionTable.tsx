@@ -23,11 +23,17 @@ const SubscriptionTable = ({ subscriptions, planMap }: SubscriptionTableProps) =
               <CardContent sx={{ p: 1.5 }}>
                 <Stack spacing={0.75}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                    <Typography fontWeight="bold">{subscription.user?.username || 'Unknown User'}</Typography>
+                    <Typography fontWeight="bold" data-testid="subscription-owner-username">
+                      {subscription.owner?.username || 'Unknown User'}
+                    </Typography>
                     <SubscriptionStatusChip subscription={subscription} />
                   </Stack>
-                  <Typography level="body-xs" sx={{ wordBreak: 'break-word', color: 'text.secondary' }}>
-                    {subscription.user?.email}
+                  <Typography
+                    level="body-xs"
+                    data-testid="subscription-owner-email"
+                    sx={{ wordBreak: 'break-word', color: 'text.secondary' }}
+                  >
+                    {subscription.owner?.email}
                   </Typography>
                   <Divider />
                   <Stack direction="row" justifyContent="space-between">
@@ -73,9 +79,11 @@ const SubscriptionTable = ({ subscriptions, planMap }: SubscriptionTableProps) =
               <tr key={subscription.id || subscription.subscriptionId}>
                 <td>
                   <Stack>
-                    <Typography>{subscription.user?.username || 'Unknown User'}</Typography>
-                    <Typography level="body-xs" sx={{ wordBreak: 'break-word' }}>
-                      {subscription.user?.email}
+                    <Typography data-testid="subscription-owner-username">
+                      {subscription.owner?.username || 'Unknown User'}
+                    </Typography>
+                    <Typography level="body-xs" data-testid="subscription-owner-email" sx={{ wordBreak: 'break-word' }}>
+                      {subscription.owner?.email}
                     </Typography>
                   </Stack>
                 </td>

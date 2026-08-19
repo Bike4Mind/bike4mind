@@ -10,6 +10,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
   mementoRepository,
@@ -46,6 +47,8 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
+import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { Config } from '@server/utils/config';
@@ -172,6 +175,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
@@ -202,6 +206,10 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       });
     },
     recallMementosV2,
+    recallLakeMemory: recallLakeMemoryForSession,
+    // Shared with the queue processors - see sessionSystemPromptResolver for why this must not be
+    // an inline lambda per factory.
+    loadSystemPromptById,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: async (

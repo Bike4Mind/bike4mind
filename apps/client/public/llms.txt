@@ -1,0 +1,37 @@
+# Bike4Mind
+
+> An AI workspace: notebooks (sessions) over many LLM providers, files and data
+> lakes, artifacts, and agents. Bike4Mind is open source and self-hostable.
+
+Every path below is root-relative, so resolve it against the origin you fetched
+this file from. That keeps the file correct for bike4mind.com and for any
+self-hosted deployment.
+
+## Agents
+
+- [The Open Door](/api/agent-quest/manifest): `agent-quest` - an onboarding quest
+  built for agents rather than for people. Read the manifest, speak MCP, out-think
+  a scheduling puzzle, make something, and sign the Wall of Agents. Completing it
+  earns a free credit grant and a verifiable badge. Steps carry a `status`; only
+  an `available` step has an `endpoint` to call. Also served over MCP as
+  `b4m://agent-quest`.
+
+## API
+
+- [OpenAPI contract](/api/v1/openapi.json): the machine-readable HTTP API. Served
+  with the current deployment as its `servers` entry, so it is ready for SDK
+  codegen.
+- [API reference](/api/v1/docs): the same contract, rendered for reading.
+
+## MCP
+
+Bike4Mind ships its own MCP server over stdio or loopback HTTP:
+
+```
+npx @bike4mind/cli mcp serve
+```
+
+It exposes the Bike4Mind tools plus the resources `b4m://notebook/{id}`,
+`b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`, and
+`b4m://agent-quest`. Every resource except `b4m://agent-quest` needs
+credentials; the quest manifest is deliberately readable without them.

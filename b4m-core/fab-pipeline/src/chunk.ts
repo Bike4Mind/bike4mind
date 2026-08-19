@@ -1,6 +1,8 @@
 import {
   BedrockEmbeddingModel,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
+  MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
   isAudioMimeType,
   OpenAIEmbeddingModel,
@@ -28,6 +30,19 @@ export const ChunkSchema = z.object({
 });
 export type Chunk = z.infer<typeof ChunkSchema>;
 
+// Canonical in @bike4mind/common (see constants/chunking) so the admin-settings schema and the
+// React controls can share them without importing this module, which pulls in mammoth, JSZip,
+// tiktoken, unpdf and the S3 client. Re-exported so existing `from './chunk'` importers are
+// unaffected.
+export { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET };
+
+export interface SmartChunkerOptions {
+  /** Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. */
+  bufferPercentOrValue?: number;
+  /** Soft target chunk size in tokens; clamped to [MIN_PASSAGE_TOKEN_TARGET, model limit]. */
+  passageTokenTarget?: number;
+}
+
 type Storage = Pick<S3Storage, 'getContentAsBuffer'>;
 
 const isEmbeddingModel = <T extends SupportedEmbeddingModel>(
@@ -37,6 +52,54 @@ const isEmbeddingModel = <T extends SupportedEmbeddingModel>(
   return Object.values(modelEnum).includes(model as T);
 };
 
+/**
+ * The embedding model's context window in tokens - the HARD ceiling an embedding call accepts.
+ * Extracted from SmartChunker so a caller (the chunk queue handler, #1662) can compute the same
+ * effective passage limit for owner-altitude policy resolution and cross-lake conflict reporting
+ * without constructing a chunker. Throws on an unsupported model, exactly as the chunker does.
+ */
+export function embeddingModelContextWindow(model: string): number {
+  if (isEmbeddingModel(model, OpenAIEmbeddingModel)) return OPENAI_EMBEDDING_MODEL_MAP[model].contextWindow;
+  if (isEmbeddingModel(model, VoyageAIEmbeddingModel)) return VOYAGEAI_EMBEDDING_MODEL_MAP[model].contextWindow;
+  if (isEmbeddingModel(model, BedrockEmbeddingModel)) return BEDROCK_EMBEDDING_MODEL_MAP[model].contextWindow;
+  if (isEmbeddingModel(model, OllamaEmbeddingModel)) return OLLAMA_EMBEDDING_MODEL_MAP[model].contextWindow;
+  throw new Error(`Unsupported embedding model: ${model}`);
+}
+
+/**
+ * The buffer subtracted from the model window to absorb cross-provider tokenizer differences
+ * (char/4 approximations can undercount by ~8-10% vs tiktoken). A value < 1 is a percent of the
+ * window (floored to >= 32 tokens); a value >= 1 is an absolute token count.
+ */
+export function embeddingWindowBuffer(maxTokens: number, bufferPercentOrValue = 0.2): number {
+  return bufferPercentOrValue < 1
+    ? Math.max(Math.floor(maxTokens * bufferPercentOrValue), 32)
+    : Math.floor(bufferPercentOrValue);
+}
+
+/**
+ * The effective per-chunk token limit the chunker will actually use: the SOFT passage target
+ * (retrieval granularity) hard-capped to the buffered model window (an oversized chunk fails the
+ * embedding call). THE single source of truth for that clamp - SmartChunker's constructor and the
+ * chunk handler's conflict/observability logic (#1662) both derive from it, so a resolved policy
+ * value can never drift from the granularity it actually produces. An omitted/invalid target falls
+ * back to DEFAULT_PASSAGE_TOKEN_TARGET; a supplied one is floored to MIN_PASSAGE_TOKEN_TARGET.
+ */
+export function effectiveChunkTokenLimit(opts: {
+  model: string;
+  passageTokenTarget?: number;
+  bufferPercentOrValue?: number;
+}): number {
+  const maxTokens = embeddingModelContextWindow(opts.model);
+  const hardLimit = maxTokens - embeddingWindowBuffer(maxTokens, opts.bufferPercentOrValue ?? 0.2);
+  const { passageTokenTarget } = opts;
+  const target =
+    passageTokenTarget !== undefined && Number.isFinite(passageTokenTarget) && passageTokenTarget > 0
+      ? Math.max(Math.floor(passageTokenTarget), MIN_PASSAGE_TOKEN_TARGET)
+      : DEFAULT_PASSAGE_TOKEN_TARGET;
+  return Math.min(hardLimit, target);
+}
+
 // The SmartChunker class handles chunking of various file types into smaller pieces suitable for processing by an embedding model
 export class SmartChunker {
   private model: string;
@@ -45,43 +108,43 @@ export class SmartChunker {
   private encoder?: Tiktoken;
   private storage: Storage;
   private bufferPercentOrValue: number;
+  // Canonical extracted document text from the most recent chunkFile() call, captured BEFORE any
+  // size-driven splitting, data-URL redaction, or structural (JSON/CSV/XLSX) enveloping - i.e. the
+  // text as extracted, independent of chunkTokenLimit/model. The lake admission contract hashes this
+  // (see computeServerTextHash) so the fingerprint is stable across chunk-policy changes; the chunk
+  // OUTPUT is not. Undefined for a file with no extractable text (image/audio/unsupported/empty).
+  private lastExtractedText: string | undefined;
 
   /**
    * @param model - The embedding model name
    * @param storage - Storage instance for file content
    * @param logger - Logger instance
-   * @param bufferPercentOrValue - Optional. Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. Default: 0.2 (20%) or 32 tokens, whichever is greater.
+   * @param options - Either a bare number (legacy: bufferPercentOrValue) or a SmartChunkerOptions
+   *   object. Buffer default: 0.2 (20%) or 32 tokens, whichever is greater. Passage target
+   *   default: DEFAULT_PASSAGE_TOKEN_TARGET.
    */
   constructor(
     model: string,
     storage: Storage,
     private readonly logger: Logger,
-    bufferPercentOrValue?: number
+    options?: number | SmartChunkerOptions
   ) {
+    const { bufferPercentOrValue, passageTokenTarget } =
+      typeof options === 'number' ? { bufferPercentOrValue: options, passageTokenTarget: undefined } : (options ?? {});
     this.model = model;
-
-    if (isEmbeddingModel(model, OpenAIEmbeddingModel)) {
-      this.maxTokens = OPENAI_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else if (isEmbeddingModel(model, VoyageAIEmbeddingModel)) {
-      this.maxTokens = VOYAGEAI_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else if (isEmbeddingModel(model, BedrockEmbeddingModel)) {
-      this.maxTokens = BEDROCK_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else if (isEmbeddingModel(model, OllamaEmbeddingModel)) {
-      this.maxTokens = OLLAMA_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else {
-      throw new Error(`Unsupported embedding model: ${model}`);
-    }
+    this.maxTokens = embeddingModelContextWindow(model);
 
     // 20% buffer absorbs cross-provider tokenizer differences: char/4 approximations
-    // (Bedrock, Voyage) can undercount by ~8-10% vs actual OpenAI tiktoken.
+    // (Bedrock, Voyage) can undercount by ~8-10% vs actual OpenAI tiktoken. The buffered model
+    // limit is the HARD cap (an oversized chunk fails the embedding call); the passage target is a
+    // SOFT cap for retrieval granularity. effectiveChunkTokenLimit is the shared source of truth
+    // for that clamp so the handler's owner-altitude resolution can't drift from it (#1662).
     this.bufferPercentOrValue = bufferPercentOrValue ?? 0.2;
-    let buffer: number;
-    if (this.bufferPercentOrValue < 1) {
-      buffer = Math.max(Math.floor(this.maxTokens * this.bufferPercentOrValue), 32);
-    } else {
-      buffer = Math.floor(this.bufferPercentOrValue);
-    }
-    this.chunkTokenLimit = this.maxTokens - buffer;
+    this.chunkTokenLimit = effectiveChunkTokenLimit({
+      model,
+      passageTokenTarget,
+      bufferPercentOrValue: this.bufferPercentOrValue,
+    });
 
     this.storage = storage;
 
@@ -90,6 +153,7 @@ export class SmartChunker {
       maxTokens: this.maxTokens,
       chunkTokenLimit: this.chunkTokenLimit,
       bufferPercentOrValue: this.bufferPercentOrValue,
+      passageTokenTarget,
     });
   }
 
@@ -122,6 +186,14 @@ export class SmartChunker {
   }
 
   /**
+   * The canonical extracted text from the most recent chunkFile() call - policy-independent, unlike
+   * the returned chunks. Undefined when the file yielded no extractable text. See lastExtractedText.
+   */
+  public getExtractedText(): string | undefined {
+    return this.lastExtractedText;
+  }
+
+  /**
    * Chunk a file into smaller pieces that can be processed by the model
    * Overloaded method that accepts either an IFabFile or a Buffer with mimeType
    */
@@ -144,6 +216,10 @@ export class SmartChunker {
 
     this.logger.updateMetadata({ mimeType });
     this.logger.log(`Chunking file with type: ${mimeType}`);
+
+    // Cleared per call; each format handler below sets it to the text it extracted. Anything that
+    // returns no chunks (audio/image/unsupported) leaves it undefined.
+    this.lastExtractedText = undefined;
 
     // Audio (generated TTS / sound effects) is intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
@@ -197,13 +273,18 @@ export class SmartChunker {
       case SupportedFabFileMimeTypes.PHP:
       case SupportedFabFileMimeTypes.RUBY:
       case SupportedFabFileMimeTypes.SH:
-      case SupportedFabFileMimeTypes.BASH:
-        chunks = await this.chunkText(content.toString());
+      case SupportedFabFileMimeTypes.BASH: {
+        const textContent = content.toString();
+        this.lastExtractedText = textContent;
+        chunks = await this.chunkText(textContent);
         break;
+      }
 
       default:
         if (mimeType && mimeType.startsWith('text/')) {
-          chunks = await this.chunkText(content.toString());
+          const textContent = content.toString();
+          this.lastExtractedText = textContent;
+          chunks = await this.chunkText(textContent);
           break;
         }
         this.logger.error(`Unsupported file type: ${mimeType}`);
@@ -222,6 +303,9 @@ export class SmartChunker {
   // Chunks CSV content into pieces that fit within the model's token limit
   private async chunkCSV(content: Buffer): Promise<Chunk[]> {
     const csvString = content.toString('utf8');
+    // Fingerprint the raw CSV text, not the token-split row chunks (whose boundaries move with
+    // chunkTokenLimit and whose oversized-row path splits on commas).
+    this.lastExtractedText = csvString;
     // Split by newlines (optionally handle \r\n)
     const rows = csvString.split(/\r?\n/).filter(row => row.trim().length > 0);
 
@@ -293,6 +377,9 @@ export class SmartChunker {
     // Extract text from the PDF
     const { text } = await extractText(pdf);
 
+    // The extracted text, page-joined - captured before size-chunking so the fingerprint is stable.
+    this.lastExtractedText = Array.isArray(text) ? text.join('\n') : text;
+
     if (typeof text === 'string') {
       // If text is a single string, chunk it as plain text
       return this.chunkText(text);
@@ -343,7 +430,11 @@ export class SmartChunker {
 
   // Chunks JSON content into pieces that fit within the model's token limit
   private async chunkJSON(content: Buffer): Promise<Chunk[]> {
-    const json = JSON.parse(content.toString());
+    const jsonString = content.toString();
+    // Fingerprint the raw JSON source, not chunkObject's `JSON.stringify({ path: value })` envelopes
+    // whose keys and `[i]` sub-indices are a function of chunkTokenLimit.
+    this.lastExtractedText = jsonString;
+    const json = JSON.parse(jsonString);
     return this.chunkObject(json);
   }
 
@@ -448,6 +539,7 @@ export class SmartChunker {
   private async chunkDOCX(content: Buffer): Promise<Chunk[]> {
     // Extract raw text from the DOCX file using mammoth
     const result = await mammoth.extractRawText({ buffer: content });
+    this.lastExtractedText = result.value;
     // Chunk the extracted text as plain text
     return this.chunkText(result.value);
   }
@@ -492,6 +584,7 @@ export class SmartChunker {
       this.logger.warn('PPTX contained no extractable slide text');
       return [];
     }
+    this.lastExtractedText = fullText;
     return this.chunkText(fullText);
   }
 
@@ -615,6 +708,19 @@ export class SmartChunker {
     const { read, utils } = await import('xlsx');
 
     const workbook = read(content, { type: 'buffer' });
+
+    // Canonical extracted text for the fingerprint: every sheet's rows serialized deterministically,
+    // independent of chunkTokenLimit. The chunk OUTPUT below flips between whole-row and per-cell
+    // (`{column,value}`) JSON at the token limit, so it cannot be the hash input.
+    this.lastExtractedText = workbook.SheetNames.map(sheetName => {
+      const rows = utils
+        .sheet_to_json<any[]>(workbook.Sheets[sheetName], { header: 1 })
+        .filter(Array.isArray)
+        .map(row => JSON.stringify(row))
+        .join('\n');
+      return `--- Sheet: ${sheetName} ---\n${rows}\n--- End of Sheet: ${sheetName} ---`;
+    }).join('\n');
+
     const chunks: Chunk[] = [];
     let currentChunk = '';
     let currentTokens = 0;
@@ -751,7 +857,10 @@ export class SmartChunker {
   private async encodeTokens(text: string): Promise<number[]> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
       await this.initializeEncoder();
-      return Array.from(this.encoder!.encode(text));
+      // encode_ordinary, not encode: file content is untrusted and a special-token literal in it
+      // ("<|endoftext|>") makes encode reject, failing the whole ingest. See TiktokenTokenizer in
+      // @bike4mind/utils for the full reasoning; the same call is used everywhere we tokenize.
+      return Array.from(this.encoder!.encode_ordinary(text));
     }
     // For non-OpenAI models, pseudo-token IDs are character offsets into the original text.
     // decodeTokens() uses these offsets to slice the original string back out.
@@ -857,9 +966,10 @@ export class SmartChunker {
   // Counts the number of tokens in the given text using the appropriate tokenization method
   private async countTokens(text: string): Promise<number> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
-      // Use tiktoken for OpenAI models
+      // Use tiktoken for OpenAI models. encode_ordinary for the same reason as encodeTokens above:
+      // a special-token literal in file content must be counted, not rejected.
       await this.initializeEncoder();
-      const tokens = this.encoder!.encode(text);
+      const tokens = this.encoder!.encode_ordinary(text);
       return tokens.length;
     } else if (isEmbeddingModel(this.model, VoyageAIEmbeddingModel)) {
       // VoyageAI uses transformers-style subword tokenization unavailable in JS;

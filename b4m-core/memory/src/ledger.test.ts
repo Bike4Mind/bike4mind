@@ -129,6 +129,30 @@ describe('deterministic fold', () => {
     expect(belief.derivedFrom).toHaveLength(3);
   });
 
+  it('carries source-document provenance onto the belief (assert replaces, affirm unions)', () => {
+    const chain = buildChain([
+      ev({ subject: 'role', fact: 'v1', sources: ['docA'], at: '2026-07-01T00:00:00.000Z' }),
+      ev({ subject: 'role', kind: 'affirm', sources: ['docB'], at: '2026-07-02T00:00:00.000Z' }),
+    ]);
+    const [belief] = foldEvents(chain);
+    expect(belief.sources).toEqual(['docA', 'docB']); // union, deduped
+  });
+
+  it('a re-assert REPLACES source provenance rather than accumulating it', () => {
+    const chain = buildChain([
+      ev({ subject: 'role', fact: 'v1', sources: ['docA'], at: '2026-07-01T00:00:00.000Z' }),
+      ev({ subject: 'role', fact: 'v2', sources: ['docB'], at: '2026-07-02T00:00:00.000Z' }),
+    ]);
+    const [belief] = foldEvents(chain);
+    expect(belief.fact).toBe('v2');
+    expect(belief.sources).toEqual(['docB']); // assert replaced content, so its sources replace too
+  });
+
+  it('leaves sources undefined when no contributing event carried any', () => {
+    const chain = buildChain([ev({ subject: 'role', fact: 'v1', at: '2026-07-01T00:00:00.000Z' })]);
+    expect(foldEvents(chain)[0].sources).toBeUndefined();
+  });
+
   it('retract folds the belief away', () => {
     const chain = buildChain([
       ev({ subject: 'role', fact: 'role' }),

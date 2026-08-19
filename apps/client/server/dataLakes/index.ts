@@ -15,14 +15,8 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import {
-  DATA_LAKES,
-  getAccessibleDataLakes,
-  hasDeveloperUserTag,
-  isImageServeable,
-  normalizeTagPrefix,
-} from '@bike4mind/common';
-import type { DataLakeConfig, ManageableDataLakeConfig } from '@bike4mind/common';
+import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
+import type { DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -34,6 +28,10 @@ import {
 import type { EntitlementRequest } from '@server/entitlements';
 import { getFilesStorage } from '@server/utils/storage';
 import { toAccessContext } from './toAccessContext';
+import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
+import { firstQueryValue } from './firstQueryValue';
+
+export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
 
 /**
  * Resolve the data lakes a user can browse: their dynamic (DB) lakes - already
@@ -46,8 +44,14 @@ import { toAccessContext } from './toAccessContext';
  * happen not to carry. Static lakes (no owner concept) still go through that filter.
  * The retrieval resolver does run that filter and compensates with its own owner re-check
  * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
+ *
+ * Returns `DataLakeConfig[]`, not the manageable projection: the dynamic half carries the
+ * `canManage`/`isOwn` labels but the static half does not, and every caller here (article,
+ * tag-count, and answer scoping) reads only id/tag/prefix - never a manage field. Typing the
+ * mixed result as the narrower shared shape keeps the manager-only labels off a path that has
+ * no use for them.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<ManageableDataLakeConfig[]> {
+export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
@@ -57,8 +61,10 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
   // it to stop the two halves of the merge disagreeing about what the caller holds.
   const ctx = await toAccessContext(req);
 
+  // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
+  // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
   const dynamic = ctx.isAdmin
-    ? await dataLakeService.listAllDataLakes({ db: { dataLakes: dataLakeRepository } })
+    ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
     : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of
@@ -76,14 +82,12 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
 export interface DataLakeArticlesQuery {
   id?: string;
   tags?: string | string[];
-  search?: string;
+  search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
   sortDir?: string;
 }
-
-const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
 
 /**
  * Split the accessible lakes' file-tag prefixes by provenance:
@@ -104,9 +108,9 @@ function splitTagPrefixes(lakes: DataLakeConfig[]): { openTagPrefixes: string[];
   const openTagPrefixes: string[] = [];
   const scopedTagPrefixes: string[] = [];
   for (const lake of lakes) {
-    const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-    if (!prefix) continue;
-    (STATIC_LAKE_IDS.has(lake.id) ? openTagPrefixes : scopedTagPrefixes).push(prefix);
+    const normalized = normalizedLakePrefix(lake);
+    if (!normalized) continue;
+    (normalized.isOpen ? openTagPrefixes : scopedTagPrefixes).push(normalized.prefix);
   }
   return { openTagPrefixes, scopedTagPrefixes };
 }
@@ -120,7 +124,7 @@ export async function queryDataLakeArticles(
   req: EntitlementRequest,
   lakes: DataLakeConfig[],
   query: DataLakeArticlesQuery
-): Promise<{ data: unknown[]; total: number; hasMore: boolean }> {
+): Promise<{ data: unknown[]; total: number; hasMore: boolean; grantedLakeIds?: string[] }> {
   if (lakes.length === 0) return { data: [], total: 0, hasMore: false };
 
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
@@ -133,11 +137,10 @@ export async function queryDataLakeArticles(
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
   if (query.id) {
     const file = await fabFileRepository.findById(query.id);
-    if (!file || file.deletedAt) return { data: [], total: 0, hasMore: false };
-    const fileTagNames = file.tags?.map(t => t.name) ?? [];
-    const hasMetaTagAccess = dataLakeTags.some(t => fileTagNames.includes(t));
-    const hasOpenPrefixAccess = openTagPrefixes.some(p => fileTagNames.some(t => t.startsWith(p)));
-    if (!hasMetaTagAccess && !hasOpenPrefixAccess) return { data: [], total: 0, hasMore: false };
+    const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
+    if (!file || grantedLakeIds.length === 0) {
+      return { data: [], total: 0, hasMore: false };
+    }
     const { content, chunks, vector, ...metadata } = file as unknown as Record<string, unknown>;
     // A held/blocked uploaded image must not hand out its cached URL via the
     // deep-link/single-id branch. Keep the metadata (so the client can render a
@@ -146,12 +149,15 @@ export async function queryDataLakeArticles(
       delete metadata.fileUrl;
       delete metadata.fileUrlExpireAt;
     }
-    return { data: [metadata], total: 1, hasMore: false };
+    // Surfaced so the caller's own access-audit attribution can reuse this SAME grantingLakes
+    // result (this is the sound, single-authorized-file case) instead of recomputing it - see
+    // apps/client/pages/api/data-lakes/articles.ts.
+    return { data: [metadata], total: 1, hasMore: false, grantedLakeIds: grantedLakeIds.map(l => l.id) };
   }
 
   const rawTags = query.tags;
   const tags: string[] = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
-  const search = query.search ?? '';
+  const search = firstQueryValue(query.search) ?? '';
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(2000, Math.max(1, Number(query.limit) || 50));
   const sortBy = query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
@@ -211,9 +217,10 @@ export async function queryDataLakeTagCounts(
 ): Promise<{
   tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>>;
   uniqueArticleCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeUniqueFilesByPrefix>>;
+  lakeFileCounts: Record<string, number>;
 }> {
   if (lakes.length === 0) {
-    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} } };
+    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} }, lakeFileCounts: {} };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
   const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
@@ -230,10 +237,25 @@ export async function queryDataLakeTagCounts(
     scopedTagPrefixes,
   };
 
-  const [tagCounts, uniqueArticleCounts] = await Promise.all([
+  // Per-lake sizes come from the membership predicate, not from `<prefix>:` tag matches: a lake
+  // whose files carry only the meta-tag (what the upload wizard produces) counts 0 under the
+  // prefix rule, and a file carrying several taxonomy tags counts several times. The lake docs
+  // are fetched because the predicate's prefix arm has to be anchored to the lake's CREATOR -
+  // the config the browse surfaces receive deliberately carries no owner id. A static registry
+  // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
+  // safe direction (see buildDataLakeMembershipFilter).
+  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
+  const membershipScopes = lakes.map((lake, i) => ({
+    datalakeTag: lake.datalakeTag,
+    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
+    creatorUserId: lakeDocs[i]?.createdByUserId,
+  }));
+
+  const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
+    fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
   ]);
 
-  return { tagCounts, uniqueArticleCounts };
+  return { tagCounts, uniqueArticleCounts, lakeFileCounts };
 }

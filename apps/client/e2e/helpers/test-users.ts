@@ -44,6 +44,14 @@ const SPEC_KEYS = [
   'search',
   'dataLake',
   'skills',
+  // AI-latency suites (only seeded when AI_LATENCY_RUN=true; getTestUsers skips absent files).
+  // Listed here so getTestUsers loads their spec users, which lets specAuthForProject resolve
+  // real auth and route their navigations through /auth/success like every other authed suite -
+  // otherwise they fall back to cold-loading the single-use refresh cookie and get revoked.
+  'aiLatencyShortAnswers',
+  'aiLatencyLongAnswers',
+  'aiLatencyToolPrompts',
+  'aiLatencyIntermediateTools',
 ];
 
 /**

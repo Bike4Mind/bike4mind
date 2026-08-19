@@ -10,6 +10,11 @@ import {
   normalizeTagPrefix,
   toDataLakeConfig,
   tagPrefixesOverlap,
+  tagPrefixIssue,
+  submittedTagPrefix,
+  MAX_TAG_PREFIX_LENGTH,
+  hasBlankTagPrefixSegment,
+  satisfiesTagPrefix,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -129,10 +134,9 @@ describe('toDataLakeConfig', () => {
     expect(config.requiredUserTag).toBe('tag');
   });
 
-  // The projection dropped `slug`, so the lake list returned lakes without a slug.
-  // The Add-files (append) wizard reads `lake.slug` to send `dataLakeSlug`; without it the
-  // server never resolved the lake tag and uploaded files were never registered to the lake.
-  it('carries slug through the projection (append-mode upload depends on it)', () => {
+  // The projection dropped `slug`, so the lake list returned lakes without a slug - and the
+  // wizard carries whatever the list gave it into the lake it is adding files to.
+  it('carries slug through the projection (clients read it off a lake they hold)', () => {
     const config = toDataLakeConfig({
       id: 'lake1',
       slug: 'acme-robotics-kb',
@@ -246,5 +250,162 @@ describe('tagPrefixesOverlap', () => {
   ])('never overlaps when one side is %s, since no query arm is built from it', (_label, a, b) => {
     expect(tagPrefixesOverlap(a, b)).toBe(false);
     expect(tagPrefixesOverlap(b, a)).toBe(false);
+  });
+});
+
+describe('satisfiesTagPrefix', () => {
+  it.each([
+    ['a plain content tag', ['acme:legal']],
+    ['a nested content tag', ['acme:legal:2024']],
+    ['one satisfying tag among several', ['important', 'globex:x', 'acme:legal']],
+    // The suffix is any non-empty string, including one that starts with a separator.
+    ['a tag whose suffix begins with a colon', ['acme::odd']],
+  ])('is satisfied by %s', (_label, tags) => {
+    expect(satisfiesTagPrefix(tags, 'acme:')).toBe(true);
+  });
+
+  it.each([
+    ['no tags at all', []],
+    ['only tags outside the prefix', ['important', 'globex:legal']],
+    // Renders as an unlabeled row in the tag tree, so it is not a category to navigate to.
+    ['a bare prefix with no suffix', ['acme:']],
+    // The read arms build an unflagged ^regex, so this file is still uncategorized to them.
+    ['a differently-cased prefix', ['ACME:legal']],
+    ['a prefix that is only a substring', ['not-acme:legal']],
+  ])('is not satisfied by %s', (_label, tags) => {
+    expect(satisfiesTagPrefix(tags, 'acme:')).toBe(false);
+  });
+
+  it('never counts a membership meta-tag as content, whatever its case', () => {
+    // The tag counters exclude `datalake:*` from the tree, so a meta-tag leaves the file
+    // uncategorized even when the lake prefix would otherwise match it.
+    expect(satisfiesTagPrefix(['datalake:acme'], 'datalake:')).toBe(false);
+    expect(satisfiesTagPrefix(['DataLake:acme'], 'DataLake:')).toBe(false);
+  });
+
+  it('ignores malformed entries rather than throwing', () => {
+    expect(satisfiesTagPrefix([null, undefined, 42, { name: 'acme:legal' }], 'acme:')).toBe(false);
+    expect(satisfiesTagPrefix([null, 'acme:legal'], 'acme:')).toBe(true);
+  });
+});
+
+describe('hasBlankTagPrefixSegment', () => {
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', ' :'])('flags an empty or whitespace segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // trim() strips WhiteSpace but not Cf format characters - these render as the same
+  // blank tree node, so the check requires ink instead. U+FEFF (BOM) is Cf too.
+  it.each(['a:\u200b:', 'a:\u2060:', 'a:\ufeff:'])('flags a zero-width segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // Not every blank-renderer is whitespace or Cf: Hangul/halfwidth fillers are letters (Lo),
+  // braille blank is a symbol (So), BEL is a control outside \s. All must count as blank.
+  it.each(['a:\u3164:', 'a:\uffa0:', 'a:\u2800:', 'a:\u115f:', 'a:\u0007:'])(
+    'flags an invisible-ink segment (%s)',
+    prefix => {
+      expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+    }
+  );
+
+  it('accepts ordinary single- and multi-segment prefixes', () => {
+    expect(hasBlankTagPrefixSegment('acme:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme:legal:')).toBe(false);
+  });
+
+  // Pins that the rule is "has ink", not an ASCII allowlist: real scripts and punctuation
+  // are valid segments, guarding against a future "fix" that would reject non-Latin users.
+  it('accepts non-Latin and punctuation-bearing segments', () => {
+    expect(hasBlankTagPrefixSegment('\u0444\u0430\u0439\u043b\u044b:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('\u6587\u4ef6:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('r&d:')).toBe(false);
+  });
+
+  // A colon-less value must not manufacture a phantom blank segment out of its last
+  // character - the trailing-colon rule is a separate check with its own message.
+  it('does not flag a colon-less prefix', () => {
+    expect(hasBlankTagPrefixSegment('a:b')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme')).toBe(false);
+  });
+});
+
+describe('submittedTagPrefix', () => {
+  it('closes a colon-less value the way the create request will', () => {
+    expect(submittedTagPrefix('acme')).toBe('acme:');
+    expect(submittedTagPrefix('acme:')).toBe('acme:');
+  });
+
+  it('trims first, so edge whitespace never becomes part of the value or its length', () => {
+    expect(submittedTagPrefix('  acme  ')).toBe('acme:');
+    expect(submittedTagPrefix('  acme:  ')).toBe('acme:');
+  });
+
+  // Returning ":" for an untouched field would manufacture a blank-segment complaint before
+  // the user has typed anything.
+  it('leaves an empty value empty', () => {
+    expect(submittedTagPrefix('')).toBe('');
+    expect(submittedTagPrefix('   ')).toBe('');
+    expect(submittedTagPrefix(undefined)).toBe('');
+    expect(submittedTagPrefix(null)).toBe('');
+  });
+});
+
+describe('tagPrefixIssue - length', () => {
+  // The reported failure: a long lake name derived a 45-char prefix that nothing client-side
+  // bounded, so the create 422'd with the form showing no reason.
+  it('reports a prefix past the max, naming the limit and the actual length', () => {
+    const issue = tagPrefixIssue('triage-router-dry-run-test-ken-delete-after:');
+    expect(issue).toContain('30 characters or fewer');
+    expect(issue).toContain('44');
+  });
+
+  it('accepts a prefix exactly at the max and rejects one character more', () => {
+    const atMax = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 1)}:`;
+    expect(atMax).toHaveLength(MAX_TAG_PREFIX_LENGTH);
+    expect(tagPrefixIssue(atMax)).toBeNull();
+    expect(tagPrefixIssue(`a${atMax}`)).toMatch(/30 characters or fewer/);
+  });
+
+  // The schema .trim()s before sizing, so edge whitespace must not count here either or the
+  // two rules disagree for a value sitting exactly on the boundary.
+  it('measures the trimmed value, like the schema does', () => {
+    const atMax = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 1)}:`;
+    // Raw, this is 34 chars and its trailing spaces read as a blank ":" segment; trimmed it is
+    // exactly what the server stores. Both false alarms are what trimming here avoids.
+    expect(tagPrefixIssue(`  ${atMax}  `)).toBeNull();
+  });
+
+  // The submitted value carries a trailing ":" the wizard appends, so a field holding exactly
+  // MAX colon-less characters is MAX+1 on arrival - sizing the field passed it and the server
+  // then refused it, which is the whole failure this rule exists to prevent.
+  it('counts the trailing ":" the request will add to a colon-less prefix', () => {
+    expect(tagPrefixIssue('a'.repeat(MAX_TAG_PREFIX_LENGTH))).toMatch(/30 characters or fewer/);
+    expect(tagPrefixIssue('a'.repeat(MAX_TAG_PREFIX_LENGTH - 1))).toBeNull();
+  });
+
+  // Length is a .min/.max check and runs BEFORE the schema's refines, so a value that trips
+  // both must read as too long on this side too.
+  it('names the length before a blank segment or the reserved namespace', () => {
+    expect(tagPrefixIssue(`datalake:${'a'.repeat(MAX_TAG_PREFIX_LENGTH)}::`)).toMatch(/30 characters or fewer/);
+  });
+});
+
+describe('tagPrefixIssue - blank segments', () => {
+  it('reports a blank segment as user-facing copy', () => {
+    expect(tagPrefixIssue('legal::')).toMatch(/visible character/);
+    expect(tagPrefixIssue('legal: :')).toMatch(/visible character/);
+  });
+
+  it('stays quiet for a healthy prefix and still reports the other two cases', () => {
+    expect(tagPrefixIssue('legal:')).toBeNull();
+    expect(tagPrefixIssue('datalake:')).toMatch(/reserved/);
+    expect(tagPrefixIssue('legal:', { name: 'Docs', fileTagPrefix: 'legal:' })).toMatch(/overlaps/);
+  });
+
+  // Precedence matches the schema's refine order, so the wizard and a server 400 name
+  // the same culprit for an input that trips both rules.
+  it('names the blank segment before the reserved namespace for "datalake::"', () => {
+    expect(tagPrefixIssue('datalake::')).toMatch(/visible character/);
   });
 });

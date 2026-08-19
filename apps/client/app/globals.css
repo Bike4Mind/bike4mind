@@ -655,3 +655,25 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
     color: var(--joy-palette-text-primary, #1a1a1a);
   }
 }
+
+/*
+ * Toasts must never intercept clicks meant for the UI beneath them (#1429). The bottom-right Sonner
+ * toaster (z-index 999999999) overlapped the Data Lake wizard footer and swallowed "Start Upload"
+ * clicks for the few seconds a dedup toast was on screen: Sonner leaves the toaster and each toast at
+ * pointer-events: auto, so a toast <li> covering a button consumes the click with no feedback.
+ *
+ * Make the toaster and toast bodies click-through, and re-enable pointer events only on a toast's own
+ * controls so those stay usable. Trade-off: swipe-to-dismiss is lost (drag needs pointer events on the
+ * toast body); the close button and the auto-dismiss timer remain, and no toast in the app relies on a
+ * whole-body click.
+ */
+[data-sonner-toaster],
+[data-sonner-toast] {
+  pointer-events: none;
+}
+
+[data-sonner-toast] [data-button],
+[data-sonner-toast] [data-cancel],
+[data-sonner-toast] [data-close-button] {
+  pointer-events: auto;
+}

@@ -9,10 +9,16 @@ import {
   updateReplacedByOverlay,
 } from './resolveDeprecatedModel';
 import { XAIBackend } from './xaiBackend';
+import { recordDeprecatedModelRequest } from './modelSunsetMetrics';
+
+vi.mock('./modelSunsetMetrics', () => ({
+  recordDeprecatedModelRequest: vi.fn().mockResolvedValue(undefined),
+}));
 
 describe('resolveDeprecatedModelId', () => {
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(recordDeprecatedModelRequest).mockClear();
   });
 
   afterEach(() => {
@@ -78,6 +84,35 @@ describe('resolveDeprecatedModelId', () => {
     // grok-3-mini is current and has no cheaper equivalent, so it must pass through
     // untouched -- mapping it up would raise input cost 6.7x and output 12x.
     expect(resolveDeprecatedModelId('grok-3-mini')).toBe('grok-3-mini');
+  });
+
+  /**
+   * This is the only place the metric can be emitted: getAvailableModels drops
+   * every model at or past its deprecationDate, so anything downstream of it has
+   * already lost the pinned id.
+   */
+  describe('staleness metric', () => {
+    it('emits one datapoint per resolution, naming the pinned id and its successor', () => {
+      resolveDeprecatedModelId('grok-3', 'test-context');
+
+      expect(recordDeprecatedModelRequest).toHaveBeenCalledTimes(1);
+      expect(recordDeprecatedModelRequest).toHaveBeenCalledWith('grok-3', 'grok-4.5');
+    });
+
+    it('emits the endpoints of a multi-hop chain, not each hop', () => {
+      updateReplacedByOverlay({ 'model-a': 'model-b', 'model-b': 'model-c' });
+
+      resolveDeprecatedModelId('model-a');
+
+      expect(recordDeprecatedModelRequest).toHaveBeenCalledTimes(1);
+      expect(recordDeprecatedModelRequest).toHaveBeenCalledWith('model-a', 'model-c');
+    });
+
+    it('does not emit for a current model', () => {
+      resolveDeprecatedModelId('claude-sonnet-4-6');
+
+      expect(recordDeprecatedModelRequest).not.toHaveBeenCalled();
+    });
   });
 });
 

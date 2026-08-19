@@ -32,7 +32,14 @@ GroupSchema.plugin(softDeletePlugin);
 
 // One LIVE group per (organization, type) - the epic's "one group per type per org in v1"
 // invariant. The partial filter scopes uniqueness to live rows so revoke (soft-delete) then
-// re-grant of the same type still works. Also serves findByOrganization (organizationId prefix).
+// re-grant of the same type still works.
+//
+// This is PARTIAL, so it does NOT serve `findByOrganization`'s `{ organizationId }` query: the
+// planner only uses a partial index for a query it can prove is a subset of the partial filter,
+// and a bare `{ organizationId }` carries no `deletedAt`/`$type` predicates, so that read is a
+// COLLSCAN (org-groups #1229). Acceptable at current volume - the collection is effectively empty
+// and org group counts are tiny by design (one per type). Add a plain `{ organizationId: 1 }`
+// index here if group usage ever grows; do NOT assume this one covers it.
 //
 // The `$type: 'string'` guards are load-bearing, not cosmetic: legacy Group rows predate both
 // `type` and `organizationId` (strict mode dropped organizationId before it was in the schema),
@@ -54,22 +61,13 @@ export const Group: mongoose.Model<IGroupDocument> =
 
 export class GroupRepository extends BaseRepository<IGroupDocument> implements IGroupRepository {
   /** Live instances (the soft-delete plugin's find hook excludes `deletedAt` rows). */
-  async findByOrganization(organizationId: string): Promise<IGroupDocument[]> {
-    const groups = await this.model.find({ organizationId });
+  async findByOrganization(organizationId: string, options?: { includeDeleted?: boolean }): Promise<IGroupDocument[]> {
+    const query = this.model.find({ organizationId });
+    // Opt out of the soft-delete find hook so the org-delete purge can reach already-soft-deleted
+    // groups whose ids may still sit in user.groups (#1230). Live-only otherwise.
+    if (options?.includeDeleted) query.setOptions({ includeDeleted: true });
+    const groups = await query;
     return groups.map(group => group.toObject());
-  }
-
-  /**
-   * Soft-delete by writing `deletedAt` directly via a Mongoose `updateMany`.
-   * NOT the plugin's `deleteMany` static: that routes through the raw driver
-   * (`this.collection.updateMany`), which Mongoose 8's transactionAsyncLocalStorage
-   * does NOT inject a session into - so a soft-delete inside `withTransaction` would
-   * escape the transaction and, on a transient-error retry, silently skip the member
-   * purge. A real Mongoose query joins the session automatically (see BaseModel notes).
-   */
-  async softDeleteByIds(groupIds: string[]): Promise<void> {
-    if (groupIds.length === 0) return;
-    await this.model.updateMany({ _id: { $in: groupIds }, deletedAt: null }, { $set: { deletedAt: new Date() } });
   }
 
   /**

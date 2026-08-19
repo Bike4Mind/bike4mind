@@ -1,24 +1,17 @@
 import type { ModelRecord } from '@bike4mind/common';
+import { parseRate, plain, tables, type ParseResult } from './markdown';
 
 /**
  * Parsers for Anthropic's two published markdown twins: `model-deprecations.md`
  * (the only typed lifecycle feed a direct provider gives us) and `pricing.md`.
  *
- * Both return `{ ok: false }` when they find valid markdown and zero rows. "The
- * page rendered and I found nothing" is the shape of a parser that broke against
- * a docs restructure, not of a provider that retired everything (sec 5.5), and
- * an empty success here would freeze every Claude lifecycle field at once.
+ * Both return `{ ok: false }` when they find valid markdown and zero rows - see
+ * ParseResult in ./markdown for why that is never an empty success.
  */
-export type ParseResult<T> = { ok: true; rows: T[] } | { ok: false; error: string };
+export type { ParseResult };
 
 export const ANTHROPIC_DEPRECATIONS_URL = 'https://docs.claude.com/en/docs/about-claude/model-deprecations.md';
 export const ANTHROPIC_PRICING_URL = 'https://docs.claude.com/en/docs/about-claude/pricing.md';
-
-interface MarkdownTable {
-  heading: string;
-  headers: string[];
-  rows: string[][];
-}
 
 const MONTHS: Readonly<Record<string, string>> = {
   january: '01',
@@ -35,44 +28,6 @@ const MONTHS: Readonly<Record<string, string>> = {
   december: '12',
 };
 
-const cells = (line: string): string[] =>
-  line
-    .replace(/^\s*\|/, '')
-    .replace(/\|\s*$/, '')
-    .split('|')
-    .map(cell => cell.trim());
-
-const isSeparator = (line: string): boolean => /^\s*\|[\s:|-]+\|\s*$/.test(line);
-
-/** Every pipe table in the document, tagged with the nearest preceding heading. */
-function tables(markdown: string): MarkdownTable[] {
-  const lines = markdown.split(/\r?\n/);
-  const found: MarkdownTable[] = [];
-  let heading = '';
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
-    const headingMatch = /^#{1,6}\s+(.*)$/.exec(line);
-    if (headingMatch) {
-      heading = (headingMatch[1] ?? '').trim();
-      continue;
-    }
-    if (!line.trimStart().startsWith('|') || !isSeparator(lines[index + 1] ?? '')) continue;
-
-    const headers = cells(line);
-    const rows: string[][] = [];
-    index += 2;
-    while (index < lines.length && (lines[index] ?? '').trimStart().startsWith('|')) {
-      rows.push(cells(lines[index] ?? ''));
-      index += 1;
-    }
-    index -= 1;
-    found.push({ heading, headers, rows });
-  }
-
-  return found;
-}
-
 /** "June 9, 2027" -> "2027-06-09". Undefined for "N/A", "TBD" and anything else. */
 export function parseLongDate(value: string): string | undefined {
   const match = /([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/.exec(value);
@@ -80,13 +35,6 @@ export function parseLongDate(value: string): string | undefined {
   if (!match || !month) return undefined;
   return `${match[3]}-${month}-${String(match[2]).padStart(2, '0')}`;
 }
-
-/** Strip inline links and code ticks, keeping the link text: docs pages are MDX. */
-const plain = (value: string): string =>
-  value
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[`*]/g, '')
-    .trim();
 
 export interface AnthropicLifecycleRow {
   modelId: string;
@@ -173,14 +121,6 @@ export interface AnthropicPriceRow {
   validUntil?: string;
   /** First day this row's rate applies, from a "starting <date>" note. */
   validFrom?: string;
-}
-
-/** "$12.50 / MTok" -> 12.5. Undefined for "N/A" and for anything without a figure. */
-function parseRate(cell: string): number | undefined {
-  const match = /\$\s*([\d,]+(?:\.\d+)?)/.exec(plain(cell));
-  if (!match) return undefined;
-  const value = Number(match[1]?.replace(/,/g, ''));
-  return Number.isFinite(value) ? value : undefined;
 }
 
 /** "Claude Sonnet 5 through August 31, 2026" -> slug + the box that qualifies it. */

@@ -39,7 +39,8 @@ export interface StubResponse {
   headers?: Record<string, string>;
 }
 
-type Route = (url: string) => StubResponse | undefined;
+/** `init` is passed through so a test can assert what headers a request carried. */
+type Route = (url: string, init?: RequestInit) => StubResponse | undefined;
 
 /**
  * Replace global fetch with a route table. Sources are exercised through their
@@ -52,7 +53,7 @@ export function stubFetch(route: Route | StubResponse): () => void {
   const spy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     init?.signal?.throwIfAborted();
-    const stub = resolve(url);
+    const stub = resolve(url, init);
     if (!stub) throw new Error(`unstubbed fetch: ${url}`);
     const status = stub.status ?? 200;
     const body = stub.raw ?? JSON.stringify(stub.body ?? {});

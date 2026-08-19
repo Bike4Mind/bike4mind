@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -9,12 +9,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
  * and the rollback of orphan state (lake / FabFiles / batch) when an upload fails (#816).
  */
 
-const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock } = vi.hoisted(() => ({
+const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock, subscribeToAction } = vi.hoisted(() => ({
   toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   apiPost: vi.fn(),
   apiPut: vi.fn(() => Promise.resolve({ data: {} })),
   apiDelete: vi.fn(() => Promise.resolve({ data: {} })),
   uploadFileToUrlMock: vi.fn(() => Promise.resolve()),
+  subscribeToAction: vi.fn(() => () => {}),
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -25,14 +26,15 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // can make individual file PUTs succeed or fail deterministically.
 vi.mock('@client/app/utils/uploadFileToUrl', () => ({ uploadFileToUrl: uploadFileToUrlMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction: () => () => {} }),
+  useWebsocket: () => ({ subscribeToAction }),
 }));
 // Create mode reads the active org and reveals nav slots after the first upload -
 // both reached only once a test runs past the offline short-circuit.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload, useRemoveFileFromDataLake } from './dataLakeWizard';
+import { useBatchUpload, useBatchProgressListener } from './dataLakeWizard';
+import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 const mountHook = <T>(hook: () => T) => {
@@ -198,6 +200,66 @@ describe('useBatchUpload onError', () => {
     expect(progress.errorMessage).not.toBe(rawZod);
   });
 
+  it('translates a 422 for a blank-segment prefix into the specific field message', async () => {
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'legal::' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('validation');
+    expect(progress.errorMessage).toBe(
+      'The tag prefix has a blank ":" segment. Give every segment a visible character (e.g. "legal:" or "legal:contracts:").'
+    );
+  });
+
+  it('translates a 422 for an over-long prefix into the specific field message', async () => {
+    // Defence in depth for #1817: the wizard no longer lets this value reach the server, so a
+    // 422 that still names the prefix must not degrade to the neutral "settings were rejected".
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'triage-router-dry-run-test-ken-delete-after:' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('validation');
+    expect(progress.errorMessage).toBe(
+      'The tag prefix is too long. Use 30 characters or fewer, including the trailing ":".'
+    );
+  });
+
+  // The classifier is the third mirror of the same rules and has to judge the same submitted
+  // form: reading the raw field turns " legal:  " into " legal:  :" and blames a blank
+  // segment on the one surface whose entire job is naming the real culprit.
+  it('does not blame a blank segment for a prefix that is merely whitespace-padded', async () => {
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: '  legal:  ' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorMessage).not.toMatch(/blank/i);
+    expect(progress.errorMessage).toBe('Your data lake settings were rejected. Review them and try again.');
+  });
+
   it('classifies a 5xx as a server error', async () => {
     apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 500, data: { error: 'boom' } } });
     seedWizardFile();
@@ -343,6 +405,62 @@ describe('useBatchUpload onError', () => {
   });
 });
 
+describe('useBatchUpload lake targeting', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockClear();
+    apiDelete.mockClear();
+    uploadFileToUrlMock.mockReset();
+    uploadFileToUrlMock.mockResolvedValue(undefined);
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  const presignedLakeRef = () =>
+    (postCall('/api/files/generate-presigned-urls-batch')?.[1] as { dataLakeSlug: string }).dataLakeSlug;
+
+  it('uploads into the lake it just created, not the lake the name slugifies to', async () => {
+    // The server disambiguates a colliding slug, so a name-derived slug can resolve to a
+    // lake that already existed - another user's, for an admin who may write to it. Only
+    // the id the create call returned identifies the new lake.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', slug: 'test-lake-1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    expect(presignedLakeRef()).toBe('lake1');
+    expect(presignedLakeRef()).not.toBe(slugifyDataLakeName(useDataLakeWizardStore.getState().config.name));
+    expect(presignedLakeRef()).toBe((postCall('/api/data-lakes/batches')?.[1] as { dataLakeId: string }).dataLakeId);
+  });
+
+  it('uploads into the target lake in append mode', async () => {
+    installApiPostRouter();
+    seedWizard({ targetLake: { id: 'existing1', slug: 'existing-slug' } });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    expect(presignedLakeRef()).toBe('existing1');
+  });
+});
+
 describe('useBatchUpload rollback (#816)', () => {
   beforeEach(() => {
     apiPost.mockReset();
@@ -480,6 +598,55 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 
+  it('a refused presign reports the server reason, not a network problem', async () => {
+    // Every chunk 400ing (e.g. a stale bundle sending a reference the door now rejects) used to
+    // surface "usually a network or connection issue" while tearing the lake down.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch')
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 400, data: { error: 'This upload must name the data lake its batch belongs to' } },
+        });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorMessage).toBe('This upload must name the data lake its batch belongs to');
+    expect(progress.errorMessage).not.toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
+  });
+
+  it('keeps the friendly transport message when the presign failed with no HTTP response', async () => {
+    // A timeout or abort carries no status, so rethrowing it would surface raw axios text
+    // ("timeout of 30000ms exceeded") where the generic message is both friendlier and true.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch')
+        return Promise.reject({ isAxiosError: true, code: 'ECONNABORTED', message: 'timeout of 30000ms exceeded' });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('upload');
+    expect(progress.errorMessage).toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
+  });
+
   it('presign failure (create mode): rolls back the lake and marks the batch failed', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
@@ -499,30 +666,125 @@ describe('useBatchUpload rollback (#816)', () => {
   });
 });
 
-describe('useRemoveFileFromDataLake cache invalidation', () => {
-  it('invalidates every tag-derived view, not just the lake file list', async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
-      React.createElement(QueryClientProvider, { client: queryClient }, children);
-    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 1,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
+    });
+  });
 
-    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('f1');
+  it('applies processingFailedFiles from a data_lake_batch_progress message for the active batch', () => {
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        failedFiles: 1,
+        processingFailedFiles: 1,
+      });
     });
 
-    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
-    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
-    expect(keys).toContain(JSON.stringify(['data-lakes']));
-    // Removal now drops the file's tags under the lake prefix, so the tag tree and the article
-    // surfaces are stale too. Bare key prefixes: both are keyed by a source discriminator, and
-    // a fully-specified key would refresh only one of the two surfaces.
-    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
-    expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
-    // The bare file-tags prefix, not ['file-tags','counts']: the tag list itself now carries a
-    // fileCount derived from the files holding each tag, and invalidating only the longer key
-    // leaves that list stale. Prefix matching covers the counts endpoint too.
-    expect(keys).toContain(JSON.stringify(['file-tags']));
+    expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(1);
+    expect(useDataLakeWizardStore.getState().uploadProgress.failedFiles).toBe(1);
+  });
+
+  it('ignores a message for a different batch', () => {
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'someone-elses-batch',
+        processingFailedFiles: 5,
+      });
+    });
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(0);
+  });
+});
+
+/**
+ * `fileCount` is a cached rollup on the lake DOCUMENT. The server recomputes it in
+ * `finalizeBatchIfComplete` BEFORE emitting the completion message, so by the time this listener
+ * fires the DB is already correct and only the client cache is stale. The upload doors invalidate
+ * the lake list at SUBMIT time - too early, since ingestion has not run - so completion is the only
+ * moment that can refresh it. Without this the count sits stale until a hard refresh.
+ */
+describe('useBatchProgressListener - refreshes the lake list on completion', () => {
+  const seedActiveBatch = () =>
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 1,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
+    });
+
+  // Spy on the prototype rather than reshaping mountHook, which owns its QueryClient internally.
+  // Restored in afterEach, NOT at the end of each test body: this file sets no `restoreMocks` in
+  // its vitest config, so a thrown assertion would otherwise leave invalidateQueries mocked for
+  // every test that runs after it.
+  let spy: ReturnType<typeof vi.spyOn>;
+
+  const invalidatedKeys = () =>
+    spy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    seedActiveBatch();
+    spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
+  });
+
+  it.each(['completed', 'completed_with_errors'] as const)(
+    'invalidates the lake list when the batch reports %s',
+    status => {
+      mountHook(useBatchProgressListener);
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+      act(() => {
+        onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
+      });
+
+      // `['data-lakes']` is dataLakeKeys.list - asserted as a literal so a rename of the key's VALUE
+      // (not just its name) still fails here rather than silently agreeing with itself.
+      expect(invalidatedKeys()).toContain(JSON.stringify(['data-lakes']));
+    }
+  );
+
+  it('does NOT invalidate the lake list on an ordinary progress tick', () => {
+    // The guard against "just invalidate on every message": mid-ingest the server rollup has not
+    // run yet, so refetching then would re-cache the stale count and cost a request per tick.
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
+    });
+
+    expect(invalidatedKeys()).not.toContain(JSON.stringify(['data-lakes']));
   });
 });

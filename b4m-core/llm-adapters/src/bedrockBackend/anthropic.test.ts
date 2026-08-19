@@ -154,3 +154,23 @@ describe('translateStreamChunk', () => {
     expect(backend.translateStreamChunk('claude', { type: 'nope' }).done).toBe(false);
   });
 });
+
+// This backend forwards user/assistant IMessage objects into body.messages largely as-is, unlike the
+// ones that rebuild each wire message from role/content. `requiresTool` is ours - it decides whether a
+// prompt survives a tools-dropped turn - and must never reach the provider.
+describe('AnthropicBedrockBackend control-field stripping', () => {
+  it('never forwards requiresTool into the request body', () => {
+    const marked: IMessage[] = [
+      { role: 'user', content: 'Hello', requiresTool: 'image_generation' },
+      { role: 'assistant', content: 'Hi there!' },
+    ];
+    const payload = backend.getPayload(ChatModels.CLAUDE_3_5_HAIKU_BEDROCK, marked, {
+      cacheStrategy,
+      tools,
+      maxTokens: 1024,
+    });
+    expect(payload.body).not.toContain('requiresTool');
+    // The message itself must still be there - stripping the field, not the message.
+    expect(payload.body).toContain('Hello');
+  });
+});

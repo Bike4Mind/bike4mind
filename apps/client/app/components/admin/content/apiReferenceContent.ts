@@ -1,5 +1,6 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 
 export const API_REFERENCE_CONTENT = `
 # ${getBrandName()} API Reference
@@ -22,15 +23,20 @@ Authorization: Bearer <access_token>
 
 | Token Type | Lifetime | Description |
 |------------|----------|-------------|
-| Access Token | 7 days | Short-lived token for API requests |
+| Access Token | 30 minutes | Short-lived token for API requests |
 | Refresh Token | 30 days | Used to obtain new access tokens |
 
 **Obtaining tokens:**
 
 - \`POST /api/otc/send\` — request a one-time sign-in code by email (passwordless)
-- \`POST /api/otc/verify\` — verify the code to log in or register; returns both tokens
+- \`POST /api/otc/verify\` — verify the code to log in or register; returns the access token
 - \`POST /api/auth/refreshToken\` — exchange a refresh token for a new access token
-- OAuth callbacks (Google, GitHub, Okta, SAML) return tokens on successful authentication
+- OAuth callbacks (Google, GitHub, Okta, SAML) return an access token on successful authentication
+
+Browser clients never receive the refresh token in a response body: it is set as an
+\`HttpOnly; Secure; SameSite=Strict\` cookie scoped to \`/api\`, and \`POST /api/auth/refreshToken\`
+reads and rotates it from there. Non-browser clients (CLI, OAuth authorization-code and device
+flows) get the refresh token in the response body and send it back the same way.
 
 ### API Key Authentication
 
@@ -106,29 +112,11 @@ POST /api/chat
 
 **Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
 
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| message | string | Yes | The user message content |
-| sessionId | string | No | Session ID to continue a conversation (creates new session if omitted) |
-| model | string | No | LLM model identifier (e.g., \`gpt-4o\`, \`claude-sonnet-4-20250514\`) |
-| temperature | number | No | Sampling temperature (0.0 - 2.0, default 0.7) |
-| stream | boolean | No | Enable streaming response via WebSocket |
-| tools | string[] | No | Tool names to enable for this request |
-| agentId | string | No | Agent ID to use for this conversation |
-| fileIds | string[] | No | File IDs to attach as context |
-| projectId | string | No | Project ID for RAG grounding |
-
-**Response:**
-
-\`\`\`json
-{
-  "questId": "quest_abc123",
-  "sessionId": "sess_xyz789",
-  "status": "pending"
-}
-\`\`\`
+> **This endpoint is now generated from its contract.** The full request/response
+> reference — every field, its type, defaults, and validation rules — lives in the
+> [generated API docs](/api/v1/docs) under \`sendChatMessage\`, derived from the same
+> object the handler validates with. The hand-written table that used to sit here
+> drifted from the code; it is not reproduced so the two cannot disagree again.
 
 #### Poll Quest Status
 
@@ -275,7 +263,8 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| fileId | string | Yes | File ID to chunk |
+| fabFileId | string | Yes | File ID to chunk |
+| chunkSize | integer | Yes | Passage target in tokens. Must be an integer between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive. |
 
 #### File Endpoints Summary
 
@@ -347,6 +336,21 @@ GET /api/sessions
   "limit": 20
 }
 \`\`\`
+
+#### Update a Session
+
+\`\`\`
+PUT /api/sessions/[id]
+\`\`\`
+
+> **This endpoint is now generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`updateSession\`, derived from the same
+> object the handler validates with.
+>
+> This is also the call that turns on grounded retrieval for \`POST /api/chat\`:
+> set \`knowledgeIds\` and \`forceKnowledgeRetrieval: true\` on the session first -
+> retrieval is gated by these session fields, not by anything in the chat request.
 
 #### Session Endpoints Summary
 
@@ -485,7 +489,7 @@ Multi-tenant organization management with roles and integrations.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/organizations | List user organizations |
-| POST | /api/organizations | Create an organization |
+| POST | /api/organizations | Create an organization (admin) |
 | GET | /api/organizations/[id] | Get organization details |
 | PUT | /api/organizations/[id] | Update organization |
 | DELETE | /api/organizations/[id] | Delete organization |
@@ -570,6 +574,8 @@ Multi-tenant organization management with roles and integrations.
 | DELETE | /api/users/[id]/delete | Delete user account |
 | POST | /api/users/[id]/upload-photo | Upload profile photo |
 | GET | /api/users/[id]/organizations | List user organizations |
+| GET | /api/users/[id]/organization | Get active organization (self or admin) |
+| DELETE | /api/users/[id]/organization | Clear active-organization pointer (self or admin) |
 | GET | /api/users/[id]/projects | List user projects |
 | GET | /api/users/[id]/agents | List user agents |
 | GET | /api/users/[id]/activities | User activity log |
@@ -644,9 +650,9 @@ read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 }
 \`\`\`
 
-#### v1 API (OpenAPI 3.1)
+#### OpenAPI 3.1 documented endpoints
 
-The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/ai/v1/tools\`) publish a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, and the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -655,7 +661,7 @@ The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/
 
 The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
 
-Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models both the completion event stream and the tools endpoint in full.
+Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives.
 
 #### AI Endpoints Summary
 
@@ -663,7 +669,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 |--------|----------|-------------|
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
-| POST | /api/ai/tts | Multi-provider text-to-speech (openai, elevenlabs) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
 | POST | /api/ai/generate-image | Image generation (DALL-E) |
 | POST | /api/ai/edit-image | Image editing |
@@ -1011,7 +1016,7 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | POST | /api/admin/system-prompts | Create system prompt |
 | GET | /api/admin/system-prompts/[promptId] | Get prompt |
 | PUT | /api/admin/system-prompts/[promptId] | Update prompt |
-| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt |
+| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt (DB-only prompts; use reset when a code default exists) |
 | POST | /api/admin/system-prompts/[promptId]/create-version | Create version |
 | POST | /api/admin/system-prompts/[promptId]/save-version | Save version |
 | POST | /api/admin/system-prompts/[promptId]/switch-version | Switch active version |
@@ -1340,7 +1345,8 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 }
 \`\`\`
 
-Use the refresh token flow to obtain a new access token:
+Use the refresh token flow to obtain a new access token. Non-browser clients pass the token in
+the body; a browser sends an empty body and the HttpOnly cookie supplies it:
 
 \`\`\`
 POST /api/auth/refreshToken
@@ -1388,7 +1394,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 7. **Prefer pagination over fetching all.** All list endpoints support \`page\` and \`limit\` parameters. Default page size is 20. Never fetch unbounded lists in production.
 
-8. **Token lifecycle matters.** Access tokens expire after 7 days. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
+8. **Token lifecycle matters.** Access tokens expire after 30 minutes. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
 
 9. **Test with the server status endpoint.** Use \`GET /api/settings/serverStatus\` as a lightweight health check. It returns server version, uptime, and configuration without requiring authentication.
 

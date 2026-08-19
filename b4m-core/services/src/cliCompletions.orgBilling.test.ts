@@ -4,7 +4,11 @@ import { CreditHolderType } from '@bike4mind/common';
 // Isolate the billing routing: stub the LLM layer, settings, and credit math so
 // the test asserts *which pool* is reserved/settled, not token accounting.
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
-vi.mock('./creditService', () => ({ subtractCredits: vi.fn().mockResolvedValue(undefined) }));
+// Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
+vi.mock('./creditService', async importOriginal => ({
+  ...(await importOriginal<typeof import('./creditService')>()),
+  subtractCredits: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
   getLlmByModel: vi.fn(() => ({
@@ -41,6 +45,7 @@ function buildDb(overrides: { org?: any } = {}) {
   const organizations = {
     findById: vi.fn().mockResolvedValue(org),
     incrementCredits: vi.fn().mockResolvedValue({ ...org, currentCredits: org.currentCredits - 10 }),
+    ensureUserDetails: vi.fn().mockResolvedValue(undefined),
     updateUserDetails: vi.fn().mockResolvedValue(undefined),
   };
   const usageEvents = { record: vi.fn().mockResolvedValue(undefined) };
@@ -132,6 +137,50 @@ describe('executeCompletion - org billing routing', () => {
     // anchor the transaction, neither the member tracking nor the ledger write fire.
     expect(organizations.updateUserDetails).not.toHaveBeenCalled();
     expect(mockSubtractCredits).not.toHaveBeenCalled();
+  });
+
+  it('self-heals a missing userDetails row before recording org-billed usage', async () => {
+    // Org snapshot carries no row for the acting member (added before grant-point seeding existed).
+    // The positional $inc in updateUserDetails cannot create it, so without this self-heal their
+    // usage would never track and maxCreditsPerMember would never trip. Guards the deleteable
+    // `if (!member)` block in cliCompletions.
+    const { db, organizations } = buildDb();
+    db.users.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'user1', email: 'u1@example.com', username: 'u1', name: 'User One' });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.ensureUserDetails).toHaveBeenCalledWith('org1', {
+      id: 'user1',
+      email: 'u1@example.com',
+      name: 'User One',
+    });
+    expect(organizations.updateUserDetails).toHaveBeenCalledWith(
+      'org1',
+      'user1',
+      expect.objectContaining({ creditsDelta: 10 })
+    );
+  });
+
+  it('does not self-heal when the member already has a userDetails row', async () => {
+    const { db, organizations } = buildDb({
+      org: {
+        id: 'org1',
+        currentCredits: 500,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      },
+    });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.ensureUserDetails).not.toHaveBeenCalled();
+    expect(organizations.updateUserDetails).toHaveBeenCalledWith(
+      'org1',
+      'user1',
+      expect.objectContaining({ creditsDelta: 10 })
+    );
   });
 
   it('rejects when the org member credit cap would be exceeded', async () => {

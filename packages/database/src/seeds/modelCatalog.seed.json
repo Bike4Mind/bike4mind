@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-29T13:51:57.149Z",
-  "notice": "Fallback defaults last maintained on 2026-07-29. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-08-04T09:38:17.825Z",
+  "notice": "Fallback defaults last maintained on 2026-08-04. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -18,7 +18,7 @@
         "type": "text",
         "name": "Jurassic-2 Mid",
         "contextWindow": 8192,
-        "maxOutputTokens": 8192,
+        "maxOutputTokens": 4096,
         "canStream": false,
         "supportsVision": false,
         "supportsImageVariation": false,
@@ -46,7 +46,7 @@
         "type": "text",
         "name": "Jurassic-2 Ultra",
         "contextWindow": 8192,
-        "maxOutputTokens": 8192,
+        "maxOutputTokens": 4096,
         "canStream": false,
         "supportsVision": false,
         "supportsImageVariation": false,
@@ -2943,7 +2943,7 @@
         "type": "text",
         "name": "Kimi K2.5",
         "contextWindow": 262144,
-        "maxOutputTokens": 262144,
+        "maxOutputTokens": 131072,
         "canStream": true,
         "reasoning": {
           "supported": true
@@ -2976,7 +2976,7 @@
         "type": "text",
         "name": "Kimi K2.6",
         "contextWindow": 262144,
-        "maxOutputTokens": 262144,
+        "maxOutputTokens": 131072,
         "canStream": true,
         "reasoning": {
           "supported": true
@@ -3009,7 +3009,7 @@
         "type": "text",
         "name": "Kimi K2.7 Code",
         "contextWindow": 262144,
-        "maxOutputTokens": 262144,
+        "maxOutputTokens": 131072,
         "canStream": true,
         "reasoning": {
           "supported": true
@@ -3042,7 +3042,7 @@
         "type": "text",
         "name": "Kimi K2.7 Code (High Speed)",
         "contextWindow": 262144,
-        "maxOutputTokens": 262144,
+        "maxOutputTokens": 131072,
         "canStream": true,
         "reasoning": {
           "supported": true

@@ -8,10 +8,13 @@ import isEqual from 'lodash/isEqual.js';
 import { PRICE_AGREEMENT_TOLERANCE, relativeGap } from './catalogWrite';
 import type {
   DiscoveredPrice,
+  DiscoveredPriceBracket,
+  DiscoveredRates,
   DiscoverySourceKind,
   PlannedPriceRow,
   PriceFlag,
   PriceFlagKind,
+  PriceOverride,
   PriceSkip,
   PriceSkipReason,
   SourceContribution,
@@ -108,6 +111,12 @@ export interface PricePlanInput {
 export interface PricePlan {
   rows: IModelPriceInput[];
   flags: PriceFlag[];
+  /**
+   * Models whose price came from a provider over a mirror that disagreed. One
+   * per model, and NOT a subset of `rows`: the provider's value standing
+   * unchanged is the steady state, and the stale mirror is the news either way.
+   */
+  overrides: PriceOverride[];
   /** Usable observations that produced neither a row nor a flag, and why. */
   skipped: PriceSkip[];
 }
@@ -132,6 +141,7 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
 
   const rows: IModelPriceInput[] = [];
   const flags: PriceFlag[] = [];
+  const overrides: PriceOverride[] = [];
   const skipped: PriceSkip[] = [];
   const skip = (modelId: string, reason: PriceSkipReason) => skipped.push({ modelId, reason });
 
@@ -147,37 +157,32 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    const disagreeing = firstDisagreement(observations);
-    if (disagreeing) {
+    const consensus = reachConsensus(observations);
+    if (consensus.kind === 'conflict') {
       flags.push({
         modelId,
         kind: 'source-disagreement',
         // One of the two sides the detail names: a third source's value would be
         // a number the operator cannot find anywhere in the sentence.
-        proposed: perMTokOf(disagreeing[0].price),
+        proposed: perMTokOf(consensus.proposed),
         sources,
-        detail:
-          `sources disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}: ` +
-          `${disagreeing[0].source} ${describe(disagreeing[0].price)} vs ${disagreeing[1].source} ` +
-          `${describe(disagreeing[1].price)}; applied neither`,
+        detail: consensus.detail,
       });
       continue;
     }
 
     const current = inForce.get(modelId);
+    const currentThresholds = current ? thresholdsOf(current) : [];
     const currentEntry = current ? lowestTierEntry(current) : undefined;
     const currentTier = currentEntry?.[1];
     const currentPrice = currentTier ? perMTokOf(tierAsPrice(currentTier)) : undefined;
     const flag = (kind: PriceFlagKind, price: DiscoveredPrice, detail: string) =>
       flags.push({ modelId, kind, proposed: perMTokOf(price), current: currentPrice, sources, detail });
 
-    const provider = observations.find(observation => observation.kind === 'provider');
-    const aggregators = observations.filter(observation => observation.kind === 'aggregator');
-
     // A lone aggregator is corroboration-free, so it never writes. It is worth
     // an operator's attention only when it contradicts what we already bill.
-    if (!provider && aggregators.length < 2) {
-      const lone = aggregators[0];
+    if (consensus.kind === 'lone') {
+      const lone = consensus.observation;
       if (!currentTier) {
         flag(
           'single-source-untrusted',
@@ -198,11 +203,10 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    // Trusted: a provider's own API, or aggregators that already passed the
-    // agreement check above. The provider value wins; models.dev leads the
-    // aggregators by registration order, not by name.
-    const trusted = provider ?? aggregators[0];
-    const valueSources = provider ? [provider.source] : aggregators.map(observation => observation.source);
+    // Trusted: a provider's own published price, or aggregators that already
+    // passed the agreement check above. models.dev leads the aggregators by
+    // registration order, not by name.
+    const { observation: trusted, valueSources, corroborating, dissenting } = consensus;
     const proposed = trusted.price;
 
     if (current && classifyPriceRow(current) === 'operator') {
@@ -219,16 +223,49 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    // A single observed rate cannot express a tier ladder, and the read path
-    // REPLACES the whole pricing map, so writing one would delete the ladder.
-    if (current && isTiered(current)) {
+    // Banded against the run's opening position, not the row the previous pass of
+    // this same run wrote: the band is what one unattended run may move a price
+    // by, and a per-pass measurement would multiply it by the pass count. A model
+    // unpriced at run start falls back to the row in force, which is one this run
+    // wrote - its first write had nothing to band against either.
+    const bandRow = atRunStart.get(modelId) ?? current;
+
+    // A ladder needs a corroborator that publishes a ladder, not just one that
+    // agrees on the short-prompt price. diverges() is deliberately silent when
+    // only ONE side carries brackets, so a mirror that went flat would otherwise
+    // corroborate the base rates and let the upper bracket be written on a single
+    // scrape's word. Checked here rather than in reachConsensus because a flat row
+    // in force discards the brackets anyway - refusing there would block writes
+    // whose ladder was never going to be used.
+    const ladderUncorroborated =
+      proposed.brackets !== undefined &&
+      current !== undefined &&
+      isTiered(current) &&
+      corroborating.length > 0 &&
+      !corroborating.some(observation => observation.price.brackets !== undefined);
+    if (ladderUncorroborated) {
+      flag(
+        'tiered-pricing-manual',
+        proposed,
+        `${trusted.source} publishes ${describe(proposed)} but ` +
+          `${corroborating.map(observation => observation.source).join(', ')} publish no long-context rates to ` +
+          'corroborate its brackets; repricing a tiered row needs a second source that carries the same ladder'
+      );
+      continue;
+    }
+
+    // The read path REPLACES the whole pricing map, so a tiered row may only be
+    // superseded by a write that reproduces every tier. That needs a ladder the
+    // sources published and this row's own thresholds to map it onto.
+    const ladder = current && isTiered(current) ? planLadder(current, proposed, bandRow) : undefined;
+    if (ladder && 'blocked' in ladder) {
       if (currentTier && diverges(proposed, tierAsPrice(currentTier), PRICE_AGREEMENT_TOLERANCE)) {
         flag(
           'tiered-pricing-manual',
           proposed,
-          `the row in force is tiered (${Object.keys(current.pricing).sort().join(', ')}) and its lowest tier ` +
+          `the row in force is tiered (${currentThresholds.join(', ')}) and its lowest tier ` +
             `${describe(tierAsPrice(currentTier))} differs from ${valueSources.join('+')} ${describe(proposed)}; ` +
-            'repricing a tier ladder is a manual edit'
+            `repricing it needs a ladder that maps onto those thresholds, and ${ladder.blocked}`
         );
       } else {
         skip(modelId, 'tiered-pricing');
@@ -236,30 +273,62 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    // Measured against the run's opening position, not the row the previous pass
-    // of this same run wrote: the band is what one unattended run may move a
-    // price by, and a per-pass measurement would multiply it by the pass count.
-    // A model unpriced at run start falls back to the row in force, which is one
-    // this run wrote - its first write had nothing to band against either.
-    const openingRow = atRunStart.get(modelId);
-    const bandBaseline = (openingRow ? lowestTier(openingRow) : undefined) ?? currentTier;
-    if (bandBaseline) {
-      const band = input.bandPct / 100;
-      const moves = bandMoves(proposed, bandBaseline);
-      if (moves.some(move => move.move > band)) {
-        flag(
-          'band-exceeded',
-          proposed,
-          `${valueSources.join('+')} moves ${moves.map(move => `${move.rate} ${pct(move.move)}`).join(', ')} against ` +
-            `the row this run started from (band ${pct(band)}): ${describe(tierAsPrice(bandBaseline))} -> ` +
-            `${describe(proposed)}`
-        );
-        continue;
-      }
+    // A flat row stays flat even when the sources publish a ladder: inventing a
+    // second threshold would bill long prompts at a rate nobody signed off on.
+    const planned: PlannedTier[] = ladder?.tiers ?? [
+      { key: currentEntry?.[0] ?? '0', price: proposed, baseline: bandRow ? lowestTier(bandRow) : undefined },
+    ];
+
+    const band = input.bandPct / 100;
+    // Per tier, because a ladder whose upper bracket moves 10x while its base
+    // holds steady is exactly the move an operator has to see. The rate name
+    // carries its threshold only for a ladder, so a flat row reads as it always did.
+    const moves = planned.flatMap(tier =>
+      tier.baseline ? bandMoves(tier.price, tier.baseline, planned.length > 1 ? tier.key : undefined) : []
+    );
+    const bandBaseline = baselineAsPrice(planned);
+    if (bandBaseline && moves.some(move => move.move > band)) {
+      flag(
+        'band-exceeded',
+        proposed,
+        `${valueSources.join('+')} moves ${moves.map(move => `${move.rate} ${pct(move.move)}`).join(', ')} against ` +
+          `the row this run started from (band ${pct(band)}): ${describe(bandBaseline)} -> ` +
+          `${describe(proposed)}`
+      );
+      continue;
     }
 
-    const tier = buildTier(proposed, currentTier);
-    if (currentTier && isEqual(rateFields(tier), rateFields(currentTier))) {
+    // Recorded wherever the provider's value STANDS - both when it is written and
+    // when the row in force already says it. Every refusal above is reported as
+    // its own flag, so this cannot double-report one; but 'unchanged' is the
+    // STEADY STATE once the catalog converges, and that is exactly when "which
+    // mirror has gone stale" is the only fact left to learn.
+    if (dissenting.length > 0) {
+      overrides.push({
+        modelId,
+        source: trusted.source,
+        dissenting: dissenting.map(observation => observation.source),
+        applied: perMTokOf(proposed),
+        // Present tense, like every flag detail: this planner runs identically in
+        // report mode, where nothing is written, so a sentence claiming a write
+        // would be false on the default run.
+        detail:
+          `${trusted.source} publishes ${describe(proposed)} and ` +
+          `${dissenting.map(observation => `${observation.source} ${describe(observation.price)}`).join(', ')} ` +
+          `disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}; the provider value wins`,
+      });
+    }
+
+    // Carried forward per tier: the cache and audio rates no feed publishes come
+    // from the tier under the SAME threshold, never from the row's lowest one.
+    const tiers = planned.map(({ key, price }) => [key, buildTier(price, current?.pricing[key])] as const);
+    const unchanged =
+      current !== undefined &&
+      tiers.every(([key, tier]) => {
+        const held = current.pricing[key];
+        return held !== undefined && isEqual(rateFields(tier), rateFields(held));
+      });
+    if (unchanged) {
       skip(modelId, 'unchanged');
       continue;
     }
@@ -270,14 +339,14 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       // Keyed like the row it supersedes: the seed keys its single tier at the
       // model's context window, and re-keying it to '0' would churn a threshold
       // convention this planner has no way to re-derive.
-      pricing: { [currentEntry?.[0] ?? '0']: tier },
+      pricing: Object.fromEntries(tiers),
       effectiveFrom: input.runStartedAt,
       note: `${DISCOVERY_PRICE_NOTE_PREFIX}${valueSources.join('+')}@${input.runStartedAt.toISOString()}`,
       repricedBy: DISCOVERY_REPRICED_BY,
     });
   }
 
-  return { rows, flags, skipped };
+  return { rows, flags, overrides, skipped };
 }
 
 /** One model's comparable cost: the lowest tier's rates, in USD per single token. */
@@ -289,7 +358,9 @@ export interface PerTokenRates {
 /**
  * The per-token rates in force, by model. The auto-remap cost constraint
  * compares two models against each other rather than against a published rate,
- * so the stored unit is the right one and there is no 1e6 crossing to get wrong.
+ * so the stored unit is the right one for that comparison. Callers that show
+ * the same comparison to an operator do cross 1e6 (`toPerMTokRate` in
+ * `@bike4mind/common`), and must scale both sides of both models.
  */
 export function perTokenRatesInForce(rows: readonly IModelPrice[]): Map<string, PerTokenRates> {
   const rates = new Map<string, PerTokenRates>();
@@ -336,7 +407,7 @@ function collectObservations(contributions: readonly SourceContribution[]): Map<
       const observation = {
         source: contribution.name,
         kind: contribution.kind,
-        price: withUsableCacheRates(record.pricing),
+        price: usableObservation(record.pricing),
       };
       if (existing) existing.push(observation);
       else observed.set(modelId, [observation]);
@@ -350,7 +421,7 @@ function collectObservations(contributions: readonly SourceContribution[]): Map<
  * rejects it anyway, and a model that genuinely costs nothing is a catalog
  * flag, not a $0 row that would settle every call free.
  */
-function isUsable(price: DiscoveredPrice): boolean {
+function isUsable(price: DiscoveredRates): boolean {
   const rates = [price.inputPerMTok, price.outputPerMTok];
   if (!rates.every(rate => Number.isFinite(rate) && rate >= 0)) return false;
   return rates.some(rate => rate > 0);
@@ -362,13 +433,138 @@ function isUsable(price: DiscoveredPrice): boolean {
  * force is carried forward instead. Zero is a claim no feed gets to make - see
  * perToken for what a stored 0 would do to settlement.
  */
-function withUsableCacheRates(price: DiscoveredPrice): DiscoveredPrice {
-  const usable: DiscoveredPrice = { inputPerMTok: price.inputPerMTok, outputPerMTok: price.outputPerMTok };
-  const cacheRead = positiveRate(price.cacheReadPerMTok);
-  const cacheWrite = positiveRate(price.cacheWritePerMTok);
+function usableObservation(price: DiscoveredPrice): DiscoveredPrice {
+  const usable: DiscoveredPrice = usableRates(price);
+  const brackets = usableBrackets(price.brackets);
+  if (brackets) usable.brackets = brackets;
+  return usable;
+}
+
+function usableRates(rates: DiscoveredRates): DiscoveredRates {
+  const usable: DiscoveredRates = { inputPerMTok: rates.inputPerMTok, outputPerMTok: rates.outputPerMTok };
+  const cacheRead = positiveRate(rates.cacheReadPerMTok);
+  const cacheWrite = positiveRate(rates.cacheWritePerMTok);
   if (cacheRead !== undefined) usable.cacheReadPerMTok = cacheRead;
   if (cacheWrite !== undefined) usable.cacheWritePerMTok = cacheWrite;
   return usable;
+}
+
+/**
+ * The ladder as the guardrails read it, ascending by breakpoint. All or nothing:
+ * one unusable bracket drops the whole ladder, because a ladder missing a rung
+ * would bill that rung's prompts at the rate below it. A source publishing no
+ * usable ladder reads as flat, which is how every source read before ladders
+ * existed.
+ */
+function usableBrackets(brackets: readonly DiscoveredPriceBracket[] | undefined): DiscoveredPriceBracket[] | undefined {
+  if (!brackets?.length) return undefined;
+  const ascending = [...brackets].sort((a, b) => a.aboveTokens - b.aboveTokens);
+
+  const usable: DiscoveredPriceBracket[] = [];
+  for (const bracket of ascending) {
+    // A stored tier key is a positive integer, and two rates for one breakpoint is
+    // a ladder with no reading to prefer.
+    const { aboveTokens } = bracket;
+    if (!Number.isInteger(aboveTokens) || aboveTokens <= 0 || !isUsable(bracket)) return undefined;
+    if (usable.some(kept => kept.aboveTokens === aboveTokens)) return undefined;
+    usable.push({ aboveTokens, ...usableRates(bracket) });
+  }
+  return usable;
+}
+
+/**
+ * What this run's sources add up to for one model.
+ *
+ * 'conflict' carries the sentence rather than the pair, because the two ways to
+ * reach it read differently to an operator: mirrors that contradict each other,
+ * and mirrors that all contradict the provider.
+ */
+type Consensus =
+  | { kind: 'conflict'; proposed: DiscoveredPrice; detail: string }
+  | { kind: 'lone'; observation: PriceObservation }
+  | {
+      kind: 'trusted';
+      observation: PriceObservation;
+      /** Credited in the row's note: the sources whose value it is. */
+      valueSources: string[];
+      /** Aggregators that agree with a provider; empty in every other case. */
+      corroborating: PriceObservation[];
+      /** Sources overruled by a provider, empty in every other case. */
+      dissenting: PriceObservation[];
+    };
+
+/**
+ * A PROVIDER'S OWN PUBLISHED PRICE IS PRIMARY. WHERE MIRRORS EXIST, one of them
+ * has to agree with it - but not all of them, and the ones that disagree are
+ * recorded and overruled rather than allowed to veto. A provider no aggregator
+ * prices at all still writes alone, which is what it has always done; that is a
+ * standing property of a provider source, not something this rule grants.
+ *
+ * That asymmetry is the whole point. The two aggregators are mirrors of the
+ * provider, and a mirror goes stale on its own schedule: litellm publishes from a
+ * git ref that lags, models.dev re-scrapes on its own cadence. Requiring all of
+ * them to agree hands any one of them a veto over a price the provider itself
+ * publishes, which is how an 80% price cut can keep billing at the old rate until
+ * the slowest mirror catches up.
+ *
+ * With no provider price, nothing here changed: the aggregators are all we have,
+ * so they must agree with each other and there must be at least two of them.
+ */
+function reachConsensus(observations: readonly PriceObservation[]): Consensus {
+  const providers = observations.filter(observation => observation.kind === 'provider');
+  const aggregators = observations.filter(observation => observation.kind === 'aggregator');
+
+  // No provider outranks another, so two of them pricing one model must agree.
+  // Nothing registers two providers for one id today; this is what happens if
+  // something ever does, rather than an arbitrary first-one-wins.
+  const providerConflict = firstDisagreement(providers);
+  if (providerConflict) return conflict(providerConflict, 'mutual');
+
+  const provider = providers[0];
+  if (!provider) {
+    const aggregatorConflict = firstDisagreement(aggregators);
+    if (aggregatorConflict) return conflict(aggregatorConflict, 'mutual');
+    if (aggregators.length < 2) return { kind: 'lone', observation: aggregators[0] };
+    return {
+      kind: 'trusted',
+      observation: aggregators[0],
+      valueSources: aggregators.map(observation => observation.source),
+      corroborating: [],
+      dissenting: [],
+    };
+  }
+
+  const agrees = (observation: PriceObservation) =>
+    !diverges(provider.price, observation.price, PRICE_AGREEMENT_TOLERANCE);
+  const corroborating = aggregators.filter(agrees);
+  const dissenting = aggregators.filter(observation => !agrees(observation));
+  // Primary, not unaccountable: where mirrors exist, one of them has to back the
+  // provider up. All of them dissenting is the shape of a parser that broke
+  // against a docs restructure, which is exactly what must not reprice anything.
+  if (aggregators.length > 0 && corroborating.length === 0) {
+    return conflict([provider, dissenting[0]], 'uncorroborated');
+  }
+  return { kind: 'trusted', observation: provider, valueSources: [provider.source], corroborating, dissenting };
+}
+
+/**
+ * The refusal, in the operator's terms. 'mutual' is two sources of equal standing
+ * contradicting each other; 'uncorroborated' is a provider price that nothing
+ * backs up. Passed in rather than inferred from the pair, because two providers
+ * disagreeing is 'mutual' even though both sides are providers.
+ */
+function conflict([left, right]: [PriceObservation, PriceObservation], reason: 'mutual' | 'uncorroborated'): Consensus {
+  const opening =
+    reason === 'uncorroborated'
+      ? `no source corroborates the provider within ${pct(PRICE_AGREEMENT_TOLERANCE)}`
+      : `sources disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}`;
+  return {
+    kind: 'conflict',
+    proposed: left.price,
+    detail:
+      `${opening}: ${left.source} ${describe(left.price)} vs ${right.source} ${describe(right.price)}; ` +
+      'applied neither',
+  };
 }
 
 /** The first pair that disagrees, so the flag can name both sides. */
@@ -384,11 +580,36 @@ function firstDisagreement(observations: readonly PriceObservation[]): [PriceObs
 }
 
 /**
- * Disagreement over any rate BOTH sides publish. A rate only one of them carries
- * is silence rather than a contradiction: models.dev quoting cache_read where
- * litellm does not is the ordinary case and may not read as a conflict.
+ * Disagreement over any rate BOTH sides publish, in the base rates or in a
+ * long-context bracket. A rate only one of them carries is silence rather than a
+ * contradiction: models.dev quoting cache_read where litellm does not is the
+ * ordinary case and may not read as a conflict.
+ *
+ * Two sides that BOTH publish a ladder must describe the SAME one, down to the
+ * breakpoints. Comparing only the base rates would let two sources that agree on
+ * the short-prompt price write one of their upper rates with no corroboration.
  */
 function diverges(a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): boolean {
+  if (ratesDiverge(a, b, tolerance)) return true;
+
+  const left = a.brackets;
+  const right = b.brackets;
+  // A ladder only one side publishes is silence, NOT divergence - deliberately, and it is
+  // load-bearing. An uncorroborated ladder is refused by the ladderUncorroborated check in
+  // planPriceWrites, which fires only when the row in force is already tiered. Repeating that
+  // judgement here would also block a FLAT row from taking the base rates, a write whose
+  // brackets get discarded anyway. Both are covered by tests; if a static analyzer suggests
+  // treating a one-sided ladder as divergence, that is the case it is missing.
+  if (!left || !right) return false;
+  if (left.length !== right.length) return true;
+
+  return left.some(
+    (bracket, index) =>
+      bracket.aboveTokens !== right[index].aboveTokens || ratesDiverge(bracket, right[index], tolerance)
+  );
+}
+
+function ratesDiverge(a: DiscoveredRates, b: DiscoveredRates, tolerance: number): boolean {
   return OBSERVED_RATES.some(([rate]) => {
     const left = a[rate];
     const right = b[rate];
@@ -403,11 +624,15 @@ function diverges(a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): bo
  * supersedes this one.
  */
 function lowestTierEntry(row: Pick<IModelPrice, 'pricing'>): [string, IModelPriceTier] | undefined {
-  const [threshold] = Object.keys(row.pricing).sort((a, b) => Number(a) - Number(b));
+  const [threshold] = thresholdsOf(row);
   return threshold === undefined ? undefined : [threshold, row.pricing[threshold]];
 }
 
 const lowestTier = (row: Pick<IModelPrice, 'pricing'>): IModelPriceTier | undefined => lowestTierEntry(row)?.[1];
+
+/** The row's thresholds in NUMERIC order; the keys are stringified numbers, so a plain sort() would put 1050000 before 272000. */
+const thresholdsOf = (row: Pick<IModelPrice, 'pricing'>): string[] =>
+  Object.keys(row.pricing).sort((a, b) => Number(a) - Number(b));
 
 /**
  * A ladder discovery must not flatten: more than one threshold. A single tier is
@@ -417,28 +642,117 @@ const lowestTier = (row: Pick<IModelPrice, 'pricing'>): IModelPriceTier | undefi
  */
 const isTiered = (row: IModelPrice): boolean => Object.keys(row.pricing).length !== 1;
 
+/** One tier of a planned row: where it is stored, what it would say, and what the band measures it against. */
+interface PlannedTier {
+  /** Threshold key in the stored pricing map. */
+  key: string;
+  price: DiscoveredRates;
+  /** The run-start row's tier under the same key; absent when there is nothing to band against. */
+  baseline?: IModelPriceTier;
+}
+
+type LadderPlan = { tiers: PlannedTier[] } | { blocked: string };
+
+/**
+ * Map a bracketed observation onto the ladder the row in force already carries,
+ * or say why it cannot be mapped (`blocked` completes the flag's sentence).
+ *
+ * Our tier keys are bracket UPPER bounds - tierForTokens in common/src/models.ts
+ * picks the first threshold >= the prompt's input tokens - while both feeds
+ * publish a base rate plus "above N tokens" rates. So the base rate belongs to the
+ * LOWEST key and each bracket to the key above its own breakpoint, which lines up
+ * only when the row's thresholds except its highest ARE the breakpoints. For a
+ * 272k/1050000 row against one bracket above 272k: [272000] == [272000], so the
+ * base is the up-to-272k tier and the bracket is the up-to-1050000 one.
+ *
+ * Any other shape would need a threshold we invented, and an invented threshold
+ * bills long prompts at the wrong end of the ladder.
+ */
+function planLadder(row: IModelPrice, observed: DiscoveredPrice, bandRow: IModelPrice | undefined): LadderPlan {
+  const brackets = observed.brackets;
+  if (!brackets?.length) return { blocked: 'the sources publish one flat rate' };
+
+  const thresholds = thresholdsOf(row);
+  const breakpoints = brackets.map(bracket => bracket.aboveTokens);
+  const aligned =
+    thresholds.length === brackets.length + 1 &&
+    thresholds.slice(0, -1).every((threshold, index) => Number(threshold) === breakpoints[index]);
+  if (!aligned) {
+    return { blocked: `the sources' brackets above ${breakpoints.join(', ')} do not line up with them` };
+  }
+
+  const tiers = thresholds.map((key, index) => ({
+    key,
+    price: index === 0 ? observed : brackets[index - 1],
+    baseline: bandRow?.pricing[key],
+  }));
+  // Per-tier banding is what makes an unattended ladder write safe, so a tier with
+  // no run-start counterpart is not one this planner may write.
+  const unbanded = tiers.filter(tier => !tier.baseline).map(tier => tier.key);
+  if (unbanded.length > 0) {
+    return { blocked: `the row this run started from has no tier at ${unbanded.join(', ')} to band against` };
+  }
+  return { tiers };
+}
+
+/**
+ * The tiers being superseded, in the shape describe() prints: the lowest tier's
+ * rates plus one bracket per tier above it, each keyed by the threshold BELOW it,
+ * which is the token count its rates start applying at.
+ */
+function baselineAsPrice(planned: readonly PlannedTier[]): DiscoveredPrice | undefined {
+  const base = planned[0]?.baseline;
+  if (!base) return undefined;
+
+  const price: DiscoveredPrice = tierAsPrice(base);
+  const brackets: DiscoveredPriceBracket[] = [];
+  for (const [index, tier] of planned.slice(1).entries()) {
+    if (tier.baseline) brackets.push({ aboveTokens: Number(planned[index].key), ...tierAsPrice(tier.baseline) });
+  }
+  if (brackets.length > 0) price.brackets = brackets;
+  return price;
+}
+
 /**
  * Every rate the band applies to: the two text rates, plus a cache rate when the
- * row in force carries it AND this observation quotes it. Each move is measured
- * against the CURRENT rate rather than symmetrically, so the setting reads as a
- * multiple of what we bill today (200% is "up to 3x") instead of saturating at
- * 100%, where relativeGap would silently disable the band.
+ * row in force carries it AND this observation quotes it. Each move is a ratio of
+ * the two rates rather than a fraction of either one, so the setting means the
+ * same multiple whichever way the price went (200% is "up to 3x", up or down).
+ *
+ * `tierKey` qualifies the rate names for a multi-tier plan, where 'input' alone
+ * would not say which tier of the ladder moved.
  */
-function bandMoves(proposed: DiscoveredPrice, current: IModelPriceTier): Array<{ rate: string; move: number }> {
+function bandMoves(
+  proposed: DiscoveredRates,
+  current: IModelPriceTier,
+  tierKey?: string
+): Array<{ rate: string; move: number }> {
   const moves: Array<{ rate: string; move: number }> = [];
   for (const [observed, field] of OBSERVED_RATES) {
     const next = proposed[observed];
     const held = current[field];
     if (next === undefined || held === undefined) continue;
-    moves.push({ rate: field, move: baselineMove(next, held * TOKENS_PER_MTOK) });
+    moves.push({ rate: tierKey ? `${field}@${tierKey}` : field, move: baselineMove(next, held * TOKENS_PER_MTOK) });
   }
   return moves;
 }
 
-/** Leaving a zero rate for a real one exceeds any band: nothing is a multiple of 0. */
+/**
+ * How far apart two rates are, as the larger over the smaller minus one: a 3x move
+ * is 200% whether the price tripled or fell to a third. A fraction of the current
+ * rate would instead saturate at 100% for any cut, which is every band of 100 or
+ * more silently disabled in that direction.
+ *
+ * Leaving OR reaching a zero rate exceeds any band: nothing is a multiple of 0. A
+ * negative rate cannot reach this point, and fails the band the same way if it ever does.
+ */
 const baselineMove = (proposed: number, current: number): number => {
+  // NaN compares false against any band, so an unusable rate would pass it.
+  if (!Number.isFinite(proposed) || !Number.isFinite(current)) return Number.POSITIVE_INFINITY;
   if (proposed === current) return 0;
-  return current === 0 ? Number.POSITIVE_INFINITY : Math.abs(proposed - current) / current;
+  const smaller = Math.min(proposed, current);
+  const larger = Math.max(proposed, current);
+  return smaller <= 0 ? Number.POSITIVE_INFINITY : larger / smaller - 1;
 };
 
 /**
@@ -447,7 +761,7 @@ const baselineMove = (proposed: number, current: number): number => {
  * silently move cached reads and voice minutes onto the text rate, which is a
  * billing change nobody asked for.
  */
-function buildTier(price: DiscoveredPrice, carry: IModelPriceTier | undefined): IModelPriceTier {
+function buildTier(price: DiscoveredRates, carry: IModelPriceTier | undefined): IModelPriceTier {
   const tier: IModelPriceTier = {
     input: price.inputPerMTok / TOKENS_PER_MTOK,
     output: price.outputPerMTok / TOKENS_PER_MTOK,
@@ -486,8 +800,8 @@ function rateFields(tier: IModelPriceTier): Record<string, number> {
   return out;
 }
 
-const tierAsPrice = (tier: IModelPriceTier): DiscoveredPrice => {
-  const price: DiscoveredPrice = {
+const tierAsPrice = (tier: IModelPriceTier): DiscoveredRates => {
+  const price: DiscoveredRates = {
     inputPerMTok: tier.input * TOKENS_PER_MTOK,
     outputPerMTok: tier.output * TOKENS_PER_MTOK,
   };
@@ -505,15 +819,21 @@ const perMTokOf = (price: DiscoveredPrice): { inputPerMTok: number; outputPerMTo
 const readable = (rate: number): number => Number(rate.toPrecision(10));
 
 /**
- * Every rate the observation carries, cache rates included: a disagreement can
- * live entirely in cache_read, and a detail line that only prints input and
- * output would then show two identical prices "disagreeing" - the opposite of
- * the explainable-line-by-line contract the flags exist to meet.
+ * Every rate the observation carries, cache rates and long-context brackets
+ * included: a disagreement can live entirely in cache_read or in an upper bracket,
+ * and a detail line that only prints the base input and output would then show two
+ * identical prices "disagreeing" - the opposite of the explainable-line-by-line
+ * contract the flags exist to meet.
  */
-const describe = (price: DiscoveredPrice): string => {
-  const parts = [`in ${readable(price.inputPerMTok)}`, `out ${readable(price.outputPerMTok)}`];
-  if (price.cacheReadPerMTok !== undefined) parts.push(`cache_read ${readable(price.cacheReadPerMTok)}`);
-  if (price.cacheWritePerMTok !== undefined) parts.push(`cache_write ${readable(price.cacheWritePerMTok)}`);
+const describe = (price: DiscoveredPrice): string =>
+  [rateList(price), ...(price.brackets ?? []).map(bracket => `above ${bracket.aboveTokens} ${rateList(bracket)}`)].join(
+    ', '
+  );
+
+const rateList = (rates: DiscoveredRates): string => {
+  const parts = [`in ${readable(rates.inputPerMTok)}`, `out ${readable(rates.outputPerMTok)}`];
+  if (rates.cacheReadPerMTok !== undefined) parts.push(`cache_read ${readable(rates.cacheReadPerMTok)}`);
+  if (rates.cacheWritePerMTok !== undefined) parts.push(`cache_write ${readable(rates.cacheWritePerMTok)}`);
   return `${parts.join('/')} $/MTok`;
 };
 

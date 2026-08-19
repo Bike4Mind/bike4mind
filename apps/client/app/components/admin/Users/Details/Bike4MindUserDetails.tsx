@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { IUserDocument } from '@bike4mind/common';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
@@ -11,7 +12,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface Bike4MindUserDetailsProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
   userKey: string;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;

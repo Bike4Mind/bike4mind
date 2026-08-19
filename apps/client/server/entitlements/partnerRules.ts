@@ -98,7 +98,7 @@ export function assertKnownEntitlements(entitlements: readonly string[]): void {
   const unknown = unknownEntitlementKeys(entitlements);
   if (unknown.length > 0) {
     throw new BadRequestError(
-      `Unknown entitlement key(s): ${unknown.join(', ')}. Known keys: ${KNOWN_ENTITLEMENT_KEYS.join(', ')}`
+      `Unknown entitlement key(s): ${unknown.join(', ')}. Known keys: ${KNOWN_ENTITLEMENT_KEYS.join(', ')}, or a datalake:<slug> lake grant.`
     );
   }
 }

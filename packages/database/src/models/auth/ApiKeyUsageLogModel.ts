@@ -1,4 +1,4 @@
-import { IMongoDocument } from '@bike4mind/common';
+import { IEndpointUsageBucket, IEndpointUsageDay, IMongoDocument, IPlatformEndpointUsage } from '@bike4mind/common';
 import mongoose, { Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -158,6 +158,89 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       acc[row._id] = { totalRequests: row.totalRequests, requestsToday: row.requestsToday };
       return acc;
     }, {});
+  }
+
+  /**
+   * Platform-wide endpoint/latency rollup over a trailing window (default 30
+   * days; pass `hours` for finer windows). Every row here is API-key-authed
+   * traffic - this collection logs nothing else - so there is no source
+   * dimension to filter on (the handler decides whether the endpoint section
+   * applies given the user's source filter). Beyond the collection's 90-day TTL
+   * there is simply no data; callers should clamp the window accordingly.
+   *
+   * `byEndpoint` groups by endpoint+method with request count, avg + p95 latency
+   * (nearest-rank), and error rate (statusCode >= 400). `overTime` is daily
+   * request counts. Request counts only - no credits/COGS live here.
+   */
+  async platformEndpointUsage(params: { hours?: number; days?: number } = {}): Promise<IPlatformEndpointUsage> {
+    const { hours, days = 30 } = params;
+    const windowMs = hours != null ? hours * 60 * 60 * 1000 : days * 24 * 60 * 60 * 1000;
+    const from = new Date(Date.now() - windowMs);
+
+    const [result] = await this.model.aggregate<{
+      byEndpoint: IEndpointUsageBucket[];
+      overTime: IEndpointUsageDay[];
+    }>([
+      { $match: { timestamp: { $gte: from } } },
+      {
+        $facet: {
+          byEndpoint: [
+            {
+              $group: {
+                _id: { endpoint: '$endpoint', method: '$method' },
+                requests: { $sum: 1 },
+                totalResponseTime: { $sum: '$responseTime' },
+                errors: { $sum: { $cond: [{ $gte: ['$statusCode', 400] }, 1, 0] } },
+                responseTimes: { $push: '$responseTime' },
+              },
+            },
+            {
+              // Nearest-rank p95: sort ascending, take element ceil(0.95 * n) - 1,
+              // clamped into range. $sortArray keeps this in-pipeline (no $unwind).
+              $addFields: {
+                p95Index: {
+                  $min: [
+                    { $subtract: [{ $size: '$responseTimes' }, 1] },
+                    { $max: [0, { $subtract: [{ $ceil: { $multiply: [0.95, { $size: '$responseTimes' }] } }, 1] }] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                endpoint: '$_id.endpoint',
+                method: '$_id.method',
+                requests: 1,
+                avgResponseTimeMs: {
+                  $cond: [{ $gt: ['$requests', 0] }, { $divide: ['$totalResponseTime', '$requests'] }, 0],
+                },
+                p95ResponseTimeMs: {
+                  $arrayElemAt: [{ $sortArray: { input: '$responseTimes', sortBy: 1 } }, '$p95Index'],
+                },
+                errorRate: { $cond: [{ $gt: ['$requests', 0] }, { $divide: ['$errors', '$requests'] }, 0] },
+              },
+            },
+            { $sort: { requests: -1 } },
+          ],
+          overTime: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp', timezone: 'UTC' } },
+                requests: { $sum: 1 },
+              },
+            },
+            { $project: { _id: 0, day: '$_id', requests: 1 } },
+            { $sort: { day: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    return {
+      byEndpoint: result?.byEndpoint ?? [],
+      overTime: result?.overTime ?? [],
+    };
   }
 }
 

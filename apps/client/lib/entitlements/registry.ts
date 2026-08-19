@@ -134,25 +134,18 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // The `opti` tag confers local OptiHashi access via `optihashi:pro` (solver
   // race, problem/run CRUD, UI/routing).
   { tag: 'opti', entitlements: ['optihashi:pro'] },
-  // Remote compute is a SEPARATE, stricter tier from local OptiHashi: the
-  // `opti-compute` tag bridges to `optihashi:compute`. Holding `optihashi:pro`
-  // alone will NOT confer remote compute once the server gate checks
-  // `optihashi:compute` (see M2) - until then this row is inert (no gate reads
-  // the key yet). Granted-only for now (no Stripe price yet); deliberately absent
-  // from DOMAIN_GRANT_ROWS / INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS -
-  // internal users reach it via admin/developer bypass, and no signup credits
-  // attach to the compute tier.
-  { tag: 'opti-compute', entitlements: ['optihashi:compute'] },
-  // Real hardware compute is the STRICTEST tier: the `opti-hardware` tag bridges to
-  // `optihashi:hardware`. Like `opti-compute` above, no gate in THIS repo reads the key yet -
-  // the hardware submit gate lives in the premium overlay - so this row is inert host-side
-  // until that overlay is composed in; it exists so the key is grantable/known here.
-  // Deliberately its own tier, NOT implied by `optihashi:compute` (classical/simulator) or
-  // `optihashi:pro` (local): a compute-tier user must not silently reach real external-provider
-  // (real-money) spend. Granted-only (no Stripe price yet) and intentionally absent from
-  // DOMAIN_GRANT_ROWS / INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS - admins reach it via
-  // bypass, and it is granted per-account rather than by domain/signup.
-  { tag: 'opti-hardware', entitlements: ['optihashi:hardware'] },
+  // The `optihashi:compute` / `optihashi:hardware` execution tiers used to be
+  // granted here via the `opti-compute` / `opti-hardware` tags. Retired (#1237):
+  // those tiers now resolve from org group membership (the overlay's group->
+  // capability map, #1178), so `optihashi:pro` is the single product-level grant
+  // and group membership decides what you reach within it. The tag rows were
+  // already inert in open core (no gate here ever read the keys).
+  // INTENDED CONSEQUENCE (deliberate, not a regression): removing the rows also
+  // drops `opti-compute` / `opti-hardware` from `allKnownEntitlementKeys()`, so
+  // `UserPermissions.tsx` no longer classifies them as managed - a leftover
+  // `opti-compute` tag now renders as a removable custom-tag chip in the admin
+  // Users panel (with no Product Access control, because the tier is retired).
+  // That is how an operator strips the inert leftover; see UserPermissions.test.tsx.
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
   // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed
@@ -310,16 +303,54 @@ export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new
 export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
 
 /**
+ * Entitlement key family for lake-scoped grants (`IDataLake.requiredEntitlement`,
+ * dataLakes epic #1658 lane D). A datalake entitlement is admin-authored per lake
+ * with an arbitrary slug - there is no fixed catalog of lakes to enumerate as a grant
+ * row here (and an open-core file must never name a customer's lake), so unlike every
+ * other key in this registry it can't be listed. Recognized as KNOWN by pattern
+ * instead: `datalake:<slug>`, slug matching the same rule as a lake slug
+ * (`CreateDataLakeRequestInput` in b4m-core/common/src/schemas/dataLake.ts). Deliberately
+ * NOT added to `KNOWN_ENTITLEMENT_KEYS` (that list is "products with a fixed identity";
+ * a lake slug is per-tenant data) - checked separately in `unknownEntitlementKeys`.
+ *
+ * Known gap: this only validates SHAPE, not that a lake with that slug exists - a
+ * well-formed but nonexistent/mistyped slug is accepted as "known" and would persist as a
+ * silent no-op grant (the same class of bug #324 fixed for the fixed catalog). Closing that
+ * needs a DB read against `DataLakeModel`, which belongs with the read-time grant resolution
+ * work (dataLakes epic #1658 lane C, #1673), not this pattern-registration step.
+ */
+const DATALAKE_ENTITLEMENT_PREFIX = 'datalake:';
+const DATALAKE_ENTITLEMENT_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+// Mirrors slug.max(60) on CreateDataLakeRequestInput (schemas/dataLake.ts) - a longer slug
+// can't belong to a real lake, so accepting it here would reopen the exact silent-no-op-grant
+// risk `unknownEntitlementKeys` exists to close. (min(2) is already implied by the regex shape:
+// first char + last char, with the middle `*` allowed to match zero characters.)
+const DATALAKE_ENTITLEMENT_MAX_SLUG_LENGTH = 60;
+
+/**
+ * Whether `key` is a `datalake:<slug>` entitlement. Normalizes internally (matches
+ * `isBypassExemptEntitlement` above) so a caller can't get a wrong answer by forgetting to
+ * normalize first.
+ */
+export function isDatalakeEntitlementKey(key: string): boolean {
+  const normalized = normalizeTag(key);
+  if (!normalized.startsWith(DATALAKE_ENTITLEMENT_PREFIX)) return false;
+  const slug = normalized.slice(DATALAKE_ENTITLEMENT_PREFIX.length);
+  return slug.length <= DATALAKE_ENTITLEMENT_MAX_SLUG_LENGTH && DATALAKE_ENTITLEMENT_SLUG_REGEX.test(slug);
+}
+
+/**
  * The entitlement keys in `keys` the registry does NOT recognize (normalized, de-duplicated).
- * Empty means every key is a known grantable product. Used to reject typo'd keys at admin
- * write boundaries before they persist as a silent no-op grant.
+ * Empty means every key is a known grantable product, or a `datalake:<slug>` grant (see
+ * `isDatalakeEntitlementKey`). Used to reject typo'd keys at admin write boundaries before
+ * they persist as a silent no-op grant.
  */
 export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
   const known = new Set(KNOWN_ENTITLEMENT_KEYS);
   const unknown = new Set<string>();
   for (const raw of keys) {
     const key = normalizeTag(raw);
-    if (key && !known.has(key)) unknown.add(key);
+    if (key && !known.has(key) && !isDatalakeEntitlementKey(key)) unknown.add(key);
   }
   return [...unknown];
 }

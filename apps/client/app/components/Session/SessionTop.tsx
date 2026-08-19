@@ -17,6 +17,7 @@ import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import SessionOwnerBadge from './SessionOwnerBadge';
+import DataLakeToggle from '@client/app/components/datalake/DataLakeToggle';
 import BackgroundAgentBadge from './AgentExecution/BackgroundAgentBadge';
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
@@ -31,9 +32,11 @@ type SessionTopProps = {
    */
   enableSearch?: boolean;
   onChatWidthToggle?: (isFullWidth: boolean) => void;
+  /** Render the bar transparent (no solid topbar background) - chat-first Data Lake surface. */
+  transparentTop?: boolean;
 };
 
-const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidthToggle }) => {
+const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidthToggle, transparentTop }) => {
   const { currentSession, currentSessionId } = useSessions();
   const { data: cachedSession } = useGetSession(currentSessionId ?? null);
   const layout = useSessionLayout(s => s.layout);
@@ -79,12 +82,13 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
           flexDirection: 'row',
           paddingRight: '0px',
           height: '0em',
-          backgroundColor: 'chatbox.topbarBg',
+          backgroundColor: transparentTop ? 'transparent' : 'chatbox.topbarBg',
           color: 'chatbox.topbarText',
           zIndex: 10000,
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <DataLakeToggle />
           {project && (
             <Breadcrumbs
               items={[
@@ -108,10 +112,10 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 slot collapses cleanly for the typical non-orchestration session. */}
             <BackgroundAgentBadge sessionId={currentSessionId} />
             {layout !== 'vertical' && layout !== 'pip' && (
-              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} />
+              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} height="32px" />
             )}
             {(layout === 'vertical' || layout === 'pip') && (
-              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} />
+              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} height="32px" />
             )}
             <Tooltip title={copied ? 'Copied!' : 'Copy chat as Markdown'} disableInteractive>
               <IconButton
@@ -124,6 +128,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 sx={{
                   width: '32px',
                   height: '32px',
+                  '--Icon-fontSize': '18px',
                 }}
               >
                 {copied ? <CheckIcon /> : <ContentCopyIcon />}
@@ -140,6 +145,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 sx={{
                   width: '32px',
                   height: '32px',
+                  '--Icon-fontSize': '18px',
                 }}
               >
                 {showPinnedOnly ? <PushPinIcon /> : <PushPinOutlinedIcon />}
@@ -156,6 +162,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 sx={{
                   width: '32px',
                   height: '32px',
+                  '--Icon-fontSize': '18px',
                 }}
               >
                 {isFullWidth ? <HorizontalRuleIcon /> : <SyncAltIcon />}

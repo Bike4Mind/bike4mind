@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Tooltip, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import { api } from '@client/app/contexts/ApiContext';
+import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
 
 /** Wire shapes of /api/admin/model-discovery (dates arrive as strings). */
 interface DiscoverySource {
@@ -17,19 +18,34 @@ interface DiscoveryJoinCoverage {
   total: number;
 }
 
-interface DiscoveryRunSummary {
+interface DiscoveryChangeCounts {
+  added: number;
+  promoted: number;
+  deprecated: number;
+  repriced: number;
+  flagged: number;
+}
+
+/** A run on the history list: counts only, since this response is polled. */
+interface DiscoveryRunListItem {
+  id: string;
   startedAt: string;
   finishedAt?: string | null;
   trigger: string;
   host: string;
   status: 'ok' | 'partial' | 'failed';
+  changes: DiscoveryChangeCounts;
+}
+
+interface DiscoveryRunSummary extends DiscoveryRunListItem {
   sources: DiscoverySource[];
   joinCoverage: DiscoveryJoinCoverage[];
-  changes: { added: number; promoted: number; deprecated: number; repriced: number; flagged: number };
 }
 
 interface DiscoveryStatus {
   lastRun: DiscoveryRunSummary | null;
+  /** Newest first; runs[0] is the same run as lastRun. */
+  runs: DiscoveryRunListItem[];
   lastSuccessfulRunAt: string | null;
   enabled: boolean;
   mode: string;
@@ -60,7 +76,10 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 const formatTime = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : '-');
 
-const changeSummary = (changes: DiscoveryRunSummary['changes']) => {
+/** Matches the run document's TTL in packages/database ModelDiscoveryRunModel. */
+const RUN_RETENTION_NOTE = 'Runs are kept for 90 days.';
+
+const changeSummary = (changes: DiscoveryChangeCounts) => {
   const parts = Object.entries(changes)
     .filter(([, count]) => count > 0)
     .map(([name, count]) => `${count} ${name}`);
@@ -91,6 +110,10 @@ const giveUpMessage = (sawNewRun: boolean, enabled: boolean) => {
  * polling for a run document newer than the one on screen when the button was
  * clicked. A run that never appears is usually the lease: a run already in
  * flight makes the manual trigger a deliberate no-op.
+ *
+ * The change counts and the run history are entry points into
+ * DiscoveryRunDetailModal: the counts alone ("34 flagged") name no model and no
+ * reason, and the 6h cron would otherwise erase whatever run was being read.
  */
 export const DiscoveryStatusCard: React.FC = () => {
   const [status, setStatus] = useState<DiscoveryStatus | null>(null);
@@ -99,6 +122,10 @@ export const DiscoveryStatusCard: React.FC = () => {
   const [isDispatching, setIsDispatching] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
   const [showFailures, setShowFailures] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  // The run being read, captured by id: a poll refreshes `status` underneath it
+  // and must never swap out the report the operator has open.
+  const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
   // The poll loop outlives a fast unmount (2 minutes of it), so every state
   // write past an await is gated on this.
@@ -177,6 +204,7 @@ export const DiscoveryStatusCard: React.FC = () => {
   };
 
   const lastRun = status?.lastRun ?? null;
+  const runs = status?.runs ?? [];
   const failedSources = lastRun?.sources.filter(source => !source.ok) ?? [];
   const discoveryDisabled = status?.enabled === false;
   // One in-flight window covers dispatch plus the poll that follows it, so a
@@ -282,9 +310,21 @@ export const DiscoveryStatusCard: React.FC = () => {
                 {coverage.aggregator} {coverage.matched}/{coverage.total}
               </Chip>
             ))}
-            <Typography level="body-xs" color="neutral" data-testid="discovery-status-changes">
-              {changeSummary(lastRun.changes)}
-            </Typography>
+            {/* No id means there is no report to open, so it stays a sentence. */}
+            {lastRun.id ? (
+              <Link
+                level="body-xs"
+                component="button"
+                onClick={() => setDetailRunId(lastRun.id)}
+                data-testid="discovery-status-changes"
+              >
+                {changeSummary(lastRun.changes)}
+              </Link>
+            ) : (
+              <Typography level="body-xs" color="neutral" data-testid="discovery-status-changes">
+                {changeSummary(lastRun.changes)}
+              </Typography>
+            )}
           </Stack>
           {showFailures &&
             failedSources.map(source => (
@@ -297,15 +337,48 @@ export const DiscoveryStatusCard: React.FC = () => {
                 {source.name}: {source.error ?? 'failed'}
               </Typography>
             ))}
-          <Typography level="body-xs" color="neutral" sx={{ mt: 0.5 }}>
-            Last success: {formatTime(status?.lastSuccessfulRunAt)}
-          </Typography>
+          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ mt: 0.5 }}>
+            <Typography level="body-xs" color="neutral">
+              Last success: {formatTime(status?.lastSuccessfulRunAt)}
+            </Typography>
+            {runs.length > 1 && (
+              <Link
+                level="body-xs"
+                component="button"
+                onClick={() => setShowHistory(v => !v)}
+                data-testid="discovery-status-history-toggle"
+              >
+                {showHistory ? 'hide' : 'show'} run history ({runs.length})
+              </Link>
+            )}
+            <Typography level="body-xs" color="neutral" data-testid="discovery-status-retention">
+              {RUN_RETENTION_NOTE}
+            </Typography>
+          </Stack>
+          {showHistory && (
+            <Stack spacing={0.25} sx={{ mt: 0.5 }} data-testid="discovery-status-history-list">
+              {runs.map(run => (
+                <Link
+                  key={run.id}
+                  level="body-xs"
+                  component="button"
+                  onClick={() => setDetailRunId(run.id)}
+                  sx={{ display: 'block', textAlign: 'left' }}
+                  data-testid={`discovery-status-history-run-${run.id}`}
+                >
+                  {formatTime(run.startedAt)} - {run.trigger} - {run.status} - {changeSummary(run.changes)}
+                </Link>
+              ))}
+            </Stack>
+          )}
         </Box>
       ) : (
         <Typography level="body-xs" color="neutral" sx={{ mt: 1 }} data-testid="discovery-status-never-run">
           Discovery has not run yet.
         </Typography>
       )}
+
+      <DiscoveryRunDetailModal runId={detailRunId} onClose={() => setDetailRunId(null)} />
     </Sheet>
   );
 };

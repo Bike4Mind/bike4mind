@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import type { ModelInfo, SupersededModelInfo } from '@bike4mind/common';
+import { recordDeprecatedModelRequest } from './modelSunsetMetrics';
 /**
  * Runtime safety net for deprecated model IDs.
  *
@@ -134,6 +135,10 @@ export function resolveDeprecatedModelId(modelId: string, context?: string): str
   Logger.globalInstance.warn(
     `[model-sunset] Resolved deprecated model: ${modelId} -> ${resolved} (context: ${context ?? 'unknown'})`
   );
+  // Alarmable counterpart to the warn above. Fire-and-forget, and safe to leave
+  // floating: the emitter swallows everything, and every caller runs a full LLM
+  // request after this, so the container stays alive long enough to flush.
+  void recordDeprecatedModelRequest(modelId, resolved);
   return resolved;
 }
 

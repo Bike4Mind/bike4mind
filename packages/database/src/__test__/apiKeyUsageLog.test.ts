@@ -60,3 +60,79 @@ describe('ApiKeyUsageLogRepository.countRequestsByKeyForUser', () => {
     expect(counts).toEqual({});
   });
 });
+
+describe('ApiKeyUsageLogRepository.platformEndpointUsage', () => {
+  let mongoServer: MongoMemoryServer;
+
+  beforeAll(async () => {
+    mongoServer = await connectTestDB();
+  }, 30000);
+
+  afterAll(async () => {
+    await disconnectTestDB(mongoServer);
+  }, 30000);
+
+  beforeEach(async () => {
+    await ApiKeyUsageLog.deleteMany({});
+  });
+
+  const log = (overrides: Partial<Record<string, unknown>> = {}) =>
+    apiKeyUsageLogRepository.create({
+      userId: 'user-1',
+      keyId: 'keyA',
+      ipAddress: '203.0.113.1',
+      endpoint: '/api/ai/v1/completions',
+      method: 'POST',
+      responseTime: 10,
+      statusCode: 200,
+      timestamp: new Date(),
+      ...overrides,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test seed: partial log doc
+    } as any);
+
+  it('groups by endpoint+method with request count, avg + p95 latency, and error rate', async () => {
+    // /a POST: 5 ok requests, latencies 10..50 -> avg 30, p95 (nearest-rank) 50.
+    for (const rt of [10, 20, 30, 40, 50]) {
+      await log({ endpoint: '/a', method: 'POST', responseTime: rt, statusCode: 200 });
+    }
+    // /b GET: 2 requests, one server error -> errorRate 0.5.
+    await log({ endpoint: '/b', method: 'GET', responseTime: 5, statusCode: 200 });
+    await log({ endpoint: '/b', method: 'GET', responseTime: 7, statusCode: 500 });
+
+    const { byEndpoint } = await apiKeyUsageLogRepository.platformEndpointUsage({ days: 30 });
+
+    // Ordered by request count desc.
+    expect(byEndpoint).toMatchObject([
+      { endpoint: '/a', method: 'POST', requests: 5, errorRate: 0 },
+      { endpoint: '/b', method: 'GET', requests: 2 },
+    ]);
+    expect(byEndpoint[0].avgResponseTimeMs).toBeCloseTo(30, 10);
+    expect(byEndpoint[0].p95ResponseTimeMs).toBe(50);
+    expect(byEndpoint[1].errorRate).toBeCloseTo(0.5, 10);
+  });
+
+  it('rolls up over-time request counts by UTC day', async () => {
+    await log({ responseTime: 10 });
+    await log({ responseTime: 20 });
+
+    const { overTime } = await apiKeyUsageLogRepository.platformEndpointUsage({ days: 30 });
+    expect(overTime).toHaveLength(1);
+    expect(overTime[0]).toMatchObject({ requests: 2 });
+    expect(overTime[0].day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('excludes requests outside the trailing window', async () => {
+    await log({ timestamp: new Date('2020-01-01') });
+    const result = await apiKeyUsageLogRepository.platformEndpointUsage({ days: 30 });
+    expect(result.byEndpoint).toHaveLength(0);
+    expect(result.overTime).toHaveLength(0);
+  });
+
+  it('supports an hours window', async () => {
+    await log({ timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000) }); // 2h ago
+    const oneHour = await apiKeyUsageLogRepository.platformEndpointUsage({ hours: 1 });
+    expect(oneHour.byEndpoint).toHaveLength(0);
+    const threeHours = await apiKeyUsageLogRepository.platformEndpointUsage({ hours: 3 });
+    expect(threeHours.byEndpoint).toHaveLength(1);
+  });
+});

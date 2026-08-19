@@ -21,6 +21,8 @@ const mockSubtractCredits = vi.mocked(subtractCredits);
 describe('creditService - deductCreditsWithOrgSupport', () => {
   const mockUser = {
     id: 'user1',
+    name: 'Test User',
+    email: 'user1@example.com',
     currentCredits: 100,
   } as IUserDocument;
 
@@ -149,6 +151,9 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         lastCreditUsedAt: expect.any(Date),
       });
 
+      // Member already has a userDetails row, so no self-heal seed is issued.
+      expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+
       expect(mockSubtractCredits).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'text_generation_usage',
@@ -169,7 +174,43 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
-    it('should call updateUserDetails even when user has no existing entry (repo handles warning)', async () => {
+    it('tracks usage even when the member is over their per-member cap (#1536)', async () => {
+      // Regression: the settlement write must NOT re-enforce maxCreditsPerMember. It used to
+      // throw here before updateUserDetails ran, so an over-cap member's usedCredits stayed 0
+      // forever - which kept the cap read at 0 and meant the cap never actually tripped.
+      // Enforcement now lives at reservation; this write only tracks and deducts.
+      const cappedOrg = {
+        id: 'org1',
+        currentCredits: 500,
+        maxCreditsPerMember: 10,
+        userDetails: [{ id: 'user1', name: 'Test User', usedCredits: 9, lastCreditUsedAt: null }],
+      } as unknown as IOrganizationDocument;
+
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: cappedOrg,
+        credits: 57, // well over the cap of 10
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'claude-3-sonnet',
+        inputTokens: 100,
+        outputTokens: 50,
+      };
+
+      await expect(deductCreditsWithOrgSupport(params, mockAdapters)).resolves.toBeUndefined();
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
+        creditsDelta: 57,
+        lastCreditUsedAt: expect.any(Date),
+      });
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: 57 }),
+        expect.any(Object)
+      );
+    });
+
+    it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {
       const orgWithoutUser = {
         id: 'org1',
         currentCredits: 500,
@@ -188,7 +229,13 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
 
       await deductCreditsWithOrgSupport(params, mockAdapters);
 
-      // Should still call updateUserDetails - the repo layer handles the no-match warning
+      // The member has no row, so seed one first - otherwise the positional $inc below no-ops and
+      // the spend (and the cap) never track for them.
+      expect(mockOrgRepo.ensureUserDetails).toHaveBeenCalledWith('org1', {
+        id: 'user1',
+        email: 'user1@example.com',
+        name: 'Test User',
+      });
       expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
         creditsDelta: 50,
         lastCreditUsedAt: expect.any(Date),
@@ -324,6 +371,58 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       expect(mockSubtractCredits).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'sound_effects_usage',
+          ownerId: 'org1',
+          ownerType: CreditHolderType.Organization,
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle music_generation_usage type (quest-less, questId omitted)', async () => {
+      const params: DeductCreditsParams = {
+        type: 'music_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 150,
+        sessionId: 'session1',
+        model: 'music_v1',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'music_generation_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 150,
+      });
+      // Quest-less: no questId key is forwarded for music generation.
+      expect('questId' in calledWith).toBe(false);
+    });
+
+    it('should bill the org pool and track userDetails for org-billed music generation', async () => {
+      const params: DeductCreditsParams = {
+        type: 'music_generation_usage',
+        user: mockUser,
+        organization: mockOrganization,
+        credits: 150,
+        sessionId: 'session1',
+        model: 'music_v1',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith(
+        'org1',
+        'user1',
+        expect.objectContaining({ creditsDelta: 150 })
+      );
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'music_generation_usage',
           ownerId: 'org1',
           ownerType: CreditHolderType.Organization,
         }),

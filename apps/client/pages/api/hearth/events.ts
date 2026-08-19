@@ -11,8 +11,10 @@ import {
   toWireHearthEvent,
   toPresenceProjection,
   HearthActorParamSchema,
+  HearthSessionParamSchema,
   resolveRequestActor,
   assertHearthWriteScope,
+  wireActorIdentity,
 } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Resource } from 'sst';
@@ -54,6 +56,7 @@ const PostEventSchema = z
       .optional(),
     refs: hearthEventRefsSchema.prefault({}),
     actor: HearthActorParamSchema,
+    session: HearthSessionParamSchema,
   })
   // Exactly one addressing mode. Accepting both would leave the precedence
   // ambiguous, and accepting neither has no sensible target.
@@ -90,7 +93,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
     const channel = await resolveTargetChannel(req.user.id, body);
     if (!channel) throw new NotFoundError('Channel not found');
 
-    const actor = await resolveRequestActor(req.user, body.actor);
+    const actor = await resolveRequestActor(req.user, body.actor, body.session);
 
     const event = await hearthLog.append({
       channelId: channel._id.toString(),
@@ -101,7 +104,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
       refs: body.refs,
     });
 
-    const wireEvent = toWireHearthEvent(event, actor.displayName);
+    const wireEvent = toWireHearthEvent(event, wireActorIdentity(actor));
 
     // Roster projection. Best-effort for the same reason as the fanout below:
     // the event is already durable, the roster is derived state that a later

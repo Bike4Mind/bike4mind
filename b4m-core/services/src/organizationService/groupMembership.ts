@@ -22,6 +22,17 @@ interface RenameGroupAdapters {
   };
 }
 
+interface ListGroupsAdapters {
+  db: {
+    organizations: Pick<IOrganizationRepository, 'findById'>;
+    groups: Pick<IGroupRepository, 'findByOrganization'>;
+    users: Pick<IUserRepository, 'findUserIdsByGroupIds'>;
+  };
+}
+
+/** A group instance plus its current membership, for the org-admin management UI. */
+export type OrganizationGroupWithMembers = IGroupDocument & { memberIds: string[]; memberCount: number };
+
 // The org+group resolution/authorization that every group action shares. groups.update is only
 // needed by rename, so it lives on that action's adapter, not this shared subset.
 type AuthorizeAdapters = {
@@ -123,4 +134,34 @@ export async function renameGroup(
 ): Promise<IGroupDocument | null> {
   await authorizeAndValidate(actingUser, { organizationId, groupId }, adapters, false);
   return adapters.db.groups.update({ id: groupId, name });
+}
+
+/**
+ * List an org's groups, each with its current member ids + count.
+ *
+ * Gated on the MANAGE predicate, NOT `Permission.read`: the result exposes who is in which group,
+ * and every org member holds read (`addMember` writes `permissions: [read]`), so a read gate would
+ * let any member enumerate membership (resolvable to names via the public profile route). Moved off
+ * the route (#1225) so the fetch + authz + member assembly live behind the service alongside the
+ * sibling group actions, and the route is param-extraction + delegation. Fetches the org through
+ * the repository (a full document, so `assertCanManageOrgGroups` always sees `users[]`), not the
+ * raw model.
+ */
+export async function listOrganizationGroups(
+  actingUser: IUserDocument,
+  { organizationId }: { organizationId: string },
+  adapters: ListGroupsAdapters
+): Promise<OrganizationGroupWithMembers[]> {
+  const organization = await adapters.db.organizations.findById(organizationId);
+  if (!organization) throw new NotFoundError('Organization not found');
+  assertCanManageOrgGroups(actingUser, organization);
+
+  const groups = await adapters.db.groups.findByOrganization(organizationId);
+  // Member ids per group in a single aggregation (backed by the user_groups index), not an N+1 of
+  // per-group reads. memberCount is derived from the ids so the two can never disagree.
+  const membersByGroup = await adapters.db.users.findUserIdsByGroupIds(groups.map(group => group.id));
+  return groups.map(group => {
+    const memberIds = membersByGroup[group.id] ?? [];
+    return { ...group, memberIds, memberCount: memberIds.length };
+  });
 }

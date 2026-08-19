@@ -13,11 +13,22 @@ function contentTypeForFormat(format: string): string {
   return 'application/octet-stream';
 }
 
+/**
+ * Default provider-fetch deadline. Same reasoning as the music generator's
+ * MUSIC_GENERATION_TIMEOUT_MS: /api/ai/sound-effects debits a credit reservation
+ * before this call and runs inside a time-capped serving function, so without a
+ * deadline a slow provider kills the process with the charge applied and no
+ * refund. Aborting lets the route's catch refund instead.
+ */
+export const SOUND_GENERATION_TIMEOUT_MS = 45_000;
+
 export interface ElevenLabsSoundGeneratorConfig {
   apiKey: string;
   logger: Logger;
   /** Injectable HTTP client; defaults to the global `fetch`. Overridden in tests. */
   fetchImpl?: typeof fetch;
+  /** Provider-fetch deadline; defaults to SOUND_GENERATION_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /**
@@ -28,6 +39,7 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
   private readonly apiKey: string;
   private readonly logger: Logger;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(config: ElevenLabsSoundGeneratorConfig) {
     if (!config.apiKey) {
@@ -36,6 +48,7 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
     this.apiKey = config.apiKey;
     this.logger = config.logger;
     this.fetchImpl = config.fetchImpl ?? fetch;
+    this.timeoutMs = config.timeoutMs ?? SOUND_GENERATION_TIMEOUT_MS;
   }
 
   async generate(text: string, options: SoundGenerationOptions = {}): Promise<GeneratedSound> {
@@ -54,6 +67,7 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
         ...(options.durationSeconds !== undefined ? { duration_seconds: options.durationSeconds } : {}),
         ...(options.promptInfluence !== undefined ? { prompt_influence: options.promptInfluence } : {}),
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {

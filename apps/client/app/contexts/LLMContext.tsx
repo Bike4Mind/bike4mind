@@ -69,8 +69,20 @@ export interface LLMContextProps {
   resetSettings: () => void;
   updateLLMParams: () => void;
   isQuestMasterEnabled: boolean;
-  isMementosEnabled: boolean;
-  isArtifactsEnabled: boolean;
+  /**
+   * Tri-state request flag for user memory (#1319). `true` = V1 mementos explicitly on;
+   * `undefined` = no V1 intent, defer to the server-side Mementos V2 account opt-in
+   * (an explicit `false` on the wire now revokes V2 for the request too, so a V2-only
+   * user must NOT send one); `false` = no memory feature enabled, requests opt out.
+   */
+  isMementosEnabled: boolean | undefined;
+  /**
+   * `undefined` until admin settings and user prefs have both hydrated. The server reads an
+   * explicit `false` on the request as "this caller has no artifact surface" and drops the
+   * artifact prompt and extraction for the turn, so a pre-hydration `false` would silently
+   * cost the first prompt of a cold load its artifacts. Absent means "no preference".
+   */
+  isArtifactsEnabled: boolean | undefined;
   isAgentsEnabled: boolean;
   isLatticeEnabled: boolean;
   toolMode: 'fast' | 'smart';
@@ -151,8 +163,10 @@ const DEFAULTS = {
   },
   organizationId: null,
   isQuestMasterEnabled: false,
-  isMementosEnabled: false,
-  isArtifactsEnabled: false,
+  // undefined pre-hydration for the same reason as isArtifactsEnabled below: an explicit
+  // false would opt a cold-load first prompt out of V2 memory before prefs have loaded.
+  isMementosEnabled: undefined,
+  isArtifactsEnabled: undefined,
   isAgentsEnabled: false, // Default controlled by user settings
   isLatticeEnabled: false, // Default controlled by user settings
   toolMode: 'smart' as const,
@@ -357,8 +371,8 @@ export function getDefaultMaxTokens(modelInfo: ModelInfo): number {
 
 export const LLMProvider: React.FC = () => {
   const { setState } = useLLM;
-  const { settings } = useUserSettings();
-  const { isFeatureEnabled } = useFeatureEnabled();
+  const { settings, isHydrated: settingsHydrated } = useUserSettings();
+  const { isFeatureEnabled, isLoading: areFeaturesLoading } = useFeatureEnabled();
   const { accessibleModels, isModelAccessible, getFallbackModel } = useAccessibleModels();
   const { data: modelInfoRepo } = useModelInfo();
   const activeModel = useLLM(s => s.model);
@@ -371,8 +385,17 @@ export const LLMProvider: React.FC = () => {
 
   // Extract primitive booleans so the effect dep array contains stable values
   // rather than the experimentalFeatures object reference (recreated on every settings update)
-  const enableMementos = settings.experimentalFeatures?.enableMementos ?? false;
-  const enableArtifacts = isFeatureEnabled('enableArtifacts');
+  // Tri-state (#1319): true = V1 toggle on; undefined = V2-only user (the server resolves
+  // memory from the account opt-in; an explicit false would revoke it per-request);
+  // false = no memory feature enabled, so requests opt out of both pipelines.
+  // Guarded on prefs hydration: settings.experimentalFeatures starts as merged defaults
+  // (both toggles false), so deriving before hydration would stamp an explicit false and
+  // opt a cold-load first send out of V2 - the same window isArtifactsEnabled guards.
+  const enableMementosV1 = settings.experimentalFeatures?.enableMementos ?? false;
+  const enableMementosV2 = settings.experimentalFeatures?.enableMementosV2 ?? false;
+  const enableMementos = !settingsHydrated ? undefined : enableMementosV1 ? true : enableMementosV2 ? undefined : false;
+  // Left undefined until both signals resolve - see isArtifactsEnabled on the state type.
+  const enableArtifacts = areFeaturesLoading ? undefined : isFeatureEnabled('enableArtifacts');
   const enableAgents = isFeatureEnabled('enableAgents');
   const enableLattice = settings.experimentalFeatures?.enableLattice ?? false;
 
@@ -381,6 +404,7 @@ export const LLMProvider: React.FC = () => {
   const accessibleModelsRef = useRef(accessibleModels);
   const isModelAccessibleRef = useRef(isModelAccessible);
   const getFallbackModelRef = useRef(getFallbackModel);
+  const modelInfoRepoRef = useRef(modelInfoRepo);
 
   // Keep refs current after every render so stable closures always read the latest values.
   // useLayoutEffect (synchronous, before paint) ensures refs are updated before any
@@ -389,6 +413,7 @@ export const LLMProvider: React.FC = () => {
     accessibleModelsRef.current = accessibleModels;
     isModelAccessibleRef.current = isModelAccessible;
     getFallbackModelRef.current = getFallbackModel;
+    modelInfoRepoRef.current = modelInfoRepo;
   });
 
   // Stable functions - identity never changes, reads from refs at call time
@@ -430,6 +455,17 @@ export const LLMProvider: React.FC = () => {
     stableIsModelAccessible,
   ]);
 
+  // Set by the default-model effect when it resolves a model on the user's behalf (both of its branches:
+  // the deprecation fallback and the admin-default chain), and consumed once by the refit effect below so
+  // that transition does not count as a user switch. Must stay in sync with both: the writer is the
+  // default-model effect, the reader is the refit effect's allowRaise gate.
+  // What makes the handoff safe is NOT effect ordering: the consuming run happens on the commit after the
+  // write either way. It is that the flag records the whole TRANSITION and is consumed once, so it can only
+  // suppress the raise for the exact from -> to this effect resolved. Keying it on the destination alone
+  // was weaker: if another write moved the model again before the consuming run, the flag survived
+  // unconsumed and could later suppress a genuine user switch back to that same model.
+  const autoResolvedModelRef = useRef<{ from: string; to: string } | null>(null);
+
   // Set the default model and max tokens, respecting access control
   // Fallback chain: admin default -> user's last used model -> first accessible model
   //
@@ -451,15 +487,19 @@ export const LLMProvider: React.FC = () => {
         const needsModelSwitch = state.model && !stableIsModelAccessible(state.model);
 
         if (hasNoModel || needsModelSwitch) {
-          // If the current model is deprecated/inaccessible, try its fallback model first
+          // If the current model is deprecated/inaccessible, try its fallback model first.
+          // Same contract as the admin-default chain below - the user did not pick this model, so the
+          // ceiling is fitted, never raised, and against the live catalog. See the longer note there.
           if (needsModelSwitch && state.model) {
             const fallback = stableGetFallbackModel(state.model);
             if (fallback) {
+              const liveFallbackInfo = modelInfoRepoRef.current?.find(m => m.id === fallback.id) ?? fallback;
+              autoResolvedModelRef.current = { from: state.model, to: fallback.id };
               return {
                 ...state,
                 model: fallback.id,
                 defaultTextModel: fallback.id,
-                max_tokens: getDefaultMaxTokens(fallback),
+                max_tokens: refitMaxTokensForModel(state.max_tokens, liveFallbackInfo, { allowRaise: false }),
                 isQuestMasterEnabled: false,
                 isAgentsEnabled: false,
               };
@@ -471,11 +511,35 @@ export const LLMProvider: React.FC = () => {
           const lastUsed = state.lastUsedTextModel ? models.find(model => model.id === state.lastUsedTextModel) : null;
           const modelToUse = adminDefault || lastUsed || models[0];
 
+          // This branch only runs when the user did NOT choose the resolved model - theirs was unset
+          // or failed the accessibility predicate - so it must never RAISE the output ceiling, or a
+          // deliberately lowered value is discarded with no signal (#1254). Every user-initiated
+          // switch goes through buildModelSelectionPatch, which sets the new model's default
+          // explicitly, so nothing depends on this branch raising. refitMaxTokensForModel still
+          // corrects an unset or too-high value down to what the resolved model can actually serve.
+          // Fit against the LIVE catalog entry, not `modelToUse`: the accessible list is
+          // `{ ...modelInfo, ...savedConfig }` (llmModelConfig.ts:82-86), so an admin-saved snapshot can
+          // carry a stale, lower `max_tokens`. Clamping to that with allowRaise off would strand the
+          // user below what the model can actually serve, and the sibling refit effect reads the live
+          // repo, so both paths must agree on the ceiling. Falls back to `modelToUse` before the repo loads.
+          const liveModelInfo = modelInfoRepoRef.current?.find(m => m.id === modelToUse.id) ?? modelToUse;
+          // hasNoModel means there is no ceiling to protect: the store is at DEFAULTS (a fresh session, or
+          // resetSettings), so state.max_tokens is the 8192 PLACEHOLDER, not a choice. Without the raise it
+          // would survive the fit untouched and strand a new user far below the model default, and the refit
+          // effect cannot correct it afterwards because this branch marks the transition auto-resolved.
+          const nextMaxTokens = refitMaxTokensForModel(state.max_tokens, liveModelInfo, {
+            allowRaise: hasNoModel,
+          });
+          // Tell the refit effect below that THIS transition was resolved for the user, not chosen by
+          // them. Without it that effect sees a model change, sets allowRaise, and raises the ceiling
+          // straight back to the new model's default - undoing the line above.
+          autoResolvedModelRef.current = { from: state.model, to: modelToUse.id };
+
           return {
             ...state,
             model: modelToUse.id,
             defaultTextModel: modelToUse.id,
-            max_tokens: getDefaultMaxTokens(modelToUse),
+            max_tokens: nextMaxTokens,
             isQuestMasterEnabled: false,
             isAgentsEnabled: false,
           };
@@ -487,6 +551,9 @@ export const LLMProvider: React.FC = () => {
     // their identity is stable and they don't need to be in deps. accessibleModels
     // IS in deps so we re-run when models arrive after isAdminSettingsLoading has
     // already flipped false (see comment above).
+    // modelInfoRepo is read (via modelInfoRepoRef) but deliberately NOT in deps: it and accessibleModels
+    // derive from the same cached catalog query, so accessibleModels already covers its arrival. Adding
+    // it would re-run this effect on every catalog refetch for no new decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels]);
 
@@ -500,14 +567,30 @@ export const LLMProvider: React.FC = () => {
   // not a stale carry-over. Raising unconditionally discarded a lowered budget on every reload.
   const refitModelRef = useRef<string | null>(null);
   useEffect(() => {
+    // The early returns below deliberately do NOT clear autoResolvedModelRef. The flag must survive until
+    // the run that actually refits the model it names, and these returns are exactly the runs that have
+    // not happened yet: the catalog is still loading, or the active model is an image model this effect
+    // does not fit. Clearing here would drop the flag before its run, and the next run would see a model
+    // change with allowRaise on - the reset this fix exists to prevent.
     if (!activeModel || !modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) return;
-    const modelChanged = refitModelRef.current !== null && refitModelRef.current !== activeModel;
+    const previousModel = refitModelRef.current;
+    const modelChanged = previousModel !== null && previousModel !== activeModel;
     refitModelRef.current = activeModel;
+    // A switch the app resolved for the user is not a switch they asked for, so it must not raise a
+    // ceiling they lowered (#1254). Consumed once: a later, genuine switch to this same model still
+    // raises, which is what session hydration relies on (applyModelFromSession sets the model with no
+    // max_tokens and depends on this effect fitting it to the new model).
+    // `previousModel` is null on the first run that fits anything, which is the fresh-session transition
+    // out of the empty model - the same '' the writer recorded as `from`.
+    const pendingAutoResolve = autoResolvedModelRef.current;
+    const autoResolved = pendingAutoResolve?.to === activeModel && pendingAutoResolve.from === (previousModel ?? '');
+    if (pendingAutoResolve?.to === activeModel) autoResolvedModelRef.current = null;
+    const allowRaise = modelChanged && !autoResolved;
     setState(state => {
-      const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise: modelChanged });
+      const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise });
       return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
     });
     // setState from Zustand is stable by reference - matches the convention used by the

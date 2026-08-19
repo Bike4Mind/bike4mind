@@ -39,12 +39,48 @@ export interface DataLakeSurfaceCopy {
   rootLabel: string;
   dropTitle: string;
   dropHint: string;
+  /** Resting affordance, shown while no drag is underway so the capability is discoverable. */
+  dropRestingHint: string;
+  /** Verb phrase completing the post-drop success toast ("3 files ready to add..."). */
+  dropAcceptedHint: string;
   emptyTitle: string;
   emptyHint: string;
-  /** Zero-state variants, shown instead of `empty*` when the create-first CTA is offered. */
+  /**
+   * TRUE zero-lake state only: the caller has no accessible lakes at all. Never shown merely
+   * because the current browse scope holds no files - that conflated "you have no lakes" with
+   * "there is nothing here", telling a user with lakes to create their first one (#1645).
+   */
   zeroTitle: string;
   zeroHint: string;
+  /**
+   * Lake selected, but it holds no files yet. The hint must promise NO action: this copy is chosen
+   * surface-wide with no knowledge of the selected lake, and the lake may be one the viewer cannot
+   * write to at all (a built-in/registry lake, or someone else's public lake), where neither
+   * "add files" nor "connect a folder" is offered. The Add-files button beside it appears only when
+   * the viewer can manage the lake, and that button - not this sentence - is the call to action.
+   */
+  lakeEmptyTitle: string;
+  lakeEmptyHint: string;
+  /**
+   * Lakes exist but NONE of them hold a file, so the all-lakes view has no tree at all. Distinct
+   * from `empty*`, which tells the user to pick a branch - there is no branch to pick here.
+   */
+  allLakesEmptyTitle: string;
+  allLakesEmptyHint: string;
+  /**
+   * The lake list could not be READ. Distinct from `zero*` on purpose: a failed read must never
+   * borrow the zero-state's meaning, or a transient error invites a user who already has lakes to
+   * create a duplicate.
+   */
+  lakesErrorTitle: string;
+  lakesErrorHint: string;
   createLabel: string;
+  /** Rail heading over the lake list. */
+  railTitle: string;
+  /** Rail row that clears the lake scope and browses every reachable lake at once. */
+  allLakesLabel: string;
+  /** Label for the shared manage-knowledge affordance (`ManageKnowledgeButton`). */
+  manageLabel: string;
   askAboutLabel: string;
   askAboutPrompt: (title: string) => string;
   /** Optional second action under an article; omit to render only "ask about". */
@@ -102,11 +138,22 @@ export const DEFAULT_DATA_LAKE_SURFACE_TOKENS: DataLakeSurfaceTokens = {
     rootLabel: DATA_LAKES,
     dropTitle: `Drop to add to a ${DATA_LAKE.toLowerCase()}`,
     dropHint: "Files or folders - you'll pick the destination next",
+    dropRestingHint: 'Drag files here to add',
+    dropAcceptedHint: `ready to add to a ${DATA_LAKE.toLowerCase()}`,
     emptyTitle: 'Nothing selected yet',
     emptyHint: 'Pick a branch from the tree, or jump into one of the largest categories below.',
     zeroTitle: 'Nothing here yet',
     zeroHint: `Create your first ${DATA_LAKE.toLowerCase()} to turn your files into searchable knowledge.`,
+    lakeEmptyTitle: 'This lake has no files yet',
+    lakeEmptyHint: 'Nothing has been added to this lake yet.',
+    allLakesEmptyTitle: 'No files yet',
+    allLakesEmptyHint: `Pick a ${DATA_LAKE.toLowerCase()} on the left and add files to make them searchable.`,
+    lakesErrorTitle: `Couldn't load your ${DATA_LAKES.toLowerCase()}`,
+    lakesErrorHint: 'Something went wrong reading the list. Retry - nothing has been lost.',
     createLabel: `Create ${DATA_LAKE.toLowerCase()}`,
+    railTitle: `My ${DATA_LAKES.toLowerCase()}`,
+    allLakesLabel: `All ${DATA_LAKES.toLowerCase()}`,
+    manageLabel: 'Manage lakes',
     askAboutLabel: 'Ask about this document',
     askAboutPrompt: title => `Tell me about this document: ${title}`,
     secondaryActionLabel: 'Summarize the key points',

@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import { hearthEventKindSchema, hearthMachineBodySchema, hearthEventRefsSchema } from '@bike4mind/hearth';
+import {
+  actorKindSchema,
+  hearthEventKindSchema,
+  hearthMachineBodySchema,
+  hearthEventRefsSchema,
+} from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
@@ -442,12 +447,18 @@ export const DataLakeBatchProgressAction = z.object({
   chunkedFiles: z.number().optional(),
   vectorizedFiles: z.number().optional(),
   failedFiles: z.number().optional(),
+  /** Subset of failedFiles caused by chunk/vectorize, so the client can say which stage a file
+   * failed at rather than a bare "failed" (#1412). Absent from a browser-upload-only failure. */
+  processingFailedFiles: z.number().optional(),
+  skippedFiles: z.number().optional(),
   totalFiles: z.number().optional(),
   status: z
     .enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
     .optional(),
   /** Background AI-tagging phase - orthogonal to `status`, see `TaxonomyStatus`. */
-  taxonomyStatus: z.enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed']).optional(),
+  taxonomyStatus: z
+    .enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'])
+    .optional(),
 });
 
 /** Verdict for a freshly-uploaded FabFile after the S3-event moderation scan. */
@@ -824,6 +835,9 @@ export const HearthEventAction = z.object({
     seq: z.number(),
     actorId: z.string(),
     actorName: z.string().optional(),
+    // Resolved server-side from the actor record. Surfaces badge it so a
+    // self-chosen displayName can never pass for a session-derived human.
+    actorKind: actorKindSchema.optional(),
     kind: hearthEventKindSchema,
     human: z.object({
       text: z.string(),

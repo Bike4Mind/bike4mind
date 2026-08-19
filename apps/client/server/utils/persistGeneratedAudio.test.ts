@@ -14,6 +14,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   User: {},
   adminSettingsRepository: {},
+  dataLakeRepository: {},
 }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() })),
@@ -70,6 +71,21 @@ describe('persistGeneratedAudio', () => {
     const [, params] = h.createFabFile.mock.calls[0];
     expect(params.tags).toContainEqual({ name: 'sound-effect', strength: 1 });
     expect(params.fileName).toMatch(/^sound-effect-\d+\.wav$/);
+  });
+
+  it('tags music audio with its source', async () => {
+    h.createFabFile.mockResolvedValue({ id: 'fab-3' });
+    await persistGeneratedAudio({
+      userId: 'u1',
+      audio: Buffer.from('bytes'),
+      contentType: 'audio/mpeg',
+      source: 'music',
+      text: 'lofi beat',
+      logger,
+    });
+    const [, params] = h.createFabFile.mock.calls[0];
+    expect(params.tags).toContainEqual({ name: 'music', strength: 1 });
+    expect(params.fileName).toMatch(/^music-lofi-beat-\d+\.mp3$/);
   });
 
   it('maps a storage-quota rejection to saved:false without throwing (audio must still be returned)', async () => {

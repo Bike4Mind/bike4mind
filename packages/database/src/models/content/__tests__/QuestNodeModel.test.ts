@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
-import { hasCycle, questGraphRepository, questNodeRepository } from '../QuestNodeModel';
+import { hasCycle, isNodeReady, isNodeRunnable, questGraphRepository, questNodeRepository } from '../QuestNodeModel';
 
 const makeGraph = (overrides = {}) =>
   questGraphRepository.createGraph({
@@ -17,6 +17,58 @@ const makeNode = (graphId: string, overrides = {}) =>
     task: 'do the thing',
     ...overrides,
   });
+
+describe('isNodeReady', () => {
+  const statuses = (entries: [string, string][]) => new Map(entries) as Map<string, never>;
+
+  it('is ready when pending with no dependencies', () => {
+    expect(isNodeReady({ status: 'pending', dependsOn: [] }, statuses([]))).toBe(true);
+  });
+
+  it('is not ready while a dependency is unfinished', () => {
+    expect(isNodeReady({ status: 'pending', dependsOn: ['a'] }, statuses([['a', 'in_progress']]))).toBe(false);
+  });
+
+  // A skipped dependency has to satisfy readiness, or deliberately dropping one
+  // node would permanently wedge everything downstream of it.
+  it('treats a skipped dependency as satisfied', () => {
+    expect(isNodeReady({ status: 'pending', dependsOn: ['a'] }, statuses([['a', 'skipped']]))).toBe(true);
+  });
+
+  it('is not ready once the node itself has moved past pending/ready', () => {
+    for (const status of ['in_progress', 'completed', 'failed', 'needs_review', 'blocked', 'skipped'] as const) {
+      expect(isNodeReady({ status, dependsOn: [] }, statuses([]))).toBe(false);
+    }
+  });
+
+  // A dependency id with no entry in the map (deleted node, or an id from
+  // another graph) must read as unsatisfied, not silently as done.
+  it('is not ready when a dependency is unknown', () => {
+    expect(isNodeReady({ status: 'pending', dependsOn: ['ghost'] }, statuses([]))).toBe(false);
+  });
+});
+
+describe('isNodeRunnable', () => {
+  const statuses = (entries: [string, string][]) => new Map(entries) as Map<string, never>;
+
+  // The Run button's predicate, deliberately wider than isNodeReady: a failed
+  // node is retryable by hand (claimForRun accepts it), and gating the button on
+  // readiness left it with no way back except editing the node.
+  it('allows a manual retry of a failed node', () => {
+    expect(isNodeRunnable({ status: 'failed', dependsOn: [] }, statuses([]))).toBe(true);
+    expect(isNodeReady({ status: 'failed', dependsOn: [] }, statuses([]))).toBe(false);
+  });
+
+  it('still refuses a node that is already running or done', () => {
+    expect(isNodeRunnable({ status: 'in_progress', dependsOn: [] }, statuses([]))).toBe(false);
+    expect(isNodeRunnable({ status: 'completed', dependsOn: [] }, statuses([]))).toBe(false);
+  });
+
+  it('still honours unmet dependencies', () => {
+    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'] }, statuses([['a', 'in_progress']]))).toBe(false);
+    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'] }, statuses([['a', 'completed']]))).toBe(true);
+  });
+});
 
 describe('hasCycle', () => {
   it('returns false for a DAG and true for a back-edge', () => {
@@ -136,6 +188,50 @@ describe('QuestGraph / QuestNode model', () => {
 
     ready = await questNodeRepository.computeReadyNodes(graph.id);
     expect(ready.map(n => n.id)).toContain(gated.id);
+  });
+
+  it('claimForRun moves a runnable node to in_progress and stamps startedAt', async () => {
+    const graph = await makeGraph();
+    const node = await makeNode(graph.id);
+
+    const claimed = await questNodeRepository.claimForRun(node.id);
+
+    expect(claimed?.status).toBe('in_progress');
+    expect(claimed?.startedAt).toBeInstanceOf(Date);
+  });
+
+  // The whole point of the atomic claim: two dispatches racing on one node
+  // (double-clicked Run, or two scheduler ticks) must bill exactly one run.
+  it('claimForRun lets exactly one of two concurrent claims win', async () => {
+    const graph = await makeGraph();
+    const node = await makeNode(graph.id);
+
+    const results = await Promise.all([
+      questNodeRepository.claimForRun(node.id),
+      questNodeRepository.claimForRun(node.id),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('claimForRun refuses a node that already completed', async () => {
+    const graph = await makeGraph();
+    const node = await makeNode(graph.id);
+    await questNodeRepository.updateStatus(node.id, 'completed');
+
+    expect(await questNodeRepository.claimForRun(node.id)).toBeNull();
+  });
+
+  it('claimForRun allows a retry of a failed node', async () => {
+    const graph = await makeGraph();
+    const node = await makeNode(graph.id);
+    await questNodeRepository.updateStatus(node.id, 'failed');
+
+    expect((await questNodeRepository.claimForRun(node.id))?.status).toBe('in_progress');
+  });
+
+  it('claimForRun returns null for a malformed id instead of throwing a cast error', async () => {
+    expect(await questNodeRepository.claimForRun('not-an-object-id')).toBeNull();
   });
 
   it('updateStatus sets score, reviewVerdict and completedAt', async () => {

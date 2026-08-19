@@ -2,6 +2,7 @@ import type {
   DiscoveredModel,
   DiscoveredPatch,
   DiscoveredPrice,
+  DiscoveredPriceBracket,
   DiscoveryFetchContext,
   DiscoverySource,
   SourceResult,
@@ -10,14 +11,27 @@ import { isEmptyDocument, joinTargets, logCoverage, type AggregatorSourceOptions
 import { boolean, compact, contentHashOf, count, fetchJson } from './http';
 
 /**
- * PINNED TO A RELEASE TAG, NEVER `main` (sec 6.5). This file is third-party data
- * fetched on a schedule and turned into prices; reading it from a moving branch
- * would mean an unreviewed upstream commit can reprice the catalog between two
- * runs. Bumping this constant is the review.
+ * The git ref the price blob is read from. A MOVING ref on purpose: a release tag
+ * is an immutable snapshot, and a snapshot that is weeks behind reports the price
+ * a provider used to charge. Two feeds then disagree about the same model, the
+ * agreement check applies neither, and the stale rate keeps billing - which is
+ * exactly the failure this constant used to cause.
+ *
+ * What protects the catalog is not the ref: no single aggregator can write a price
+ * (a lone one only ever raises a flag), the two aggregators must agree within
+ * PRICE_AGREEMENT_TOLERANCE, any move past modelDiscoveryPriceBandPct is flagged
+ * rather than applied, operator-owned rows are untouchable, and anything else
+ * suspicious keeps the row in force billing. The tradeoff accepted here is that
+ * upstream data can change between two runs, which is the point of a live
+ * registry; the source report records the body's `contentHash`, so "the
+ * aggregator changed under us" stays answerable after the fact.
+ *
+ * Single constant so re-pinning to a tag is one edit if upstream ever ships a
+ * commit worth pinning away from.
  */
-export const LITELLM_RELEASE_TAG = 'v1.93.0';
+export const LITELLM_REF = 'main';
 
-export const LITELLM_PRICES_URL = `https://raw.githubusercontent.com/BerriAI/litellm/${LITELLM_RELEASE_TAG}/model_prices_and_context_window.json`;
+export const LITELLM_PRICES_URL = `https://raw.githubusercontent.com/BerriAI/litellm/${LITELLM_REF}/model_prices_and_context_window.json`;
 
 /** The document's own self-describing template row, not a model. */
 const SAMPLE_SPEC_KEY = 'sample_spec';
@@ -52,19 +66,81 @@ export const TOKENS_PER_MTOK = 1_000_000;
 const perMTok = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value * TOKENS_PER_MTOK : undefined;
 
+/** litellm's field-name prefix for each rate, and the DiscoveredRates key it lands in. */
+const BRACKET_RATE_BY_PREFIX = {
+  input_cost_per_token: 'inputPerMTok',
+  output_cost_per_token: 'outputPerMTok',
+  cache_read_input_token_cost: 'cacheReadPerMTok',
+  cache_creation_input_token_cost: 'cacheWritePerMTok',
+} as const satisfies Record<string, keyof DiscoveredPriceBracket>;
+
+type BracketRateKey = (typeof BRACKET_RATE_BY_PREFIX)[keyof typeof BRACKET_RATE_BY_PREFIX];
+
+/**
+ * litellm spells a long-context bracket as a field-name family, so the breakpoint
+ * is read off the NAME - nothing here knows 272k. Anchored at both ends on
+ * purpose: `_above_272k_tokens_priority`, `_flex`, `_batches` and
+ * `cache_creation_input_token_cost_above_1hr_above_200k_tokens` are different
+ * service or cache-TTL lanes, and pricing one of them as the long-context rate
+ * would overcharge every long prompt.
+ */
+const BRACKET_FIELD = new RegExp(`^(${Object.keys(BRACKET_RATE_BY_PREFIX).join('|')})_above_(\\d+)k_tokens$`);
+
+/** The rate and breakpoint a litellm field name declares, or null when it is not a context bracket. */
+export function parseBracketField(field: string): { rate: BracketRateKey; aboveTokens: number } | null {
+  const match = BRACKET_FIELD.exec(field);
+  if (!match) return null;
+  const rate = BRACKET_RATE_BY_PREFIX[match[1] as keyof typeof BRACKET_RATE_BY_PREFIX];
+  const thousands = Number(match[2]);
+  return thousands > 0 ? { rate, aboveTokens: thousands * 1000 } : null;
+}
+
+/**
+ * The entry's context brackets, ascending by breakpoint. A bracket missing either
+ * text rate, or carrying an unreadable one, drops the WHOLE ladder rather than
+ * part of it (gemini-1.5-flash publishes an above-128k input rate and no output
+ * rate): a half ladder would leave the tier we dropped billing at the rate below
+ * it, and the price planner treats a ladderless observation as flat, which is what
+ * this feed has always been read as.
+ */
+function bracketsOf(entry: LiteLlmEntry): DiscoveredPriceBracket[] | undefined {
+  const byBreakpoint = new Map<number, Partial<Record<BracketRateKey, number>>>();
+  for (const [field, value] of Object.entries(entry as Record<string, unknown>)) {
+    const parsed = parseBracketField(field);
+    if (!parsed) continue;
+    const rate = perMTok(value);
+    if (rate === undefined) return undefined;
+    const rates = byBreakpoint.get(parsed.aboveTokens) ?? {};
+    rates[parsed.rate] = rate;
+    byBreakpoint.set(parsed.aboveTokens, rates);
+  }
+  if (byBreakpoint.size === 0) return undefined;
+
+  const brackets: DiscoveredPriceBracket[] = [];
+  for (const [aboveTokens, rates] of [...byBreakpoint.entries()].sort(([a], [b]) => a - b)) {
+    const { inputPerMTok, outputPerMTok, cacheReadPerMTok, cacheWritePerMTok } = rates;
+    if (inputPerMTok === undefined || outputPerMTok === undefined) return undefined;
+    brackets.push(
+      compact<DiscoveredPriceBracket>({ aboveTokens, inputPerMTok, outputPerMTok, cacheReadPerMTok, cacheWritePerMTok })
+    );
+  }
+  return brackets;
+}
+
 function priceOf(entry: LiteLlmEntry): DiscoveredPrice | undefined {
   const inputPerMTok = perMTok(entry.input_cost_per_token);
   const outputPerMTok = perMTok(entry.output_cost_per_token);
   if (inputPerMTok === undefined || outputPerMTok === undefined) return undefined;
   if (inputPerMTok === 0 && outputPerMTok === 0) return undefined;
-  // The `_above_*_tokens` and `_priority` variants are deliberately ignored:
-  // DiscoveredPrice is one flat rate, and picking one of them would quote a
-  // long-context or priority-lane price as if it were the standard one.
+  // The `_priority`, `_flex` and `_batches` variants stay ignored: those are
+  // service tiers of the same context bracket, not brackets, and quoting one
+  // would price the standard lane at a lane nobody is on.
   return compact({
     inputPerMTok,
     outputPerMTok,
     cacheReadPerMTok: perMTok(entry.cache_read_input_token_cost),
     cacheWritePerMTok: perMTok(entry.cache_creation_input_token_cost),
+    brackets: bracketsOf(entry),
   });
 }
 
@@ -153,11 +229,12 @@ export function createLiteLlmSource(options: AggregatorSourceOptions): Discovery
     kind: 'aggregator',
     isConfigured: () => true,
     async fetch(ctx: DiscoveryFetchContext): Promise<SourceResult> {
-      // No conditional GET: a tagged file is immutable, so a validator would
-      // only ever answer a question the tag already answers.
+      // No conditional GET: a 304 carries no body, the join needs the body on
+      // every run, and contentHash already answers "did this change since last
+      // run" - so a validator would only buy an extra round trip.
       const response = await fetchJson<LiteLlmDocument>({ url: LITELLM_PRICES_URL, followRedirects: true }, ctx);
       if (!response.ok) return { ok: false, error: response.error, httpStatus: response.status };
-      if (response.notModified) return { ok: false, error: 'unexpected 304 from a pinned tag', httpStatus: 304 };
+      if (response.notModified) return { ok: false, error: 'unexpected 304 without a validator', httpStatus: 304 };
       // Same contract every provider source honors (types.ts:154-158): a
       // valid-but-empty body is a failed fetch, not a run on which every price
       // happened to vanish. Checked on the document, not the join.

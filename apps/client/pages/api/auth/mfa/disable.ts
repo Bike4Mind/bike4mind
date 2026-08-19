@@ -1,7 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { mfaService } from '@bike4mind/services';
-import { userRepository, adminSettingsRepository } from '@bike4mind/database';
+import { mfaService, userService } from '@bike4mind/services';
+import {
+  userRepository,
+  adminSettingsRepository,
+  authSessionRepository,
+  trustedDeviceRepository,
+} from '@bike4mind/database';
+import { clearTrustedDeviceCookie } from '@server/auth/trustedDevice';
 import { logAuthAudit } from '@server/utils/authAudit';
 
 const handler = baseApi().post(
@@ -23,12 +29,27 @@ const handler = baseApi().post(
 
       const result = await mfaService.disableMFA({ user: freshUser, enforceMFA }, userRepository);
 
-      // Disabling MFA is a security-relevant change: bump tokenVersion to
-      // invalidate every existing session (including this one), forcing
-      // re-authentication.
-      await userRepository.incrementTokenVersion(freshUser.id);
+      // Disabling MFA is a security-relevant change: revoke every existing session (including
+      // this one) -- bumps tokenVersion AND clears session rows -- forcing re-authentication.
+      await userService.revokeUserSessions(freshUser.id, {
+        db: { users: userRepository, authSessions: authSessionRepository },
+        logger: req.logger,
+      });
+
+      // Trusts are vouchers to skip a second factor. With MFA off there is no second
+      // factor to skip, so leaving them would silently pre-authorize those devices if
+      // MFA is ever re-enabled. Drop them all and clear this browser's cookie.
+      const revokedDevices = await trustedDeviceRepository.revokeAllForUser(freshUser.id);
+      clearTrustedDeviceCookie(res);
 
       await logAuthAudit(req, { userId: freshUser.id, event: 'mfa_disabled' });
+      if (revokedDevices > 0) {
+        await logAuthAudit(req, {
+          userId: freshUser.id,
+          event: 'trusted_device_revoked',
+          metadata: { revoked: revokedDevices, scope: 'all', reason: 'mfa_disabled' },
+        });
+      }
 
       res.json(result);
     } catch (error: any) {

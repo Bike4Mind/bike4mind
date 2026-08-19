@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
@@ -15,13 +15,17 @@ import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 
 export const CreditAnalyticsTab: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<string>('users');
+  // Held in the store rather than locally so another admin tab can land the
+  // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
+  const activeTab = useCreditAnalysisStore(state => state.activeTab);
+  const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', px: 2, py: 1 }}>
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)} sx={{ mb: 2 }}>
+      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as CreditAnalysisTab)} sx={{ mb: 2 }}>
         <TabList sx={{ overflowX: { xs: 'auto', sm: 'visible' }, minWidth: { xs: 'max-content', sm: 'auto' } }}>
           <Tab value="users">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

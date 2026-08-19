@@ -8,7 +8,6 @@ import {
   IUserDocument,
   type CompletionSource,
 } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
 import { subtractCredits, SubtractCreditsParameters } from './subtractCredits';
 
 /**
@@ -86,6 +85,15 @@ export interface DeductSoundEffectsCreditsParams extends DeductCreditsCommonPara
 }
 
 /**
+ * Parameters for music-generation credit deduction. Quest-less, like sound
+ * effects: music generation is a stateless API call with only a synthetic
+ * sessionId, so it extends the common base rather than the quest-scoped one.
+ */
+export interface DeductMusicGenerationCreditsParams extends DeductCreditsCommonParams {
+  type: 'music_generation_usage';
+}
+
+/**
  * Union type of all deduction parameter types
  */
 export type DeductCreditsParams =
@@ -93,7 +101,8 @@ export type DeductCreditsParams =
   | DeductImageEditCreditsParams
   | DeductVideoGenerationCreditsParams
   | DeductTextGenerationCreditsParams
-  | DeductSoundEffectsCreditsParams;
+  | DeductSoundEffectsCreditsParams
+  | DeductMusicGenerationCreditsParams;
 
 /**
  * Database adapters required for credit deduction.
@@ -151,20 +160,28 @@ export async function deductCreditsWithOrgSupport(
   let creditHolderMethods: ICreditHolderMethods = adapters.db.users;
 
   if (organization) {
-    // Enforce per-member credit cap if configured
-    // NOTE: Known TOCTOU - pre-check and atomic increment are separate operations.
-    // A concurrent request can exceed the limit by one. Accepted: window is tiny, stakes are low.
-    if (organization.maxCreditsPerMember != null) {
-      const userDetails = organization.userDetails?.find(u => u.id === user.id);
-      const usedCredits = userDetails?.usedCredits ?? 0;
-      if (usedCredits + credits > organization.maxCreditsPerMember) {
-        throw new BadRequestError('Organization member credit limit reached');
-      }
-    }
-
+    const memberDetails = organization.userDetails?.find(u => u.id === user.id);
     ownerId = organization.id;
     ownerType = CreditHolderType.Organization;
     creditHolderMethods = adapters.db.organizations;
+
+    // No per-member cap check guards the tracking below: this is the settlement write, and
+    // the cap is enforced at reservation (see isMemberCreditCapExceeded, used by
+    // ChatCompletionProcess/cliCompletions pre-flight). Throwing here cannot block an
+    // already-served request - it only skips the usage tracking below, freezing `usedCredits`
+    // at 0 forever so the cap can never trip (#1536). Always track.
+
+    // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
+    // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without
+    // this their usage is never tracked and `maxCreditsPerMember` never trips for them. Idempotent
+    // and only writes when the row is actually absent, so already-tracked members pay nothing extra.
+    if (!memberDetails) {
+      await adapters.db.organizations.ensureUserDetails(organization.id, {
+        id: user.id,
+        email: user.email ?? user.username,
+        name: user.name,
+      });
+    }
 
     // Atomically increment per-user usage tracking within the organization.
     // Uses $inc to avoid race conditions with concurrent requests.
@@ -196,6 +213,9 @@ export async function deductCreditsWithOrgSupport(
   } else if (type === 'sound_effects_usage') {
     // Quest-less: sound effects has no questId.
     transactionParams = { ...baseParams, type: 'sound_effects_usage' };
+  } else if (type === 'music_generation_usage') {
+    // Quest-less: music generation has no questId.
+    transactionParams = { ...baseParams, type: 'music_generation_usage' };
   } else {
     // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
     transactionParams = {

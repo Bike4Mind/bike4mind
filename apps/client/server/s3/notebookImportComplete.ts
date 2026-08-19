@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import { InboxType, isImageServeable } from '@bike4mind/common';
 import { notebookImportService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
@@ -5,7 +6,6 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
   inboxRepository,
   sessionRepository,
-  questRepository,
   Quest,
   FabFile,
   Artifact,
@@ -16,12 +16,65 @@ import {
   importHistoryJobRepository,
 } from '@bike4mind/database';
 import { withContext } from '@server/s3/utils';
+import type { ClientSession, FilterQuery } from 'mongoose';
+import type { IChatHistoryItem, IChatHistoryItemDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuidv4 } from 'uuid';
 import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
 
 const { NotebookImportService } = notebookImportService;
+
+/**
+ * The notebook-metadata writes an import performs. Exported for the same reason as the message
+ * writes below: a test that re-implements these cannot catch them regressing.
+ *
+ * No `ctx` is assigned on the repository: transactionAsyncLocalStorage already carries the session
+ * into these queries, and assigning it would strand a finished session on the shared instance -
+ * the next caller to read it fails with "Use of expired sessions".
+ */
+export const createSessionWrites = () => ({
+  // The service hands over a plain literal; the repository wants a session document. Casting here
+  // keeps that boundary in one visible place instead of widening either side.
+  create: async (data: Record<string, unknown>) =>
+    sessionRepository.create(data as Parameters<typeof sessionRepository.create>[0]),
+  find: async (query: Record<string, unknown>) => sessionRepository.find(query),
+  // `update` identifies the row by `id` and throws without it - `_id` here silently made every
+  // overwrite and merge import fail.
+  updateById: async (id: string, data: Record<string, unknown>) => sessionRepository.update({ id, ...data }),
+});
+
+/**
+ * The message writes an import performs. Exported so the invariant below is testable against a
+ * real database rather than a copy of it - see notebookImportOverwrite.e2e.test.ts.
+ */
+export const createChatHistoryWrites = (session?: ClientSession) => {
+  // The key must be absent, not present-and-undefined: the session guards are presence checks, so
+  // `{ session: undefined }` makes the write escape the caller's transaction. See BaseModel.delete.
+  const txn = session ? { session } : {};
+  return {
+    bulkCreate: async (items: IChatHistoryItem[]) => {
+      // Insert, never upsert: an upsert on the incoming id re-pointed the *source* documents at
+      // the new notebook when an export was imported back into its own database, emptying the
+      // original.
+      //
+      // skipValidation keeps this as lenient as the update it replaces. Inserts validate where
+      // updates do not, and ChatHistoryItemSchema marks `prompt` required (QuestModel.ts) while
+      // the system writes empty ones - an assistant-first turn has no prompt - so validating here
+      // would fail imports that currently work. Note it waives every validator on the schema, not
+      // just that one; bulkWrite has no per-field opt-out.
+      const ops = items.map(({ id, ...rest }) => ({
+        insertOne: { document: id ? { _id: id, ...rest } : rest },
+      }));
+      return Quest.bulkWrite(ops, { ...txn, skipValidation: true });
+    },
+    deleteMany: async (filter: FilterQuery<IChatHistoryItemDocument>) => {
+      // Hard delete: the soft-delete default leaves the rows with their ids, so the replacement
+      // insert in bulkCreate collides with the documents it supersedes.
+      return Quest.deleteMany(filter, { ...txn, hardDelete: true });
+    },
+  };
+};
 
 const processNotebookImport = async (
   userId: string,
@@ -52,65 +105,30 @@ const processNotebookImport = async (
 
       // Create service adapters (matching the export service pattern)
       const adapters = {
-        sessionRepository: {
-          ...sessionRepository,
-          ctx: session,
-          create: async (data: any) => {
-            sessionRepository.ctx = session;
-            return sessionRepository.create(data);
-          },
-          find: async (query: any) => {
-            sessionRepository.ctx = session;
-            return sessionRepository.find(query);
-          },
-          updateById: async (id: string, data: any) => {
-            // sessionRepository.update expects the full object with _id
-            sessionRepository.ctx = session;
-            return sessionRepository.update({ _id: id, ...data });
-          },
-        },
-        chatHistoryRepository: {
-          ...questRepository,
-          ctx: session,
-          bulkCreate: async (items: any[]) => {
-            // Use Quest model directly for bulk operations
-            const bulkOps = items.map(item => ({
-              updateOne: {
-                filter: { _id: item.id },
-                update: { $set: item },
-                upsert: true,
-              },
-            }));
-            return Quest.bulkWrite(bulkOps, { session });
-          },
-          deleteMany: async (filter: any) => {
-            return Quest.deleteMany(filter).session(session);
-          },
-        },
+        sessionRepository: createSessionWrites(),
+        chatHistoryRepository: createChatHistoryWrites(session),
         knowledgeRepository: {
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             // Use model directly with session for transaction support
             const [created] = await FabFile.create([data], { session });
             return created;
           },
         },
         artifactRepository: {
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             // Use model directly with session for transaction support
             const [created] = await Artifact.create([data], { session });
             return created;
           },
         },
         toolRepository: {
-          find: async (query: any) => Tool.find(query).session(session),
-          findById: async (id: string) => Tool.findById(id).session(session),
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             const [created] = await Tool.create([data], { session });
             return created;
           },
         },
         agentRepository: {
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             // Use model directly with session for transaction support
             const [created] = await Agent.create([data], { session });
             return created;
@@ -175,17 +193,40 @@ const processNotebookImport = async (
       const importService = new NotebookImportService(adapters);
       const result = await importService.importNotebooks(userId, importData, options);
 
+      // Any per-notebook failure rolls the whole import back. A failed write usually aborts the
+      // transaction server-side already, but a client-side cast error leaves it healthy.
+      if (result.errors?.length) {
+        throw new Error(`Imported no notebooks: ${result.errors.join('; ')}`);
+      }
+
       await markImportComplete(importHistoryJobId, userId, {
         processedItems: result.importedNotebooks + result.importedMessages,
         skippedItems: result.skippedNotebooks,
       });
 
+      // Attachment failures are warnings, not errors, so they do not abort the import - but the
+      // user still has to hear about them, or a notebook silently arrives without its files.
+      const warnings = result.warnings ?? [];
+      const shown = warnings.slice(0, 5);
+      // Assembled from parts and joined, so an absent clause cannot leave a double space behind.
+      const parts = [
+        `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages.`,
+      ];
+      if (result.skippedNotebooks > 0) {
+        parts.push(`Skipped ${result.skippedNotebooks} duplicate(s).`);
+      }
+      if (warnings.length) {
+        // Neutral wording on purpose: not every entry is a failure. A file that imported with its
+        // type degraded says so itself, and calling that "could not be imported" contradicts the
+        // record. Each message states its own outcome.
+        const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
+        parts.push(`${warnings.length} attachment issue(s): ${shown.join('; ')}${more}.`);
+      }
+
       await inboxRepository.createInboxMessage({
         type: InboxType.COMMON,
-        title: '✅ Notebook Import Successful',
-        message: `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages. ${
-          result.skippedNotebooks > 0 ? `Skipped ${result.skippedNotebooks} duplicate(s).` : ''
-        }`,
+        title: warnings.length ? '⚠️ Notebook Import Completed With Issues' : '✅ Notebook Import Successful',
+        message: parts.join(' '),
         receiverId: userId,
         userId,
       });
@@ -193,23 +234,11 @@ const processNotebookImport = async (
       logger.info('Notebook import completed successfully', { userId, result });
       return result;
     } catch (error) {
+      // Reporting the failure happens in the caller, not here. A failed write aborts the
+      // transaction server-side, and every write in this scope picks that session up from
+      // async-local storage, so a status update or inbox message written here would itself fail
+      // and the user would hear nothing.
       logger.error('Notebook import failed', { userId, dataKey, error });
-
-      await markImportFailed(importHistoryJobId, userId, {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-
-      await inboxRepository.createInboxMessage({
-        type: InboxType.COMMON,
-        title: '❌ Notebook Import Failed',
-        message: `Failed to import notebooks. Error: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }. Please try again or contact support if the issue persists.`,
-        receiverId: userId,
-        userId,
-      });
-
       throw error;
     } finally {
       await Promise.all([
@@ -264,8 +293,12 @@ export const dispatch = withContext(async (event, context, logger) => {
       try {
         const metadata = await s3.getMetadata(key);
         fileSize = metadata.size ?? 0;
-      } catch (err: any) {
-        if (err.name === 'NoSuchKey' || err.name === 'NotFound') {
+      } catch (err: unknown) {
+        // Read the name off the value rather than gating on `instanceof Error`: a plain-object or
+        // cross-realm rejection would otherwise turn a duplicate S3 event into a failed import.
+        // Same form as pages/api/app-files/serve/[...key].ts.
+        const name = (err as { name?: string })?.name;
+        if (name === 'NoSuchKey' || name === 'NotFound') {
           logger.info(`File ${key} already processed (doesn't exist), skipping duplicate event`);
           continue;
         }
@@ -332,6 +365,8 @@ export const dispatch = withContext(async (event, context, logger) => {
         error,
       });
 
+      // Outside the import's transaction, so these still land when it is the transaction that
+      // failed - which is the usual reason to be here.
       try {
         const existingJob = await importHistoryJobRepository.findByS3Key(key);
         if (existingJob && existingJob.status !== 'failed') {
@@ -343,6 +378,19 @@ export const dispatch = withContext(async (event, context, logger) => {
       } catch (markFailedErr) {
         logger.error('Failed to mark import as failed:', markFailedErr);
       }
+
+      // Outside the try above, so a failed job lookup does not swallow the user's notification.
+      await inboxRepository
+        .createInboxMessage({
+          type: InboxType.COMMON,
+          title: '❌ Notebook Import Failed',
+          message: `Failed to import notebooks. Error: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }. Please try again or contact support if the issue persists.`,
+          receiverId: userId,
+          userId,
+        })
+        .catch(notifyErr => logger.error('Failed to notify import failure:', notifyErr));
     }
   }
 });

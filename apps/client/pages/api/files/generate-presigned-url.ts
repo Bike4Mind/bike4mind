@@ -1,16 +1,24 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
+  FabFileSourceType,
   FileGeneratePresignedUrlRequestInput,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
   KnowledgeType,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
-import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+} from '@bike4mind/database';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -20,7 +28,7 @@ import { FileEvents } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { Resource } from 'sst';
 
-const s3Client = new S3Client();
+const s3Client = createS3Client();
 
 const handler = baseApi().post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(
@@ -29,6 +37,13 @@ const handler = baseApi().post(
 
       const userId = req.user.id;
       const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
+
+      // Same feature gate as the batch-presign sibling: when this upload is bound to a data
+      // lake batch, the feature must actually be on.
+      if (data.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
+      }
 
       const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
       let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
@@ -54,12 +69,18 @@ const handler = baseApi().post(
       console.log('==============');
 
       // Applying a lake's `datalake:*` meta-tag is a WRITE into that lake - gate it so this
-      // presign door can't be used to inject files into a lake the caller only reads.
-      await dataLakeService.assertCanWriteDataLakeTags(
-        { userId, isAdmin: !!req.user.isAdmin },
-        (data.tags ?? []).map(t => t.name),
-        { db: { dataLakes: dataLakeRepository } }
-      );
+      // presign door can't be used to inject files into a lake the caller only reads. Full actor
+      // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
+      // matching the batch presign door (generate-presigned-urls-batch.ts).
+      const requestedTagNames = (data.tags ?? []).map(t => t.name);
+      const ctx = await toAccessContext(req);
+      await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      // This route creates the FabFile through the manager's direct FabFile.create(), not the
+      // fabFileService.createFabFile door that gates the static-registry namespace centrally -
+      // so it needs its own check, same as the meta-tag one above.
+      dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames);
 
       // A file joining a lake must also land under that lake's content prefix, or it is
       // invisible to tag-counts and to the Explorer's tag tree.
@@ -67,6 +88,12 @@ const handler = baseApi().post(
         db: { dataLakes: dataLakeRepository },
         logger: req.logger,
       });
+
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the batch-presign and createFabFile routes (see assertBatchOwnership).
+      if (data.batchId) {
+        await dataLakeService.assertBatchOwnership(userId, data.batchId, { db: { batches: dataLakeBatchRepository } });
+      }
 
       // Reject unsupported/binary types (e.g. .exe) - the chunker can't
       // vectorize them, and the prior `mime.extension()` guard let generic
@@ -96,6 +123,9 @@ const handler = baseApi().post(
           fileName: data.fileName,
           mimeType: mimeType,
           type: KnowledgeType.FILE,
+          // Admission provenance (#1679): stamp the door - the web upload path the lake previously
+          // could not identify. Mirrors the batch door and the connector/chat-platform doors.
+          sourceType: FabFileSourceType.MANUAL_UPLOAD,
           ...(data.contentHash && { contentHash: data.contentHash }),
           ...(data.batchId && { batchId: data.batchId }),
           ...(data.relativePath && { relativePath: data.relativePath }),

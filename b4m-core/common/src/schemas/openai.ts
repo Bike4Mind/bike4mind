@@ -14,9 +14,9 @@ export const ChatCompletionCreateInputSchema = z.object({
   /**
    * Optional so "the caller expressed no output budget" stays distinguishable from
    * "the caller asked for exactly N". ChatCompletionProcess resolves the absent case
-   * against the resolved model, which is the only layer that knows whether it is an
-   * adaptive reasoning model (those need a larger default - see
-   * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR). A number here is treated as deliberate.
+   * against the resolved model, which is the only layer that knows whether it reasons
+   * inside the output budget (those need a larger default - see
+   * reasonsWithinOutputBudget). A number here is treated as deliberate.
    */
   max_tokens: z.number().optional(),
   presence_penalty: z.number().min(-2).max(2).optional(),

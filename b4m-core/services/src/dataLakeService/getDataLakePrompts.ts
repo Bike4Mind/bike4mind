@@ -1,6 +1,22 @@
-import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import type { IDataLakeDocument } from '@bike4mind/common';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
+
+/**
+ * The distinct `datalake:*` provenance tags among a bag of file tag names - i.e. which lakes a set
+ * of retrieved files belongs to. Feeds `restrictToDatalakeTags` so an injection site scopes to the
+ * lakes a turn ACTUALLY used. Order-independent; deduped.
+ *
+ * Each returned value is a WHOLE `datalakeTag` (a file carries its lake's `datalakeTag` verbatim,
+ * see buildDatalakeTag). `restrictToDatalakeTags` then matches these EXACTLY, never as a prefix -
+ * so this scoping cannot over-match a sibling lake whose tag shares a prefix.
+ */
+export function datalakeTagsFrom(tagNames: Iterable<string>): string[] {
+  const out = new Set<string>();
+  for (const name of tagNames) if (name.startsWith(DATALAKE_TAG_PREFIX)) out.add(name);
+  return [...out];
+}
 
 /** A trusted lake's prompt, ready to render as a labeled block. */
 export interface DataLakePrompt {
@@ -20,20 +36,32 @@ export interface DataLakePrompt {
  * neither the user nor their org admin could see what is steering the answer. Content
  * from a stranger's public lake is still retrievable; only its INSTRUCTIONS are dropped.
  *
- * Trusted = the caller's own lake, or a lake scoped to the caller's org (the org admin
- * governance path). Consumed by DataLakePromptFeature, which renders the surviving lakes.
+ * Trusted = the caller's own lake, or a lake scoped to one of the caller's orgs (the org admin
+ * governance path - membership, not the selected-org pointer, #1674). The surviving lakes are
+ * rendered by renderDataLakePromptSection at each retrieval-scoped injection site (forced
+ * retrieval + the model-driven knowledge tools).
  *
- * Both sides of each comparison are String-coerced (behind a truthiness guard, so an absent
- * value never becomes the string "undefined"). The schema stores these as Strings today, but an
- * ObjectId-vs-String comparison would fail SILENTLY - denying injection with no error - which is
- * the hard failure mode to notice. Same reasoning as the actor-side coercion in the resolver.
+ * NOTE (#1668): the owner arm keys on `createdByUserId`, so a lake whose ownership was TRANSFERRED to
+ * a new user (an owner grant supersedes the creator for management, but createdByUserId is immutable)
+ * is not injection-trusted for that new owner unless the org arm covers it. Folding grants into this
+ * READ-time trust decision is #1673's job (read-time grant resolution, with its report-only cutover);
+ * wiring the grant repo through the ChatCompletion db here for that narrow edge is deliberately
+ * deferred. Org-scoped lakes - the productization case - are covered by the org arm regardless.
+ *
+ * The lake side is normalized through normalizeId (which yields undefined for an absent value, so
+ * it never becomes the string "undefined"). The schema stores this as a String today, but an
+ * ObjectId- or populated-document org would fail the membership-set `includes` SILENTLY - denying
+ * injection with no error - which is the hard failure mode to notice (#1281 / @bike4mind/utils/normalizeId).
+ * The actor side needs no such normalization: `organizationIds` is already a set of plain strings
+ * by contract (resolved via `IOrganizationRepository.findMembershipOrgIds`).
  */
 function isTrustedForInjection(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
-  actor: { userId?: string; organizationId?: string }
+  actor: { userId?: string; organizationIds?: string[] }
 ): boolean {
   if (actor.userId && lake.createdByUserId && String(lake.createdByUserId) === actor.userId) return true;
-  return !!lake.organizationId && !!actor.organizationId && String(lake.organizationId) === actor.organizationId;
+  const lakeOrg = normalizeId(lake.organizationId);
+  return !!lakeOrg && (actor.organizationIds ?? []).includes(lakeOrg);
 }
 
 /**
@@ -54,21 +82,50 @@ function isTrustedForInjection(
  * superset `ManageableDataLakeConfig` instead, which only the actor-aware list projections build.
  *
  * Fail-safe: a lake read failure yields no prompts rather than failing the turn.
+ *
+ * RETRIEVAL SCOPE (#1108): pass `restrictToDatalakeTags` to keep only the lakes a turn ACTUALLY
+ * used - the set of `datalake:*` tags carried by the files that were retrieved/injected this turn
+ * (a lake's files carry its `datalakeTag` verbatim, see buildDatalakeTag). Applied AFTER the trust
+ * filter, so a retrieved-but-untrusted lake still contributes nothing. Omit it only for a caller
+ * that legitimately wants every trusted lake's prompt regardless of retrieval; injection sites must
+ * always pass it, or they reintroduce the org-wide over-injection this scope exists to close.
  */
-export async function getAccessibleDataLakePrompts(context: DataLakeAccessContext): Promise<DataLakePrompt[]> {
+export async function getAccessibleDataLakePrompts(
+  context: DataLakeAccessContext,
+  options?: { restrictToDatalakeTags?: Iterable<string> }
+): Promise<DataLakePrompt[]> {
   const repo = context.db.dataLakes;
   if (!repo) return [];
 
+  // Normalize the scope once. An EMPTY (but present) restrict set means "this turn retrieved no
+  // lake" -> inject nothing; only an ABSENT set means "do not scope". Distinguished by undefined.
+  const restrictTags = options?.restrictToDatalakeTags ? new Set(options.restrictToDatalakeTags) : undefined;
+  if (restrictTags && restrictTags.size === 0) return [];
+
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // String-coerce for the same reason getDynamicDataLakeAccess does: a hydrated user doc
-  // carries ObjectIds, and the lake's owner/org fields are Strings.
-  const organizationId = context.user.organizationId ? String(context.user.organizationId) : undefined;
   const userId = context.user.id ? String(context.user.id) : undefined;
+  // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
+  // legible error naming the missing adapter (mirrors getDynamicDataLakeAccess).
+  if (typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
+    throw new Error(
+      'getAccessibleDataLakePrompts: context.db.organizations.findMembershipOrgIds is required to resolve lake access'
+    );
+  }
+  // Same membership resolution as getDynamicDataLakeAccess - resolved from `db.organizations`,
+  // never from a selected-org pointer (#1674).
+  //
+  // Resolved outside the try/catch below on purpose: within THIS resolver, a transient failure
+  // here propagates rather than being silently folded into "no prompts" by the fail-safe catch
+  // that guards the lake read. That guarantee is local to this function - top-level chat callers
+  // may still catch this throw and degrade to an empty scope, which is ALSO fail-closed (it
+  // denies, never grants). The placement buys observability into where a failure originated, not
+  // a stronger deny guarantee than returning [] outright would have given.
+  const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
 
   let lakes: IDataLakeDocument[];
   try {
-    lakes = await repo.findActiveByUserTagsAndEntitlements(userTags, entitlementKeys, organizationId, userId);
+    lakes = await repo.findActiveByUserTagsAndEntitlements(userTags, entitlementKeys, organizationIds, userId);
   } catch (err) {
     context.logger?.warn('[dataLakes] prompt lookup failed; injecting no lake prompts', err);
     return [];
@@ -85,7 +142,10 @@ export async function getAccessibleDataLakePrompts(context: DataLakeAccessContex
       .filter(
         lake =>
           lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
-          isTrustedForInjection(lake, { userId, organizationId })
+          isTrustedForInjection(lake, { userId, organizationIds }) &&
+          // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact
+          // string a lake's files carry, so this is a precise lake<->retrieval match, not a prefix.
+          (!restrictTags || restrictTags.has(lake.datalakeTag))
       )
       .map(lake => ({ id: lake.id, name: lake.name, systemPrompt: (lake.systemPrompt ?? '').trim() }))
       .filter(lake => lake.systemPrompt.length > 0)

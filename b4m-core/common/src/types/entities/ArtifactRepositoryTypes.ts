@@ -48,7 +48,11 @@ export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> 
   findActive(filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;
   findByStatus(status: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;
   findByVisibility(visibility: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;
-  searchByText(searchTerm: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;
+  searchByText(
+    searchTerm: string,
+    filter?: Record<string, unknown>,
+    includeDeleted?: boolean
+  ): Promise<IArtifactDocument[]>;
   findDuplicatesByHash(contentHash: string): Promise<IArtifactDocument[]>;
 
   // Permission-based queries

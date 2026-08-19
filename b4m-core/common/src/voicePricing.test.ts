@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTtsUsd, ttsUsdPer1kChars } from './voicePricing';
+import { computeTtsUsd, estimateTtsCreditCost, ttsUsdPer1kChars } from './voicePricing';
 
 describe('ttsUsdPer1kChars', () => {
   it('returns the per-model rate for known OpenAI models', () => {
@@ -35,5 +35,17 @@ describe('computeTtsUsd', () => {
 
   it('charges the conservative fallback rate for an unknown model rather than nothing', () => {
     expect(computeTtsUsd('elevenlabs', 'eleven_unknown', 1000)).toBeCloseTo(0.1, 6);
+  });
+});
+
+describe('estimateTtsCreditCost', () => {
+  it('scales with character count', () => {
+    const short = estimateTtsCreditCost('openai', 'tts-1', 100);
+    const long = estimateTtsCreditCost('openai', 'tts-1', 4000);
+    expect(long).toBeGreaterThan(short);
+  });
+
+  it('never estimates below the 1-credit floor for non-empty input', () => {
+    expect(estimateTtsCreditCost('openai', 'tts-1', 1)).toBeGreaterThanOrEqual(1);
   });
 });

@@ -97,6 +97,20 @@ describe('analyzeBatchTaxonomy', () => {
     expect(result).toMatchObject({ outcome: 'failed', error: 'No OpenAI API key configured' });
   });
 
+  it('propagates a genuine inference API failure as an unexpected exception, without touching taxonomySuggestions itself', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
+    const apiError = new Error('401 Incorrect API key provided: sk-***');
+    h.runTaxonomyInference.mockRejectedValue(apiError);
+
+    await expect(analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['ready', 'failed'] })).rejects.toThrow(
+      apiError
+    );
+    // Left to the caller (queue handler releases the claim for SQS retry; the manual endpoint
+    // marks it failed itself) - this function itself never writes taxonomySuggestions here, so
+    // neither caller's own handling can clobber a prior-good suggestion set either.
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledTimes(1);
+  });
+
   it('does not notify a failure if the fail-transition itself lost a concurrent race', async () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim wins
     h.fabFindByBatchId.mockResolvedValue([]);

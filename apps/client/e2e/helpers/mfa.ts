@@ -1,5 +1,6 @@
 import { type APIRequestContext } from '@playwright/test';
 import speakeasy from 'speakeasy';
+import { refreshTokenFromSetCookie } from './api';
 
 export interface MfaSetupResult {
   secret: string;
@@ -32,9 +33,10 @@ export async function apiSetupMfa(request: APIRequestContext, accessToken: strin
 }
 
 /**
- * POST /api/auth/mfa/verify-setup - enables MFA and returns a fresh token pair. The token used to
+ * POST /api/auth/mfa/verify-setup - enables MFA and issues a fresh session. The token used to
  * call apiSetupMfa is invalidated by this call (tokenVersion bump), so callers must switch to the
- * returned tokens for any request made after enrollment.
+ * returned tokens for any request made after enrollment. Only the access token is in the body;
+ * the refresh token comes back as the HttpOnly cookie, so it has to be read off Set-Cookie.
  */
 export async function apiVerifyMfaSetup(
   request: APIRequestContext,
@@ -49,8 +51,15 @@ export async function apiVerifyMfaSetup(
   if (!response.ok()) {
     throw new Error(`MFA verify-setup failed: ${response.status()} ${response.statusText()}`);
   }
-  const result: MfaTokens = await response.json();
-  return result;
+  const refreshToken = refreshTokenFromSetCookie(response.headers()['set-cookie']);
+  const { accessToken: freshAccessToken } = (await response.json()) as { accessToken?: string };
+  if (!freshAccessToken || !refreshToken) {
+    throw new Error(
+      `MFA verify-setup returned no session (accessToken=${freshAccessToken ? 'set' : 'missing'}, ` +
+        `refreshCookie=${refreshToken ? 'set' : 'missing'})`
+    );
+  }
+  return { accessToken: freshAccessToken, refreshToken };
 }
 
 /**

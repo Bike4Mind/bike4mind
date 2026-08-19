@@ -23,8 +23,11 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import HistoryIcon from '@mui/icons-material/History';
 import ReplayIcon from '@mui/icons-material/Replay';
-import type { IModelPriceTier } from '@bike4mind/common';
+// getPriceMargin is read-only here: markup is applied when calls settle, so it
+// informs the editor's derived line and never reaches a stored rate.
+import { getPriceMargin, type IModelPriceTier } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useCreditAnalysisStore } from '../store';
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
@@ -42,9 +45,9 @@ const SEED_NOTE = 'adapter-seed';
 const isSeedRow = (row: PriceRow) => row.note === SEED_NOTE;
 
 // Mirrors DISCOVERY_PRICE_NOTE_PREFIX in @bike4mind/common; discovery stamps
-// notes as 'discovery:<source>@<iso-date>'. Duplicated because every
-// @bike4mind import in this file is type-only, and a runtime one would drag
-// server code into the client bundle. Pinned by the model-prices API test.
+// notes as 'discovery:<source>@<iso-date>'. Kept as a literal so the whole note
+// vocabulary this file classifies on reads in one place, next to SEED_NOTE,
+// which cannot be imported at all. Pinned by the model-prices API test.
 const DISCOVERY_NOTE_PREFIX = 'discovery:';
 const isDiscoveryRow = (row: PriceRow) => row.note?.startsWith(DISCOVERY_NOTE_PREFIX) === true;
 
@@ -96,12 +99,50 @@ const UNIT_SUFFIX: Record<string, string> = {
   per_image: 'per image',
 };
 
+/** Compact form for the narrow editor inputs; the modal states the full unit. */
+const UNIT_FIELD_SUFFIX: Record<string, string> = {
+  per_token: '$/M',
+  per_minute: '$/min',
+  per_image: '$/img',
+};
+
+// The one place the token scale lives: display, editing, and submission all go
+// through it, because a scaling applied in one direction and missed in the
+// other is a 1e6 mispricing that takes effect the instant the row is appended.
+const TOKENS_PER_MILLION = 1_000_000;
+
 // per_token rates are USD per single token and read best scaled to 1M; other
 // units are already human-scale and must NOT be inflated.
 const formatRate = (unit: string, value: number | undefined) => {
   if (value === undefined) return '-';
-  const scaled = unit === 'per_token' ? value * 1_000_000 : value;
+  const scaled = unit === 'per_token' ? value * TOKENS_PER_MILLION : value;
   return `$${scaled.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+};
+
+// Both directions trim to 10 significant digits: the 1e6 round trip leaves
+// float noise at either end (stored 1.4999999999999999e-05 must present as 15,
+// and an entered 0.2 must store as 2e-7, not 2.0000000000000002e-7, or the
+// API's idempotency compare sees a change that isn't one). Same choice as
+// readable() in b4m-core/services/src/modelDiscoveryService/pricePlan.ts.
+const trimRoundTripNoise = (value: number) => Number(value.toPrecision(10));
+
+/** Stored per-single-token rate -> the value the editor shows and edits. */
+const toDisplayedRate = (unit: string, stored: number) =>
+  trimRoundTripNoise(unit === 'per_token' ? stored * TOKENS_PER_MILLION : stored);
+
+/** Inverse of toDisplayedRate: the edited value back to the stored wire rate. */
+const toStoredRate = (unit: string, displayed: number) =>
+  trimRoundTripNoise(unit === 'per_token' ? displayed / TOKENS_PER_MILLION : displayed);
+
+/**
+ * What a user pays for a rate the editor is showing. Display only: the markup
+ * is applied when calls settle (usdToCredits), so it must never reach the wire
+ * or the catalog would carry cost times markup and be marked up again on read.
+ */
+const markedUpRate = (displayed: string | undefined) => {
+  const value = Number(displayed);
+  if (displayed === undefined || !Number.isFinite(value)) return '-';
+  return `$${(value * getPriceMargin()).toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
 };
 
 const firstTier = (row: PriceRow): IModelPriceTier => Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
@@ -110,26 +151,54 @@ const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
 
 // Axios errors carry the server's validation reason in response.data, while
 // err.message is the useless generic 'Request failed with status code 400'.
+// The envelope names it 'error' (server/middlewares/errorHandler.ts); 'message'
+// stays as a fallback for endpoints that answer outside that envelope.
 const apiErrorMessage = (err: unknown, fallback: string) => {
-  const e = err as { response?: { data?: { message?: string } }; message?: string };
-  return e?.response?.data?.message || e?.message || fallback;
+  const e = err as { response?: { data?: { error?: string; message?: string } }; message?: string };
+  return e?.response?.data?.error || e?.response?.data?.message || e?.message || fallback;
+};
+
+// Mirrors MANUAL_REPRICE_BAND_ERROR_CODE in pages/api/admin/model-prices.ts
+// (importing an API route here would drag the server into the SPA bundle);
+// pinned by that route's test. It marks the one rejection an operator may waive,
+// so a magnitude slip costs a second, deliberate click instead of nothing.
+const BAND_ERROR_CODE = 'manual-reprice-over-band';
+
+/**
+ * The waiver token from a guardrail rejection, or null when the failure was
+ * anything else. It is echoed back verbatim as `confirm`: the server recomputes
+ * it from the resubmitted draft, so it can only ever waive the exact values
+ * this rejection enumerated.
+ */
+const bandConfirmToken = (err: unknown): string | null => {
+  const data = (err as { response?: { data?: { code?: string; confirmToken?: string } } })?.response?.data;
+  return data?.code === BAND_ERROR_CODE && typeof data.confirmToken === 'string' ? data.confirmToken : null;
 };
 
 /**
  * Admin manager for the versioned model price catalog. Rates are provider
- * cost beliefs in USD (shown per 1M tokens); what users pay is always this
- * cost times the published uniform markup, so nothing here touches markup.
+ * cost beliefs in USD (shown AND edited per 1M tokens, stored per token); what
+ * users pay is always this cost times the published uniform markup, so nothing
+ * here writes markup.
  * All writes are append-only rows via /api/admin/model-prices.
  */
 export const ModelPricingCatalog: React.FC = () => {
   const [rows, setRows] = useState<PriceRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+
+  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
+  const clearPricingModelId = useCreditAnalysisStore(state => state.clearPricingModelId);
 
   const [repriceTarget, setRepriceTarget] = useState<PriceRow | null>(null);
   const [draftRates, setDraftRates] = useState<Record<string, Record<string, string>>>({});
   const [note, setNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  // Waiver token from the server's guardrails; cleared on any edit so a confirm
+  // can only ever waive the exact values the server rejected (the server also
+  // re-derives the token, so a stale one is refused there too).
+  const [confirmToken, setConfirmToken] = useState<string | null>(null);
 
   const [revertTarget, setRevertTarget] = useState<PriceRow | null>(null);
   const [historyModel, setHistoryModel] = useState<string | null>(null);
@@ -155,22 +224,38 @@ export const ModelPricingCatalog: React.FC = () => {
     void fetchRows();
   }, [fetchRows]);
 
+  // A cross-surface jump (a discovery price flag) names one model out of ~110
+  // rows. Consumed once so a later manual visit does not open still filtered.
+  useEffect(() => {
+    if (!pricingModelId) return;
+    setFilter(pricingModelId);
+    clearPricingModelId();
+  }, [pricingModelId, clearPricingModelId]);
+
+  // Drafts are held in the DISPLAYED unit (per 1M for token rows), so what the
+  // editor shows always matches the table it was opened from.
   const openReprice = (row: PriceRow) => {
     const drafts: Record<string, Record<string, string>> = {};
     for (const [threshold, tier] of Object.entries(row.pricing)) {
       drafts[threshold] = {};
       for (const field of RATE_FIELDS) {
         const value = tier[field];
-        if (value !== undefined) drafts[threshold][field] = String(value);
+        if (value !== undefined) drafts[threshold][field] = String(toDisplayedRate(row.unit, value));
       }
     }
     setDraftRates(drafts);
     setNote('');
     setError(null);
+    setConfirmToken(null);
     setRepriceTarget(row);
   };
 
-  const submitReprice = async () => {
+  const editRate = (threshold: string, field: string, value: string) => {
+    setConfirmToken(null);
+    setDraftRates(prev => ({ ...prev, [threshold]: { ...prev[threshold], [field]: value } }));
+  };
+
+  const submitReprice = async (waiver?: string) => {
     if (!repriceTarget) return;
     setIsSaving(true);
     setError(null);
@@ -179,7 +264,7 @@ export const ModelPricingCatalog: React.FC = () => {
       for (const [threshold, fields] of Object.entries(draftRates)) {
         pricing[threshold] = {};
         for (const [field, raw] of Object.entries(fields)) {
-          pricing[threshold][field] = Number(raw);
+          pricing[threshold][field] = toStoredRate(repriceTarget.unit, Number(raw));
         }
       }
       await api.post('/api/admin/model-prices', {
@@ -187,11 +272,14 @@ export const ModelPricingCatalog: React.FC = () => {
         unit: repriceTarget.unit,
         pricing,
         note: note.trim(),
+        ...(waiver ? { confirm: waiver } : {}),
       });
       setRepriceTarget(null);
+      setConfirmToken(null);
       await fetchRows();
     } catch (err) {
       setError(apiErrorMessage(err, 'Reprice failed'));
+      setConfirmToken(bandConfirmToken(err));
     } finally {
       setIsSaving(false);
     }
@@ -233,6 +321,14 @@ export const ModelPricingCatalog: React.FC = () => {
     }
   };
 
+  const repriceUnit = repriceTarget?.unit ?? '';
+  const repriceUnitLabel = UNIT_SUFFIX[repriceUnit] ?? repriceUnit;
+
+  const visibleRows = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    return needle ? rows.filter(row => row.modelId.toLowerCase().includes(needle)) : rows;
+  }, [rows, filter]);
+
   const draftInvalid = useMemo(
     () =>
       Object.values(draftRates).some(fields =>
@@ -251,15 +347,25 @@ export const ModelPricingCatalog: React.FC = () => {
             edited.
           </Typography>
         </Box>
-        <IconButton
-          size="sm"
-          onClick={fetchRows}
-          disabled={isLoading}
-          aria-label="Refresh the price catalog"
-          data-testid="model-pricing-refresh-btn"
-        >
-          <RefreshIcon />
-        </IconButton>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Input
+            size="sm"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            placeholder="Filter by model id"
+            sx={{ width: 220 }}
+            slotProps={{ input: { 'data-testid': 'model-pricing-filter-input', 'aria-label': 'Filter by model id' } }}
+          />
+          <IconButton
+            size="sm"
+            onClick={fetchRows}
+            disabled={isLoading}
+            aria-label="Refresh the price catalog"
+            data-testid="model-pricing-refresh-btn"
+          >
+            <RefreshIcon />
+          </IconButton>
+        </Stack>
       </Stack>
 
       {error && (
@@ -288,7 +394,16 @@ export const ModelPricingCatalog: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {rows.map(row => {
+              {visibleRows.length === 0 && rows.length > 0 && (
+                <tr>
+                  <td colSpan={9}>
+                    <Typography level="body-sm" color="neutral" data-testid="model-pricing-filter-empty">
+                      No model id matches &quot;{filter}&quot;.
+                    </Typography>
+                  </td>
+                </tr>
+              )}
+              {visibleRows.map(row => {
                 const tier = firstTier(row);
                 const provenance = provenanceOf(row);
                 const source = discoverySource(row);
@@ -366,13 +481,15 @@ export const ModelPricingCatalog: React.FC = () => {
         <ModalDialog sx={{ minWidth: 420 }} data-testid="reprice-modal">
           <Typography level="title-md">Reprice {repriceTarget?.modelId}</Typography>
           {error && (
-            <Alert color="danger" size="sm" data-testid="reprice-modal-error">
+            // pre-line: a guardrail rejection enumerates one violation per
+            // line, and every line has to be readable before "Apply anyway".
+            <Alert color="danger" size="sm" sx={{ whiteSpace: 'pre-line' }} data-testid="reprice-modal-error">
               {error}
             </Alert>
           )}
-          <Typography level="body-sm" color="neutral">
-            USD per token. This appends a new operator row taking effect immediately; seeding will no longer manage this
-            model until reverted.
+          <Typography level="body-sm" color="neutral" data-testid="reprice-unit-help">
+            Raw provider cost in USD {repriceUnitLabel}, as providers publish it. This appends a new operator row taking
+            effect immediately; seeding will no longer manage this model until reverted.
           </Typography>
           <Stack spacing={1} sx={{ mt: 1 }}>
             {Object.entries(draftRates).map(([threshold, fields]) => (
@@ -385,21 +502,22 @@ export const ModelPricingCatalog: React.FC = () => {
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   {Object.entries(fields).map(([field, raw]) => (
                     <FormControl key={field} sx={{ width: 130 }}>
-                      <FormLabel>{RATE_LABELS[field as RateField]}</FormLabel>
+                      <FormLabel>
+                        {RATE_LABELS[field as RateField]} {UNIT_FIELD_SUFFIX[repriceUnit] ?? repriceUnit}
+                      </FormLabel>
                       <Input
                         size="sm"
                         value={raw}
-                        onChange={e =>
-                          setDraftRates(prev => ({
-                            ...prev,
-                            [threshold]: { ...prev[threshold], [field]: e.target.value },
-                          }))
-                        }
+                        onChange={e => editRate(threshold, field, e.target.value)}
                         slotProps={{ input: { 'data-testid': `reprice-rate-${threshold}-${field}` } }}
                       />
                     </FormControl>
                   ))}
                 </Stack>
+                <Typography level="body-xs" color="neutral" data-testid={`reprice-markup-${threshold}`}>
+                  At the published {getPriceMargin()}x markup a user pays about {markedUpRate(fields.input)} in /{' '}
+                  {markedUpRate(fields.output)} out {repriceUnitLabel}. Entered rates stay raw cost.
+                </Typography>
               </Box>
             ))}
             <FormControl required>
@@ -418,11 +536,22 @@ export const ModelPricingCatalog: React.FC = () => {
               <Button
                 disabled={note.trim() === '' || draftInvalid || isSaving}
                 loading={isSaving}
-                onClick={submitReprice}
+                onClick={() => submitReprice()}
                 data-testid="reprice-save-btn"
               >
                 Append price row
               </Button>
+              {confirmToken !== null && (
+                <Button
+                  color="danger"
+                  disabled={note.trim() === '' || draftInvalid || isSaving}
+                  loading={isSaving}
+                  onClick={() => submitReprice(confirmToken)}
+                  data-testid="reprice-confirm-band-btn"
+                >
+                  Apply anyway
+                </Button>
+              )}
             </Stack>
           </Stack>
         </ModalDialog>

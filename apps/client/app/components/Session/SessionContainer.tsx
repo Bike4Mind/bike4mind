@@ -63,8 +63,13 @@ interface SessionLayoutProps {
   emptySessionSplash?: React.ReactNode;
   /** Extra action buttons rendered in the FloatingChatWindow header (before minimize/close) */
   floatingChatHeaderActions?: React.ReactNode;
+  /** Overrides the docked/floating chat header's default "AI Chat" label (e.g. /opti swaps in the Data Lakes toggle). */
+  dockedChatTitle?: React.ReactNode;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
+  /** When true, the top toolbar bar renders transparent (no solid background) so a surface's
+   *  own backdrop shows through - used by the chat-first Data Lake surface. (#836) */
+  transparentTop?: boolean;
 }
 
 /**
@@ -185,7 +190,9 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   customSplash,
   emptySessionSplash,
   floatingChatHeaderActions,
+  dockedChatTitle,
   onSessionCreated,
+  transparentTop,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
@@ -253,7 +260,12 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       }
 
       setCurrentSessionId(realId);
-      setCurrentSession(realSession);
+      // Merge over an already-adopted copy of the SAME session instead of replacing it: the
+      // client may have adopted the create response (Data Lake open/attach mints one holding
+      // knowledgeIds) before this event lands, and a replace makes whatever the wire copy
+      // lacks vanish - the knowledgeIds hydration effect then zeroes the workbench it had
+      // just filled. A different id is the optimistic-migration path and replaces as before.
+      setCurrentSession(prev => (prev && prev.id === realId ? { ...prev, ...realSession } : realSession));
 
       // Notify parent (e.g. /opti) so it can sync its local session state.
       if (onSessionCreatedRef.current) {
@@ -478,26 +490,34 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                 },
               }}
             >
-              {/** SessionTop component */}
-              <Box
-                sx={theme => ({
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: '60px',
-                  borderColor: 'divider',
-                  background: theme.palette.background.body,
-                  zIndex: 1,
-                  padding: '0px 0 0px 12px',
-                  display: {
-                    xs: project ? 'block' : 'none',
-                    sm: 'block',
-                  },
-                })}
-              >
-                <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />
-              </Box>
+              {/* SessionTop header. Skipped in floatingChat/dock like the chat content below:
+                the parent Box is display:none there anyway, so this only kept dead controls
+                (e.g. a second datalake-mode-toggle) mounted in the DOM. */}
+              {layout !== 'floatingChat' && layout !== 'dockRight' && layout !== 'dockBottom' && (
+                <Box
+                  sx={theme => ({
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '60px',
+                    borderColor: 'divider',
+                    background: transparentTop ? 'transparent' : theme.palette.background.body,
+                    zIndex: 1,
+                    padding: 0,
+                    display: {
+                      xs: project ? 'block' : 'none',
+                      sm: 'block',
+                    },
+                  })}
+                >
+                  <SessionTop
+                    listClosed={listClosed}
+                    onChatWidthToggle={setIsFullWidth}
+                    transparentTop={transparentTop}
+                  />
+                </Box>
+              )}
               {/* Skip rendering chat content when floatingChat/dock is active — FloatingChatWindow
                 or DockedChatPanel renders its own SessionMiddle + SessionBottom. Rendering duplicates
                 here causes the hidden editor's SyncValuePlugin to call selectEnd() on every keystroke,
@@ -573,7 +593,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
 
         {/* Floating Chat Window - renders when layout is floatingChat */}
         {layout === 'floatingChat' && (
-          <FloatingChatWindow headerActions={floatingChatHeaderActions}>
+          <FloatingChatWindow headerActions={floatingChatHeaderActions} title={dockedChatTitle}>
             <Box
               ref={containerRef}
               sx={{
@@ -650,7 +670,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
 
         {/* Docked Chat Panel - renders when layout is dockRight or dockBottom */}
         {(layout === 'dockRight' || layout === 'dockBottom') && (
-          <DockedChatPanel headerActions={floatingChatHeaderActions}>
+          <DockedChatPanel headerActions={floatingChatHeaderActions} title={dockedChatTitle}>
             <Box
               ref={containerRef}
               sx={{

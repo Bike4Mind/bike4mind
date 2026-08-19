@@ -13,7 +13,7 @@ interface DateFilterComponentProps {
   endDate: string;
   onStartDateChange: (date: string) => void;
   onEndDateChange: (date: string) => void;
-  onRangeSelect: (days: number) => void;
+  onRangeSelect?: (days: number) => void;
 }
 
 export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
@@ -81,7 +81,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
     // Update local state via props
     onStartDateChange(newStartDate);
     onEndDateChange(newEndDate);
-    onRangeSelect(days);
+    onRangeSelect?.(days);
 
     // Also update the store
     setDateFilters({

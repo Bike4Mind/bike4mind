@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import { IUserDocument, IUserPreferences, IUserRepository } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -64,13 +64,16 @@ export const updateUserSchema = z.object({
       toolsCatalogCollapsed: z.boolean().optional(),
       docxTemplateFileId: z.string().nullable().optional(),
       contextTelemetryLevel: z.enum(['none', 'basic', 'enhanced']).optional(),
-      contextTelemetryConsentedAt: z.date().optional(),
+      // coerce: the settings UI echoes this back as an ISO string from GET /users/{id},
+      // so a strict z.date() 422s on every write after the first (which mints a real Date).
+      contextTelemetryConsentedAt: z.coerce.date().optional(),
       // Layer-2 Agent-mode preference. The Mongoose schema accepts it now
       // (UserModel.ts) but unknown keys never reach repo.update without being
       // listed here.
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
       showFunTools: z.boolean().optional(),
       saveGeneratedAudio: z.boolean().optional(),
+      showSplashCards: z.boolean().optional(),
     })
     .nullable()
     .optional(),
@@ -100,7 +103,28 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
   return {
     ...user,
     ...params,
+    ...(params.preferences && { preferences: mergePreferences(user.preferences, params.preferences) }),
     updatedAt: new Date(),
+  };
+}
+
+/**
+ * `preferences` is merged onto the stored object, not replaced, so a partial write cannot
+ * silently drop keys the caller omitted. An explicit `null` still clears the whole object -
+ * that is the only way to remove individual keys. `experimentalFeatures` is merged one level
+ * deeper (mirrors the client in UserSettingsContext); nothing else in the schema nests.
+ */
+function mergePreferences(
+  stored: IUserPreferences | null | undefined,
+  incoming: NonNullable<UpdateUserParameters['preferences']>
+): IUserPreferences {
+  const base = stored ?? {};
+  return {
+    ...base,
+    ...incoming,
+    ...(incoming.experimentalFeatures !== undefined && {
+      experimentalFeatures: { ...base.experimentalFeatures, ...incoming.experimentalFeatures },
+    }),
   };
 }
 

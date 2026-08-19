@@ -5,8 +5,10 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 
 const mutate = vi.fn();
+// Read at render time, so a test can put the mutation into its rejected state.
+let updateError: unknown;
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => ({ mutate, isPending: false }),
+  useUpdateSettings: () => ({ mutate, isPending: false, error: updateError }),
 }));
 
 import AdminSettingInputField from './AdminSettingInputField';
@@ -34,6 +36,7 @@ const saveButton = () => screen.getByTestId('admin-setting-anthropicDemoKey-save
 describe('AdminSettingInputField sensitive setting', () => {
   beforeEach(() => {
     mutate.mockReset();
+    updateError = undefined;
   });
 
   it('shows the server mask and reveals nothing on focus', () => {
@@ -116,5 +119,65 @@ describe('AdminSettingInputField sensitive setting', () => {
     const { onSuccess } = mutate.mock.calls[0][1];
     act(() => onSuccess({ settingName: 'anthropicDemoKey', settingValue: `${SENSITIVE_SETTING_MASK}resh` }));
     expect(input().value).toBe(`${SENSITIVE_SETTING_MASK}resh`);
+  });
+});
+
+// modelDiscoveryPriceBandPct is the bounded case: makeNumberSetting gives its schema
+// min 0 / max 500, and the update route parses with that schema.
+const bandSetting = settingsMap.modelDiscoveryPriceBandPct;
+
+const renderBandField = (defaultValue: number) =>
+  render(
+    <TestWrapper>
+      <AdminSettingInputField setting={bandSetting} index={0} defaultValue={defaultValue} />
+    </TestWrapper>
+  );
+
+const bandInput = () => screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input') as HTMLInputElement;
+const bandSaveButton = () => screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-save-btn');
+const bandHelperText = () => screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-helper');
+
+describe('AdminSettingInputField number setting', () => {
+  beforeEach(() => {
+    mutate.mockReset();
+    updateError = undefined;
+  });
+
+  it('carries the schema bounds the server enforces', () => {
+    renderBandField(50);
+
+    expect(bandInput()).toHaveAttribute('min', '0');
+    expect(bandInput()).toHaveAttribute('max', '500');
+  });
+
+  it('explains an out-of-range value rather than letting the save do nothing', () => {
+    renderBandField(50);
+    fireEvent.change(bandInput(), { target: { value: '600' } });
+
+    // The reported bug: the schema rejects 600 server-side, so a field that submitted it
+    // would look like a no-op save with no reason given anywhere.
+    expect(bandHelperText()).toHaveTextContent('Enter a number between 0 and 500.');
+    expect(bandSaveButton()).toBeDisabled();
+
+    fireEvent.click(bandSaveButton());
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('saves a value inside the range and keeps showing the description', () => {
+    renderBandField(50);
+    fireEvent.change(bandInput(), { target: { value: '200' } });
+
+    expect(bandHelperText()).toHaveTextContent(bandSetting.description);
+    fireEvent.click(bandSaveButton());
+
+    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
+  });
+
+  it('surfaces the server reason when a write is rejected anyway', () => {
+    updateError = { isAxiosError: true, response: { status: 400, data: { message: 'Number must be <= 500' } } };
+
+    renderBandField(50);
+
+    expect(bandHelperText()).toHaveTextContent('Number must be <= 500');
   });
 });

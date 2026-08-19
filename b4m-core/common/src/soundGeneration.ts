@@ -8,6 +8,11 @@ export const supportedSoundGenerationVendor = z.enum(['elevenlabs']);
 
 export type SoundGenerationVendor = z.infer<typeof supportedSoundGenerationVendor>;
 
+// Max prompt length (characters) for a sound-effects generation, per the
+// ElevenLabs sound-generation API. Exported so the client can enforce the same
+// limit before calling the endpoint.
+export const SOUND_EFFECTS_MAX_INPUT_CHARS = 1000;
+
 /**
  * Inbound request body for `POST /api/ai/sound-effects`.
  *
@@ -18,7 +23,7 @@ export type SoundGenerationVendor = z.infer<typeof supportedSoundGenerationVendo
  */
 export const soundEffectsRequestSchema = z.object({
   provider: supportedSoundGenerationVendor.default('elevenlabs'),
-  text: z.string().min(1).max(1000),
+  text: z.string().min(1).max(SOUND_EFFECTS_MAX_INPUT_CHARS),
   durationSeconds: z.number().min(0.5).max(30).optional(),
   promptInfluence: z.number().min(0).max(1).optional(),
   format: z.string().optional(),

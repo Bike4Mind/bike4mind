@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getSettingsValue, getSettingByName } from './settings';
+import { getSettingsValue, getSettingByName, getSettingsByNames } from './settings';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
@@ -10,8 +10,8 @@ import { Logger } from '@bike4mind/observability';
  * the resolver used to return '' verbatim - silently stripping prompts like ArtifactEmissionPrompt /
  * HelpCenterPrompt from completions even though every such setting's description promises "clearing
  * reverts to the built-in default". getSettingsValue now treats a blank stored value as "use the
- * default" WHEN the caller passed one, while leaving '' intact for callers that omit a default (a
- * blank value is legitimate there, e.g. FormatPromptTemplate).
+ * default" WHEN the caller passed one, while leaving '' intact for callers that omit a default (e.g.
+ * FormatPromptTemplate, whose sole reader applies its own fallback).
  */
 describe('getSettingsValue - blank string reverts to a provided default', () => {
   const DEFAULT = 'BUILT_IN_DEFAULT_PROMPT';
@@ -34,8 +34,16 @@ describe('getSettingsValue - blank string reverts to a provided default', () => 
     expect(getSettingsValue('HelpCenterPrompt', { HelpCenterPrompt: '' }, DEFAULT)).toBe(DEFAULT);
   });
 
+  it('applies the same blank->default behavior to AbstentionPrompt', () => {
+    // The abstention licence must survive a cleared row - it is the only counterweight to the
+    // completeness pressure the rest of the system prompt applies.
+    expect(getSettingsValue('AbstentionPrompt', { AbstentionPrompt: '' }, DEFAULT)).toBe(DEFAULT);
+    expect(getSettingsValue('AbstentionPrompt', {}, DEFAULT)).toBe(DEFAULT);
+  });
+
   it('keeps an empty string when NO default is provided (blank is a legitimate value here)', () => {
-    // No third arg: a cleared FormatPromptTemplate stays '' (its empty default is meaningful).
+    // No third arg: a cleared FormatPromptTemplate stays ''. Its only reader,
+    // includeHardcodedSystemMessage, substitutes FORMAT_PROMPT_TEMPLATE for the blank itself.
     expect(getSettingsValue('FormatPromptTemplate', { FormatPromptTemplate: '' })).toBe('');
   });
 
@@ -74,5 +82,29 @@ describe('getSettingByName - stored boolean false survives the round-trip', () =
     const db = { adminSettings: repoReturning(false) };
     const v: unknown = await cache.getSettingByName('EnableFalseFlagRegression', db);
     expect(v).toBe(false);
+  });
+});
+
+// Same regression class as above, one function over: getSettingsByNames' cached path used
+// `|| null`, so a stored numeric 0 (e.g. a spend budget meaning "stop") or boolean false
+// collapsed to null and read as "absent" - the caller then resumed at its coded default.
+describe('getSettingsByNames - stored falsy values survive the cached path', () => {
+  it('returns 0 and false as themselves, and null only for truly absent settings', async () => {
+    const db = {
+      adminSettings: {
+        findAll: vi.fn().mockResolvedValue([
+          { settingName: 'zeroBudgetRegression', settingValue: 0 },
+          { settingName: 'falseSwitchRegression', settingValue: false },
+        ]),
+        findBySettingNames: vi.fn(),
+      },
+    };
+    const values: Record<string, unknown> = await getSettingsByNames(
+      ['zeroBudgetRegression', 'falseSwitchRegression', 'absentRegression'] as never,
+      db as never
+    );
+    expect(values.zeroBudgetRegression).toBe(0);
+    expect(values.falseSwitchRegression).toBe(false);
+    expect(values.absentRegression).toBeNull();
   });
 });

@@ -122,58 +122,60 @@ test.describe('Notebook CRUD', () => {
 test.describe('Notebook - Router resilience', () => {
   // Guards against TanStack Router / React Query regressions on deep-route reload
   // and browser history navigation - the surface most likely to break on router/query upgrades.
-  test('survives hard reload and history nav on a deep notebook route', async ({
-    page,
-    request,
-    basePage,
-    consoleTracker,
-  }) => {
-    const NOTEBOOK_NAME = `E2E Router ${Date.now().toString().slice(-6)}`;
-    const { specUsers } = getTestUsers();
-    const token = specUsers.notebook.accessToken;
+  // @realauth: exercises hard reload + history nav, which must hit the app's real refresh-cookie
+  // bootstrap - so this test opts out of the /auth/success seed (see fixtures.ts authState) and
+  // relies on the pristine cookie the setup planted (see seedAuthStorageState).
+  test(
+    'survives hard reload and history nav on a deep notebook route',
+    { tag: '@realauth' },
+    async ({ page, request, basePage, consoleTracker }) => {
+      const NOTEBOOK_NAME = `E2E Router ${Date.now().toString().slice(-6)}`;
+      const { specUsers } = getTestUsers();
+      const token = specUsers.notebook.accessToken;
 
-    const sessionId = await apiCreateSession(request, token);
-    await apiRenameSession(request, token, sessionId, NOTEBOOK_NAME);
+      const sessionId = await apiCreateSession(request, token);
+      await apiRenameSession(request, token, sessionId, NOTEBOOK_NAME);
 
-    try {
-      const deepUrl = `/notebooks/${sessionId}`;
-      const sidebarItem = page.getByTestId('sidenav-item-session-btn').filter({ hasText: NOTEBOOK_NAME });
+      try {
+        const deepUrl = `/notebooks/${sessionId}`;
+        const sidebarItem = page.getByTestId('sidenav-item-session-btn').filter({ hasText: NOTEBOOK_NAME });
 
-      await test.step('deep-link directly to the notebook', async () => {
-        await page.goto(deepUrl);
-        await page.waitForLoadState('domcontentloaded');
-        await basePage.dismissModals();
-        await expect(sidebarItem).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-      });
-
-      await test.step('hard reload preserves route and rehydrates sidebar query', async () => {
-        consoleTracker.clear();
-        await page.reload({ waitUntil: 'domcontentloaded' });
-        await expect(page).toHaveURL(new RegExp(`/notebooks/${sessionId}`));
-        await expect(sidebarItem).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-      });
-
-      await test.step('back/forward navigate between notebook and projects', async () => {
-        // Direct nav (projects is earned-nav; the sidenav row may be hidden). goto still
-        // pushes a history entry, so the goBack/goForward assertions below hold.
-        await page.goto('/projects');
-        await expect(page).toHaveURL(/\/projects/);
-
-        await page.goBack();
-        await expect(page).toHaveURL(new RegExp(`/notebooks/${sessionId}`));
-        await expect(sidebarItem).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-
-        await page.goForward();
-        await expect(page).toHaveURL(/\/projects/);
-        await expect(page.getByTestId('new-project-btn')).toBeVisible({
-          timeout: TIMEOUTS.NAVIGATION,
+        await test.step('deep-link directly to the notebook', async () => {
+          await page.goto(deepUrl);
+          await page.waitForLoadState('domcontentloaded');
+          await basePage.dismissModals();
+          await expect(sidebarItem).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
         });
-      });
 
-      const errors = consoleTracker.getErrors();
-      expect(errors, `Unexpected console errors: ${JSON.stringify(errors, null, 2)}`).toHaveLength(0);
-    } finally {
-      await apiDeleteSession(request, token, sessionId).catch(() => {});
+        await test.step('hard reload preserves route and rehydrates sidebar query', async () => {
+          consoleTracker.clear();
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          await expect(page).toHaveURL(new RegExp(`/notebooks/${sessionId}`));
+          await expect(sidebarItem).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+        });
+
+        await test.step('back/forward navigate between notebook and projects', async () => {
+          // Direct nav (projects is earned-nav; the sidenav row may be hidden). goto still
+          // pushes a history entry, so the goBack/goForward assertions below hold.
+          await page.goto('/projects');
+          await expect(page).toHaveURL(/\/projects/);
+
+          await page.goBack();
+          await expect(page).toHaveURL(new RegExp(`/notebooks/${sessionId}`));
+          await expect(sidebarItem).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+
+          await page.goForward();
+          await expect(page).toHaveURL(/\/projects/);
+          await expect(page.getByTestId('new-project-btn')).toBeVisible({
+            timeout: TIMEOUTS.NAVIGATION,
+          });
+        });
+
+        const errors = consoleTracker.getErrors();
+        expect(errors, `Unexpected console errors: ${JSON.stringify(errors, null, 2)}`).toHaveLength(0);
+      } finally {
+        await apiDeleteSession(request, token, sessionId).catch(() => {});
+      }
     }
-  });
+  );
 });

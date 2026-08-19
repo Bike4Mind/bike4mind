@@ -1,5 +1,7 @@
 import { RequestHandler } from 'express';
 import { ForbiddenError } from '@server/utils/errors';
+import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 /**
  * CSRF Protection Middleware
@@ -18,8 +20,11 @@ export const csrfProtection = (): RequestHandler => {
 
     // API key requests use a bearer token that a cross-site attacker cannot
     // read or forge, so they are not vulnerable to CSRF. Applying origin checks
-    // to API key requests breaks all server-to-server integrations.
-    if (req.headers['x-api-key']) {
+    // to API key requests breaks all server-to-server integrations. Uses the same
+    // extractor as apiKeyAuth so every accepted form (x-api-key, `Authorization:
+    // ApiKey`, and the canonical `Authorization: Bearer b4m_<key>`) is exempt -
+    // sniffing x-api-key alone would CSRF-block the form the spec advertises.
+    if (extractApiKeyFromHeaders(req.headers)) {
       return next();
     }
 
@@ -60,9 +65,7 @@ export const csrfProtection = (): RequestHandler => {
     // Build allowed origins from environment variable and localhost for development
     const allowedOrigins: string[] = [];
 
-    if (process.env.APP_URL) {
-      allowedOrigins.push(process.env.APP_URL);
-    } else {
+    if (!process.env.APP_URL) {
       // Fail closed: an unset APP_URL previously produced an empty allow-list
       // that would reject all requests, but made misconfiguration silent.
       // Failing loudly here surfaces the missing env var on the first
@@ -70,12 +73,46 @@ export const csrfProtection = (): RequestHandler => {
       throw new ForbiddenError('CSRF: APP_URL is not configured on this deployment.');
     }
 
-    // In dev, allow any localhost origin (Next.js may start on any available port)
-    if (process.env.APP_URL?.includes('localhost')) {
+    // Normalize to an origin before comparing. The check below tests against
+    // `new URL(header).origin`, which is always scheme + host + optional port with
+    // no trailing slash and a lowercased host. Pushing the raw env value made the
+    // comparison sensitive to how APP_URL happens to be written: a single trailing
+    // slash produced an allow-list entry no request could ever match, so every
+    // state-changing request ON THE ROUTES THAT OPT INTO THIS MIDDLEWARE returned
+    // 403 while reads kept working. That is a scattered handful of routes, not the
+    // whole app (csrfProtection is opt-in, wired into a few dozen route files), so
+    // the symptom is "these particular saves fail" rather than an outage - which is
+    // harder to place, since a partial write failure reads as an auth or per-route
+    // bug rather than as one misformatted configuration value.
+    //
+    // A malformed APP_URL now fails the same way an unset one does - loudly, naming
+    // the variable - rather than being buried under origin-rejection 403s.
+    let appOrigin: string;
+    try {
+      appOrigin = new URL(process.env.APP_URL).origin;
+    } catch {
+      throw new ForbiddenError('CSRF: APP_URL is not a valid absolute URL on this deployment.');
+    }
+    if (appOrigin === 'null') {
+      // `new URL()` accepts some non-http schemes whose origin serializes to the
+      // string "null" (e.g. `file:`). Treat that as misconfiguration too: it would
+      // otherwise sit in the allow-list matching nothing, which is the exact silent
+      // failure this normalization exists to remove.
+      throw new ForbiddenError('CSRF: APP_URL does not resolve to a usable origin on this deployment.');
+    }
+    allowedOrigins.push(appOrigin);
+
+    // In dev, allow any localhost origin (Next.js may start on any available port).
+    // Reads the normalized origin, not the raw env value, so this branch cannot
+    // disagree with the allow-list entry above about what APP_URL points at, and
+    // shares one predicate with the OAuth callback sites AND with the inner
+    // origin/referer match below (isLocalAppUrl), so none of them can drift on
+    // what counts as local.
+    if (isLocalAppUrl(appOrigin)) {
       if (origin) {
         try {
           const url = new URL(origin);
-          if (url.hostname === 'localhost') {
+          if (isLocalAppUrl(url.origin)) {
             allowedOrigins.push(url.origin);
           }
         } catch {
@@ -85,7 +122,7 @@ export const csrfProtection = (): RequestHandler => {
       if (referer) {
         try {
           const url = new URL(referer);
-          if (url.hostname === 'localhost') {
+          if (isLocalAppUrl(url.origin)) {
             allowedOrigins.push(url.origin);
           }
         } catch {
@@ -110,7 +147,13 @@ export const csrfProtection = (): RequestHandler => {
     const hasValidReferer = isValidOriginOrReferer(referer);
 
     if (!hasValidOrigin && !hasValidReferer) {
-      throw new ForbiddenError('Invalid request origin. CSRF protection triggered.');
+      // Names the allowed origin. Without it this message describes only the caller,
+      // so a deployment whose APP_URL points somewhere users never arrive from reads
+      // as an attack on every request instead of as a configuration mismatch - and
+      // the two have completely different remedies. The value is our own configured
+      // origin, not anything caller-supplied, so echoing it discloses nothing the
+      // client did not already connect to.
+      throw new ForbiddenError(`Invalid request origin. CSRF protection triggered (expected ${appOrigin}).`);
     }
 
     next();

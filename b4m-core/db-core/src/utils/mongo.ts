@@ -351,6 +351,35 @@ function castIdFilter(filter: Record<string, unknown>): Record<string, unknown> 
   return result;
 }
 
+/**
+ * Join a raw MongoDB driver call to the caller's transaction.
+ *
+ * `softDeletePlugin`'s statics soft-delete via `this.collection.updateOne` - the RAW driver, chosen
+ * to sidestep Mongoose 8's "path 'userId' is matched twice" casting bug on CASL `$or` filters.
+ * Mongoose's `transactionAsyncLocalStorage` injects the active session into Mongoose QUERIES only,
+ * never raw-driver calls, so without this a soft delete inside `withTransaction` commits immediately
+ * and escapes the transaction - it survives even when the surrounding writes roll back (org-groups
+ * #1228, mechanism 1). Mirror Mongoose's own guard (query.js:2097 -
+ * `!hasOwn(options, 'session') && als?.session != null`): inject the ALS session unless the caller
+ * already set one, so an explicit `{ session }` still wins.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- plugin statics are typed against the `any` schema generic
+function withAlsSession(model: mongoose.Model<any>, options: Record<string, unknown> | undefined) {
+  // `transactionAsyncLocalStorage` is a real Mongoose 8 internal but not in its public types;
+  // narrow via `unknown` rather than `any` to keep the access typed. Shape mirrors the store
+  // Mongoose sets in connection.transaction() (`{ session }`).
+  const als = (
+    model.db?.base as unknown as {
+      transactionAsyncLocalStorage?: { getStore(): { session?: mongoose.mongo.ClientSession } | undefined };
+    }
+  )?.transactionAsyncLocalStorage;
+  const alsSession = als?.getStore()?.session;
+  if (alsSession != null && (!options || !Object.hasOwn(options, 'session'))) {
+    return { ...options, session: alsSession };
+  }
+  return options;
+}
+
 export const softDeletePlugin = (
   // mongoose 8.24 defaults Document's _id to ObjectId; under the `any` schema
   // generic below, this.save() resolves _id to `unknown`, so the method return
@@ -382,8 +411,10 @@ export const softDeletePlugin = (
 
   schema.statics.deleteOne = function (filter, options) {
     const castFilter = castIdFilter(filter as Record<string, unknown>);
+    // withAlsSession on BOTH paths: the raw driver escapes transactionAsyncLocalStorage, so a
+    // hard OR soft delete inside withTransaction would otherwise commit immediately (#1228 mech 1).
     if (options && options.hardDelete) {
-      return this.collection.deleteOne(castFilter);
+      return this.collection.deleteOne(castFilter, withAlsSession(this, options));
     }
     // Perform a soft delete by updating the `deletedAt` field.
     // Use raw MongoDB driver to bypass Mongoose 8's stricter path inference,
@@ -392,7 +423,7 @@ export const softDeletePlugin = (
     const softDeleteFilter = { ...castFilter, deletedAt: null };
     console.debug(`Soft deleting one document with filter: ${JSON.stringify(softDeleteFilter)}`);
     return this.collection
-      .updateOne(softDeleteFilter, { $set: { deletedAt: new Date() } }, options)
+      .updateOne(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
       .then((result: any) => ({
         ...result,
         deletedCount: result.modifiedCount,
@@ -402,14 +433,14 @@ export const softDeletePlugin = (
   schema.statics.deleteMany = function (filter, options) {
     const castFilter = castIdFilter(filter as Record<string, unknown>);
     if (options && options.hardDelete) {
-      return this.collection.deleteMany(castFilter);
+      return this.collection.deleteMany(castFilter, withAlsSession(this, options));
     }
     // Perform a soft delete by updating the `deletedAt` field.
     // Use raw MongoDB driver to bypass Mongoose 8's path inference (see deleteOne above).
     const softDeleteFilter = { ...castFilter, deletedAt: null };
     console.debug(`Soft deleting many documents with filter: ${JSON.stringify(softDeleteFilter)}`);
     return this.collection
-      .updateMany(softDeleteFilter, { $set: { deletedAt: new Date() } }, options)
+      .updateMany(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
       .then((result: any) => ({
         ...result,
         deletedCount: result.modifiedCount,
@@ -493,6 +524,12 @@ export async function safeDropIndex(collection: mongoose.Collection, indexName: 
   } catch (error) {
     if (error instanceof mongoose.mongo.MongoError && error.code === 27) {
       console.log(`⚠ Index not found (skipping): ${indexName}`);
+    } else if (error instanceof mongoose.mongo.MongoError && error.code === 26) {
+      // NamespaceNotFound: the collection itself does not exist yet, so there is no index
+      // to drop - as "safe" a no-op as a missing index. Surfaced as a test-order flake:
+      // a migration test calling this in beforeEach fails only when no earlier test in the
+      // shard happened to create the collection.
+      console.log(`⚠ Collection not found (skipping): ${indexName}`);
     } else if (error instanceof Error && error.message?.includes('index not found')) {
       console.log(`⚠ Index not found (skipping): ${indexName}`);
     } else {

@@ -22,14 +22,22 @@ import type { ToolContext } from '../base/types';
  */
 export async function persistGeneratedFileAsFabFile(
   context: ToolContext,
-  file: { fileName: string; mimeType: string; content: Buffer }
+  file: {
+    fileName: string;
+    mimeType: string;
+    content: Buffer;
+    /** KnowledgeType to store under; defaults to FILE. Audio-generating tools pass AUDIO. */
+    type?: KnowledgeType;
+    /** FabFile tags; defaults to a single `generated` tag. */
+    tags?: { name: string; strength: number }[];
+  }
 ): Promise<void> {
   const { sessionId, userId, db, storage, logger } = context;
 
   // No session means nothing to attach the file to (e.g. some non-chat tool harnesses).
   if (!sessionId) return;
-  if (!db.fabfiles || !db.users || !db.adminSettings) {
-    logger.warn('[persistGeneratedFileAsFabFile] missing db adapters — skipping FabFile persist');
+  if (!db.fabfiles || !db.users || !db.adminSettings || !db.dataLakes) {
+    logger.warn('[persistGeneratedFileAsFabFile] missing db adapters - skipping FabFile persist');
     return;
   }
 
@@ -40,18 +48,19 @@ export async function persistGeneratedFileAsFabFile(
         fileName: file.fileName,
         mimeType: file.mimeType,
         fileSize: file.content.length,
-        type: KnowledgeType.FILE,
+        type: file.type ?? KnowledgeType.FILE,
         content: file.content,
         contentType: file.mimeType,
         sessionId,
         prefix: 'generated',
-        tags: [{ name: 'generated', strength: 1 }],
+        tags: file.tags ?? [{ name: 'generated', strength: 1 }],
       },
       {
         db: {
           fabFiles: db.fabfiles,
           adminSettings: db.adminSettings,
           users: db.users,
+          dataLakes: db.dataLakes,
         },
         storage: {
           upload: (path, content, options) => storage.upload(content, path, options),

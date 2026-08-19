@@ -2,13 +2,20 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TiktokenTokenizer, createTokenizer } from './tokenCounting';
 import type { ILogger } from '@bike4mind/observability';
 
-const mockEncode = vi.fn();
+const mockEncodeOrdinary = vi.fn();
 const mockFree = vi.fn();
 const mockEncodingForModel = vi.fn();
 const mockGetEncoding = vi.fn();
 
+// Reaching `encode` at all is the bug: it rejects untrusted text carrying a special-token literal.
+// Failing here names the regression, instead of leaving it to surface as a zeroed billing estimate.
+const mockEncode = vi.fn(() => {
+  throw new Error('The text contains a special token that is not allowed: <|endoftext|>');
+});
+
 const mockEncoder = {
   encode: mockEncode,
+  encode_ordinary: mockEncodeOrdinary,
   free: mockFree,
 };
 
@@ -33,7 +40,7 @@ describe('TiktokenTokenizer', () => {
 
     mockEncodingForModel.mockReturnValue(mockEncoder);
     mockGetEncoding.mockReturnValue(mockEncoder);
-    mockEncode.mockReturnValue(new Uint32Array([1, 2, 3])); // Mock 3 tokens
+    mockEncodeOrdinary.mockReturnValue(new Uint32Array([1, 2, 3])); // Mock 3 tokens
 
     tokenizer = new TiktokenTokenizer({ logger: mockLogger });
   });
@@ -48,20 +55,20 @@ describe('TiktokenTokenizer', () => {
 
       expect(result).toBe(3);
       expect(mockGetEncoding).toHaveBeenCalledWith('cl100k_base');
-      expect(mockEncode).toHaveBeenCalledWith('Hello world');
+      expect(mockEncodeOrdinary).toHaveBeenCalledWith('Hello world');
     });
 
     it('should count tokens for multiple text strings', async () => {
-      mockEncode
+      mockEncodeOrdinary
         .mockReturnValueOnce(new Uint32Array([1, 2])) // First text: 2 tokens
         .mockReturnValueOnce(new Uint32Array([3, 4, 5])); // Second text: 3 tokens
 
       const result = await tokenizer.countTokens(['Hello', 'world']);
 
       expect(result).toBe(5); // 2 + 3 = 5 tokens
-      expect(mockEncode).toHaveBeenCalledTimes(2);
-      expect(mockEncode).toHaveBeenNthCalledWith(1, 'Hello');
-      expect(mockEncode).toHaveBeenNthCalledWith(2, 'world');
+      expect(mockEncodeOrdinary).toHaveBeenCalledTimes(2);
+      expect(mockEncodeOrdinary).toHaveBeenNthCalledWith(1, 'Hello');
+      expect(mockEncodeOrdinary).toHaveBeenNthCalledWith(2, 'world');
     });
 
     it('should use model-specific encoder when model ID is provided', async () => {
@@ -94,7 +101,7 @@ describe('TiktokenTokenizer', () => {
       // Second call with same model should use cached encoder
       await tokenizer.countTokens('test2', 'gpt-4');
       expect(mockEncodingForModel).toHaveBeenCalledTimes(1); // Still only called once
-      expect(mockEncode).toHaveBeenCalledTimes(2); // But encode called twice
+      expect(mockEncodeOrdinary).toHaveBeenCalledTimes(2); // But the text is encoded twice
     });
 
     it('should not cache when caching is disabled', async () => {
@@ -123,19 +130,19 @@ describe('TiktokenTokenizer', () => {
     });
 
     it('should handle empty strings', async () => {
-      mockEncode.mockReturnValue(new Uint32Array([]));
+      mockEncodeOrdinary.mockReturnValue(new Uint32Array([]));
 
       const result = await tokenizer.countTokens('');
 
       expect(result).toBe(0);
-      expect(mockEncode).toHaveBeenCalledWith('');
+      expect(mockEncodeOrdinary).toHaveBeenCalledWith('');
     });
 
     it('should handle empty arrays', async () => {
       const result = await tokenizer.countTokens([]);
 
       expect(result).toBe(0);
-      expect(mockEncode).not.toHaveBeenCalled();
+      expect(mockEncodeOrdinary).not.toHaveBeenCalled();
     });
 
     it('should throw error when tokenizer is shutting down', async () => {
@@ -143,16 +150,24 @@ describe('TiktokenTokenizer', () => {
 
       await expect(tokenizer.countTokens('test')).rejects.toThrow('TiktokenTokenizer is shutting down');
     });
+
+    it('should never use the special-token-rejecting encode', async () => {
+      await tokenizer.countTokens('what does <|endoftext|> mean');
+      await tokenizer.countTokens(['<|endofprompt|>', '<|fim_prefix|>']);
+      await tokenizer.encodeTokens('<|endoftext|>');
+
+      expect(mockEncode).not.toHaveBeenCalled();
+    });
   });
 
   describe('encodeTokens', () => {
     it('should encode text to token array', async () => {
-      mockEncode.mockReturnValue(new Uint32Array([1, 2, 3]));
+      mockEncodeOrdinary.mockReturnValue(new Uint32Array([1, 2, 3]));
 
       const result = await tokenizer.encodeTokens('Hello world');
 
       expect(result).toEqual([1, 2, 3]);
-      expect(mockEncode).toHaveBeenCalledWith('Hello world');
+      expect(mockEncodeOrdinary).toHaveBeenCalledWith('Hello world');
     });
 
     it('should use model-specific encoder for encoding', async () => {

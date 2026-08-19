@@ -51,6 +51,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
         'speech_to_text_usage',
         'text_to_speech_usage',
         'sound_effects_usage',
+        'music_generation_usage',
         'transfer_credit',
         'received_credit',
       ],

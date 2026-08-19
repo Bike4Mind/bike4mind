@@ -127,12 +127,28 @@ export interface IQuestGraphRepository extends IBaseRepository<IQuestGraphDocume
   softDelete(id: string): Promise<void>;
 }
 
+/**
+ * Statuses a node may be dispatched from. Excludes `in_progress` and
+ * `completed`: a node with a live or accepted run must not be re-dispatched.
+ * Shared by the claim below and by any caller that wants to show a Run
+ * affordance, so the UI and the write agree on one rule.
+ */
+export const RUNNABLE_NODE_STATUS_VALUES = ['pending', 'ready', 'blocked', 'needs_review', 'failed'] as const;
+export type RunnableNodeStatus = (typeof RUNNABLE_NODE_STATUS_VALUES)[number];
+
 export interface IQuestNodeRepository extends IBaseRepository<IQuestNodeDocument> {
   addNode(input: QuestNodeCreateInput): Promise<IQuestNodeDocument>;
   addDependency(nodeId: string, dependsOnId: string): Promise<IQuestNodeDocument | null>;
   getNodes(graphId: string): Promise<IQuestNodeDocument[]>;
   getNode(id: string): Promise<IQuestNodeDocument | null>;
   updateStatus(id: string, status: NodeStatus, extra?: QuestNodeStatusExtra): Promise<IQuestNodeDocument | null>;
+  /**
+   * Atomically move a runnable node to `in_progress`. Returns null when the
+   * node was already claimed, so a double-dispatch (double-clicked Run, or two
+   * scheduler ticks racing on the same ready node) costs nothing instead of
+   * billing a second agent execution.
+   */
+  claimForRun(id: string): Promise<IQuestNodeDocument | null>;
   linkArtifacts(id: string, artifactIds: string[]): Promise<IQuestNodeDocument | null>;
   setExecution(id: string, ref: NodeExecutionRef): Promise<IQuestNodeDocument | null>;
   computeReadyNodes(graphId: string): Promise<IQuestNodeDocument[]>;

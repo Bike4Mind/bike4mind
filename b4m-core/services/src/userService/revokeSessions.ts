@@ -1,24 +1,30 @@
 import { Logger } from '@bike4mind/observability';
-import { IUserRepository } from '@bike4mind/common';
+import { IAuthSessionRepository, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
 interface RevokeSessionsAdapters {
   db: {
     users: Pick<IUserRepository, 'incrementTokenVersion'>;
+    authSessions: Pick<IAuthSessionRepository, 'revokeAllByUserId'>;
   };
   logger?: Logger;
 }
 
 /**
- * Revoke ALL of a user's sessions by bumping the server-side tokenVersion kill switch.
- * Every access/refresh token the user currently holds (any device) carries the old version
- * and is rejected on its next request. There is no per-device revocation: tokens carry no
- * session id, so this is all-or-nothing per user by design. Returns the new tokenVersion.
+ * Revoke ALL of a user's sessions (all devices): bump the tokenVersion kill switch AND revoke
+ * every AuthSession row.
+ *
+ * Both are required. The tokenVersion bump invalidates outstanding access tokens on their next
+ * request; revoking the sessions invalidates the opaque refresh tokens. Without the session
+ * revoke, a live refresh token could rotate into a fresh access token stamped with the NEW
+ * tokenVersion and defeat the revoke entirely. This stays all-or-nothing per user; per-device
+ * logout is layered on top later (epic #1187). Returns the new tokenVersion.
  */
 export const revokeUserSessions = async (userId: string, { db, logger }: RevokeSessionsAdapters): Promise<number> => {
   const newVersion = await db.users.incrementTokenVersion(userId);
-  logger?.log('Revoked all sessions for user', userId, 'new tokenVersion:', newVersion);
+  const revokedSessions = await db.authSessions.revokeAllByUserId(userId);
+  logger?.log('Revoked all sessions for user', userId, 'tokenVersion:', newVersion, 'sessions:', revokedSessions);
   return newVersion;
 };
 
@@ -28,6 +34,7 @@ export type AdminRevokeSessionsParameters = z.infer<typeof adminRevokeSessionsSc
 interface AdminRevokeSessionsAdapters {
   db: {
     users: Pick<IUserRepository, 'findById' | 'incrementTokenVersion'>;
+    authSessions: Pick<IAuthSessionRepository, 'revokeAllByUserId'>;
   };
   logger?: Logger;
 }

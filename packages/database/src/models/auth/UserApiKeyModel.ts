@@ -127,8 +127,15 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ productId }).sort({ createdAt: -1 }).exec();
   }
 
+  // Keys BILLED to this org, so the same billingOwnerType conjunct
+  // findByOrganizationIdsAndId applies: without it a legacy or direct-DB
+  // user-billed row carrying an organizationId would be listed to the org's
+  // admins on a surface whose write paths then refuse to resolve it.
   findByOrganizationId(organizationId: string) {
-    return this.model.find({ organizationId }).sort({ createdAt: -1 }).exec();
+    return this.model
+      .find({ organizationId, billingOwnerType: CreditHolderType.Organization })
+      .sort({ createdAt: -1 })
+      .exec();
   }
 
   // Positive org-admin scope for the write paths: the key with this id, but only

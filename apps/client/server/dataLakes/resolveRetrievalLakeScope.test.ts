@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { DataLakeConfig } from '@bike4mind/common';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
@@ -12,19 +12,23 @@ const { mockGetDynamicDataLakeAccess, mockGetRequestEntitlements } = vi.hoisted(
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { getDynamicDataLakeAccess: mockGetDynamicDataLakeAccess },
 }));
-vi.mock('@bike4mind/database', () => ({ dataLakeRepository: { __marker: 'dataLakeRepository' } }));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: { __marker: 'dataLakeRepository' },
+  organizationRepository: { __marker: 'organizationRepository' },
+}));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
 
 import { resolveRetrievalLakeScope, withStaticRegistryBypass } from './resolveRetrievalLakeScope';
-import { dataLakeRepository } from '@bike4mind/database';
+import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
-type Scope = { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] };
+type Scope = Parameters<typeof withStaticRegistryBypass>[0];
 
 const scopeOf = (over: Partial<Scope> = {}): Scope => ({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
+  lakes: [],
   ...over,
 });
 
@@ -105,6 +109,33 @@ describe('withStaticRegistryBypass', () => {
     expect(out.dataLakeTagPrefixes).toEqual(['dyn-open:', 'opti:', 'house:']);
   });
 
+  it('widens the per-lake entries alongside the tags, so a privileged caller can count what it searches', () => {
+    const out = withStaticRegistryBypass(scopeOf(), REGISTRY);
+
+    expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:opti-knowledge', 'datalake:house-kb']);
+    // Registry-sourced entries carry no membership scope - they have no creator to anchor one to.
+    expect(out.lakes.every(l => l.source === 'registry' && !l.membership)).toBe(true);
+  });
+
+  it('keeps a lake the scope already resolved, rather than replacing it with a registry entry', () => {
+    // The scope's own entry may carry a membership scope; a registry copy of the same tag would
+    // count the lake through the weaker prefix arm instead.
+    const resolved = {
+      id: 'opti-knowledge',
+      name: 'Opti',
+      slug: 'opti-knowledge',
+      datalakeTag: 'datalake:opti-knowledge',
+      fileTagPrefix: 'opti:',
+      membership: { datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:', creatorUserId: 'owner1' },
+      source: 'dynamic' as const,
+    };
+
+    const out = withStaticRegistryBypass(scopeOf({ lakes: [resolved] }), REGISTRY);
+
+    expect(out.lakes.filter(l => l.datalakeTag === 'datalake:opti-knowledge')).toEqual([resolved]);
+    expect(out.lakes).toHaveLength(2);
+  });
+
   it('is a no-op on the OPEN buckets for an empty registry', () => {
     const scope = scopeOf({ dataLakeTags: ['datalake:dyn'], scopedTagPrefixes: ['dyn:'] });
 
@@ -119,6 +150,12 @@ describe('resolveRetrievalLakeScope', () => {
     mockGetDynamicDataLakeAccess.mockResolvedValue(scopeOf());
   });
 
+  afterEach(() => {
+    // A couple of tests below assign a spy directly onto the mocked module singleton (it has no
+    // findMembershipOrgIds by default); strip it so a later test never inherits a leftover spy.
+    delete (organizationRepository as unknown as { findMembershipOrgIds?: unknown }).findMembershipOrgIds;
+  });
+
   it('calls the shared resolver with exactly the context the chat tool passes', async () => {
     mockGetRequestEntitlements.mockResolvedValue(['optihashi:pro']);
 
@@ -126,10 +163,15 @@ describe('resolveRetrievalLakeScope', () => {
 
     // Deep equality, not objectContaining: an extra or missing field here IS the divergence
     // this ticket exists to close. This mirrors the ToolContext fields the chat tool hands the
-    // same resolver; it is a literal, so a change on the chat side would not fail here.
+    // same resolver; it is a literal, so a change on the chat side would not fail here. Threads
+    // organizationRepository so the resolver can derive membership itself - user.organizationId
+    // (the selected-org pointer) is NOT forwarded (#1674).
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository },
-      user: { id: 'u1', tags: ['Opti'], organizationId: 'org1' },
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+      },
+      user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: ['optihashi:pro'],
     });
   });
@@ -174,13 +216,62 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess.mock.calls[0][0].entitlementKeys).toEqual(['acme:pro']);
   });
 
-  it('forwards absent tags and org explicitly rather than falsy-coercing them', async () => {
+  it('forwards absent tags explicitly rather than falsy-coercing them', async () => {
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: null }));
 
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository },
-      user: { id: 'u1', tags: [], organizationId: undefined },
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+      },
+      user: { id: 'u1', tags: [] },
       entitlementKeys: [],
     });
+  });
+
+  it('never forwards user.organizationId, regardless of its shape (#1343 concern now lives in the shared resolver)', async () => {
+    // A .populate('organizationId') upstream would hand req.user a full Organization doc; this
+    // used to need normalizing at this seam (#1343). It no longer matters what shape arrives here -
+    // organizationId is not part of what this seam forwards at all (#1674): membership is resolved
+    // inside getDynamicDataLakeAccess from user.id via the threaded organizationRepository.
+    const populatedOrg = { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } as unknown as string;
+    await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: populatedOrg }));
+
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+      },
+      user: { id: 'u1', tags: ['Opti'] },
+      entitlementKeys: [],
+    });
+  });
+
+  it('serves the resolver membership lookup from the request memo for the requesting user', async () => {
+    const req = asReq({ id: 'u1', tags: ['Opti'] }) as EntitlementRequest & { membershipOrgIds?: string[] };
+    // The repository mock is the __marker stub; give it a spy so a fall-through call is visible.
+    organizationRepository.findMembershipOrgIds = vi.fn().mockResolvedValue([]);
+
+    await resolveRetrievalLakeScope(req);
+    const { db } = mockGetDynamicDataLakeAccess.mock.calls.at(-1)![0];
+
+    req.membershipOrgIds = ['memoized-org'];
+    await expect(db.organizations.findMembershipOrgIds(req.user!.id)).resolves.toEqual(['memoized-org']);
+    expect(organizationRepository.findMembershipOrgIds).not.toHaveBeenCalled();
+  });
+
+  it('does not serve another user id from the request memo (cross-user leak guard)', async () => {
+    const req = asReq({ id: 'u1', tags: ['Opti'] }) as EntitlementRequest & { membershipOrgIds?: string[] };
+    organizationRepository.findMembershipOrgIds = vi.fn().mockResolvedValue(['other-org']);
+
+    await resolveRetrievalLakeScope(req);
+    const { db } = mockGetDynamicDataLakeAccess.mock.calls.at(-1)![0];
+
+    // The memo was seeded for 'u1'; a lookup for a different user must still hit the repository
+    // rather than fall through to the memoized value - collapsing this to "always use the memo"
+    // would leak one user's org membership onto another's request.
+    req.membershipOrgIds = ['memoized-org'];
+    await expect(db.organizations.findMembershipOrgIds('other-user')).resolves.toEqual(['other-org']);
+    expect(organizationRepository.findMembershipOrgIds).toHaveBeenCalledWith('other-user');
   });
 });

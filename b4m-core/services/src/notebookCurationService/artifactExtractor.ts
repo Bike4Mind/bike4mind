@@ -2,8 +2,16 @@ import {
   ExtractedArtifact,
   CurationArtifactType as ArtifactType,
   CurationOptions,
+  IChatHistoryItem,
   mapMimeTypeToArtifactType as mapMimeTypeToSharedArtifactType,
 } from '@bike4mind/common';
+
+/**
+ * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form items
+ * carry but the interface omits (used only as an id fallback). Also the input type of
+ * computeCurationContentHash in ./index - see there for which fields the hash covers.
+ */
+export type CurationMessage = IChatHistoryItem & { _id?: { toString(): string } };
 
 /**
  * Extracts code, diagrams, and other artifacts from conversation messages.
@@ -20,7 +28,7 @@ const CODE_BLOCK_REGEX = /```(\w+)?\s*([\s\S]*?)```/g;
 /**
  * Extract artifacts from a single message
  */
-export function extractArtifactsFromMessage(message: any, options: CurationOptions): ExtractedArtifact[] {
+export function extractArtifactsFromMessage(message: CurationMessage, options: CurationOptions): ExtractedArtifact[] {
   const artifacts: ExtractedArtifact[] = [];
   const messageId = message.id || message._id?.toString() || 'unknown';
   const timestamp = message.timestamp ? new Date(message.timestamp) : new Date();
@@ -84,7 +92,7 @@ export function extractArtifactsFromMessage(message: any, options: CurationOptio
 
   // 5. Extract images
   if (options.includeImages && message.images && message.images.length > 0) {
-    message.images.forEach((imagePath: string, index: number) => {
+    message.images.forEach((imagePath, index) => {
       artifacts.push({
         type: ArtifactType.IMAGE,
         content: imagePath,

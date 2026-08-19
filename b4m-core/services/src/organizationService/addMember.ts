@@ -41,7 +41,10 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
 
   if (!organization) throw new NotFoundError('Organization not found');
 
-  if (!force && organization.users.length >= organization.seats) {
+  // Owner-inclusive team size: the owner is not a `users[]` row (see organizationService/create.ts)
+  // but still occupies a seat, so full means owner + members >= seats (#1423). This matches the
+  // canonical accounting in sharingService/accept.ts and validateSeatChange.
+  if (!force && organization.users.length + 1 >= organization.seats) {
     throw new UnprocessableEntityError('Organization is at full capacity');
   }
 
@@ -55,12 +58,28 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
     organization.users.push({ userId: userToAdd.id, permissions: [Permission.read] });
   }
 
-  await db.organizations.update(organization);
+  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
+  // userDetails array from this stale snapshot and could revert a concurrent credit increment
+  // (updateUserDetails' atomic positional $inc), defeating the very cap this seeding enables.
+  await db.organizations.update({ id: organization.id, users: organization.users });
 
-  // Establish org membership on the user document. Org-scoped features (e.g.
-  // data-lake AccessContext) read user.organizationId; without this, members
-  // added via this path stay organizationId: null and get no org-scoped access -
-  // the same defect fixed for invite acceptance in sharingService/accept.ts.
+  // Seed the per-member credit side-table so `users[]` and `userDetails[]` stay in sync at the grant
+  // point. Without a row, `updateUserDetails`'s positional $inc no-ops and the member escapes
+  // `maxCreditsPerMember` entirely (reads as 0 spend forever). ensureUserDetails is an idempotent
+  // guarded $push: a re-add never duplicates, and an existing member who predates this seeding is
+  // backfilled - all as a targeted atomic op, never a whole-doc overwrite.
+  await db.organizations.ensureUserDetails(organizationId, {
+    id: userToAdd.id,
+    email: userToAdd.email ?? userToAdd.username,
+    name: userToAdd.name,
+  });
+
+  // Establish the selected-org display preference on the user document. This is
+  // the field the UI reads for the active-org switcher; lake authorization reads
+  // the membership set via findMembershipOrgIds (#1674), not this pointer. Without
+  // this, members added via this path stay organizationId: null and have no org
+  // selected in the UI - the same defect fixed for invite acceptance in
+  // sharingService/accept.ts.
   userToAdd.organizationId = organizationId;
   await db.users.update(userToAdd);
 

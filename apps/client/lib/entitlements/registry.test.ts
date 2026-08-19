@@ -6,6 +6,7 @@ import {
   entitlementsForPriceIds,
   entitlementsForTags,
   grantTagForEntitlement,
+  isDatalakeEntitlementKey,
   normalizeTag,
   resolveEntitlements,
   signupCreditsForEmail,
@@ -131,18 +132,6 @@ describe('entitlementsForTags', () => {
 
   it('ignores empty/whitespace tags', () => {
     expect(entitlementsForTags(['', '   '])).toEqual(new Set());
-  });
-
-  it('grants optihashi:hardware ONLY via opti-hardware, never via a cheaper tier', () => {
-    // Pins the exact grant path an operator uses to authorize a partner account for
-    // external-provider hardware spend: tagging `opti-hardware` must confer `optihashi:hardware`,
-    // the key the overlay's hardware submit gate reads. A rename/removal here silently locks
-    // everyone (incl. non-admins) out of hardware compute, so lock it by name.
-    expect(entitlementsForTags(['opti-hardware']).has('optihashi:hardware')).toBe(true);
-    // The invariant that actually matters: cheaper tiers must NOT confer real-money hardware.
-    // Fails loudly if someone later widens a cheaper row into hardware.
-    expect(entitlementsForTags(['opti-compute']).has('optihashi:hardware')).toBe(false);
-    expect(entitlementsForTags(['opti']).has('optihashi:hardware')).toBe(false);
   });
 });
 
@@ -352,6 +341,47 @@ describe('KNOWN_ENTITLEMENT_KEYS / unknownEntitlementKeys', () => {
   it('treats a known key as known regardless of case/whitespace', () => {
     const known = KNOWN_ENTITLEMENT_KEYS[0];
     expect(unknownEntitlementKeys([` ${known.toUpperCase()} `])).toEqual([]);
+  });
+
+  it('treats a well-formed datalake:<slug> key as known without listing it', () => {
+    expect(KNOWN_ENTITLEMENT_KEYS).not.toContain('datalake:acme-legal');
+    expect(unknownEntitlementKeys(['datalake:acme-legal'])).toEqual([]);
+    expect(unknownEntitlementKeys([' DataLake:Acme-Legal '])).toEqual([]);
+  });
+
+  it('still flags a malformed datalake key as unknown', () => {
+    expect(unknownEntitlementKeys(['datalake:'])).toEqual(['datalake:']);
+    expect(unknownEntitlementKeys(['datalake:-leading-hyphen'])).toEqual(['datalake:-leading-hyphen']);
+    expect(unknownEntitlementKeys(['datalake:Bad_Char'])).toEqual(['datalake:bad_char']);
+    expect(unknownEntitlementKeys(['datalakes:acme'])).toEqual(['datalakes:acme']);
+  });
+});
+
+describe('isDatalakeEntitlementKey', () => {
+  it('recognizes datalake:<slug> for a valid lake-slug shape', () => {
+    expect(isDatalakeEntitlementKey('datalake:acme-legal')).toBe(true);
+    expect(isDatalakeEntitlementKey('datalake:ab')).toBe(true);
+  });
+
+  it('rejects an empty slug, invalid slug characters, or a lookalike prefix', () => {
+    expect(isDatalakeEntitlementKey('datalake:')).toBe(false);
+    expect(isDatalakeEntitlementKey('datalake:-abc')).toBe(false);
+    expect(isDatalakeEntitlementKey('datalake:abc-')).toBe(false);
+    expect(isDatalakeEntitlementKey('datalakes:acme')).toBe(false);
+    expect(isDatalakeEntitlementKey('optihashi:pro')).toBe(false);
+  });
+
+  it('normalizes internally, so case/whitespace in the input still resolves correctly', () => {
+    expect(isDatalakeEntitlementKey('  DataLake:Acme-Legal  ')).toBe(true);
+    expect(isDatalakeEntitlementKey('datalake:Bad_Char')).toBe(false); // uppercase segment normalizes to `_`, still invalid
+  });
+
+  it('rejects a slug longer than a real lake slug can be (max 60, matches CreateDataLakeRequestInput)', () => {
+    const maxSlug = 'a'.repeat(60);
+    const tooLong = 'a'.repeat(61);
+    expect(isDatalakeEntitlementKey(`datalake:${maxSlug}`)).toBe(true);
+    expect(isDatalakeEntitlementKey(`datalake:${tooLong}`)).toBe(false);
+    expect(unknownEntitlementKeys([`datalake:${tooLong}`])).toEqual([`datalake:${tooLong}`]);
   });
 });
 

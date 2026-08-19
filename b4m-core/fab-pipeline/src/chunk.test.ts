@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import JSZip from 'jszip';
-import { SmartChunker, Chunk } from './chunk';
+import {
+  SmartChunker,
+  Chunk,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  effectiveChunkTokenLimit,
+  embeddingModelContextWindow,
+} from './chunk';
 import { Logger } from '@bike4mind/observability';
 
 // Minimal mock storage - chunkText doesn't use storage
@@ -21,6 +28,52 @@ function createChunker(chunkTokenLimit = CHUNK_TOKEN_LIMIT): SmartChunker {
   return new SmartChunker(MODEL, mockStorage, logger, buffer);
 }
 
+// text-embedding-3-small: 8192-token window. Default 20% buffer => floor(8192*0.2)=1638, so the
+// hard limit a passage target is capped to is 8192 - 1638 = 6554.
+const MODEL_WINDOW = 8192;
+const DEFAULT_BUFFERED_HARD_LIMIT = MODEL_WINDOW - Math.floor(MODEL_WINDOW * 0.2); // 6554
+
+describe('embeddingModelContextWindow', () => {
+  it('returns the model window for a supported model', () => {
+    expect(embeddingModelContextWindow('text-embedding-3-small')).toBe(MODEL_WINDOW);
+  });
+
+  it('throws on an unsupported model (matching the chunker)', () => {
+    expect(() => embeddingModelContextWindow('not-a-real-model')).toThrow(/Unsupported embedding model/);
+  });
+});
+
+describe('effectiveChunkTokenLimit', () => {
+  const model = 'text-embedding-3-small';
+
+  it('passes a passage target through unchanged when it fits under the buffered window', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 512 })).toBe(512);
+  });
+
+  it('falls back to the default when no target is supplied', () => {
+    expect(effectiveChunkTokenLimit({ model })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('floors a below-minimum target to MIN_PASSAGE_TOKEN_TARGET', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 1 })).toBe(MIN_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('caps a target larger than the model can embed to the buffered window (#1662 clamp)', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 100_000 })).toBe(DEFAULT_BUFFERED_HARD_LIMIT);
+  });
+
+  it('two over-window targets clamp to the SAME effective limit (so they never false-conflict)', () => {
+    const a = effectiveChunkTokenLimit({ model, passageTokenTarget: 100_000 });
+    const b = effectiveChunkTokenLimit({ model, passageTokenTarget: 50_000 });
+    expect(a).toBe(b);
+  });
+
+  it('treats a non-finite/negative target as absent (default)', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: -5 })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: Number.NaN })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
+
 describe('SmartChunker', () => {
   let chunker: SmartChunker;
 
@@ -30,6 +83,38 @@ describe('SmartChunker', () => {
 
   afterEach(() => {
     chunker.freeEncoder();
+  });
+
+  // Fab-file content is untrusted, and a tiktoken special-token literal inside it used to make the
+  // encoder reject - failing the ingest of the whole file over one string in it.
+  describe('chunkText - special-token literals in file content', () => {
+    const LITERAL = '<|endoftext|>';
+
+    it('counts a literal as characters rather than rejecting it', async () => {
+      await expect((chunker as any).countTokens(`what does ${LITERAL} mean`)).resolves.toBeGreaterThan(1);
+    });
+
+    it('round-trips encode -> decode through a literal', async () => {
+      // splitOversizedSegment slices encoded ids and decodes them back, so the pair has to survive
+      // the literal, not just the count.
+      const text = `keep ${LITERAL} intact`;
+      const ids = await (chunker as any).encodeTokens(text);
+
+      expect(ids.length).toBeGreaterThan(1);
+      await expect((chunker as any).decodeTokens(ids)).resolves.toBe(text);
+    });
+
+    it('chunks a document containing literals', async () => {
+      const text = `Section one discusses ${LITERAL} and how the pipeline handles it. `.repeat(40);
+      const chunks: Chunk[] = await (chunker as any).chunkText(text);
+
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks.map(c => c.text).join('')).toContain(LITERAL);
+      for (const chunk of chunks) {
+        const actualTokens = await (chunker as any).countTokens(chunk.text);
+        expect(actualTokens).toBeLessThanOrEqual(CHUNK_TOKEN_LIMIT);
+      }
+    });
   });
 
   describe('chunkText — oversized word fallback', () => {
@@ -199,6 +284,72 @@ describe('SmartChunker', () => {
     });
   });
 
+  describe('passage granularity (#1420)', () => {
+    it('pins the default passage target and floor (a silent bump back toward whole-document chunks must fail CI)', () => {
+      // Every other test in this block derives its bound FROM the constant, so mutating the
+      // constant to e.g. 6000 would leave them all green. This assertion is the regression
+      // tripwire for #1420 itself.
+      expect(DEFAULT_PASSAGE_TOKEN_TARGET).toBe(512);
+      expect(MIN_PASSAGE_TOKEN_TARGET).toBe(64);
+    });
+
+    // ~22KB of heterogeneous prose - the regression shape from the issue: a whole markdown
+    // profile that previously became ONE chunk covering 100% of the document.
+    const longDocument = Array.from(
+      { length: 400 },
+      (_, i) => `Section ${i} covers a distinct topic with its own facts and figures about subject ${i}.`
+    ).join(' ');
+
+    it('a default chunker splits a long document into passage-sized chunks, not one whole-document chunk', async () => {
+      const defaultChunker = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }));
+      try {
+        const chunks = await defaultChunker.chunkFile(Buffer.from(longDocument), 'text/markdown');
+
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks) {
+          expect(chunk.tokenCount).toBeLessThanOrEqual(DEFAULT_PASSAGE_TOKEN_TARGET);
+        }
+      } finally {
+        defaultChunker.freeEncoder();
+      }
+    });
+
+    it('honors an explicit passage target via the options object', async () => {
+      const custom = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), {
+        passageTokenTarget: 128,
+      });
+      try {
+        const chunks = await (custom as any).chunkText(longDocument);
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks) {
+          expect(chunk.tokenCount).toBeLessThanOrEqual(128);
+        }
+      } finally {
+        custom.freeEncoder();
+      }
+    });
+
+    it('clamps a too-small passage target up to the minimum', () => {
+      const tiny = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), {
+        passageTokenTarget: 10,
+      });
+      expect((tiny as any).chunkTokenLimit).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    });
+
+    it('caps an oversized passage target at the buffered model limit', () => {
+      const huge = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), {
+        passageTokenTarget: 999999,
+      });
+      // 8192 - max(floor(8192 * 0.2), 32) = 8192 - 1638
+      expect((huge as any).chunkTokenLimit).toBe(8192 - 1638);
+    });
+
+    it('keeps legacy numeric buffer argument behavior (still wins when tighter than the passage target)', () => {
+      // createChunker passes buffer = 8192 - 300 as a bare number: limit 300 < default 512.
+      expect((chunker as any).chunkTokenLimit).toBe(CHUNK_TOKEN_LIMIT);
+    });
+  });
+
   describe('chunkFile with PPTX', () => {
     const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
@@ -220,5 +371,40 @@ describe('SmartChunker', () => {
       expect(allText).toContain('Attributed run text');
       expect(allText).toContain('Bare run text');
     });
+  });
+});
+
+describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
+  const buildChunker = (passageTokenTarget: number): SmartChunker =>
+    new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), { passageTokenTarget });
+
+  it('is identical across chunk sizes even when the chunk OUTPUT is not - the fingerprint is policy-independent', async () => {
+    // A long whitespace-free token routes through splitOversizedSegment (mid-token splits): it is
+    // fragmented into many chunks at a small target and stays whole at a large one, so the chunk
+    // TEXT differs by policy. The extracted text - what the admission hash fingerprints - must not.
+    const text = 'x'.repeat(4000);
+    const buf = Buffer.from(text, 'utf8');
+
+    const small = buildChunker(MIN_PASSAGE_TOKEN_TARGET); // 64
+    const chunksSmall = await small.chunkFile(buf, 'text/plain');
+    small.freeEncoder();
+
+    const large = buildChunker(6000);
+    const chunksLarge = await large.chunkFile(buf, 'text/plain');
+    large.freeEncoder();
+
+    // Output genuinely diverges with policy...
+    expect(chunksSmall.length).toBeGreaterThan(chunksLarge.length);
+    expect(chunksSmall.map(c => c.text)).not.toEqual(chunksLarge.map(c => c.text));
+    // ...but the extracted text (and therefore the fingerprint) is stable and equals the source.
+    expect(small.getExtractedText()).toBe(text);
+    expect(small.getExtractedText()).toBe(large.getExtractedText());
+  });
+
+  it('is undefined for a file that yields no extractable text', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
+    chunker.freeEncoder();
+    expect(chunker.getExtractedText()).toBeUndefined();
   });
 });

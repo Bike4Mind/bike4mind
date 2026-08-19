@@ -18,6 +18,7 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 );
 
 const CRON_RUN = {
+  id: 'run-1',
   startedAt: '2026-07-26T12:00:00.000Z',
   finishedAt: '2026-07-26T12:03:00.000Z',
   trigger: 'cron',
@@ -32,8 +33,22 @@ const CRON_RUN = {
   changes: { added: 2, promoted: 1, deprecated: 0, repriced: 0, flagged: 0 },
 };
 
+type Run = typeof CRON_RUN;
+
+/** The run as the polled list carries it: counts, no per-model detail. */
+const listOf = (run: Run) => ({
+  id: run.id,
+  startedAt: run.startedAt,
+  finishedAt: run.finishedAt,
+  trigger: run.trigger,
+  host: run.host,
+  status: run.status,
+  changes: run.changes,
+});
+
 const STATUS = {
   lastRun: CRON_RUN,
+  runs: [listOf(CRON_RUN)],
   lastSuccessfulRunAt: '2026-07-26T06:00:00.000Z',
   enabled: true,
   mode: 'report',
@@ -41,9 +56,68 @@ const STATUS = {
   selfHost: false,
 };
 
-type Run = typeof CRON_RUN;
 const runLike = (over: Partial<Run>): Run => ({ ...CRON_RUN, ...over });
-const statusWith = (lastRun: Run | null, over: Partial<typeof STATUS> = {}) => ({ ...STATUS, lastRun, ...over });
+const statusWith = (lastRun: Run | null, over: Partial<typeof STATUS> = {}) => ({
+  ...STATUS,
+  lastRun,
+  // runs[0] is lastRun by construction server-side; keep the fixture honest.
+  runs: lastRun ? [listOf(lastRun)] : [],
+  ...over,
+});
+
+/** One run in full, as GET ?runId= answers it. */
+const RUN_DETAIL = {
+  id: 'run-1',
+  startedAt: CRON_RUN.startedAt,
+  finishedAt: CRON_RUN.finishedAt,
+  trigger: 'cron',
+  host: 'hosted',
+  status: 'partial',
+  passes: 1,
+  sources: [],
+  joinCoverage: [],
+  changes: {
+    added: [],
+    promoted: [],
+    deprecated: [],
+    repriced: [],
+    flagged: ['gpt-5.6-luna'],
+    operatorConflicts: [],
+    plannedRows: 0,
+    appendedRows: 0,
+    plannedPriceRows: 0,
+    appendedPriceRows: 0,
+  },
+  priceFlags: [
+    {
+      modelId: 'gpt-5.6-luna',
+      kind: 'source-disagreement',
+      proposed: { inputPerMTok: 0.2, outputPerMTok: 1.2 },
+      current: { inputPerMTok: 1, outputPerMTok: 6 },
+      sources: ['models.dev', 'litellm'],
+      detail: 'sources disagree beyond 10%; applied neither',
+    },
+  ],
+  priceRows: [],
+  priceSkips: [],
+  lifecycleTransitions: [],
+  catalogDiff: [],
+  unmatchedIds: [],
+  droppedRecords: [],
+};
+
+/**
+ * Route the two GETs this card can trigger: its own status, and the detail modal's
+ * run report (echoing back whichever run id was asked for).
+ */
+const routeGets = (status: unknown = STATUS) =>
+  mockGet.mockImplementation((url: string) =>
+    Promise.resolve(
+      url.includes('runId=')
+        ? { data: { run: { ...RUN_DETAIL, id: decodeURIComponent(url.split('runId=')[1]) } } }
+        : { data: status }
+    )
+  );
 
 const renderCard = () =>
   render(
@@ -107,6 +181,71 @@ describe('DiscoveryStatusCard', () => {
 
     expect(await screen.findByTestId('discovery-status-error')).toHaveTextContent('turned off');
     expect(screen.queryByTestId('discovery-status-notice')).not.toBeInTheDocument();
+  });
+
+  it('states the retention window, so an operator knows how far back runs go', async () => {
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-retention')).toHaveTextContent('90 days');
+  });
+});
+
+const OLDER_RUNS = [
+  listOf(CRON_RUN),
+  listOf(
+    runLike({
+      id: 'run-0',
+      startedAt: '2026-07-26T06:00:00.000Z',
+      finishedAt: '2026-07-26T06:02:00.000Z',
+      trigger: 'manual',
+      status: 'ok',
+      changes: { added: 0, promoted: 0, deprecated: 0, repriced: 3, flagged: 34 },
+    })
+  ),
+];
+
+describe('DiscoveryStatusCard run history', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    routeGets();
+    mockPost.mockResolvedValue({ data: { dispatched: 'lambda' } });
+  });
+
+  it('opens the last run report from the change-count sentence', async () => {
+    renderCard();
+
+    fireEvent.click(await screen.findByTestId('discovery-status-changes'));
+
+    expect(await screen.findByTestId('discovery-run-modal')).toBeInTheDocument();
+    expect(mockGet).toHaveBeenCalledWith('/api/admin/model-discovery?runId=run-1');
+    // The counts sentence led straight to the model and the reason behind it.
+    expect(screen.getByTestId('discovery-run-flag-detail-gpt-5.6-luna')).toHaveTextContent('applied neither');
+  });
+
+  it('lists the recent runs with their trigger, status and counts, and opens a prior one', async () => {
+    routeGets({ ...STATUS, runs: OLDER_RUNS });
+    renderCard();
+
+    fireEvent.click(await screen.findByTestId('discovery-status-history-toggle'));
+
+    const list = screen.getByTestId('discovery-status-history-list');
+    expect(list).toHaveTextContent('cron');
+    const prior = screen.getByTestId('discovery-status-history-run-run-0');
+    expect(prior).toHaveTextContent('manual');
+    expect(prior).toHaveTextContent('ok');
+    expect(prior).toHaveTextContent('3 repriced, 34 flagged');
+
+    fireEvent.click(prior);
+
+    expect(await screen.findByTestId('discovery-run-modal')).toBeInTheDocument();
+    expect(mockGet).toHaveBeenCalledWith('/api/admin/model-discovery?runId=run-0');
+  });
+
+  it('offers no history toggle when the only run is the one already on the card', async () => {
+    renderCard();
+
+    await screen.findByTestId('discovery-status-changes');
+    expect(screen.queryByTestId('discovery-status-history-toggle')).not.toBeInTheDocument();
   });
 });
 
@@ -274,6 +413,42 @@ describe('DiscoveryStatusCard run now', () => {
 
     expect(screen.getByTestId('discovery-status-error')).toHaveTextContent('Network Error');
     expect(runNowButton()).not.toHaveAttribute('disabled');
+  });
+
+  it('keeps an open run report on the run the operator chose while the card polls underneath it', async () => {
+    const newerManual = runLike({
+      id: 'run-2',
+      startedAt: '2026-07-26T12:10:00.000Z',
+      finishedAt: '2026-07-26T12:11:00.000Z',
+      trigger: 'manual',
+      status: 'ok',
+    });
+    let latest: unknown = STATUS;
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes('runId=')
+          ? { data: { run: { ...RUN_DETAIL, id: decodeURIComponent(url.split('runId=')[1]) } } }
+          : { data: latest }
+      )
+    );
+
+    renderCard();
+    await tick();
+    fireEvent.click(screen.getByTestId('discovery-status-changes'));
+    await tick();
+    expect(screen.getByTestId('discovery-run-modal')).toHaveTextContent('run-1');
+
+    fireEvent.click(runNowButton());
+    await tick();
+    latest = statusWith(newerManual);
+    await tick(POLL_INTERVAL_MS);
+    await tick(POLL_INTERVAL_MS);
+
+    // The card moved on to the newer run; the report being read did not, and the
+    // poll never re-fetched it.
+    expect(screen.getByTestId('discovery-status-notice')).toHaveTextContent('Run finished: ok.');
+    expect(screen.getByTestId('discovery-run-modal')).toHaveTextContent('run-1');
+    expect(mockGet.mock.calls.filter(([url]) => String(url).includes('runId=')).length).toBe(1);
   });
 
   it('leaves no timer behind when the tab closes mid-poll', async () => {

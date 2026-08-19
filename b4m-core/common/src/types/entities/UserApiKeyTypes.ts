@@ -206,9 +206,9 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /**
    * The key with this id iff it is org-billed to one of the given orgs (any
    * status); null for an empty set (fail-closed, no query). Positive org-admin
-   * scope for the configure/rotate/revoke write paths - mirrors how the LIST
-   * route surfaces org keys, so an org admin can act on any key billed to an org
-   * they administer, not just keys they minted.
+   * scope for the configure/rotate/revoke write paths - same billing predicate
+   * findByOrganizationId applies to the LIST route, so an org admin can act on
+   * any key billed to an org they administer, not just keys they minted.
    */
   findByOrganizationIdsAndId: (organizationIds: string[], id: string) => Promise<IUserApiKeyDocument | null>;
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse

@@ -178,6 +178,29 @@ describe('emailIngestionService - processIngestedEmail', () => {
       expect(result.emailId).toBe('existing123');
       expect(mockAdapters.db.ingestedEmails.create).not.toHaveBeenCalled();
     });
+
+    it('should collapse a null fabFileId to undefined when returning stored attachments', async () => {
+      const existingEmail = {
+        id: 'existing123',
+        messageId: '<msg123@example.com>',
+        threadId: 'thread123',
+        attachments: [
+          { filename: 'no-fabfile.pdf', mimeType: 'application/pdf', size: 1000, fabFileId: null },
+          { filename: 'ok.png', mimeType: 'image/png', size: 22, fabFileId: 'fab456' },
+        ],
+        bodyFabFileId: 'fab123',
+      };
+
+      vi.mocked(mockAdapters.db.ingestedEmails.findByMessageId).mockResolvedValue(existingEmail as any);
+      vi.mocked(mockAdapters.db.ingestedEmails.findById).mockResolvedValue(existingEmail as any);
+
+      const result = await processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters);
+
+      expect(result.attachments).toEqual([
+        { filename: 'no-fabfile.pdf', mimeType: 'application/pdf', size: 1000, fabFileId: undefined },
+        { filename: 'ok.png', mimeType: 'image/png', size: 22, fabFileId: 'fab456' },
+      ]);
+    });
   });
 
   describe('Thread ID Generation', () => {

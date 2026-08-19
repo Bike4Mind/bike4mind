@@ -49,7 +49,11 @@ function captureSlugFromHook(sessionId: string): Promise<{ slug: string; channel
       const address = server.address();
       const port = typeof address === 'object' && address ? address.port : 0;
       const child = spawn(process.execPath, [HOOK_PATH], {
-        env: { ...process.env, B4M_API_URL: `http://127.0.0.1:${port}`, B4M_API_KEY: 'test-key' },
+        env: {
+          ...ambientHookEnv(),
+          B4M_API_URL: `http://127.0.0.1:${port}`,
+          B4M_API_KEY: 'test-key',
+        },
         stdio: ['pipe', 'ignore', 'ignore'],
       });
       child.on('error', err => {
@@ -65,6 +69,19 @@ function captureSlugFromHook(sessionId: string): Promise<{ slug: string; channel
       child.stdin.end();
     });
   });
+}
+
+/**
+ * process.env minus every B4M_HEARTH_* key.
+ *
+ * The hook reads its channel, label, and disclosure tier from the environment,
+ * so a developer who actually uses the hook has those set - and inheriting them
+ * made this suite assert against their config instead of the defaults. A real
+ * B4M_HEARTH_CHANNEL, for instance, makes the hook send channelId and leaves
+ * channelName undefined, failing the default-channel test on their machine only.
+ */
+function ambientHookEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('B4M_HEARTH_')));
 }
 
 describe('hearth-hook.mjs parity', () => {

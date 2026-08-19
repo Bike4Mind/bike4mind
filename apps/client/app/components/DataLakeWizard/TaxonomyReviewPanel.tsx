@@ -11,6 +11,7 @@ import {
   Modal,
   ModalDialog,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
@@ -21,8 +22,13 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { memo, useEffect, useState } from 'react';
-import type { IDataLakeBatchDocument, TaxonomyTag } from '@bike4mind/common';
-import { useApplyTaxonomySuggestions, useReanalyzeTaxonomy } from '@client/app/hooks/data/dataLakes';
+import type { IDataLakeBatchSummary, TaxonomyTag } from '@bike4mind/common';
+import {
+  useApplyTaxonomySuggestions,
+  useDismissTaxonomy,
+  useReanalyzeTaxonomy,
+} from '@client/app/hooks/data/dataLakes';
+import { useConfirmation } from '@client/app/hooks/useConfirmation';
 
 // Confidence tier helpers
 
@@ -132,19 +138,29 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
             autoFocus
             sx={{ flex: 1, fontFamily: 'monospace' }}
           />
-          <IconButton
-            size="sm"
-            variant="soft"
-            color="success"
-            disabled={!canSave}
-            data-testid="taxonomy-tag-save"
-            onClick={handleSave}
-          >
-            <CheckIcon sx={{ fontSize: 14 }} />
-          </IconButton>
-          <IconButton size="sm" variant="soft" color="neutral" onClick={handleCancel}>
-            <CloseIcon sx={{ fontSize: 14 }} />
-          </IconButton>
+          {/* A disabled Joy button emits no pointer events, so the tooltip needs the span - but
+              that also means Tooltip's usual aria-label clone lands on the span, not the button
+              (which has no text content), so it needs an explicit one too. */}
+          <Tooltip title="Save" size="sm">
+            <span>
+              <IconButton
+                size="sm"
+                variant="soft"
+                color="success"
+                disabled={!canSave}
+                data-testid="taxonomy-tag-save"
+                aria-label="Save"
+                onClick={handleSave}
+              >
+                <CheckIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Cancel" size="sm">
+            <IconButton size="sm" variant="soft" color="neutral" onClick={handleCancel}>
+              <CloseIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
         </Stack>
       ) : (
         <Typography
@@ -175,24 +191,28 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
       {/* Actions */}
       {!isEditing && (
         <Stack direction="row" gap={0}>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            data-testid="taxonomy-tag-edit"
-            onClick={() => setIsEditing(true)}
-          >
-            <EditIcon sx={{ fontSize: 14 }} />
-          </IconButton>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="danger"
-            data-testid="taxonomy-tag-delete"
-            onClick={() => onDelete(tag.originalName)}
-          >
-            <DeleteOutlineIcon sx={{ fontSize: 14 }} />
-          </IconButton>
+          <Tooltip title="Edit" size="sm">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              data-testid="taxonomy-tag-edit"
+              onClick={() => setIsEditing(true)}
+            >
+              <EditIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete" size="sm">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="danger"
+              data-testid="taxonomy-tag-delete"
+              onClick={() => onDelete(tag.originalName)}
+            >
+              <DeleteOutlineIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
         </Stack>
       )}
     </Box>
@@ -202,7 +222,7 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
 /**
  * Review/apply panel for a batch's background AI tag suggestions. Replaces the old
  * pre-upload TaxonomyReviewStep: analysis now runs AFTER upload, so this is a standalone
- * modal opened from the Data Lakes list (`DataLakeListPanel`) rather than a wizard step -
+ * modal opened from the Data Lakes manager (`DataLakeManagerPanel`) rather than a wizard step -
  * edits live in local state here, not the wizard store, and "Apply" writes tags directly to
  * the batch's already-uploaded files via the apply-taxonomy endpoint.
  */
@@ -211,7 +231,7 @@ export default function TaxonomyReviewPanel({
   prefix,
   onClose,
 }: {
-  batch: IDataLakeBatchDocument;
+  batch: IDataLakeBatchSummary;
   /** The lake's fixed tag prefix (fetched separately - the batch doc doesn't carry it). */
   prefix: string;
   onClose: () => void;
@@ -220,12 +240,27 @@ export default function TaxonomyReviewPanel({
   const [tags, setTags] = useState<TaxonomyTag[]>(batch.taxonomySuggestions?.tags ?? []);
   const applyMutation = useApplyTaxonomySuggestions(batch.id);
   const reanalyzeMutation = useReanalyzeTaxonomy(batch.id);
+  const dismissMutation = useDismissTaxonomy(batch.id);
+  const confirm = useConfirmation();
 
-  // Re-seed local edits whenever the batch's stored suggestions change identity (e.g. after
-  // a re-analyze completes and the list refetches with a fresh taxonomySuggestions object).
+  // Re-seed local edits when the stored suggestions actually CHANGE, e.g. after a re-analyze
+  // completes. Deliberately keyed on tag CONTENT, not batch.taxonomySuggestions's object
+  // identity: the batches-list response is rebuilt via a Map + array spread on every poll, so
+  // when any other batch leaves the list, every later element shifts index - React Query's
+  // default structural sharing compares arrays positionally, so a batch that merely moved
+  // position (its own suggestions unchanged) gets a brand-new object reference, which would
+  // wipe this panel's in-progress edits with no warning.
+  //
+  // Stringifies the WHOLE tag (including strength/matchingFolders, which the panel never lets
+  // the user edit), not just suffix/originalName - deliberately broad, not narrowed to what's
+  // editable, because analyzeBatchTaxonomy.ts is the only writer of taxonomySuggestions content
+  // and it always replaces the entire tag set in one shot; there is no partial-re-score writer
+  // today that would change strength alone. If one is ever added, narrow this key to just the
+  // fields the panel actually edits (originalName + suffix) so a re-score doesn't wipe edits.
+  const suggestionsKey = JSON.stringify(batch.taxonomySuggestions?.tags ?? []);
   useEffect(() => {
     setTags(batch.taxonomySuggestions?.tags ?? []);
-  }, [batch.taxonomySuggestions]);
+  }, [suggestionsKey]);
 
   const updateTag = (originalName: string, updates: Partial<TaxonomyTag>) =>
     setTags(prev => prev.map(t => (t.originalName === originalName ? { ...t, ...updates } : t)));
@@ -328,6 +363,25 @@ export default function TaxonomyReviewPanel({
             onClick={() => reanalyzeMutation.mutate(undefined)}
           >
             Re-analyze
+          </Button>
+          <Button
+            variant="outlined"
+            color="neutral"
+            data-testid="taxonomy-dismiss-btn"
+            loading={dismissMutation.isPending}
+            onClick={() =>
+              confirm({
+                type: 'danger',
+                title: 'Dismiss Suggestion',
+                description: 'This clears the suggestion from your list. Files keep whatever tags they already have.',
+                okLabel: 'Dismiss',
+                onOk: async () => {
+                  dismissMutation.mutate(undefined, { onSuccess: onClose });
+                },
+              })
+            }
+          >
+            Dismiss
           </Button>
           <Button variant="plain" color="neutral" onClick={onClose}>
             Close

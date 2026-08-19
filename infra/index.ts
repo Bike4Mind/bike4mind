@@ -24,6 +24,7 @@ export * from './llm';
 export * from './agentExecutor';
 export * from './alarms';
 export * from './dashboard';
+export * from './modelSunsetDashboard';
 export * from './dlqAlarms';
 export * from './emailMarketing';
 export * from './wafPolicy';

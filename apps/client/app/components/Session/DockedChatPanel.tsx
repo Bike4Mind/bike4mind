@@ -9,13 +9,20 @@ import ChatPanelControls from './ChatPanelControls';
 interface DockedChatPanelProps {
   children: React.ReactNode;
   headerActions?: React.ReactNode;
+  /** Overrides the default "AI Chat" header label (e.g. /opti swaps in the Data Lakes toggle). */
+  title?: React.ReactNode;
 }
 
-const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions }) => {
+const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title }) => {
   const layout = useSessionLayout(s => s.layout);
 
-  const handleClose = useCallback(() => {
-    setSessionLayout({ layout: 'floatingChat' });
+  // Dismiss the panel down to the bottom-right "AI Chat" launcher (the minimized
+  // FloatingChatWindow pill) rather than opening the floating window.
+  const handleMinimize = useCallback(() => {
+    setSessionLayout({
+      layout: 'floatingChat',
+      floatingChatMinimized: true,
+    });
   }, []);
 
   return (
@@ -45,13 +52,15 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography
-            level="body-sm"
-            fontWeight="md"
-            sx={theme => ({ color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary })}
-          >
-            AI Chat
-          </Typography>
+          {title ?? (
+            <Typography
+              level="body-sm"
+              fontWeight="md"
+              sx={theme => ({ color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary })}
+            >
+              AI Chat
+            </Typography>
+          )}
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -63,12 +72,12 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
             activeLayout={layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined}
             showFloat
           />
-          <Tooltip title="Close" disableInteractive>
+          <Tooltip title="Minimize" disableInteractive>
             <IconButton
               size="sm"
               variant="plain"
               color="neutral"
-              onClick={handleClose}
+              onClick={handleMinimize}
               data-testid="docked-chat-close"
               sx={{ '--IconButton-size': '28px' }}
             >

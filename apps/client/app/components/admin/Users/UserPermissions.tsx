@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
 import { DEVELOPER_USER_TAGS, IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
@@ -5,10 +6,11 @@ import { Button, FormHelperText, FormLabel, Input, Radio, RadioGroup, Stack, Too
 import React, { useState } from 'react';
 
 /**
- * Comp tags that grant a product entitlement (e.g. `opti`, `opti-compute`) -
- * these have their own dedicated grant/revoke control in the Product Access
- * section, so the freeform "Custom Tags" list below hides them to avoid two
- * controls editing the same tag.
+ * Comp tags that grant a product entitlement (e.g. `opti`) - these have their
+ * own dedicated grant/revoke control in the Product Access section, so the
+ * freeform "Custom Tags" list below hides them to avoid two controls editing
+ * the same tag. Derived from the live registry, so a RETIRED tag (e.g. the
+ * former `opti-compute`, #1237) is intentionally no longer hidden here.
  */
 const PRODUCT_GRANT_TAGS = allKnownEntitlementKeys()
   .map(grantTagForEntitlement)
@@ -23,7 +25,7 @@ const isManagedTag = (tag: string): boolean => {
 };
 
 interface UserPermissionsProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
   handleUserLevelButtonChange: (userId: string) => void;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
@@ -55,7 +57,7 @@ const ROLE_OPTIONS: { value: Role; label: string }[] = [
 const withoutDeveloperTags = (tags: readonly string[]): string[] =>
   tags.filter(tag => !(DEVELOPER_USER_TAGS as readonly string[]).includes(tag));
 
-const userLevelColor = (user: IUserDocument) => {
+const userLevelColor = (user: AdminUserListItem) => {
   switch (user.level) {
     case 'DemoUser':
       return 'neutral';
@@ -72,7 +74,7 @@ const userLevelColor = (user: IUserDocument) => {
   }
 };
 
-const userLevelDisplay = (user: IUserDocument) => {
+const userLevelDisplay = (user: AdminUserListItem) => {
   switch (user.level) {
     case 'DemoUser':
       return 'Demo User';

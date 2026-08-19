@@ -31,7 +31,10 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+  // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
+  // checkApiKeyRateLimit is stubbed.
+  ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -195,5 +198,52 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
+  });
+
+  describe('functionCalls redaction for non-owner viewers', () => {
+    const questWithFunctionCalls = () => ({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'completed',
+      reply: {},
+      replies: [],
+      promptMeta: {
+        functionCalls: [
+          { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
+        ],
+      },
+    });
+
+    it('strips returnValue for a sharee (jwt-user is not session.userId)', async () => {
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire({ apiKey: null }); // JWT_USER.id === 'jwt-user', a sharee not the owner
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      // Whole-response, not field-scoped: guards against the leak reappearing through a sibling
+      // field (e.g. executionTracking) that also reads off the unredacted quest.promptMeta.
+      expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+      expect(body.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
+    });
+
+    it('strips returnValue for a sharee polling via an API key (not just JWT/browser callers)', async () => {
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]); // resolves to userId 'user-1', a sharee per beforeEach
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    });
+
+    it('leaves returnValue untouched for the session owner', async () => {
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(JSON.stringify(body.promptMeta.functionCalls)).toContain('PRIVATE TOOL OUTPUT');
+    });
   });
 });

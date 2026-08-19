@@ -19,7 +19,7 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 // Mirror React Query's `enabled` semantics: a disabled query never fetches, so it has no data.
 // `lake-1` is manageable (a valid send target); `lake-2` is a read-only public lake the caller
 // doesn't own, so the modal must exclude it (sending is a write).
-const useDataLakes = vi.fn((enabled: boolean = true) =>
+const useGetDataLakes = vi.fn((enabled: boolean = true) =>
   enabled
     ? {
         data: [
@@ -31,8 +31,8 @@ const useDataLakes = vi.fn((enabled: boolean = true) =>
     : { data: undefined, isLoading: false }
 );
 
-vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: (enabled?: boolean) => useDataLakes(enabled),
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useGetDataLakes: (enabled?: boolean) => useGetDataLakes(enabled),
 }));
 
 // The component reads the EnableDataLakes flag via useAdminSettingsCache; default it on so
@@ -61,7 +61,7 @@ describe('SendToDataLakeModal', () => {
   beforeEach(() => {
     createFabFileOnServerWithUpload.mockReset();
     updateFabFileOnServer.mockReset();
-    useDataLakes.mockClear();
+    useGetDataLakes.mockClear();
     isFeatureEnabled.mockReset();
     isFeatureEnabled.mockReturnValue(true);
     useSendToDataLakeStore.setState({
@@ -180,7 +180,7 @@ describe('SendToDataLakeModal', () => {
     // (set in beforeEach), so with the flag off the hook must still be called with enabled=false
     // to avoid the 403 on /api/data-lakes.
     expect(isFeatureEnabled).toHaveBeenCalledWith('EnableDataLakes');
-    expect(useDataLakes).toHaveBeenCalledWith(false);
+    expect(useGetDataLakes).toHaveBeenCalledWith(false);
     expect(screen.queryByTestId('send-to-datalake-option-lake-1')).toBeNull();
   });
 

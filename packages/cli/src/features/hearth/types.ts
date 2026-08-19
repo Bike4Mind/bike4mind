@@ -7,6 +7,7 @@
  * server-side from the authenticated session, never sent by the client).
  */
 import { z } from 'zod';
+import { actorKindSchema, selfClaimedActorKindSchema } from '@bike4mind/hearth';
 
 export const HearthEventKindSchema = z.enum([
   'message',
@@ -51,6 +52,8 @@ export const HearthEventSchema = z.object({
   actorId: z.string(),
   /** Display name resolved by the server so surfaces need no actor lookup. */
   actorName: z.string().optional(),
+  /** Resolved server-side; `human` is reserved there and never self-claimed. */
+  actorKind: actorKindSchema.optional(),
   kind: HearthEventKindSchema,
   human: HearthHumanBodySchema,
   machine: HearthMachineBodySchema.optional(),
@@ -58,6 +61,29 @@ export const HearthEventSchema = z.object({
   createdAt: z.string(),
 });
 export type HearthEvent = z.infer<typeof HearthEventSchema>;
+
+/**
+ * Per-session identity sent with every write and cursor read.
+ *
+ * The server derives the actor NAME from the authenticated account and uses
+ * only `id` to discriminate sessions, so this cannot forge an identity. Sending
+ * it is what gives each concurrent CLI session its own actor and therefore its
+ * own per-channel cursor; without it, two sessions running hearth_catchup on
+ * one channel consume each other's events.
+ */
+export const HearthSessionSchema = z.object({
+  id: z.string().min(1).max(200),
+  /** Friendly name for the session (the notebook name); display only. */
+  label: z.string().max(200).optional(),
+  /**
+   * What this session IS, so the server badges it honestly. Every write the CLI
+   * makes originates in an LLM tool call, so a CLI session is an agent even
+   * though its name is derived from the human's account. Only the self-claimable
+   * kinds are accepted server-side; 'human' stays reserved there.
+   */
+  kind: selfClaimedActorKindSchema.optional(),
+});
+export type HearthSession = z.infer<typeof HearthSessionSchema>;
 
 // GET /api/hearth/channels
 
@@ -82,6 +108,7 @@ export const PostEventRequestSchema = z.object({
   human: HearthHumanBodySchema,
   machine: HearthMachineBodySchema.optional(),
   refs: HearthEventRefsSchema.optional(),
+  session: HearthSessionSchema.optional(),
 });
 export type PostEventRequest = z.infer<typeof PostEventRequestSchema>;
 
@@ -96,6 +123,7 @@ export const CatchupRequestSchema = z.object({
   channelId: z.string().min(1),
   advance: z.boolean().optional(),
   limit: z.number().optional(),
+  session: HearthSessionSchema.optional(),
 });
 export type CatchupRequest = z.infer<typeof CatchupRequestSchema>;
 

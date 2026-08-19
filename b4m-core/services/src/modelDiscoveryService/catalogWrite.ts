@@ -1,4 +1,6 @@
 import {
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   FIELD_GROUPS,
   FIELD_GROUP_OF,
   ModelRecordWrite,
@@ -226,6 +228,76 @@ function usableFields(
   return usable;
 }
 
+/**
+ * A text model whose output reserve eats its whole context window leaves safeInputWindow
+ * (ChatCompletionProcess) a non-positive input budget, and the chat path then refuses to build a
+ * prompt at all. The static tables are held to that by modelCatalogInputBudget.test.ts, but
+ * maxOutputTokens is in the feed-claimable `limits` group and a discovery row outranks the seed, so
+ * a fetched claim could put the failure back with those tables still clean.
+ *
+ * Three remedies, in order of how much the row still tells us:
+ *
+ * `refuse` rejects the feed's number and hands the cap to whatever the catalog already holds. When
+ * a non-starving maxOutputTokens is in force it is carried forward onto the draft (`carryForward`),
+ * because mergeRows resolves per GROUP not per key: alongside a contextWindow claim the appended row
+ * wins the whole `limits` group, so a deleted field would drop the read path to
+ * DEFAULT_MAX_OUTPUT_TOKENS (4096) - a capability cut on exactly the frontier models with the
+ * largest legitimate output. Preserving the value in force is the same rule mergeLifecycle applies:
+ * absence of a fresh claim means "did not say", never "reset to the global default". Only with no
+ * usable value in force does the field drop and the read-path fallback stand (which is already what
+ * toModelInfo means by "unknown").
+ *
+ * `clamp` covers a window too small to fund even that fallback. Such a model still answers at a
+ * lower output setting, so it keeps its row with a reserve that leaves the budget positive - half of
+ * what is left after the buffer, the same split the static tables use.
+ *
+ * `drop` is only for a window at or under the buffer itself, where no reserve leaves room for a
+ * prompt and the model could not answer at any setting.
+ */
+type StarvedOutputClaim =
+  | { reason: string; action: 'refuse'; carryForward?: number }
+  | { reason: string; action: 'drop' }
+  | { reason: string; action: 'clamp'; to: number };
+
+function starvedByOutputClaim(
+  draft: Record<string, unknown>,
+  contributed: Map<string, unknown>,
+  inForceMaxOutputTokens: unknown
+): StarvedOutputClaim | null {
+  // Gate on the RESULTING draft, not on which field arrived. A run claiming only contextWindow
+  // still lands the starving shape, because draft carries maxOutputTokens forward from the record
+  // in force and both fields are in the `limits` group, so the appended row wins the pair.
+  if (draft.type !== 'text') return null;
+  if (!contributed.has('maxOutputTokens') && !contributed.has('contextWindow')) return null;
+  const contextWindow = draft.contextWindow;
+  const maxOutputTokens = draft.maxOutputTokens;
+  if (typeof contextWindow !== 'number' || typeof maxOutputTokens !== 'number') return null;
+
+  const starves = (output: number) => contextWindow - output - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= 0;
+  if (!starves(maxOutputTokens)) return null;
+
+  const claim =
+    `maxOutputTokens ${maxOutputTokens} leaves no input budget in a contextWindow of ${contextWindow} ` +
+    `(safety buffer ${CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS})`;
+
+  if (!starves(Math.min(contextWindow, DEFAULT_MAX_OUTPUT_TOKENS))) {
+    // Carry a non-starving cap already in force forward rather than let the read path fall to the
+    // global default. Excludes the value the draft already carries when it is the starving one.
+    if (typeof inForceMaxOutputTokens === 'number' && !starves(inForceMaxOutputTokens)) {
+      return {
+        reason: `${claim}; carried forward the in-force maxOutputTokens ${inForceMaxOutputTokens}`,
+        action: 'refuse',
+        carryForward: inForceMaxOutputTokens,
+      };
+    }
+    return { reason: `${claim}; maxOutputTokens dropped`, action: 'refuse' };
+  }
+
+  const halved = Math.floor((contextWindow - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS) / 2);
+  if (halved < 1) return { reason: `${claim}; no reserve leaves room for a prompt`, action: 'drop' };
+  return { reason: `${claim}; clamped to ${halved}`, action: 'clamp', to: halved };
+}
+
 type PlanOneResult = { entry: CatalogDiffEntry; row: IModelCatalogRowInput } | { unchanged: true } | { reason: string };
 
 function planOne(
@@ -251,11 +323,40 @@ function planOne(
     }
   }
 
+  const derivedGroups = new Set<FieldGroup>();
+  const outputClaim = starvedByOutputClaim(draft, contributed, base.maxOutputTokens);
+  let claimsMaxOutput = contributed.has('maxOutputTokens');
+  if (outputClaim) {
+    if (outputClaim.action === 'drop') return { reason: outputClaim.reason };
+    dropped.push({
+      source:
+        candidate.sourceOfField.get('maxOutputTokens') ??
+        candidate.sourceOfField.get('contextWindow') ??
+        candidate.sourceNames.join('+'),
+      modelId: candidate.modelId,
+      reason: outputClaim.reason,
+    });
+    if (outputClaim.action === 'clamp') {
+      draft.maxOutputTokens = outputClaim.to;
+      derivedGroups.add('limits');
+    } else if (outputClaim.carryForward !== undefined) {
+      // The row wins the `limits` group, so it has to re-assert the in-force cap or the read path
+      // would fall to DEFAULT_MAX_OUTPUT_TOKENS. Credit it to discovery, not the feed that starved.
+      draft.maxOutputTokens = outputClaim.carryForward;
+      claimsMaxOutput = true;
+      derivedGroups.add('limits');
+    } else {
+      delete draft.maxOutputTokens;
+      claimsMaxOutput = false;
+    }
+  }
+
   const ownedGroups = new Set<FieldGroup>();
   for (const key of contributed.keys()) {
     // A refused lifecycle block is not a claim: an ownedGroups entry no field
     // backs is overclaiming, which the row schema rejects at append time.
     if (key === 'lifecycle' && !claimsLifecycle) continue;
+    if (key === 'maxOutputTokens' && !claimsMaxOutput) continue;
     const group = FIELD_GROUP_OF[key as keyof ModelRecord];
     if (group) ownedGroups.add(group);
   }
@@ -338,7 +439,13 @@ function planOne(
     patch: record,
     ownedGroups: owned,
     effectiveFrom: input.runStartedAt,
-    contributors: contributorsFor(candidate, contributed, owned, input.priorContributors?.get(candidate.modelId)),
+    contributors: contributorsFor(
+      candidate,
+      contributed,
+      owned,
+      input.priorContributors?.get(candidate.modelId),
+      derivedGroups
+    ),
     note: `discovery:${candidate.sourceNames.join('+')}@${input.runStartedAt.toISOString()}`,
     runId: input.runId,
   };
@@ -423,7 +530,10 @@ function contributorsFor(
   candidate: Candidate,
   contributed: ReadonlyMap<string, unknown>,
   owned: readonly FieldGroup[],
-  prior: readonly ICatalogContributor[] | undefined
+  prior: readonly ICatalogContributor[] | undefined,
+  // Groups this module computed a value for rather than took from a feed. Crediting the feed for a
+  // number we invented would make the row claim the provider reported it.
+  derived?: ReadonlySet<FieldGroup>
 ): ICatalogContributor[] {
   const bySource = new Map<FieldGroup, string>();
   for (const key of contributed.keys()) {
@@ -437,10 +547,11 @@ function contributorsFor(
   const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
   return owned.map(group => ({
     group,
-    source:
-      bySource.get(group) ??
-      carried.get(group) ??
-      (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR),
+    source: derived?.has(group)
+      ? DISCOVERY_CONTRIBUTOR
+      : (bySource.get(group) ??
+        carried.get(group) ??
+        (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR)),
   }));
 }
 

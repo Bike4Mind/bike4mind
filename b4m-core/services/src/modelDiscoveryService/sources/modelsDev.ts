@@ -1,5 +1,12 @@
 import { MODELS_DEV_PROVIDER_BY_BACKEND, type ModelRecord } from '@bike4mind/common';
-import type { DiscoveredModel, DiscoveredPrice, DiscoveryFetchContext, DiscoverySource, SourceResult } from '../types';
+import type {
+  DiscoveredModel,
+  DiscoveredPrice,
+  DiscoveredPriceBracket,
+  DiscoveryFetchContext,
+  DiscoverySource,
+  SourceResult,
+} from '../types';
 import { isEmptyDocument, joinTargets, logCoverage, type AggregatorSourceOptions, type JoinTarget } from './aggregator';
 import { boolean, compact, contentHashOf, count, fetchJson } from './http';
 
@@ -16,6 +23,23 @@ interface ModelsDevCost {
   output?: unknown;
   cache_read?: unknown;
   cache_write?: unknown;
+  tiers?: unknown;
+  /**
+   * Legacy duplicate of the `tiers[]` entry, kept by models.dev for the models
+   * whose breakpoint used to be 200k. Its NAME is fixed while the real breakpoint
+   * is not (gpt-5.6-luna carries context_over_200k with a tier size of 272000),
+   * so reading it would price a 272k bracket as if it started at 200k.
+   */
+  context_over_200k?: unknown;
+}
+
+interface ModelsDevTier {
+  input?: unknown;
+  output?: unknown;
+  cache_read?: unknown;
+  cache_write?: unknown;
+  /** 'context' is the only type published today; a size is the breakpoint in input tokens. */
+  tier?: { type?: unknown; size?: unknown };
 }
 
 interface ModelsDevModel {
@@ -71,6 +95,35 @@ export function indexModelsDev(document: unknown, backends: Iterable<string>): M
 const rate = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 
+/**
+ * The context brackets in `cost.tiers[]`, ascending by breakpoint. A tier of any
+ * other type is not a long-context bracket and is skipped; a context tier we
+ * cannot read whole drops the WHOLE ladder rather than part of it, because the
+ * bracket we dropped would leave its prompts billed at the rate below it.
+ */
+function bracketsOf(cost: ModelsDevCost | undefined): DiscoveredPriceBracket[] | undefined {
+  if (!Array.isArray(cost?.tiers)) return undefined;
+
+  const brackets: DiscoveredPriceBracket[] = [];
+  for (const entry of cost.tiers as ModelsDevTier[]) {
+    if (!entry || typeof entry !== 'object' || entry.tier?.type !== 'context') continue;
+    const aboveTokens = count(entry.tier.size);
+    const inputPerMTok = rate(entry.input);
+    const outputPerMTok = rate(entry.output);
+    if (!aboveTokens || inputPerMTok === undefined || outputPerMTok === undefined) return undefined;
+    brackets.push(
+      compact<DiscoveredPriceBracket>({
+        aboveTokens,
+        inputPerMTok,
+        outputPerMTok,
+        cacheReadPerMTok: rate(entry.cache_read),
+        cacheWritePerMTok: rate(entry.cache_write),
+      })
+    );
+  }
+  return brackets.length > 0 ? brackets.sort((a, b) => a.aboveTokens - b.aboveTokens) : undefined;
+}
+
 /** models.dev already quotes $/MTok, so there is no unit conversion to get wrong. */
 function priceOf(cost: ModelsDevCost | undefined): DiscoveredPrice | undefined {
   const inputPerMTok = rate(cost?.input);
@@ -82,6 +135,7 @@ function priceOf(cost: ModelsDevCost | undefined): DiscoveredPrice | undefined {
     outputPerMTok,
     cacheReadPerMTok: rate(cost?.cache_read),
     cacheWritePerMTok: rate(cost?.cache_write),
+    brackets: bracketsOf(cost),
   });
 }
 

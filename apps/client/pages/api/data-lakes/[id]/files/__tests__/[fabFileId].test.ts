@@ -31,6 +31,15 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileRepository: {},
   userRepository: {},
 }));
@@ -89,6 +98,21 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
 
     await expect(call(req({ id: 'opti', fabFileId: 'f1' }), res)).rejects.toThrow(/read-only/i);
     expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+  });
+
+  it('forwards an admin actor through to the service (untested before, so a route that hardcoded isAdmin: false would have gone unnoticed)', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.toAccessContext.mockResolvedValue({ userId: 'root', isAdmin: true });
+    const { res } = makeRes();
+
+    await call(req({ id: 'lake1', fabFileId: 'f1' }), res);
+
+    expect(h.removeFileFromDataLake).toHaveBeenCalledWith(
+      { userId: 'root', isAdmin: true },
+      'lake1',
+      'f1',
+      expect.anything()
+    );
   });
 
   it('takes the actor from the access context, never from the request body', async () => {

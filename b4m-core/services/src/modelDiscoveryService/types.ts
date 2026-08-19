@@ -1,5 +1,6 @@
 import type {
   DiscoveryRunHost,
+  DiscoveryRunMode,
   DiscoveryRunStatus,
   DiscoveryRunTrigger,
   IAdminSettingsRepository,
@@ -61,12 +62,12 @@ export interface DiscoveryCredentials {
 export type DiscoverySourceKind = 'provider' | 'aggregator';
 
 /**
- * A price a source observed, in the one unit the promotion predicate compares
- * and the price planner reasons in. ModelPrice tier rates are USD per SINGLE
- * token, so pricePlan divides by 1e6 at the write boundary - crossing the two
- * is a 1e6 billing error.
+ * One set of rates, in the one unit the promotion predicate compares and the
+ * price planner reasons in. ModelPrice tier rates are USD per SINGLE token, so
+ * pricePlan divides by 1e6 at the write boundary - crossing the two is a 1e6
+ * billing error.
  */
-export interface DiscoveredPrice {
+export interface DiscoveredRates {
   /** USD per 1M input tokens. */
   inputPerMTok: number;
   /** USD per 1M output tokens. */
@@ -75,6 +76,30 @@ export interface DiscoveredPrice {
   cacheReadPerMTok?: number;
   /** USD per 1M cache-write input tokens, when the source publishes it. */
   cacheWritePerMTok?: number;
+}
+
+/**
+ * The rates that take over once a prompt is LONGER than `aboveTokens` input
+ * tokens, which is how both aggregators express a long-context ladder (models.dev
+ * `cost.tiers[]`, litellm `*_above_<N>k_tokens`).
+ *
+ * The stored ModelPrice map instead keys each tier by its UPPER bound -
+ * tierForTokens in common/src/models.ts picks the first threshold >= the prompt -
+ * so pricePlan maps a bracket onto the threshold ABOVE its own breakpoint, never
+ * onto a key of its own.
+ */
+export interface DiscoveredPriceBracket extends DiscoveredRates {
+  aboveTokens: number;
+}
+
+/** A price a source observed: the rates a short prompt pays, plus any ladder above them. */
+export interface DiscoveredPrice extends DiscoveredRates {
+  /**
+   * Long-context brackets, ascending by `aboveTokens` and in the same $/MTok unit
+   * as the base rates. Absent means the source published one flat rate, which is
+   * the ordinary case and the only one a non-tiered row can be repriced from.
+   */
+  brackets?: DiscoveredPriceBracket[];
 }
 
 /**
@@ -208,8 +233,11 @@ export interface DiscoverySource {
  */
 export type DispatchResolver = (record: ModelRecord) => Pick<ModelRecord, 'adapterFamily' | 'dispatchProfile'> | null;
 
-/** 'report' writes no catalog rows and no bookkeeping; it only reports the diff. */
-export type DiscoveryMode = 'report' | 'write';
+/**
+ * 'report' writes no catalog rows and no bookkeeping; it only reports the diff.
+ * Aliased from common because the run document persists it (DISCOVERY_RUN_MODES).
+ */
+export type DiscoveryMode = DiscoveryRunMode;
 
 export type DiscoveryAutoEnablePolicy = 'priced' | 'manual' | 'all';
 
@@ -277,6 +305,28 @@ export interface PriceFlag {
   current?: { inputPerMTok: number; outputPerMTok: number };
   /** Every source that priced this model, so a disagreement names both sides. */
   sources: string[];
+  detail: string;
+}
+
+/**
+ * A price that STANDS over a source that disagreed with it, which only a
+ * provider's own published price can do. The counterpart to a PriceFlag: a flag
+ * is a value discovery declined to apply, this is one it applied over an
+ * objection, and the dissenting source named here is the operator's cue that a
+ * mirror has gone stale.
+ *
+ * Raised whether or not a row was appended. Once the catalog converges the
+ * provider's value is already in force and the plan is 'unchanged' every run -
+ * which is precisely when a stale mirror is the only thing left worth reporting.
+ */
+export interface PriceOverride {
+  modelId: string;
+  /** The provider source whose value stands. */
+  source: string;
+  /** Sources that disagreed with it and were not applied. */
+  dissenting: string[];
+  /** Per-MTok, the readable unit; the row it would write is per token. */
+  applied: { inputPerMTok: number; outputPerMTok: number };
   detail: string;
 }
 
@@ -398,6 +448,8 @@ export interface ModelDiscoveryRunResult {
   prices: {
     rows: PlannedPriceRow[];
     flags: PriceFlag[];
+    /** Rows written over a source that disagreed; a subset of `rows` by model. */
+    overrides: PriceOverride[];
   };
   /** The lifecycle plan, likewise: report mode declines to persist it, nothing more. */
   lifecycle: {

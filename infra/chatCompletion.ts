@@ -105,6 +105,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
     // CompletionCompleted (memento) + AutoName events still go through EventBridge.
     { actions: ['events:PutEvents'], resources: ['*'] },
+    // Lumina5/ModelSunset (deprecated model pins) and Lumina5/AnthropicAPI (rate limits)
+    // are emitted from llm-adapters on this path. PutMetricData takes no resource scope.
+    { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     {
       actions: [
         'transcribe:StartTranscriptionJob',

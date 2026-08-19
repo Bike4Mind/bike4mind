@@ -8,6 +8,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  SessionUpdateRequestSchema,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -16,25 +17,10 @@ import uniq from 'lodash/uniq.js';
 import isEqual from 'lodash/isEqual.js';
 import { z } from 'zod';
 
-const updateSessionParamtersSchema = z.object({
+// `id` is service-internal addressing, not a field the public PUT request body carries
+// (it comes from the URL path there) - extend rather than fold it into the shared schema.
+const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
   id: z.string(),
-  name: z.string().optional(),
-  knowledgeIds: z.array(z.string()).optional(),
-  artifactIds: z.array(z.string()).optional(),
-  tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
-  lastUsedModel: z.string().optional(),
-  /**
-   * Whether newly-added knowledgeIds should also be appended to every project that
-   * contains this session (and shared with that project's members).
-   *
-   * Defaults to true, which is what every deliberate "add this file" gesture wants and
-   * what all callers did before this flag existed. Pass false when the session gained a
-   * file WITHOUT the user asking for it to travel - an upload that lands in notebook
-   * context by default has consented to this notebook, not to the whole project. The
-   * propagation is append-only (nothing ever removes a fileId from a project), so a
-   * wrong `true` is not recoverable through the UI.
-   */
-  propagateToProjects: z.boolean().optional(),
 });
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
@@ -55,10 +41,8 @@ export const updateSession = async (
   adapters: UpdateSessionAdapters
 ) => {
   const { db } = adapters;
-  const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel, propagateToProjects } = secureParameters(
-    parameters,
-    updateSessionParamtersSchema
-  );
+  const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel, forceKnowledgeRetrieval, propagateToProjects } =
+    secureParameters(parameters, updateSessionParamtersSchema);
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
   if (!session) {
@@ -85,6 +69,10 @@ export const updateSession = async (
   session.artifactIds = artifactIds || session.artifactIds;
   session.tags = tags || session.tags;
   session.lastUsedModel = lastUsedModel || session.lastUsedModel;
+  // Explicit undefined check (not `|| session.x`) so toggling OFF (false) actually persists.
+  if (forceKnowledgeRetrieval !== undefined) {
+    session.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
+  }
   session.lastUpdated = new Date();
 
   await db.sessions.update(session);

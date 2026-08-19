@@ -215,6 +215,17 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableQuestMaster')}
       />
+      {/* User-only flag (no admin SettingKey), so it gates on the user's own
+          opt-in exactly like Mementos V2 - no `getServerSettingValue` here. */}
+      <FeatureContainer
+        title="Quest Master v5"
+        featureKey="enableQuestMasterV5"
+        description="Quests as a graph of nodes: each node is one scoreable task that runs its own agent, with arbitrary-depth sub-quests. Experimental - runs alongside Quest Master, not instead of it."
+        enabled={settings.experimentalFeatures?.enableQuestMasterV5}
+        disabled={false}
+        loading={false}
+        onChange={() => handleToggle('enableQuestMasterV5')}
+      />
       <FeatureContainer
         title="Rapid Reply"
         featureKey="enableRapidReply"

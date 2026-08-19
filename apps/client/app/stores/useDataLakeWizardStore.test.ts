@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { useDataLakeWizardStore } from './useDataLakeWizardStore';
 import type { WizardFile } from '../utils/folderTreeParser';
+import { MAX_TAG_PREFIX_LENGTH, tagPrefixIssue } from '@bike4mind/common';
 
 /**
  * Opening the wizard must start a genuinely clean create session - no config, tag prefix,
@@ -118,6 +119,31 @@ describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
     useDataLakeWizardStore.getState().deriveTagPrefixFromName();
 
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('');
+  });
+
+  // The reported bug: the derived prefix came straight off the slug, whose own max is 60,
+  // so a long name handed the user a value the create endpoint refuses at 30.
+  it('caps the derived prefix at the server maximum', () => {
+    setName('Triage Router Dry-Run Test (Ken, delete after)');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    const prefix = useDataLakeWizardStore.getState().config.tagPrefix;
+    expect(prefix).toBe('triage-router-dry-run-test-ke:');
+    expect(prefix.length).toBeLessThanOrEqual(MAX_TAG_PREFIX_LENGTH);
+    expect(tagPrefixIssue(prefix)).toBeNull();
+  });
+
+  // The cut can land on a word boundary and leave "...test-:" - slugifyDataLakeName only
+  // trims hyphens after its own 60-slice, so the second cut needs its own trim.
+  it('leaves no dangling hyphen when the cap lands on a word boundary', () => {
+    // This name's slug has its 29th character on a hyphen, so an un-trimmed cut would
+    // produce "product-launch-retrospective-:".
+    setName('Product Launch Retrospective Notes');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('product-launch-retrospective:');
   });
 
   it('still derives for a name that merely starts with the reserved word', () => {

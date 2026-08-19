@@ -3,13 +3,14 @@ import { authFailLogRepository, identityProviderRepository } from '@bike4mind/da
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { setupSamlStrategy } from '@server/auth/auth';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -128,7 +129,11 @@ const handleSamlCallback = async (req: any, res: any) => {
         throw new ForbiddenError('User is banned');
       }
 
-      const tokens = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+      const { accessToken } = await issueBrowserSession(req, res, user.id, {
+        createdVia: 'saml',
+        tokenVersion: user.tokenVersion ?? 0,
+      });
+      const tokens = { accessToken };
 
       await logEvent({
         userId: user.id,
@@ -148,13 +153,11 @@ const handleSamlCallback = async (req: any, res: any) => {
       // Derive base URL from request so the redirect goes back to the same port
       const host = req.headers.host || 'localhost:3000';
       const protocol = req.headers['x-forwarded-proto'] || 'http';
-      const baseUrl = process.env.APP_URL?.includes('localhost')
-        ? `${protocol}://${host}`
-        : process.env.APP_URL || `${protocol}://${host}`;
+      const baseUrl = isLocalAppUrl() ? `${protocol}://${host}` : process.env.APP_URL || `${protocol}://${host}`;
       // Resume the originally requested path (round-tripped via RelayState);
       // /auth/success sanitizes it before navigating.
       const successQuery = authSuccessRedirectQuery(redirectTo);
-      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}&userId=${user.id}`;
+      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
 
       console.log('Redirecting to:', redirectUrl.substring(0, LOG_URL_TRUNCATE_LENGTH) + '...');
       return res.redirect(redirectUrl);

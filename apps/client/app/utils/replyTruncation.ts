@@ -13,12 +13,29 @@ export const CLEAN_FINISH_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'st
 const TRUNCATED_FINISH_REASON = 'max_tokens';
 
 /**
+ * Stop reason for "we aborted the stream because it degenerated into repetition"
+ * (`DEGENERATE_STREAM_STOP_REASON` in `@bike4mind/llm-adapters`). Kept distinct
+ * from `max_tokens` because the explanation the user needs is different: the
+ * ceiling wording ("ask me to continue") is actively wrong advice here, since
+ * continuing from a degenerated tail is what tends to reproduce the loop.
+ */
+const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
+
+/**
+ * Every reason that means "this reply stopped early". Membership - not equality
+ * with one literal - is what lets a new early-stop reason surface a notice; an
+ * ABSENT reason still surfaces nothing (see the branch comment below).
+ */
+const EARLY_STOP_FINISH_REASONS = new Set([TRUNCATED_FINISH_REASON, DEGENERATE_FINISH_REASON]);
+
+/**
  * Which truncation notice (if any) to render. Exactly one at a time:
  *  - 'artifact': cut off mid-artifact, the partial is best-effort recovered into a card.
  *  - 'reply-partial': cut off in prose, some content survived.
  *  - 'reply-empty': cut off before producing any content, so the bubble would be blank.
+ *  - 'reply-degenerate': we stopped it ourselves because it began repeating itself.
  */
-export type ReplyTruncationNotice = 'artifact' | 'reply-partial' | 'reply-empty' | null;
+export type ReplyTruncationNotice = 'artifact' | 'reply-partial' | 'reply-empty' | 'reply-degenerate' | null;
 
 export interface ReplyTruncationInput {
   /** Reply text with <think> blocks already stripped. */
@@ -61,10 +78,15 @@ export function getReplyTruncationState({
   let notice: ReplyTruncationNotice = null;
   if (isTruncatedArtifact) {
     notice = 'artifact';
-  } else if (completed && !hasUnclosedArtifact && finishReason === TRUNCATED_FINISH_REASON) {
-    // Deliberately requires an EXPLICIT max_tokens: unlike the artifact path above, a missing
-    // finishReason must not surface a notice or every pre-existing quest grows a false banner.
-    notice = reply.trim() ? 'reply-partial' : 'reply-empty';
+  } else if (completed && !hasUnclosedArtifact && !!finishReason && EARLY_STOP_FINISH_REASONS.has(finishReason)) {
+    // Deliberately requires an EXPLICIT early-stop reason: unlike the artifact path above, a
+    // missing finishReason must not surface a notice or every pre-existing quest grows a false
+    // banner. Only the reasons in the set qualify, so that property is preserved.
+    if (finishReason === DEGENERATE_FINISH_REASON) {
+      notice = 'reply-degenerate';
+    } else {
+      notice = reply.trim() ? 'reply-partial' : 'reply-empty';
+    }
   }
 
   return { isStreamingArtifact, isTruncatedArtifact, notice };

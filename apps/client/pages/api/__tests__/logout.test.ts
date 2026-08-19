@@ -2,17 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
- * /api/logout revokes sessions server-side (tokenVersion bump). This is the security
- * fix's only production wiring, so it is asserted here directly: a normal authenticated
- * session revokes; an API-key caller and an impersonating admin must NOT (an any-scope key
- * would become an account-wide kill switch; an impersonated logout would force-log-out the
- * real customer on every device).
+ * /api/logout is per-device (issue #1194): it revokes ONLY the requesting session (`sid`) via the
+ * session store and NEVER bumps tokenVersion, so other devices stay signed in. This is the security
+ * fix's only production wiring, so it is asserted here directly: a normal session revokes its own
+ * sid; an API-key caller and a legacy token with no sid revoke nothing; and no path bumps
+ * tokenVersion (the old all-device hammer - `userService.revokeUserSessions` - must never be called).
  */
 
 // `any` below is deliberate test-mock plumbing for the next-connect / node-mocks-http chain.
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   isApiKey: false,
+  revokeSession: null as null | ReturnType<typeof vi.fn>,
   revokeUserSessions: null as null | ReturnType<typeof vi.fn>,
   updateLogoutTime: null as null | ReturnType<typeof vi.fn>,
 }));
@@ -28,14 +29,18 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/database', () => ({ userRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ userRepository: {}, authSessionRepository: {} }));
 vi.mock('@bike4mind/services', () => {
+  mockRefs.revokeSession = vi.fn().mockResolvedValue({ sid: 'sid-1' });
   mockRefs.revokeUserSessions = vi.fn().mockResolvedValue(1);
   mockRefs.updateLogoutTime = vi.fn().mockResolvedValue(undefined);
   return {
     userService: {
       revokeUserSessions: mockRefs.revokeUserSessions,
       updateLogoutTime: mockRefs.updateLogoutTime,
+    },
+    authSessionService: {
+      revokeSession: mockRefs.revokeSession,
     },
   };
 });
@@ -51,42 +56,47 @@ function mocks(user: unknown) {
   return { req, res };
 }
 
-describe('GET /api/logout - server-side session revocation', () => {
+describe('GET /api/logout - per-device session revocation', () => {
   beforeEach(() => {
     mockRefs.isApiKey = false;
+    mockRefs.revokeSession?.mockClear();
     mockRefs.revokeUserSessions?.mockClear();
     mockRefs.updateLogoutTime?.mockClear();
   });
 
-  it('revokes sessions for a normal authenticated session', async () => {
-    const { req, res } = mocks({ id: 'user-1' });
+  it('revokes ONLY the requesting session and never bumps tokenVersion', async () => {
+    const { req, res } = mocks({ id: 'user-1', sid: 'sid-1' });
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(mockRefs.revokeUserSessions).toHaveBeenCalledWith('user-1', expect.anything());
+    expect(mockRefs.revokeSession).toHaveBeenCalledWith('sid-1', expect.anything());
+    // The old all-device hammer must be gone.
+    expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
+    expect(mockRefs.updateLogoutTime).toHaveBeenCalled();
   });
 
-  it('does NOT revoke for an API-key caller (no account-wide kill switch)', async () => {
+  it('does NOT revoke for an API-key caller (no browser session to revoke)', async () => {
     mockRefs.isApiKey = true;
-    const { req, res } = mocks({ id: 'user-1' });
+    const { req, res } = mocks({ id: 'user-1', sid: 'sid-1' });
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
+    expect(mockRefs.revokeSession).not.toHaveBeenCalled();
     // Logout time is still stamped - only the revoke is gated.
     expect(mockRefs.updateLogoutTime).toHaveBeenCalled();
   });
 
-  it('does NOT revoke when an admin is impersonating the user', async () => {
-    const { req, res } = mocks({ id: 'customer-1', impersonatedBy: 'admin-9' });
-    await mockRefs.getHandler!(req, res);
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
-  });
-
-  it('still returns 200 when the account was deleted between auth and the revoke bump', async () => {
-    const { NotFoundError } = await import('@bike4mind/utils');
-    mockRefs.revokeUserSessions?.mockRejectedValueOnce(new NotFoundError('User user-1 not found'));
+  it('does NOT revoke when the token carries no sid (legacy pre-session-store token)', async () => {
     const { req, res } = mocks({ id: 'user-1' });
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.revokeSession).not.toHaveBeenCalled();
+    expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
+  });
+
+  it('revokes only the impersonation session (never the customer-wide tokenVersion) when impersonating', async () => {
+    const { req, res } = mocks({ id: 'customer-1', sid: 'imp-sid', impersonatedBy: 'admin-9' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.revokeSession).toHaveBeenCalledWith('imp-sid', expect.anything());
+    expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
   });
 });

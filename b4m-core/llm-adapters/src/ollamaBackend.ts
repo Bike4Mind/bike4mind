@@ -1,4 +1,5 @@
 import {
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
@@ -6,6 +7,7 @@ import {
   type MessageContentObject,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -18,7 +20,9 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
+import { truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
+import { v4 as uuidv4 } from 'uuid';
 
 /** A tool call normalized across native (message.tool_calls) and content-embedded forms. */
 interface NormalizedToolCall {
@@ -105,7 +109,7 @@ export class OllamaBackend implements ICompletionBackend {
             name: model.name,
             backend: ModelBackend.Ollama,
             contextWindow,
-            max_tokens: contextWindow,
+            max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
             supportsImageVariation: false,
             // Local models are free. pricing is a tier map keyed by a token
             // threshold (consumed by getTextModelCost), not a flat {input,output}
@@ -155,6 +159,24 @@ export class OllamaBackend implements ICompletionBackend {
    * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
    */
   private static readonly DEFAULT_MAX_NUM_CTX = 32768;
+
+  /**
+   * Output ceiling we advertise for a local model. Half of what we allocate, because advertising
+   * the whole window made the server's context - output - buffer negative and emptied the prompt.
+   *
+   * Halving alone is not enough at the bottom of the range: OLLAMA_MAX_NUM_CTX accepts any positive
+   * value, so an operator setting 2000 would leave exactly zero input budget for every local model
+   * at once. The second bound keeps input room for any window ABOVE the safety buffer.
+   *
+   * At or below the buffer nothing here can: a 500-token window yields a cap of 1 and still leaves
+   * 500 - 1 - 1000 negative. Clamping the window up to hide that would advertise more context than
+   * the model has, which is the misreporting this whole change removes, so the honest answer is
+   * that such a model cannot serve a chat prompt at all.
+   */
+  private static advertisedOutputCap(contextWindow: number): number {
+    const halved = Math.floor(contextWindow / 2);
+    return Math.max(1, Math.min(halved, contextWindow - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS - 1));
+  }
 
   /** A model's reported window clamped to what we are willing to allocate. */
   private static effectiveContextWindow(reported: number): number {
@@ -223,8 +245,9 @@ export class OllamaBackend implements ICompletionBackend {
     return {
       num_ctx: numCtx,
       ...(typeof options.temperature === 'number' && { temperature: options.temperature }),
-      // The catalogue reports max_tokens as the whole context window, so cap
-      // the output budget at what we actually allocated.
+      // A caller can still ask for more than the catalogue advertises - a stale
+      // persisted setting, or a direct API request - so cap the output budget at
+      // what we actually allocated.
       ...(typeof options.maxTokens === 'number' && { num_predict: Math.min(options.maxTokens, numCtx) }),
     };
   }
@@ -258,7 +281,9 @@ export class OllamaBackend implements ICompletionBackend {
     const formattedTools = offerTools ? this.formatTools(options.tools ?? []) : [];
     const baseRequest = {
       model,
-      messages: this.buildMessages(messages),
+      // This backend withholds tools in place rather than recursing, so the strip has to track
+      // `offerTools` here: prompts ordering the model to use a tool must not outlive the tools.
+      messages: this.buildMessages(offerTools ? messages : stripToolDependentMessages(messages)),
       options: await this.buildModelOptions(model, options),
       ...(formattedTools.length > 0 && { tools: formattedTools }),
       // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by
@@ -341,10 +366,14 @@ export class OllamaBackend implements ICompletionBackend {
         { parallel: options.parallelToolExecution !== false, maxConcurrency: options.maxParallelTools }
       );
 
+      // Captured index-aligned with `resolved` so executedToolsUsed below can stamp each
+      // entry with the exact observation the model saw, success included.
+      const observations: string[] = [];
       outcomes.forEach((outcome, i) => {
         const { tc } = resolved[i];
         const params = tc.arguments || '{}';
         if (outcome.ok) {
+          observations[i] = outcome.result;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, outcome.result);
         } else {
           // A denied permission must abort, not be fed back as a result.
@@ -352,15 +381,27 @@ export class OllamaBackend implements ICompletionBackend {
           const errorMsg = `Error running ${tc.name}: ${
             outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
           }`;
+          observations[i] = errorMsg;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, errorMsg);
         }
       });
 
       // Only calls we actually ran count as used; hallucinated tool names must
-      // not inflate the reported tool list.
+      // not inflate the reported tool list. Ollama rebuilds this array (rather than
+      // mutating toolsUsed in place like other backends) so returnValue/success are
+      // stamped directly into the rebuild, index-aligned with outcomes/observations.
       const executedToolsUsed = [
         ...priorToolsUsed,
-        ...resolved.map(({ tc }) => ({ name: tc.name, arguments: tc.arguments, id: tc.id })),
+        ...resolved.map(({ tc }, i) => ({
+          name: tc.name,
+          arguments: tc.arguments,
+          id: tc.id,
+          // String(...) matches recordToolResult's own defensive wrap on the other backends -
+          // observations[i] is already a string here (executeToolsBatch<string>), but keeping
+          // the same guard means a future change to that generic can't silently drop it.
+          returnValue: truncateToolResult(String(observations[i])),
+          success: outcomes[i].ok,
+        })),
       ];
 
       // Stop before another round if the request was cancelled mid-flight, rather
@@ -506,12 +547,21 @@ export class OllamaBackend implements ICompletionBackend {
     return { content, toolCalls, completionInfo: { inputTokens, outputTokens, ...(stopReason ? { stopReason } : {}) } };
   }
 
-  /** Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape. */
+  /**
+   * Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape.
+   *
+   * Ids are real uuids, not a position-derived string. A prior version keyed ids off
+   * `accumulated-count + round-local-index`, but the accumulated count is measured AFTER
+   * hallucinated calls are filtered out while the round-local index is assigned BEFORE that
+   * filter runs, so the two can drift and mint the same id for two different real calls across
+   * rounds - replayableToolCalls dedupes by id and silently drops the later one. A uuid makes
+   * the whole collision class unrepresentable, matching how the other backends already mint ids.
+   */
   private normalizeToolCalls(toolCalls: ToolCall[]): NormalizedToolCall[] {
-    return toolCalls.map((tc, i) => ({
+    return toolCalls.map(tc => ({
       name: tc.function.name,
       arguments: JSON.stringify(tc.function.arguments ?? {}),
-      id: `ollama-tool-${i}-${tc.function.name}`,
+      id: `ollama-tool-${uuidv4()}`,
     }));
   }
 
@@ -549,7 +599,8 @@ export class OllamaBackend implements ICompletionBackend {
       const key = `${call.name}:${call.arguments}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      calls.push({ ...call, id: `ollama-content-tool-${calls.length}-${call.name}` });
+      // Real uuid, not a position-derived string - see normalizeToolCalls' doc comment.
+      calls.push({ ...call, id: `ollama-content-tool-${uuidv4()}` });
     }
     return calls;
   }

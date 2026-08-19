@@ -1,15 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { buildFabFileChunkScanFilter } from './chunkScan';
+import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
 type Doc = Record<string, unknown>;
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
+    if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
     if (cond && typeof cond === 'object' && '$ne' in cond) return value !== (cond as { $ne: unknown }).$ne;
     if (cond && typeof cond === 'object' && '$lt' in cond) return (value as Date) < (cond as { $lt: Date }).$lt;
+    if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
+    if (cond && typeof cond === 'object' && '$not' in cond)
+      return !matches({ [key]: value }, { [key]: (cond as { $not: unknown }).$not });
+    // Mongo $in with null also matches a missing field.
+    if (cond && typeof cond === 'object' && '$in' in cond)
+      return (cond as { $in: unknown[] }).$in.some(v =>
+        v === null ? value === null || value === undefined : value === v
+      );
     return value === cond;
   });
 
@@ -47,5 +56,92 @@ describe('buildFabFileChunkScanFilter', () => {
     const recent = new Date('2026-01-01T00:01:00Z'); // after cutoff
     const doc = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: recent, deletedAt: null };
     expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file already flagged as having no extractable text (terminal - would re-fail every cycle)', () => {
+    const doc = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
+    };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('still selects a file with unrelated user notes', () => {
+    const doc = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      notes: 'quarterly report, uploaded for the board deck',
+    };
+    expect(matches(doc, filter)).toBe(true);
+  });
+
+  it('skips a file whose chunking already failed (error persisted by the chunk handler)', () => {
+    const doc = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      error: 'Invalid PDF structure',
+    };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('selects a file with an empty-string or missing error field', () => {
+    const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
+    expect(matches({ ...base, error: '' }, filter)).toBe(true);
+    expect(matches({ ...base, error: null }, filter)).toBe(true);
+    expect(matches(base, filter)).toBe(true);
+  });
+
+  it('skips audio, image, and video files (0 chunks by design, not a rescue candidate)', () => {
+    const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
+    expect(matches({ ...base, mimeType: 'audio/mpeg' }, filter)).toBe(false);
+    expect(matches({ ...base, mimeType: 'image/png' }, filter)).toBe(false);
+    expect(matches({ ...base, mimeType: 'image/svg+xml' }, filter)).toBe(false);
+    expect(matches({ ...base, mimeType: 'video/mp4' }, filter)).toBe(false);
+  });
+
+  it('still selects chunkable document types', () => {
+    const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
+    expect(matches({ ...base, mimeType: 'text/markdown' }, filter)).toBe(true);
+    expect(matches({ ...base, mimeType: 'application/pdf' }, filter)).toBe(true);
+  });
+});
+
+describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const staleClaimBefore = new Date('2026-01-01T00:00:00Z'); // a claim older than this is stranded
+  const old = new Date('2025-12-31T00:00:00Z'); // before both cutoffs
+  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore);
+  const base = { status: 'complete', chunkCount: 0, createdAt: old, deletedAt: null };
+
+  it('still selects a normal not-in-progress file', () => {
+    expect(matches({ ...base, isChunking: false }, filter)).toBe(true);
+  });
+
+  it('rescues a claim stranded past the stale cutoff (worker hard-killed before its finally)', () => {
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: old }, filter)).toBe(true);
+  });
+
+  it('does NOT rescue a fresh in-flight claim (recent chunkClaimedAt)', () => {
+    const recent = new Date('2026-01-01T00:10:00Z'); // after staleClaimBefore
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: recent }, filter)).toBe(false);
+  });
+
+  it('RESCUES an isChunking:true claim with no timestamp - the backfill for files stuck before chunkClaimedAt existed', () => {
+    // Every code path that sets isChunking:true now stamps chunkClaimedAt in the same write, so a
+    // null/missing stamp on an in-flight file can only be a pre-migration straggler - which would
+    // otherwise stay claimed and unrescuable forever. The sweep re-claims it via a CAS before
+    // enqueue, so a still-running (not crashed) file isn't double-processed.
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
+    expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
   });
 });

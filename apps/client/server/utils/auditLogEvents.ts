@@ -55,6 +55,11 @@ export enum AdminOrgAuditEvents {
   ORG_GRANTED = 'ORG_GRANTED',
   ORG_TOPPED_UP = 'ORG_TOPPED_UP',
   ORG_SEATS_CHANGED = 'ORG_SEATS_CHANGED',
+  // Domain-signup provisioning raised the seat ceiling to admit a partner-rule user instead of
+  // rejecting at capacity (#1239). System action (no admin actor); the audited userId is the
+  // admitted user, with the org, before/after ceiling, and trigger route in metadata - a raise
+  // nobody can see is indistinguishable from having no ceiling at all.
+  ORG_SEAT_CEILING_RAISED = 'ORG_SEAT_CEILING_RAISED',
   ORG_CONVERT_INITIATED = 'ORG_CONVERT_INITIATED',
   ORG_REVOKED = 'ORG_REVOKED',
   // Group-type grant/revoke (org-groups #1172). One event carries the diff (added/removed types

@@ -2,8 +2,14 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -14,6 +20,12 @@ const handler = baseApi().post(
     // Toggling a lake's `datalake:*` meta-tag onto a file is a WRITE into that lake, so gate it
     // with the creator/admin check so this path can't inject files into a lake the caller only
     // reads (mirrors the remove path).
+    //
+    // This gate covers meta-tag names ONLY and deliberately is not extended to cover a
+    // fileTagPrefix content tag (also membership, since #1263): it has no resolved file list, so
+    // it cannot know the file OWNER a prefix-arm leave/join is anchored to. That check lives
+    // entirely in the service layer (`toggleTags`'s own prefix-arm gate below) - do not duplicate
+    // it here.
     const toggledTags: string[] = Array.isArray((req.body as { tags?: unknown })?.tags)
       ? (req.body as { tags: unknown[] }).tags.filter((t): t is string => typeof t === 'string')
       : [];
@@ -21,31 +33,21 @@ const handler = baseApi().post(
       { userId: req.user.id, isAdmin: !!req.user.isAdmin },
       toggledTags,
       {
-        db: { dataLakes: dataLakeRepository },
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       }
     );
 
-    const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
-      db: { dataLakes: dataLakeRepository },
+    const result = await fabFilesService.toggleTags(req.user.id, req.body, {
+      db: {
+        fabFiles: fabFileRepository,
+        fileTags: fileTagRepository,
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        users: userRepository,
+        ...lakeConfigAuditDb,
+      },
       logger: req.logger,
     });
-
-    const result = await fabFilesService.toggleTags(
-      req.user.id,
-      {
-        ...(req.body as any),
-      },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          fileTags: fileTagRepository,
-          users: userRepository,
-        },
-        // One memoized tagger for the request: this door reconciles every file in the batch, so
-        // the one-shot form would re-read the same lake once per file.
-        reconcileTags: (tags, previousTags) => applyFallbackTags(tags, { previousTags }),
-      }
-    );
 
     return res.json(result);
   })

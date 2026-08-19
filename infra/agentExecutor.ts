@@ -79,6 +79,12 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     },
     { actions: ['events:PutEvents'], resources: ['*'] },
     {
+      // Lumina5/ModelSunset (deprecated model pins) and Lumina5/AgentExecutor metrics.
+      // PutMetricData takes no resource scope.
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    },
+    {
       // SQS permission for self-dispatch via continuation queue
       actions: ['sqs:SendMessage'],
       resources: [agentContinuationQueue.arn],

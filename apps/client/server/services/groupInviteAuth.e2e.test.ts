@@ -55,8 +55,12 @@ afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
 }, 30000);
+// Targeted deletes, not dropDatabase(): dropping the database discards the indexes too, so every
+// subsequent test pays to rebuild them on first write, which is a real cost across 8 cases on a
+// contended CI shard. Group.deleteMany also clears the raw `groups` insert the legacy-group case
+// makes below, since it is the same collection.
 afterEach(async () => {
-  await mongoose.connection.dropDatabase();
+  await Promise.all([Organization.deleteMany({}), Group.deleteMany({}), Invite.deleteMany({})]);
 });
 
 // Seeds an org with a users[]-share grant for memberUser, a group under it, and a
