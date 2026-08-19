@@ -110,7 +110,12 @@ export class BFLImageService extends AIImageService {
           }
 
           const cleanedBody = this.stripNullFields(requestBody);
-          Logger.globalInstance.debug('[DEBUG] BFL Image generation request body:', cleanedBody);
+          // .log(), not .debug(), so the actual outbound payload is visible at the default log
+          // level. image_prompt is redacted, mirroring transform()'s input_image redaction below.
+          const safeRequestBody = cleanedBody.image_prompt
+            ? { ...cleanedBody, image_prompt: `[BASE64_DATA_${(cleanedBody.image_prompt as string).length}_CHARS]` }
+            : cleanedBody;
+          Logger.globalInstance.log('[DEBUG] BFL Image generation request body:', safeRequestBody);
 
           // Submit a new generation request for each image
           const submitResponse = await axios.post(`${this.baseUrl}/${model}`, cleanedBody, {
