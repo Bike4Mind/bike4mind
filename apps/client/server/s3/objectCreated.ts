@@ -57,6 +57,17 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ fabFileId: metadata.id, ownerId: metadata.userId });
 
+    // `status` tracks the UPLOAD, and the bytes are in S3 by the time this event fires, so
+    // record it here rather than at the end of the transaction below. Everything after this
+    // point can bail out (missing owner) or throw (a scan that keeps failing), and either
+    // would otherwise strand the record on 'pending' - permanently invisible to content-hash
+    // dedup, which excludes 'pending' as a never-landed upload (FabFileModel.findByContentHashes).
+    // Serving stays gated by moderationStatus, which this does not touch.
+    if (metadata.status !== 'complete') {
+      await FabFile.updateOne({ _id: metadata._id }, { $set: { status: 'complete' } });
+      metadata.status = 'complete';
+    }
+
     // Atomically claim the right to scan this file BEFORE the transaction
     // below touches it. `metadata` above was read outside a transaction with retry/backoff
     // - two concurrent invocations (a slow in-flight scan racing an S3 at-least-once
@@ -148,7 +159,6 @@ export const func = withContext(async (event, context, logger) => {
         }
       }
 
-      metadata.status = 'complete';
       changeStorageSize(user, object.size);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
