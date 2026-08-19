@@ -20,7 +20,8 @@ import { Config, classifyStage } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
-  recordFeedbackDeliverySkipped,
+  buildFeedbackDeliverySkippedMetrics,
+  emitFeedbackDeliveryMetrics,
   ALARM_WORTHY_SKIP_REASONS,
 } from '@server/utils/cloudwatch';
 import sanitizeHtml from 'sanitize-html';
@@ -121,7 +122,12 @@ const handler = baseApi()
 
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
-    // recorded here since it never even calls into postFeedbackToSlack.
+    // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
+    // email 'disabled'/'no_recipients' skips) into one batched PutMetricData call rather than one
+    // per channel - on a fresh install with both channels off by default, that's the difference
+    // between one CloudWatch call and two per feedback submission.
+    const disabledChannelMetrics: ReturnType<typeof buildFeedbackDeliverySkippedMetrics> = [];
+
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
@@ -136,7 +142,9 @@ const handler = baseApi()
       );
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('slack', stageClass, 'disabled', Config.STAGE)
+      );
     }
 
     // Split the FeedbackReceiveEmail setting into individual addresses, trimmed: a
@@ -154,10 +162,14 @@ const handler = baseApi()
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('email', stageClass, 'disabled', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', stageClass, 'disabled', Config.STAGE)
+      );
     } else if (feedbackEmails.length === 0) {
       email = { outcome: 'skipped', reason: 'no_recipients' };
-      await recordFeedbackDeliverySkipped('email', stageClass, 'no_recipients', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', stageClass, 'no_recipients', Config.STAGE)
+      );
     } else {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
@@ -333,6 +345,10 @@ const handler = baseApi()
       // return success with a rejected entry that nothing in this repo currently checks for, and
       // SMTP delivery itself happens in a separate, uninstrumented subsystem.
       email = succeeded > 0 ? { outcome: 'delivered' } : { outcome: 'failed', reason: 'error' };
+    }
+
+    if (disabledChannelMetrics.length > 0) {
+      await emitFeedbackDeliveryMetrics(disabledChannelMetrics);
     }
 
     const delivery: FeedbackDeliveryResult = {

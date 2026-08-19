@@ -79,13 +79,15 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.
 
 const mockRecordSuccess = vi.fn();
 const mockRecordFailure = vi.fn();
-const mockRecordSkipped = vi.fn();
+const mockEmitMetrics = vi.fn();
 vi.mock('@server/utils/cloudwatch', async () => {
   const actual = await vi.importActual<typeof import('@server/utils/cloudwatch')>('@server/utils/cloudwatch');
   return {
     recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
     recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),
-    recordFeedbackDeliverySkipped: (...args: unknown[]) => mockRecordSkipped(...args),
+    // Pure builder - safe to pass through unmocked; only the AWS-calling emit needs a mock.
+    buildFeedbackDeliverySkippedMetrics: actual.buildFeedbackDeliverySkippedMetrics,
+    emitFeedbackDeliveryMetrics: (...args: unknown[]) => mockEmitMetrics(...args),
     ALARM_WORTHY_SKIP_REASONS: actual.ALARM_WORTHY_SKIP_REASONS,
   };
 });
@@ -125,6 +127,16 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(mockPostFeedbackToSlack).not.toHaveBeenCalled();
     const body = res._getJSONData();
     expect(body.delivery.channels.slack).toEqual({ outcome: 'skipped', reason: 'disabled' });
+  });
+
+  it('batches the Slack and email disabled-skip metrics into one emitFeedbackDeliveryMetrics call', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockEmitMetrics).toHaveBeenCalledTimes(1);
+    const [metrics] = mockEmitMetrics.mock.calls[0];
+    const channels = metrics.map((m: { dimensions?: { channel?: string } }) => m.dimensions?.channel).filter(Boolean);
+    expect(channels).toEqual(expect.arrayContaining(['slack', 'email']));
   });
 
   it('calls postFeedbackToSlack once when enabled and reports its outcome verbatim', async () => {
