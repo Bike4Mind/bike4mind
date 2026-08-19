@@ -451,6 +451,17 @@ async function emitDeliveryFailureMetrics(
     );
   }
 
+  // Dimensionless copy of the total: webhookDeliveryHighFailures (infra/alarms.ts) alarms on
+  // this metric with no dimension filter, so it needs its own dimensionless data point to
+  // receive any data - see apps/client/server/utils/cloudwatch.ts:recordWebhookDeliveryFailure
+  // for the same pattern on the per-user MCP delivery path.
+  const totalFailureCount = counts.handlerErrorCount + counts.perUserFailureCount + counts.dispatchErrorCount;
+  if (totalFailureCount > 0) {
+    emissions.push(
+      emitWebhookDeliveryMetric(WebhookMetrics.DELIVERY_FAILED, totalFailureCount, {}, StandardUnit.Count)
+    );
+  }
+
   await Promise.all(emissions);
 }
 
