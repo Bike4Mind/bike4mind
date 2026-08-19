@@ -31,7 +31,7 @@ On a new account, Projects has not earned a sidebar spot yet, so you start from 
 2. Click **Create your first project** (then **Create your first project** again on the Projects page)
 3. Enter a name and description, optionally add notebooks or files, and click **Create Project**
 
-![Creating your first project from Gears](./media/create-project-new-account.gif)
+![Creating your first project from Gears](https://youtu.be/noO3j87PBF4)
 
 ### From the sidebar
 
@@ -41,7 +41,7 @@ Once you have at least one project, **Projects** appears in the sidebar:
 2. Click **New Project**
 3. Enter a name and description, optionally add notebooks or files, and click **Create Project**
 
-![Creating a project from the sidebar](./media/create-project-existing-account.gif)
+![Creating a project from the sidebar](https://youtu.be/EwOTKKsl110)
 
 ### Project Settings
 

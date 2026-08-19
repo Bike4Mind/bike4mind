@@ -50,7 +50,7 @@ Research Mode is a beta feature, so you turn it on in two places.
 3. Toggle **Enable** on
 4. Configure your model slots (below)
 
-![Enabling Research Mode](https://youtu.be/leGHirtEQHQ)
+![Enabling Research Mode](https://youtu.be/oBI53Bfn6ik)
 
 ### Configuring Models
 
@@ -62,7 +62,7 @@ For each of the 4 slots, you can set:
 | **Temperature** | Control response creativity (0.0 - 1.0+) |
 | **Max Tokens** | Limit response length |
 
-![Configuring Research Mode models](https://youtu.be/vgjfpNUAzt4)
+![Configuring Research Mode models](https://youtu.be/NPR-CBbxeZk)
 
 ### Example Configurations
 
@@ -97,7 +97,7 @@ Results appear in a grid layout:
 - **Mobile**: Stacked cards you can scroll through
 - Each response shows the model name and settings
 
-![Viewing Research Mode results](https://youtu.be/4n8JIUsYHzg)
+![Viewing Research Mode results](https://youtu.be/SYdIjTKrXu8)
 
 ### Comparing Responses
 
