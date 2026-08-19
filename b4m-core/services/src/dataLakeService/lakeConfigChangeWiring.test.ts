@@ -461,6 +461,7 @@ describe('lifecycle services', () => {
       update: echoUpdate(existing),
       setStats: vi.fn(),
       activateIfDraft: vi.fn().mockResolvedValue(false),
+      claimRestoring: vi.fn().mockResolvedValue(true),
       find: vi.fn().mockResolvedValue([]),
       claimFilesArchivedAt: vi.fn().mockResolvedValue(new Date()),
       claimFilesDeletedAt: vi.fn().mockResolvedValue(new Date()),
