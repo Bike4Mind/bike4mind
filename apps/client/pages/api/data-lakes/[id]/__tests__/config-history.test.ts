@@ -133,6 +133,21 @@ describe('GET /api/data-lakes/[id]/config-history', () => {
       );
     });
 
+    it('sends undefined for a BARE ?limit=, not 0 - otherwise the owner silently gets a one-row history', async () => {
+      // The reason the route reads `limit ? Number(limit) : undefined` rather than `limit == null`.
+      // An empty query value arrives as '', `Number('')` is 0, and the service's clamp floors 0 to 1,
+      // so the truthiness check is load-bearing: swapping it for a null check would ship a one-row
+      // history with a green suite.
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1', limit: '' }), res);
+
+      expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ limit: undefined })
+      );
+    });
+
     it('serves a page instead of a 400 for a garbage limit - the service clamps a NaN to the default', async () => {
       const { res, json } = makeRes();
 
