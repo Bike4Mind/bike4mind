@@ -286,11 +286,62 @@ describe('SSRF - IPv6 spellings missed by per-hextet prefix arms (fe00::/9, unco
   it('still refuses zero-padded spellings that are too malformed to canonicalise', () => {
     // `normalizeIpv6` returns input it cannot parse untouched, which is the only path that still reaches
     // the zero-padded prefix arms. Without them these read as public, so this is the guard against
-    // deleting those arms as unreachable.
-    expect(isPrivateIP('2001:0db8:zz::1')).toBe(true);
-    expect(isPrivateIP('2001:0000:zz::1')).toBe(true);
-    expect(isPrivateIP('0064:ff9b:zz::1')).toBe(true);
-    expect(isPrivateIP('0100::zz:1')).toBe(true);
+    // deleting those arms as unreachable. An over-long hextet is the reason they bail out here; garbage
+    // carrying non-hex letters is refused earlier by the charset gate instead (see below).
+    expect(isPrivateIP('2001:0db8:12345::1')).toBe(true);
+    expect(isPrivateIP('2001:0000:12345::1')).toBe(true);
+    expect(isPrivateIP('0064:ff9b:12345::1')).toBe(true);
+    expect(isPrivateIP('0100::12345:1')).toBe(true);
+    // Non-hex garbage is not an address in any spelling, so it is not this predicate's `true` to give.
+    expect(isPrivateIP('2001:0db8:zz::1')).toBe(false);
+  });
+
+  it('refuses the special-purpose ranges IANA assigned after the arm list was written', () => {
+    // RFC 9637 documentation and RFC 9602 SRv6 SID space, both 2024. Same category as the 2001:db8::/32
+    // arm that already exists, and the reason the list needs range tests rather than remembered prefixes.
+    expect(isPrivateIP('3fff::1')).toBe(true);
+    expect(isPrivateIP('3fff:fff:ffff::1')).toBe(true);
+    expect(isPrivateIP('5f00::1')).toBe(true);
+    expect(isPrivateIP('5f00:ffff::1')).toBe(true);
+    // The /20 boundary matters: above it is unassigned global unicast IANA can still allocate, so a
+    // `3fff:` prefix test would over-block it.
+    expect(isPrivateIP('3fff:1000::1')).toBe(false);
+    expect(isPrivateIP('3fff:ffff::1')).toBe(false);
+    expect(isPrivateIP('5f01::1')).toBe(false);
+  });
+
+  it('only decodes an embedded IPv4 from an exact dotted quad', () => {
+    // `::ffff:1:2:3:8.8.8.8` is inside reserved 0000::/16 and is NOT a mapped address - hextets 4-6 are
+    // non-zero. Judging it by its trailing quad alone let it pass as public.
+    expect(isPrivateIP('::ffff:1:2:3:8.8.8.8')).toBe(true);
+    expect(isPrivateIP('::1:2:3:8.8.8.8')).toBe(true);
+    // The real mapped and compatible forms still resolve through their embedded IPv4, both ways.
+    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true);
+  });
+
+  it('reads a literal the same whether it carries a port or a zone index', () => {
+    // `stripIpv6Brackets` needs the string to END in `]`, so a bracketed literal with a port used to
+    // reach the arms still bracketed and match nothing. A zone index is not part of the address either.
+    expect(isPrivateIP('[fe80::1]:8080')).toBe(true);
+    expect(isPrivateIP('[0:0:0:0:0:ffff:127.0.0.1]:443')).toBe(true);
+    expect(isPrivateIP('fe80::1%eth0')).toBe(true);
+    expect(isPrivateIP('[2606:4700::1111]:443')).toBe(false);
+  });
+
+  it('does not misread a dotted quad that sits in the head half', () => {
+    // A quad is only legal as the last two hextets; in the head half the zero-fill index over-counts and
+    // the canonical form names a different address, so this input must take the bail-out instead.
+    expect(isPrivateIP('2001:db8:1.2.3.4::')).toBe(true);
+    expect(isPrivateIP('2606:4700:1.2.3.4::')).toBe(false);
+    // The discriminating pair: without the guard these canonicalise to `::1.2.3.4` - the zero-fill lands
+    // one hextet too far right and swallows the leading `0`, so the reserved-space refusal is lost and a
+    // public embedded quad decides the verdict instead.
+    expect(isPrivateIP('0:1.2.3.4::')).toBe(true);
+    expect(isPrivateIP('0:0:1.2.3.4::')).toBe(true);
   });
 
   it('does not read a hostname as an address in a family whose letters it shares', () => {
@@ -302,6 +353,7 @@ describe('SSRF - IPv6 spellings missed by per-hextet prefix arms (fe00::/9, unco
     expect(isPrivateIP('fe.example.com')).toBe(false);
     expect(isPrivateIP('ffmpeg.org')).toBe(false);
     expect(isPrivateIP('fdic.gov')).toBe(false);
+    expect(isPrivateIP('fedex.com:8080')).toBe(false);
     // The addresses those names were being confused with are still refused.
     expect(isPrivateIP('fe00::1')).toBe(true);
     expect(isPrivateIP('ff02::1')).toBe(true);
