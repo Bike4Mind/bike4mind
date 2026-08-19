@@ -60,6 +60,7 @@ const ComingSoon = () => {
         }}
       >
         <Input
+          data-testid="coming-soon-email-input"
           placeholder="Your Email Address"
           type="email"
           value={email}
@@ -67,6 +68,7 @@ const ComingSoon = () => {
           sx={{ width: '100%', maxWidth: '400px' }}
         />
         <Button
+          data-testid="coming-soon-submit-btn"
           type="submit"
           sx={{ mt: 2, backgroundColor: 'primary', '&:hover': { backgroundColor: 'primary.dark' } }}
         >
