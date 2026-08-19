@@ -125,6 +125,29 @@ export interface AssembleLakeConfigHistoryAdapters {
  *
  * Entries stay chronological and un-aggregated - see `LakeConfigHistoryEntry`.
  */
+/**
+ * The audited fields whose VALUES are user ids. Deliberately just these two: `organizationId` and
+ * `preferredSystemPromptId` are ids as well, but of other entities, so putting them through a user
+ * lookup would produce a confidently wrong name rather than a missing one.
+ *
+ * `effectiveOwnerUserId`'s `before` can be a COMMA-JOINED set - `ownershipChange` joins the prior
+ * owners rather than emitting a list, because the value shape is scalar - so each side is split.
+ */
+const IDENTITY_VALUE_FIELDS = new Set(['effectiveOwnerUserId', 'createdByUserId']);
+
+/** Every ObjectId-shaped user id appearing as a VALUE in one entry's changes. */
+function identityValueIds(changes: readonly LakeConfigHistoryFieldChange[]): string[] {
+  const ids: string[] = [];
+  for (const change of changes) {
+    if (change.kind !== 'literal' || !IDENTITY_VALUE_FIELDS.has(change.field)) continue;
+    for (const side of [change.before, change.after]) {
+      if (typeof side !== 'string') continue;
+      for (const id of side.split(',')) if (isObjectIdShaped(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
 export async function assembleLakeConfigHistory(
   lake: Pick<IDataLakeDocument, 'id' | 'name'>,
   { db, limit, now = new Date() }: AssembleLakeConfigHistoryAdapters
@@ -146,6 +169,11 @@ export async function assembleLakeConfigHistory(
   for (const entry of entries) {
     if (entry.principalKind === 'user' && isObjectIdShaped(entry.principalId)) userIds.add(entry.principalId);
     if (entry.onBehalfOfUserId && isObjectIdShaped(entry.onBehalfOfUserId)) userIds.add(entry.onBehalfOfUserId);
+    // Identity fields carry user ids as their VALUES, and the transfer row is the one an owner most
+    // comes here for - unresolved it reads as two opaque hex strings in the column that exists to
+    // say what changed. Folded into the SAME batch as the principals, so this costs no extra round
+    // trip however many rows reference an identity.
+    for (const id of identityValueIds(entry.changes)) userIds.add(id);
   }
   const users = userIds.size > 0 ? await db.users.findByIds(Array.from(userIds)) : [];
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
@@ -163,5 +191,11 @@ export async function assembleLakeConfigHistory(
     // the list is all-time. Events come back newest-first, so that is the last element.
     windowStartsAt: truncated ? entries[entries.length - 1]?.changedAt : undefined,
     generatedAt: now,
+    // Only the ids that actually resolved to a NAME. Absent covers both "no user record" and "a user
+    // with neither name nor username" - userDisplayName deliberately never falls back to email - and
+    // in both cases the consumer's raw-id fallback is what should fire, not an empty cell.
+    userNames: Object.fromEntries(
+      Array.from(userNameById).filter((pair): pair is [string, string] => pair[1] !== undefined)
+    ),
   };
 }
