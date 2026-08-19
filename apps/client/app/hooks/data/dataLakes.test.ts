@@ -46,6 +46,8 @@ import {
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
   useRechunkDataLake,
+  useSetLakeVisibility,
+  useArchiveDataLake,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -509,6 +511,67 @@ describe('nextRebuildPoll', () => {
     let state = nextRebuildPoll(3, start).next;
     state = nextRebuildPoll(0, state).next; // one settle poll consumed
     expect(nextRebuildPoll(5, state).next.settlePolls).toBe(0);
+  });
+});
+
+/**
+ * A config write adds a history row, and the History tab renders in the same modal that submitted
+ * it. `useUpdateDataLake` invalidated that key from the start; these two did not, and only got away
+ * with it because the history query pairs `staleTime: 0` with an `enabled` toggle that flips on tab
+ * switch. That is an incidental refetch, not a guarantee - raising staleTime or dropping the toggle
+ * would strand the row the owner just created. These pin the invalidation itself.
+ *
+ * The key is asserted as the literal `['dataLakeConfigHistory', 'lake1']` prefix rather than through
+ * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
+ * still pass if that helper's shape drifted away from what the query is actually keyed under.
+ */
+describe('config-history invalidation on the non-update config writes', () => {
+  const mountWith = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { wrapper, invalidate };
+  };
+  const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  it("useSetLakeVisibility invalidates the changed lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+
+    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', visibility: 'public' });
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("a lifecycle action invalidates the acted-on lake's history", async () => {
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { success: true } });
+
+    const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it('scopes the invalidation to that one lake, never the whole history root', async () => {
+    // configHistory sits outside the `list` prefix precisely so a rename does not refetch every
+    // lake's history (see dataLakeKeys.ts). Invalidating the bare root here would undo that.
+    const { wrapper, invalidate } = mountWith();
+    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+
+    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', visibility: 'private' });
+    });
+
+    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
   });
 });
 
