@@ -15,11 +15,11 @@ import { Logger } from '@bike4mind/observability';
  * and it is the opposite contract on purpose - a write is a validated command, not a best-effort
  * read, so an invalid key/scope/value throws before anything reaches the database.
  *
- * The one guarantee this module exists to make structural rather than conventional: a write can
- * never leave the cache stale. `invalidateScopedSettingsCache` already existed but had no caller -
- * every write path was left to a future caller to remember it (exactly the trap the issue that
- * created this file describes). Bundling the DB write and the invalidation in one function means a
- * caller cannot do one without the other.
+ * The guarantee this module exists to make structural rather than conventional: invalidation cannot
+ * be forgotten. `invalidateScopedSettingsCache` already existed but had no caller - every write path
+ * was left to a future caller to remember it (exactly the trap the issue that created this file
+ * describes). Bundling the DB write and the invalidation in one function means a caller cannot do one
+ * without the other; the cross-instance caveat below still applies.
  *
  * Cross-instance staleness bound: invalidation here only clears the CURRENT process's
  * `ScopedSettingsCache`. A written or cleared override is visible on this instance's very next

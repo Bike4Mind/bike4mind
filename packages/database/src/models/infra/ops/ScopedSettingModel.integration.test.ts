@@ -5,9 +5,9 @@ import { createMongoServer } from '../../../__test__/createMongoServer';
 import { ScopedSetting, scopedSettingsRepository } from './ScopedSettingModel';
 
 /**
- * Real-Mongo guard for the scoped-override store (#1660). Hand-mocked repos cannot exercise the unique
- * index or the soft-delete read filter, and the delete-then-recreate collision (blocking review item)
- * is precisely what only a real index catches.
+ * Real-Mongo guard for the scoped-override store (#1660) and its writer (#1728). Hand-mocked repos
+ * cannot exercise the unique index or the soft-delete read filter, and the delete-then-recreate
+ * collision (blocking review item) is precisely what only a real index catches.
  */
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -119,5 +119,54 @@ describe('ScopedSettingModel unique index + soft delete', () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].scopeId).toBe('l1');
+  });
+});
+
+describe('ScopedSettingsRepository.upsertOverride / clearOverride (#1728)', () => {
+  it('creates a live row readable via findOverrides', async () => {
+    const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY };
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000' });
+
+    const rows = await scopedSettingsRepository.findOverrides([{ scopeLevel: addr.scopeLevel, scopeId: 'l1' }], [KEY]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].settingValue).toBe('1000');
+  });
+
+  it('upserting again at the same address updates the live row in place, not a duplicate', async () => {
+    const addr = { scopeLevel: SettingScopeLevel.Owner, scopeId: 'u1', settingName: KEY };
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000' });
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '2000' });
+
+    const rows = await scopedSettingsRepository.findOverrides([{ scopeLevel: addr.scopeLevel, scopeId: 'u1' }], [KEY]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].settingValue).toBe('2000');
+  });
+
+  it('clearOverride then upsertOverride at the same address does not throw E11000 (tombstone reinsert)', async () => {
+    const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY };
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000' });
+    await scopedSettingsRepository.clearOverride(addr);
+
+    await expect(scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '2000' })).resolves.toMatchObject({
+      settingValue: '2000',
+    });
+
+    const rows = await scopedSettingsRepository.findOverrides([{ scopeLevel: addr.scopeLevel, scopeId: 'l1' }], [KEY]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].settingValue).toBe('2000');
+  });
+
+  it('clearOverride excludes the row from findOverrides', async () => {
+    const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY };
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000' });
+    await scopedSettingsRepository.clearOverride(addr);
+
+    const rows = await scopedSettingsRepository.findOverrides([{ scopeLevel: addr.scopeLevel, scopeId: 'l1' }], [KEY]);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('clearOverride on an address with no live row is a no-op', async () => {
+    const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l-never-set', settingName: KEY };
+    await expect(scopedSettingsRepository.clearOverride(addr)).resolves.toBeUndefined();
   });
 });
