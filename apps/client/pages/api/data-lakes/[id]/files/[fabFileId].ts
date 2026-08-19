@@ -30,6 +30,7 @@ const handler = baseApi()
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fabFiles: fabFileRepository,
       },
+      logger: req.logger,
     });
 
     return res.json(result);

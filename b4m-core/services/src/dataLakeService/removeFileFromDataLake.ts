@@ -2,6 +2,7 @@ import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepos
 import { NotFoundError } from '@bike4mind/utils';
 import { removeFileFromLake, type MembershipActor } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
 
 interface RemoveFileFromDataLakeAdapters {
   db: {
@@ -9,6 +10,11 @@ interface RemoveFileFromDataLakeAdapters {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
+  /** Forwarded into the stats recompute so an audit-write failure there is logged at `error` like
+   *  every other config-write path, instead of falling through to a bare console.error. Removing a
+   *  file can still reach activateIfDraft's draft->active flip, so this call site really can emit an
+   *  audit row - it is not merely parity with its siblings. */
+  logger?: LakeConfigAuditLogger;
 }
 
 /**
@@ -81,7 +87,7 @@ export const removeFileFromDataLake = async (
   actor: MembershipActor,
   dataLakeId: string,
   fabFileId: string,
-  { db }: RemoveFileFromDataLakeAdapters
+  { db, logger }: RemoveFileFromDataLakeAdapters
 ): Promise<{ success: true; fileCount: number; totalSizeBytes: number }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -90,6 +96,6 @@ export const removeFileFromDataLake = async (
 
   await removeFileFromLake(actor, lake, fabFileId, { db });
 
-  const stats = await recomputeLakeStats(lake, { db });
+  const stats = await recomputeLakeStats(lake, { db, logger });
   return { success: true, ...stats };
 };
