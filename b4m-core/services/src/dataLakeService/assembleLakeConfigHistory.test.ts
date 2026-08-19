@@ -287,6 +287,106 @@ describe('assembleLakeConfigHistory', () => {
     });
   });
 
+  /**
+   * Identity fields carry user ids as their VALUES. Unresolved, the transfer row - the row an owner
+   * is most likely to open this surface for - reads as two opaque hex strings in the very column
+   * that exists to say what changed, while the Who cell one column left shows a name.
+   */
+  describe('identity values resolved to names', () => {
+    const transfer = (before: string | undefined, after: string) =>
+      event({
+        action: 'transfer-ownership',
+        changes: [{ field: 'effectiveOwnerUserId', kind: 'literal', before, after }],
+      });
+
+    it('resolves both sides of a transfer into userNames', async () => {
+      // Mock is id-SENSITIVE on purpose: a fixture that returns the same users whatever it is asked
+      // for would keep passing even if the identity ids were never collected, which is precisely the
+      // regression this test exists to catch.
+      const directory: Record<string, string> = {
+        '000000000000000000000011': 'Ada Lovelace',
+        '000000000000000000000022': 'Grace Hopper',
+      };
+      const findByIds = vi
+        .fn()
+        .mockImplementation(async (ids: string[]) =>
+          ids.filter(id => directory[id]).map(id => ({ id, name: directory[id] }))
+        );
+      const { adapters: a } = adapters([transfer('000000000000000000000011', '000000000000000000000022')], {
+        findByIds,
+      });
+      const view = await assembleLakeConfigHistory(lake(), a);
+
+      expect(view.userNames).toEqual({
+        '000000000000000000000011': 'Ada Lovelace',
+        '000000000000000000000022': 'Grace Hopper',
+      });
+    });
+
+    it('splits a comma-joined prior-owner set, which is how ownershipChange records it', async () => {
+      const findByIds = vi.fn().mockResolvedValue([]);
+      const { adapters: a } = adapters(
+        [transfer('000000000000000000000011,000000000000000000000022', '000000000000000000000033')],
+        { findByIds }
+      );
+      await assembleLakeConfigHistory(lake(), a);
+
+      // All three identity ids reach the ONE batched lookup - a joined set must not be treated as a
+      // single id. The event's own user principal ...0001 rides in the same batch, which is the point.
+      expect(findByIds.mock.calls[0][0].sort()).toEqual([
+        '000000000000000000000001',
+        '000000000000000000000011',
+        '000000000000000000000022',
+        '000000000000000000000033',
+      ]);
+    });
+
+    it('folds identity ids into the SAME batch as the principals - one round trip, not two', async () => {
+      const findByIds = vi.fn().mockResolvedValue([]);
+      const { adapters: a } = adapters([transfer(undefined, '000000000000000000000022')], { findByIds });
+      await assembleLakeConfigHistory(lake(), a);
+      expect(findByIds).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT look up organizationId or preferredSystemPromptId - they are ids of other entities', async () => {
+      // Resolving these through a USER lookup would produce a confidently wrong name, which is worse
+      // than the raw id it replaces.
+      const findByIds = vi.fn().mockResolvedValue([]);
+      const { adapters: a } = adapters(
+        [
+          event({
+            changes: [
+              { field: 'organizationId', kind: 'literal', before: '000000000000000000000044' },
+              { field: 'preferredSystemPromptId', kind: 'literal', after: '000000000000000000000055' },
+            ],
+          }),
+        ],
+        { findByIds }
+      );
+      await assembleLakeConfigHistory(lake(), a);
+
+      // Only the event's own user principal is looked up, never the two id-valued non-user fields.
+      expect(findByIds.mock.calls[0][0]).toEqual(['000000000000000000000001']);
+    });
+
+    it('omits an unresolvable id from userNames, so the consumer falls back to the raw id', async () => {
+      const findByIds = vi.fn().mockResolvedValue([]);
+      const { adapters: a } = adapters([transfer(undefined, '000000000000000000000099')], { findByIds });
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(view.userNames['000000000000000000000099']).toBeUndefined();
+    });
+
+    it('never hands a malformed identity value to findByIds', async () => {
+      // Same reason as the principal guard: findByIds throws on a non-24-hex id, which would turn one
+      // bad stored value into a 500 for the entire history.
+      const findByIds = vi.fn().mockResolvedValue([]);
+      const { adapters: a } = adapters([transfer('system', 'not-an-objectid')], { findByIds });
+      const view = await assembleLakeConfigHistory(lake(), a);
+      expect(findByIds.mock.calls[0][0]).toEqual(['000000000000000000000001']);
+      expect(view.userNames).toEqual({});
+    });
+  });
+
   describe('principal name resolution', () => {
     it('resolves a user principal and the on-behalf human in ONE batched lookup', async () => {
       const findByIds = vi.fn().mockResolvedValue([
