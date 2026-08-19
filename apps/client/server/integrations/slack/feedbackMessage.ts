@@ -9,7 +9,13 @@ import { escapeSlackText } from '@bike4mind/services';
  */
 export interface FeedbackPromptMetaInput {
   model?: { name?: string };
-  tokenUsage?: { totalTokens?: number; actualTotalTokens?: number; estimatedCost?: number };
+  tokenUsage?: {
+    totalTokens?: number;
+    actualTotalTokens?: number;
+    actualInputTokens?: number;
+    actualOutputTokens?: number;
+    estimatedCost?: number;
+  };
   finishReason?: string;
   functionCalls?: Array<{ name?: string }> | null;
   citables?: unknown[];
@@ -17,6 +23,24 @@ export interface FeedbackPromptMetaInput {
 }
 
 const MAX_FUNCTION_CALL_NAMES = 5;
+const MAX_DATA_LAKE_TAGS = 5;
+// Slack's incoming-webhook `text` has a documented ~40k character ceiling, but a crafted
+// submission pushing anywhere near that turns into a delivery failure (and the alarm noise
+// that follows) rather than just an unreadable message - cap well under it so an oversized
+// field truncates the message instead of losing it.
+const MAX_MESSAGE_CHARS = 3000;
+
+/** `$1.23e-7` / `$0.30000000000000004` -> a plain, short decimal string. */
+function formatCost(cost: number): string {
+  return String(parseFloat(cost.toFixed(4)));
+}
+
+/** Joins the first `max` items, appending a "+N more" marker for anything past that. */
+function joinWithOverflow(items: string[], max: number): string {
+  const shown = items.slice(0, max);
+  const overflow = items.length - shown.length;
+  return overflow > 0 ? `${shown.join(', ')}, +${overflow} more` : shown.join(', ');
+}
 
 /**
  * A short, readable summary of the diagnostic signals that matter for triaging a bug
@@ -35,10 +59,21 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   }
 
   const tokenUsage = promptMeta.tokenUsage;
-  const totalTokens = tokenUsage?.totalTokens ?? tokenUsage?.actualTotalTokens;
-  if (totalTokens !== undefined) {
-    const cost = tokenUsage?.estimatedCost !== undefined ? `, est. cost $${tokenUsage.estimatedCost}` : '';
-    lines.push(`Tokens: ${totalTokens}${cost}`);
+  // actualTotalTokens is a field the completion pipeline has never actually populated (it
+  // writes actualInputTokens/actualOutputTokens instead) - sum those as a further fallback so
+  // a real completion's usage isn't silently dropped just because the summed field is absent.
+  const actualSum =
+    tokenUsage?.actualInputTokens !== undefined && tokenUsage?.actualOutputTokens !== undefined
+      ? tokenUsage.actualInputTokens + tokenUsage.actualOutputTokens
+      : undefined;
+  const totalTokens = tokenUsage?.totalTokens ?? tokenUsage?.actualTotalTokens ?? actualSum;
+  const cost = tokenUsage?.estimatedCost;
+  // Rendered whenever EITHER is present, not gated on totalTokens alone - a cost recorded
+  // without a token total (or vice versa) would otherwise silently vanish from the summary.
+  if (totalTokens !== undefined || cost !== undefined) {
+    const tokensPart = totalTokens !== undefined ? `${totalTokens}` : 'unknown';
+    const costPart = cost !== undefined ? `, est. cost $${formatCost(cost)}` : '';
+    lines.push(`Tokens: ${tokensPart}${costPart}`);
   }
 
   if (promptMeta.finishReason !== undefined) {
@@ -50,17 +85,22 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
     const names = functionCalls
       .map(fc => fc.name)
       .filter((name): name is string => name !== undefined)
-      .slice(0, MAX_FUNCTION_CALL_NAMES)
       .map(escapeSlackText);
-    const citableCount = promptMeta.citables?.length;
-    const citablePart = citableCount !== undefined ? `, ${citableCount} citable(s)` : '';
-    lines.push(`Tool calls: ${functionCalls.length}${names.length ? ` (${names.join(', ')})` : ''}${citablePart}`);
+    const namesPart = names.length ? ` (${joinWithOverflow(names, MAX_FUNCTION_CALL_NAMES)})` : '';
+    lines.push(`Tool calls: ${functionCalls.length}${namesPart}`);
+  }
+
+  // Independent of the functionCalls branch above - a citation-only turn (citables present,
+  // no functionCalls) must not silently lose this diagnostic.
+  if (promptMeta.citables?.length !== undefined) {
+    lines.push(`Citables: ${promptMeta.citables.length}`);
   }
 
   const lakeMemory = promptMeta.context?.lakeMemory;
   if (lakeMemory?.beliefCount !== undefined) {
-    const tags = lakeMemory.dataLakeTags?.map(escapeSlackText).join(', ');
-    lines.push(`Lake beliefs: ${lakeMemory.beliefCount}${tags ? ` (${tags})` : ''}`);
+    const tags = lakeMemory.dataLakeTags?.map(escapeSlackText) ?? [];
+    const tagsPart = tags.length ? ` (${joinWithOverflow(tags, MAX_DATA_LAKE_TAGS)})` : '';
+    lines.push(`Lake beliefs: ${lakeMemory.beliefCount}${tagsPart}`);
   }
 
   return lines.length ? lines.join('\n') : 'none';
@@ -74,10 +114,23 @@ export interface FeedbackSlackMessageInput {
   username: string;
   userEmail: string;
   userId: string;
-  /** User-supplied report text - escaped here, never interpolated raw. */
+  /** User-supplied report text - escaped and blockquoted here, never interpolated raw. */
   content: string;
   /** Already redacted (functionCalls[].returnValue/.error stripped) by the caller. */
   promptMeta?: FeedbackPromptMetaInput | null;
+}
+
+/**
+ * Slack mrkdwn has no escape for `*`/`_`/newlines, so a multi-line `content` value could
+ * otherwise inject what reads as extra top-level `*Label:*` lines into the message.
+ * Blockquoting every line (each prefixed with `> `) keeps injected lines visually nested
+ * under "Feedback:" instead of sitting as siblings of the real fields above them.
+ */
+function toBlockquote(text: string): string {
+  return text
+    .split('\n')
+    .map(line => `> ${line}`)
+    .join('\n');
 }
 
 /**
@@ -86,15 +139,17 @@ export interface FeedbackSlackMessageInput {
  * escapeSlackText before interpolation - unescaped, a value like
  * `<https://example/|Open record>` renders as a live Slack link indistinguishable
  * from a real one, and on the unauthenticated submission path username/userEmail/type
- * are raw request-body values, the same exposure class as content.
+ * are raw request-body values, the same exposure class as content. The result is capped
+ * to MAX_MESSAGE_CHARS so an oversized field (a huge `content`, an unbounded `model.name`)
+ * truncates the delivered message rather than failing to send at all.
  */
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
   const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;
-  return (
+  const message =
     `${stagePrefix}*Type:* ${escapeSlackText(type)}\n` +
     `*User Details:* ${escapeSlackText(organization)} - ${escapeSlackText(username)} (ID: ${escapeSlackText(userId)})\n` +
     `*User Email:* ${escapeSlackText(userEmail)}\n` +
-    `*Feedback:* ${escapeSlackText(content)}\n` +
-    `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`
-  );
+    `*Feedback:*\n${toBlockquote(escapeSlackText(content))}\n` +
+    `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`;
+  return message.length > MAX_MESSAGE_CHARS ? `${message.slice(0, MAX_MESSAGE_CHARS)}... [truncated]` : message;
 }

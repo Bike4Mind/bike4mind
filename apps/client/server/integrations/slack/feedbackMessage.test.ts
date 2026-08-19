@@ -14,7 +14,8 @@ describe('buildPromptMetaSummary', () => {
     expect(summary).toContain('Model: claude-sonnet-5');
     expect(summary).toContain('Tokens: 1234, est. cost $0.05');
     expect(summary).toContain('Finish reason: end_turn');
-    expect(summary).toContain('Tool calls: 2 (web_search, search_knowledge_base), 2 citable(s)');
+    expect(summary).toContain('Tool calls: 2 (web_search, search_knowledge_base)');
+    expect(summary).toContain('Citables: 2');
     expect(summary).toContain('Lake beliefs: 3 (support-docs)');
   });
 
@@ -31,6 +32,11 @@ describe('buildPromptMetaSummary', () => {
     expect(buildPromptMetaSummary({})).toBe('none');
   });
 
+  it('renders citables even with no functionCalls (a citation-only turn)', () => {
+    const summary = buildPromptMetaSummary({ citables: [{}, {}, {}] });
+    expect(summary).toBe('Citables: 3');
+  });
+
   it('renders a zero token count and a zero belief count (not swallowed by a truthy check)', () => {
     const summary = buildPromptMetaSummary({
       tokenUsage: { totalTokens: 0 },
@@ -43,6 +49,37 @@ describe('buildPromptMetaSummary', () => {
   it('falls back to actualTotalTokens when totalTokens is absent', () => {
     const summary = buildPromptMetaSummary({ tokenUsage: { actualTotalTokens: 42 } });
     expect(summary).toContain('Tokens: 42');
+  });
+
+  it('falls back to actualInputTokens + actualOutputTokens when neither totalTokens nor actualTotalTokens is set', () => {
+    const summary = buildPromptMetaSummary({ tokenUsage: { actualInputTokens: 100, actualOutputTokens: 23 } });
+    expect(summary).toContain('Tokens: 123');
+  });
+
+  it('renders an estimated cost even with no token total, formatted without scientific notation or long tails', () => {
+    const summary = buildPromptMetaSummary({ tokenUsage: { estimatedCost: 0.300000000000004 } });
+    expect(summary).toContain('Tokens: unknown, est. cost $0.3');
+  });
+
+  it('handles functionCalls: null and functionCalls: [] without throwing', () => {
+    expect(buildPromptMetaSummary({ functionCalls: null })).toBe('none');
+    expect(buildPromptMetaSummary({ functionCalls: [] })).toBe('Tool calls: 0');
+  });
+
+  it('caps function-call names and marks the overflow instead of truncating silently', () => {
+    const summary = buildPromptMetaSummary({
+      functionCalls: Array.from({ length: 7 }, (_, i) => ({ name: `tool_${i}` })),
+    });
+    expect(summary).toContain('Tool calls: 7 (tool_0, tool_1, tool_2, tool_3, tool_4, +2 more)');
+  });
+
+  it('caps data lake tags and marks the overflow instead of truncating silently', () => {
+    const summary = buildPromptMetaSummary({
+      context: {
+        lakeMemory: { beliefCount: 9, dataLakeTags: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+      },
+    });
+    expect(summary).toContain('Lake beliefs: 9 (a, b, c, d, e, +2 more)');
   });
 
   it('escapes Slack mrkdwn special characters inside the summary itself (model name, tool names, lake tags)', () => {
@@ -77,15 +114,25 @@ describe('buildFeedbackSlackMessage', () => {
     content: 'it broke',
   };
 
-  it('renders the label with an empty body for empty content', () => {
+  it('renders the label with a blockquoted body', () => {
+    const message = buildFeedbackSlackMessage(base);
+    expect(message).toContain('*Feedback:*\n> it broke\n');
+  });
+
+  it('renders the label with an empty quoted body for empty content', () => {
     const message = buildFeedbackSlackMessage({ ...base, content: '' });
-    expect(message).toContain('*Feedback:* \n');
+    expect(message).toContain('*Feedback:*\n> \n');
   });
 
   it('escapes an injection-shaped content value instead of letting it render as a live link', () => {
     const message = buildFeedbackSlackMessage({ ...base, content: '<https://evil.example/|Open record>' });
     expect(message).not.toContain('<https://evil.example/|Open record>');
     expect(message).toContain('&lt;https://evil.example/|Open record&gt;');
+  });
+
+  it('blockquotes every line of multi-line content so it cannot forge fake top-level fields', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'line one\n*User Email:* fake@evil.example' });
+    expect(message).toContain('> line one\n> *User Email:* fake@evil.example');
   });
 
   it('escapes username, userEmail, type, organization, and userId the same way as content', () => {
@@ -107,5 +154,11 @@ describe('buildFeedbackSlackMessage', () => {
     const message = buildFeedbackSlackMessage({ ...base, stagePrefix: '*[pr-1234]*\n', promptMeta: undefined });
     expect(message.startsWith('*[pr-1234]*\n*Type:*')).toBe(true);
     expect(message.split('*Prompt Meta:*')[1]).not.toContain('[pr-1234]');
+  });
+
+  it('truncates an oversized message instead of shipping it (or silently failing to send) whole', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'x'.repeat(10_000) });
+    expect(message.length).toBeLessThan(3100);
+    expect(message.endsWith('... [truncated]')).toBe(true);
   });
 });
