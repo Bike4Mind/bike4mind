@@ -88,10 +88,23 @@ export const ChatAckSchema = z.object({
 
 export type ChatAck = z.infer<typeof ChatAckSchema>;
 
-/** Reusable JSON error envelope (plain; the OpenAPI layer annotates it). */
+/**
+ * Reusable JSON error envelope (plain; the OpenAPI layer annotates it).
+ *
+ * Must stay in sync with the published `ErrorResponse` component
+ * (../openapi/schemas.ts) - `openapi/errorEnvelopeParity.test.ts` pins the two
+ * together, and apps/client's errorHandler test uses this shape as the stand-in for
+ * the component, which is generate-time only and cannot be imported at runtime.
+ */
 export const ApiErrorSchema = z.object({
   error: z.string(),
   request_id: z.string().optional(),
+  /**
+   * Deprecated, sunset 2026-12-01. The thrower's error *class* name, added to every
+   * body by apps/client's errorHandler. Documented here so the runtime and the spec
+   * agree while it is still served; do not build on it. See CONVENTIONS.md section 1.
+   */
+  name: z.string().optional(),
 });
 
 /**

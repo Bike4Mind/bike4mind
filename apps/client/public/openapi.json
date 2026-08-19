@@ -57,6 +57,11 @@
           "request_id": {
             "type": "string",
             "description": "Correlation id, mirrors the X-Request-ID header."
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The internal error class name the server threw (`NotFoundError`, `UnprocessableEntityError`, ...). Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
           }
         },
         "required": [
@@ -415,6 +420,9 @@
                 "type": "string"
               },
               "request_id": {
+                "type": "string"
+              },
+              "name": {
                 "type": "string"
               }
             },

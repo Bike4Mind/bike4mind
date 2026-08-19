@@ -17,6 +17,17 @@ export const ErrorResponse = registry.register(
     .object({
       error: z.string().openapi({ description: 'Human-readable error message.' }),
       request_id: z.string().optional().openapi({ description: 'Correlation id, mirrors the X-Request-ID header.' }),
+      name: z
+        .string()
+        .optional()
+        .openapi({
+          deprecated: true,
+          description:
+            'Deprecated, sunset 2026-12-01. The internal error class name the server threw ' +
+            '(`NotFoundError`, `UnprocessableEntityError`, ...). Documented only so the wire and ' +
+            'this spec agree for the deprecation window; it is removed on the sunset date. ' +
+            'Branch on the HTTP status, not on this.',
+        }),
     })
     .openapi('ErrorResponse', { example: { error: 'Missing or invalid toolName', request_id: 'abc-123' } })
 );
