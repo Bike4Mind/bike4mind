@@ -2,16 +2,18 @@ import type {
   IDataLakeDocument,
   ILakeConfigChangeEventDocument,
   ILakeConfigChangeEventRepository,
+  ILakeConfigFieldChange,
   IUserRepository,
   LakeConfigHistoryEntry,
+  LakeConfigHistoryFieldChange,
   LakeConfigHistoryView,
 } from '@bike4mind/common';
 
 /**
- * Default cap on config-change events read for one history view. Deliberately far smaller than the
- * access view's 2000: config writes are rare by nature (an operator action each), so a window this
- * deep already reaches years back on a real lake, while the rows are wider (each carries a change
- * array) and every one of them is rendered rather than folded into a count.
+ * Default cap on config-change events read for one history view. Deliberately small: config writes
+ * are rare by nature (an operator action each), so a window this deep already reaches years back on
+ * a real lake, while the rows are wider (each carries a change array) and every one of them is
+ * rendered rather than folded into a count.
  */
 export const LAKE_CONFIG_HISTORY_LIMIT = 200;
 
@@ -73,7 +75,32 @@ export function toLakeConfigHistoryEntry(
     onBehalfOfUserId: event.onBehalfOfUserId,
     manageRung: event.manageRung,
     action: event.action,
-    changes: event.changes,
+    changes: event.changes.map(toHistoryFieldChange),
+  };
+}
+
+/**
+ * Narrow a stored change to its wire form, dropping the fingerprint hash.
+ *
+ * Built by naming the fields to KEEP rather than by spreading and deleting `hash`: an allowlist
+ * fails safe when the stored fingerprint grows a field, a denylist ships it. The literal arm passes
+ * through untouched - it holds only values the reader is already entitled to see.
+ */
+function toHistoryFieldChange(change: ILakeConfigFieldChange): LakeConfigHistoryFieldChange {
+  if (change.kind !== 'fingerprint') return change;
+  return {
+    field: change.field,
+    kind: 'fingerprint',
+    beforeFingerprint: { present: change.beforeFingerprint.present, length: change.beforeFingerprint.length },
+    afterFingerprint: { present: change.afterFingerprint.present, length: change.afterFingerprint.length },
+    // The hash comparison happens HERE, where the hashes are already in hand, so the answer crosses
+    // instead of the inputs. Both sides must be present: two absent values share the empty-string
+    // hash, and calling that "unchanged text" would be true but useless - the caller renders that
+    // case as "still not set" from `present` alone.
+    textUnchanged:
+      change.beforeFingerprint.present &&
+      change.afterFingerprint.present &&
+      change.beforeFingerprint.hash === change.afterFingerprint.hash,
   };
 }
 
@@ -103,8 +130,14 @@ export async function assembleLakeConfigHistory(
   { db, limit, now = new Date() }: AssembleLakeConfigHistoryAdapters
 ): Promise<LakeConfigHistoryView> {
   const pageSize = clampLakeConfigHistoryLimit(limit);
-  const events = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize });
-  const entries = events.map(toLakeConfigHistoryEntry);
+  // One row MORE than the page, purely as a probe: fetching exactly `pageSize` cannot distinguish
+  // "this lake has exactly that many events" from "there are more behind this page", and calling a
+  // complete history truncated makes a consumer caption the lake's whole life as "changes since
+  // <date>". The extra row is never returned - it is sliced off below.
+  const events = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 });
+  const truncated = events.length > pageSize;
+  const windowEvents = truncated ? events.slice(0, pageSize) : events;
+  const entries = windowEvents.map(toLakeConfigHistoryEntry);
 
   // One batched name resolution across every id worth looking up. Only USER-kind principals and the
   // on-behalf human are candidates - a system/agent/apiKey principalId names no user record - and
@@ -117,11 +150,6 @@ export async function assembleLakeConfigHistory(
   const users = userIds.size > 0 ? await db.users.findByIds(Array.from(userIds)) : [];
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
 
-  // A full page means there may be more behind it, so the window's oldest event is carried rather
-  // than letting a consumer present a truncated list as the lake's whole history. Events come back
-  // newest-first, so that is the last element.
-  const truncated = events.length >= pageSize;
-
   return {
     lakeId: lake.id,
     lakeName: lake.name,
@@ -131,6 +159,8 @@ export async function assembleLakeConfigHistory(
       onBehalfOfName: entry.onBehalfOfUserId ? userNameById.get(entry.onBehalfOfUserId) : undefined,
     })),
     truncated,
+    // The window's oldest event, so a consumer can say "changes since <date>" instead of implying
+    // the list is all-time. Events come back newest-first, so that is the last element.
     windowStartsAt: truncated ? entries[entries.length - 1]?.changedAt : undefined,
     generatedAt: now,
   };
