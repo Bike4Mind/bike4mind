@@ -127,7 +127,35 @@ const handler = baseApi()
         if (lake.status !== 'deleted') {
           return res.status(400).json({ error: 'Data lake must be soft-deleted before cleanup' });
         }
-        await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
+        // Claim 'deleted' -> 'purging' BEFORE enqueueing, never after: the transition is what takes
+        // the lake out of the deleted-lakes list and refuses Restore on it, so enqueueing first
+        // would leave the accept window this fixes wide open (#1744) - the sweep can finish before
+        // the status ever moves. Throws on a lost claim, which is the correct refusal: the checks
+        // above ran against a document read moments earlier, and a restore or a second purge can
+        // land in that gap.
+        await dataLakeService.acceptDataLakePurge(actor, lake.id, {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        });
+        try {
+          await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
+        } catch (err) {
+          // A claim that lands with no message behind it is the one unrecoverable outcome here: no
+          // list shows a 'purging' lake, restore and delete both refuse it, and there is no queued
+          // message to alarm on or replay - so without this release it would need a manual DB edit.
+          // Releasing puts it back in the deleted list for the owner to retry, and the 5xx tells
+          // them the purge did not take.
+          //
+          // Safe even if the message DID land and only the ack was lost: the sweep's guard accepts
+          // 'deleted' as well as 'purging', so a delivery that survives still completes the purge
+          // the user asked for.
+          await dataLakeRepository.releasePurgingToDeleted(lake.id);
+          throw err;
+        }
         return res.status(202).json({ success: true, queued: true });
       }
     }
