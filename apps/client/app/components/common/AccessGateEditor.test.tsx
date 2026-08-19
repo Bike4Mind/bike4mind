@@ -212,6 +212,22 @@ describe('AccessGateEditor - passphrase show-once', () => {
     expect(screen.getByTestId('manage-gate-passphrase-generate').textContent).toContain('Generate');
   });
 
+  // The show-once panel renders as a SIBLING of the passphrase block, so it survives a change of
+  // gate type - and that change also removes the input, which was the only other thing that
+  // cleared it. The plaintext therefore stayed on screen indefinitely, under a heading reading
+  // "This will not be shown again", for anyone comparing gate options over a screen share.
+  it('clears the shown passphrase when the gate type changes', async () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(input(), { target: { value: 'longenough1' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-justset')).not.toBeNull());
+
+    pickGate('domain');
+
+    expect(screen.queryByTestId('manage-gate-passphrase-justset')).toBeNull();
+  });
+
   it('copies the shown passphrase to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

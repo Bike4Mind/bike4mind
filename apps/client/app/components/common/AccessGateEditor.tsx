@@ -94,6 +94,14 @@ export function AccessGateEditor({
     }
   };
 
+  /** Change gate type. Clears the show-once passphrase: the panel renders as a sibling of the
+   *  passphrase block, so without this it keeps displaying the plaintext after the owner switches
+   *  to another gate - and switching also removes the input, the only other thing that clears it. */
+  const chooseKind = (next: GateKind) => {
+    setKind(next);
+    setJustSet(null);
+  };
+
   const buildInput = (): PublishAccessGateInput | 'invalid' => {
     if (kind === 'none') return null;
     if (kind === 'passphrase') {
@@ -194,11 +202,11 @@ export function AccessGateEditor({
                   role="radio"
                   aria-checked={selected}
                   tabIndex={0}
-                  onClick={() => setKind(o.value)}
+                  onClick={() => chooseKind(o.value)}
                   onKeyDown={e => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      setKind(o.value);
+                      chooseKind(o.value);
                     }
                   }}
                   data-testid={`${testIdPrefix}-${o.value}`}

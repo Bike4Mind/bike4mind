@@ -59,50 +59,6 @@ export function renderPassphraseShell(): string {
     msg.parentNode.insertBefore(url, msg);
     return;
   }
-  // ---- owner/admin bypass: try the session before asking for a passphrase ----
-  // The form starts hidden and is revealed either when the check comes back unhelpful or when
-  // FORM_REVEAL_MS elapses, whichever is first - a slow or failed exchange must never strand a
-  // viewer in front of a spinner when a passphrase would have let them straight in.
-  var FORM_REVEAL_MS = 1500;
-  var settled = false;
-  function revealForm() {
-    if (settled) return;
-    settled = true;
-    form.style.visibility = 'visible';
-    input.focus();
-  }
-  var revealTimer = setTimeout(revealForm, FORM_REVEAL_MS);
-
-  b4mExchangeSession(function (token) {
-    if (!token) { revealForm(); return; }
-    // Ask the server to mint the proof cookie on identity alone. It says yes only to the owner
-    // and to an admin - exactly who checkAccessGate already admits ahead of any proof check.
-    // On success we RELOAD rather than rendering here: the reload passes the gate server-side
-    // and the artifact comes back through the ordinary serve path, with the ordinary wrapper
-    // and CSP. Rendering in place would mean rebuilding the sandboxed-iframe pipeline inside a
-    // page whose CSP is deliberately tight because it holds a credential input.
-    fetch('/api/publish/gate/owner', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      credentials: 'include',
-      body: JSON.stringify({ path: location.pathname })
-    })
-      .then(function (res) {
-        if (res.status === 204) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(revealTimer);
-          if (hint) hint.textContent = 'Opening your artifact...';
-          location.reload();
-          return;
-        }
-        // 401/403/404 all mean "this viewer must supply the passphrase", which is every
-        // viewer who is not the owner - the overwhelmingly common case for a shared link.
-        revealForm();
-      })
-      .catch(function () { revealForm(); });
-  });
-
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
     var passphrase = input.value;
@@ -132,6 +88,65 @@ export function renderPassphraseShell(): string {
         note('Something went wrong - try again.');
       })
       .catch(function () { btn.disabled = false; note('Network error - try again.'); });
+  });
+
+  // ---- owner/admin bypass: try the session before asking for a passphrase ----
+  // The form starts hidden and is revealed either when the check comes back unhelpful or when
+  // FORM_REVEAL_MS elapses, whichever is first - a slow or failed exchange must never strand a
+  // viewer in front of a spinner when a passphrase would have let them straight in.
+  var FORM_REVEAL_MS = 1500;
+  var settled = false;
+  function revealForm() {
+    if (settled) return;
+    settled = true;
+    form.style.visibility = 'visible';
+    input.focus();
+  }
+  var revealTimer = setTimeout(revealForm, FORM_REVEAL_MS);
+
+  // One-shot: a proof cookie that does not stick (blocked, or dropped between the 204 and the
+  // reload) would otherwise re-serve this shell, mint again and reload again, bounded only by the
+  // 60/min rate limit. The sentinel turns that cycle into exactly one attempt, degrading to the
+  // form - the correct destination when the cookie mechanism is not working.
+  var SENTINEL = 'b4m-pp-tried-' + location.pathname;
+  var alreadyTried = false;
+  try { alreadyTried = sessionStorage.getItem(SENTINEL) === '1'; } catch (e) {}
+  if (alreadyTried) { revealForm(); return; }
+
+  b4mExchangeSession(function (token) {
+    if (!token) { revealForm(); return; }
+    // Ask the server to mint the proof cookie on identity alone. It says yes only to the owner
+    // and to an admin - exactly who checkAccessGate already admits ahead of any proof check.
+    // On success we RELOAD rather than rendering here: the reload passes the gate server-side
+    // and the artifact comes back through the ordinary serve path, with the ordinary wrapper
+    // and CSP. Rendering in place would mean rebuilding the sandboxed-iframe pipeline inside a
+    // page whose CSP is deliberately tight because it holds a credential input.
+    try { sessionStorage.setItem(SENTINEL, '1'); } catch (e) {}
+    fetch('/api/publish/gate/owner', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      credentials: 'include',
+      body: JSON.stringify({ path: location.pathname })
+    })
+      .then(function (res) {
+        if (res.status === 204) {
+          // Reload UNCONDITIONALLY, even if the reveal timer already won the race. The cookie
+          // is set server-side by this point, so returning early would abandon a gate the owner
+          // has already passed and leave them staring at a prompt for a passphrase that is
+          // deliberately unrecoverable. The revealed form holds no state worth preserving.
+          // Reachable, not theoretical: the exchange's own ladder retries at 600ms and 1800ms,
+          // so two transient failures put this response past the 1500ms budget by construction.
+          settled = true;
+          clearTimeout(revealTimer);
+          if (hint) hint.textContent = 'Opening your artifact...';
+          location.reload();
+          return;
+        }
+        // 401/403/404 all mean "this viewer must supply the passphrase", which is every
+        // viewer who is not the owner - the overwhelmingly common case for a shared link.
+        revealForm();
+      })
+      .catch(function () { revealForm(); });
   });
 })();`;
 

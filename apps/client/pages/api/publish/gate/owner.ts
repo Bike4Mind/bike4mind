@@ -47,7 +47,20 @@ const handler = baseApi({ auth: false })
 
     // No credential -> nothing to check. The prompt shell treats this as "show the form",
     // which is the right destination for every anonymous viewer.
-    if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
+    //
+    // A pre-MFA (mfaPending) session is degraded to anonymous here, deliberately and not for
+    // free: optionalAuth does NOT filter it (unlike its sibling optionalJwtAuth, whose comment
+    // at :35-42 describes this exact hazard), because the JWT strategy stamps mfaPending onto
+    // req.user and returns SUCCESS - and the full-auth chain's own mfaPending gate
+    // (server/auth/auth.ts) never runs on an `auth: false` route like this one. Without the
+    // check, a first-factor-only session could mint a proof cookie that then needs NO credential
+    // at all: it outlives the 10-minute mfaPending token by two hours and carries no identity, so
+    // a tokenVersion bump - this codebase's revocation mechanism - could not reach it. For an
+    // admin principal that would be every passphrase-gated artifact in the system.
+    const principal = req.user as (Express.User & { mfaPending?: boolean }) | undefined;
+    if (!principal?.id || principal.mfaPending) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
 
     const segments = segmentsFromViewerPathname(parsed.data.path);
     const resolved = segments ? parsePublishPath(segments) : null;
@@ -72,8 +85,8 @@ const handler = baseApi({ auth: false })
       return res.status(404).json({ error: 'Not found' });
     }
 
-    const isOwner = String(artifact.ownerId) === String(req.user.id);
-    if (!isOwner && !req.user.isAdmin) {
+    const isOwner = String(artifact.ownerId) === String(principal.id);
+    if (!isOwner && !principal.isAdmin) {
       return res.status(403).json({ error: 'Passphrase required' });
     }
 

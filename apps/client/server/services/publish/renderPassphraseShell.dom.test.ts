@@ -50,8 +50,12 @@ function res(status: number, body?: unknown): Response {
   } as unknown as Response;
 }
 
-/** `ownerStatus` is what /gate/owner answers: 204 admits, 403 is a non-owner, 401 anonymous. */
-function stubFetch(opts: { signedIn: boolean; ownerStatus?: number; hang?: boolean }) {
+/**
+ * `ownerStatus` is what /gate/owner answers: 204 admits, 403 is a non-owner, 401 anonymous.
+ * `ownerDelayMs` defers that answer, so a test can land it AFTER the 1500ms reveal timer - the
+ * race in which a successful mint used to be discarded.
+ */
+function stubFetch(opts: { signedIn: boolean; ownerStatus?: number; hang?: boolean; ownerDelayMs?: number }) {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: RequestInit) => {
@@ -60,7 +64,11 @@ function stubFetch(opts: { signedIn: boolean; ownerStatus?: number; hang?: boole
       if (url.includes(REFRESH)) {
         return Promise.resolve(opts.signedIn ? res(200, { accessToken: 'tok' }) : res(401));
       }
-      if (url.includes(OWNER_ROUTE)) return Promise.resolve(res(opts.ownerStatus ?? 403));
+      if (url.includes(OWNER_ROUTE)) {
+        const answer = res(opts.ownerStatus ?? 403);
+        if (!opts.ownerDelayMs) return Promise.resolve(answer);
+        return new Promise<Response>(resolve => setTimeout(() => resolve(answer), opts.ownerDelayMs));
+      }
       if (url.includes(PASSPHRASE_ROUTE)) return Promise.resolve(res(204));
       throw new Error('unexpected fetch: ' + url);
     })
@@ -93,6 +101,7 @@ describe('passphrase shell - owner bypass', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    sessionStorage.clear(); // the one-shot mint sentinel is keyed on pathname; do not leak it
   });
 
   it('starts with the form hidden so the owner never sees a prompt they do not need', () => {
@@ -142,6 +151,38 @@ describe('passphrase shell - owner bypass', () => {
 
     await vi.advanceTimersByTimeAsync(1500);
 
+    expect(formVisible()).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  // REGRESSION GUARD. The 204 branch used to `return` early when the reveal timer had already
+  // latched `settled`, abandoning a gate the owner had ALREADY passed server-side and leaving them
+  // at a prompt for a passphrase that is deliberately unrecoverable. Reachable by construction:
+  // the exchange's own ladder retries at 600ms and 1800ms, so two transient failures put the mint
+  // past the 1500ms budget before it is even issued.
+  it('reloads on a 204 that lands AFTER the form has already been revealed', async () => {
+    stubFetch({ signedIn: true, ownerStatus: 204, ownerDelayMs: 2500 });
+
+    await runShell();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(formVisible()).toBe(true); // timer won the race
+    expect(reload).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1500); // the mint lands late
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('attempts the mint only once per path, so a cookie that will not stick cannot loop', async () => {
+    // Simulates the reload having already happened once without the cookie taking effect: the
+    // sentinel is set, so the shell goes straight to the form instead of minting again.
+    stubFetch({ signedIn: true, ownerStatus: 204 });
+    sessionStorage.setItem('b4m-pp-tried-/p/u/scope/my-slug', '1');
+
+    await runShell();
+
+    expect(called(OWNER_ROUTE)).toBe(false);
+    expect(called(REFRESH)).toBe(false);
     expect(formVisible()).toBe(true);
     expect(reload).not.toHaveBeenCalled();
   });
