@@ -46,6 +46,11 @@ const ChunkFabFilePayload = z.object({
   ...provenancePayloadShape,
 });
 
+/** Attempts at the paused marker before giving up; see the write's own note for why it retries. */
+const MARK_PAUSED_MAX_ATTEMPTS = 3;
+/** Linear backoff base, in ms. Small: the handler is otherwise doing nothing and holds no lease. */
+const MARK_PAUSED_RETRY_DELAY_MS = 150;
+
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
   const { fabFileId, userId, chunkSize, origin, lakeId } = ChunkFabFilePayload.parse(JSON.parse(body));
@@ -74,13 +79,27 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
-    // Best-effort, and deliberately not fatal: failing the delivery would retry the whole message
-    // against a switch that is still on. An unmarked file is the pre-existing invisible state, which
-    // the ERROR log is the trail for.
-    try {
-      await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_CHUNK_NOTE });
-    } catch (err) {
-      logger.error(`[convergenceKillSwitch] could not mark ${fabFileId} as paused mid-rechunk: ${err}`);
+    // Retried in-process, then best-effort. Failing the DELIVERY is still not an option - the switch
+    // is still on, so SQS would redeliver into this same branch until the message expired - but the
+    // realistic failure here is a transient one (a pool timeout, a stepdown, a blip), and one attempt
+    // gave it a single chance. Losing the write loses the ONE signal that tells "its passages were
+    // deleted" from "it never had any", and the message is gone, so nothing retries it later.
+    // Bounded and short on purpose: this runs inside a Lambda invocation that has already decided to
+    // do no work, and the ERROR log remains the trail if every attempt fails.
+    for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
+      try {
+        await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_CHUNK_NOTE });
+        break;
+      } catch (err) {
+        if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
+          logger.error(
+            `[convergenceKillSwitch] could not mark ${fabFileId} as paused mid-rechunk after ` +
+              `${MARK_PAUSED_MAX_ATTEMPTS} attempts: ${err}`
+          );
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, MARK_PAUSED_RETRY_DELAY_MS * attempt));
+      }
     }
     logger.log(
       `[convergenceKillSwitch] Paused background chunk work for fabFileId ${fabFileId}` +

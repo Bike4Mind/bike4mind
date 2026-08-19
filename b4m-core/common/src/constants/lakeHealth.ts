@@ -16,7 +16,12 @@
  * a substitute: the chars-per-token ratio swings by corpus, so a customer-facing percentage derived
  * from it is systematically wrong per lake - the exact "vibe" these predicates exist to remove.
  */
-import { CHARS_PER_TOKEN_SERVE_BOUND, deriveServeCharBudget, isConvergencePausedNote } from './chunking';
+import {
+  CHARS_PER_TOKEN_SERVE_BOUND,
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  deriveServeCharBudget,
+  isConvergencePausedNote,
+} from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
 export const LAKE_HEALTH_PREDICATES = [
@@ -169,6 +174,17 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // The kill switch marks an abandoned vectorize with `notes` and never with `error`, so this is the
   // second terminal-stall signal, not a redundant one. See LakeHealthMemberInput.notes.
   const abandonedByKillSwitch = isConvergencePausedNote(member.notes);
+  // The CHUNK arm of the same switch, and the one case where absent rollups are not "unmeasured".
+  // `resetChunkStateByIds` nulls all four rollups in the write that deletes the file's passages, so
+  // every predicate below would abstain on `null` and the member would grade `unknown` across the
+  // board - excluded from `failed`, excluded from `reachableChars`, and therefore invisible in both
+  // the drill-down and the headline. That is precisely the reading this module exists to catch, so
+  // the missing rollups are read as the PROVEN zero they are: no passages means no vector-bearing
+  // chunk and no reachable character. `chunkCount === 0` is required, not decorative - the marker
+  // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset, and nothing on
+  // the success path clears `notes`), so keying on the note alone would fail a repaired file forever.
+  // Same guard, same reason, as `decideMemberConvergence`'s own arm.
+  const passagesRemoved = member.chunkCount === 0 && member.notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
 
   // Is the file's vectorization settled, or is it still being indexed? chunk-complete stamps the char
   // rollups (making the file "measured") and zeroes the vector rollups in the SAME write, so between
@@ -200,13 +216,15 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // P3: every chunk must carry a vector. `embeddedChunkCount` is the count of vector-bearing ROWS,
   // deliberately NOT `vectorizedChunkCount` (which also counts un-embeddable oversized chunks as done).
   // While vectorization is still in flight the answer is genuinely PENDING, not a failure.
-  const fullyVectorized: PredicateStatus = !vectorizationSettled
-    ? 'unknown'
-    : embeddedChunkCount === null
+  const fullyVectorized: PredicateStatus = passagesRemoved
+    ? 'fail'
+    : !vectorizationSettled
       ? 'unknown'
-      : embeddedChunkCount >= member.chunkCount
-        ? 'pass'
-        : 'fail';
+      : embeddedChunkCount === null
+        ? 'unknown'
+        : embeddedChunkCount >= member.chunkCount
+          ? 'pass'
+          : 'fail';
 
   const failed: LakeHealthPredicate[] = [];
   if (chunkWithinPolicy === 'fail') failed.push('chunkWithinPolicy');
@@ -216,8 +234,9 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // Reachability is a real number only once the char and vector rollups are present AND vectorization
   // has settled; otherwise it is pending (null), so the summarizer excludes it from BOTH the numerator
   // and the denominator rather than counting it as zero-reachable.
-  const reachableChars =
-    !vectorizationSettled || chunkedCharCount === null || embeddedCharCount === null || embeddedChunkCount === null
+  const reachableChars = passagesRemoved
+    ? 0
+    : !vectorizationSettled || chunkedCharCount === null || embeddedCharCount === null || embeddedChunkCount === null
       ? null
       : Math.min(embeddedCharCount, embeddedChunkCount * policy.serveCap);
   const measured = reachableChars !== null;
@@ -268,11 +287,22 @@ export type LakeHealthReport = {
  * switch stalled mid-wave is also chunkless, but because its passages were DELETED, not because it
  * never had any. Excluding it produced the exact green-counters-but-broken reading the four rules
  * are meant to catch - a lake reporting "Reachable 100%" over the members it still had, while a
- * document sat entirely unsearchable and absent from `affectedMembers`. Included, it fails P3 with
- * its real zero and is named in the drill-down.
+ * document sat entirely unsearchable and absent from `affectedMembers`. Admitting it here is only
+ * half the fix and was, on its own, inert: the same reset nulls all four rollups, so every
+ * predicate abstained and the member landed in neither `failed` nor the ratio. `evaluateMemberHealth`
+ * reads that marker as the proven zero it is (see `passagesRemoved` there), which is what actually
+ * fails P3 and names it in the drill-down.
+ *
+ * Note what this does NOT do: `reachableShare` cannot move for such a member, because the reset
+ * destroyed the `chunkedCharCount` that would have been its denominator - it contributes 0/0. The
+ * signal is the P3 `fail` tally and the drill-down row, which is what `deriveLakeHealthBadge` reads
+ * to drop the lake off `healthy` regardless of the percentage beside it.
  */
 export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: LakeHealthPolicy): LakeHealthReport {
-  const withChunks = members.filter(m => m.chunkCount > 0 || isConvergencePausedNote(m.notes));
+  // The CHUNK marker only, matching `findDataLakeHealthMembers`'s own `$match` and
+  // `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
+  // already admitted by `chunkCount > 0` and needs no exception here.
+  const withChunks = members.filter(m => m.chunkCount > 0 || m.notes === CONVERGENCE_PAUSED_CHUNK_NOTE);
   const results = withChunks.map(m => evaluateMemberHealth(m, policy));
 
   const predicates = {

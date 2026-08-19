@@ -1344,6 +1344,32 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  /**
+   * The lake's convergence-stranded files: passages deleted by a wave the kill switch halted, so
+   * `chunked:false`, `chunkCount:0` and `error:null` - a shape that matches neither
+   * findChunkedFilesByScope nor countFailedFilesByScope. Selected by the marker rather than by that
+   * shape, because the shape alone is indistinguishable from an image or a pending upload.
+   */
+  async findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+          // The marker outlives a rebuild the rescue sweep performs (it enqueues without a reset and
+          // nothing on the success path clears `notes`), so the chunkless precondition is what keeps
+          // a repaired file out of the rebuild wave. Same guard as decideMemberConvergence's arm.
+          chunkCount: { $lte: 0 },
+          isChunking: { $ne: true },
+        },
+        { _id: 1, userId: 1 }
+      )
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
   async resetChunkStateByIds(ids: string[]): Promise<string[]> {
     if (ids.length === 0) return [];
     // The ONE reset shape for re-chunking, shared by the bulk "Rebuild passages" wave and the

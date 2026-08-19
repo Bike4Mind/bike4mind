@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import {
   buildFilenameMarkerRegex,
   filterRetrievalExcluded,
@@ -61,6 +62,25 @@ describe('isRetrievalExcluded', () => {
   it('excludes an unvectorized file when vectorizedOnly is set', () => {
     expect(isRetrievalExcluded({ fileName: 'Clean.pdf', vectorized: false }, { vectorizedOnly: true })).toBe(true);
     expect(isRetrievalExcluded({ fileName: 'Clean.pdf', vectorized: true }, { vectorizedOnly: true })).toBe(false);
+  });
+
+  it('keeps a convergence-stranded file despite vectorizedOnly, so the withhold can report it', () => {
+    // It is unvectorized because a halted wave DELETED its passages, not because it is an image or a
+    // failed job. Dropping it here runs upstream of partitionByIndexAvailability, so the turn would
+    // answer around the hole and report full coverage - the failure the withhold exists to prevent.
+    const stranded = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    expect(isRetrievalExcluded(stranded, { vectorizedOnly: true })).toBe(false);
+    expect(filterRetrievalExcluded([stranded], { vectorizedOnly: true })).toEqual([stranded]);
+  });
+
+  it('still excludes a stranded file whose NAME the surface excludes - naming it outranks the hole', () => {
+    const marked = { fileName: 'MARK - Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    expect(isRetrievalExcluded(marked, { vectorizedOnly: true, excludeFilenameMarkers: ['MARK'] })).toBe(true);
+  });
+
+  it('does not exempt the vectorize-arm marker - that file keeps its chunks and is served', () => {
+    const vectorizePaused = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_NOTE };
+    expect(isRetrievalExcluded(vectorizePaused, { vectorizedOnly: true })).toBe(true);
   });
 
   it('combines both rules (either triggers exclusion)', () => {

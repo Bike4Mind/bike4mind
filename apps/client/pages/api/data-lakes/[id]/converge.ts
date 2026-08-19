@@ -1,5 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { rateLimit } from '@server/middlewares/rateLimit';
+import { isDevelopment } from '@server/utils/config';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -49,6 +51,29 @@ import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch
  * attaching nothing and mutating no lake document.
  */
 
+const HOUR_MS = 60 * 60 * 1000;
+/**
+ * Runs per hour per caller. `MAX_CONVERGENCE_WAVE` bounds ONE request; nothing bounded the caller
+ * across requests, so a loop re-embedded a whole lake at once and defeated the reason the default
+ * wave is 25 (see DEFAULT_CONVERGENCE_WAVE). Re-POSTing does not double-charge the same file - a
+ * just-reset member has no chunks and no marker, so the plan drops it - but flipping
+ * `requiredPassageTokenTarget` and re-running re-embeds the corpus again, and the Settings field
+ * this PR adds makes that loop reachable from the UI. At the 200 hard cap this still allows a wave
+ * rate far above what the embedder's TPM will absorb; it is a brake on runaway spend, not a quota.
+ *
+ * NOT exempted for admins, unlike the taxonomy caps: this meters SPEND rather than gating an
+ * action, and the operator most able to loop the button is exactly the one it has to bound.
+ */
+const CONVERGENCE_HOURLY_CAP = 20;
+
+const convergenceRunRateLimit = rateLimit({
+  limit: () => (isDevelopment() ? Infinity : CONVERGENCE_HOURLY_CAP),
+  windowMs: HOUR_MS,
+  // Required: the raw pathname embeds the lake id, which would make the cap per-lake - and "loop
+  // over every lake I own" is precisely the amplification being bounded.
+  bucket: 'data-lakes/converge',
+});
+
 const ConvergeInput = z.object({
   limit: z.number().int().positive().max(dataLakeService.MAX_CONVERGENCE_WAVE).optional(),
   /**
@@ -82,6 +107,9 @@ const convergenceAdapters = async () => {
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
+  // POST only. The GET is a preview that writes nothing and enqueues nothing; capping it would
+  // throttle reading the plan, which is the thing an owner is supposed to do before running one.
+  .use((req, res, next) => (req.method === 'POST' ? convergenceRunRateLimit(req, res, next) : next()))
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
     const ctx = await toAccessContext(req);
@@ -115,7 +143,13 @@ const handler = baseApi()
     if (report.refusal || (report.requiresConfirmation && !confirm)) {
       // 200 with an explicit outcome, not a 4xx: the plan is the useful part of the answer and the
       // client renders it either way. `enqueued: 0` is the load-bearing field.
-      return res.json({ ...report, outcome: report.refusal ?? 'confirmationRequired', detected: 0, enqueued: 0, stranded: 0 });
+      return res.json({
+        ...report,
+        outcome: report.refusal ?? 'confirmationRequired',
+        detected: 0,
+        enqueued: 0,
+        stranded: 0,
+      });
     }
 
     let enqueued = 0;

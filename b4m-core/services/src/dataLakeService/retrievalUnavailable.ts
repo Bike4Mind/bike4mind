@@ -146,6 +146,12 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     // The opposite remedy, stated as such. These do NOT come back on their own, so the one thing
     // this must not do is tell the reader to wait - that is how a permanently absent document reads
     // as a temporary blip for as long as nobody checks.
+    //
+    // Both repairs it names are reachable independently of the lake's chunk policy, which is what
+    // keeps this promise honest: convergence refuses a lake whose policy is inherited, so clearing
+    // `requiredPassageTokenTarget` would otherwise retract the only repair while this text went on
+    // advertising one. "Reprocessed" is the policy-independent door - "Rebuild passages"
+    // (detectUnderChunkedFiles) selects these members by the same marker, on any lake.
     sentences.push(
       `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: a re-chunk ` +
         'removed them and was then paused, so they were withheld. Unlike re-indexing files these do NOT return on ' +
@@ -160,13 +166,11 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
  * Callers ask this one question instead of remembering which reports exist, so adding a third
  * limitation later reaches every surface without touching any of them.
  */
-export function describeSearchLimitations(
-  search: {
-    embeddingMismatch?: EmbeddingMismatchReport;
-    retrievalUnavailable?: RetrievalUnavailableReport;
-    embeddingModel: string;
-  }
-): string | null {
+export function describeSearchLimitations(search: {
+  embeddingMismatch?: EmbeddingMismatchReport;
+  retrievalUnavailable?: RetrievalUnavailableReport;
+  embeddingModel: string;
+}): string | null {
   const sentences = [
     describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel),
     describeRetrievalUnavailable(search.retrievalUnavailable),

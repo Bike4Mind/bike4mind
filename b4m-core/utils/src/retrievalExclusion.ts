@@ -1,3 +1,4 @@
+import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
 import { escapeRegex } from './escapeRegex';
 
 /**
@@ -80,10 +81,21 @@ export function buildFilenameMarkerRegex(markers?: string[]): RegExp | null {
  * of the best-effort DB pre-filter. Fail-closed by design.
  */
 export function isRetrievalExcluded(
-  file: { fileName?: string | null; vectorized?: boolean },
+  file: { fileName?: string | null; vectorized?: boolean; notes?: string | null },
   opts: RetrievalExclusionOptions
 ): boolean {
-  if (opts.vectorizedOnly && !file.vectorized) return true;
+  // The `vectorizedOnly` arm is exempted for exactly one shape, and the exemption is load-bearing.
+  // A member whose passages a HALTED convergence wave deleted is `vectorized: false` - not because
+  // it is an image or a failed job, but because the corpus now has a hole where it was. Dropping it
+  // here happens strictly UPSTREAM of `partitionByIndexAvailability`, so on a vectorizedOnly lake
+  // the file would never reach the withhold, the turn would answer around the hole, and it would
+  // report full coverage while doing it - the exact silent degradation that partition exists to
+  // prevent, on the highest-traffic surface. It stays a candidate so it can be REFUSED and named.
+  //
+  // Filename-marker exclusion is deliberately NOT exempted below: that one says the surface must
+  // never retrieve or NAME this document, which outranks reporting a hole in it.
+  const passagesRemoved = file.notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
+  if (opts.vectorizedOnly && !file.vectorized && !passagesRemoved) return true;
   const re = buildFilenameMarkerRegex(opts.excludeFilenameMarkers);
   return !!re && re.test((file.fileName ?? '').toLowerCase());
 }
@@ -94,10 +106,9 @@ export function isRetrievalExcluded(
  * candidate set so retrieval correctness never depends on the DB regex engine or on the
  * `fileNameLower` field being populated (see isRetrievalExcluded).
  */
-export function filterRetrievalExcluded<T extends { fileName?: string | null; vectorized?: boolean }>(
-  files: T[],
-  opts: RetrievalExclusionOptions
-): T[] {
+export function filterRetrievalExcluded<
+  T extends { fileName?: string | null; vectorized?: boolean; notes?: string | null },
+>(files: T[], opts: RetrievalExclusionOptions): T[] {
   if (!opts.vectorizedOnly && normalizeExclusionMarkers(opts.excludeFilenameMarkers).length === 0) {
     return files;
   }

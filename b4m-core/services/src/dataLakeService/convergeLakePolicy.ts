@@ -167,7 +167,9 @@ async function resolveConvergencePolicy(
     { logger }
   );
   const inheritedTarget =
-    typeof resolved.value === 'number' && Number.isFinite(resolved.value) ? resolved.value : DEFAULT_PASSAGE_TOKEN_TARGET;
+    typeof resolved.value === 'number' && Number.isFinite(resolved.value)
+      ? resolved.value
+      : DEFAULT_PASSAGE_TOKEN_TARGET;
 
   const health = resolveLakeHealthPolicy({ explicitTarget: lake.requiredPassageTokenTarget, inheritedTarget });
   return {
@@ -293,6 +295,10 @@ async function partitionCrossLakeConflicts(
         userId: candidate.userId,
         fileName: candidate.fileName,
         overshootChars: candidate.overshootChars,
+        // Carried, not dropped: it outranks `overshootChars` in `planLakeConvergence`'s ordering, so
+        // omitting it here would silently un-prioritise the members with no passages at all the day
+        // anything re-sorts this wave or surfaces the flag.
+        passagesRemoved: candidate.passagesRemoved,
       });
       continue;
     }

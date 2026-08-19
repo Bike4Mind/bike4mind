@@ -716,7 +716,9 @@ export interface LakeConvergencePlanResponse {
   crossLakeConflicts: {
     fabFileId: string;
     fileName?: string;
-    conflictingLakes: { lakeId?: string; name: string; effectiveRequiredTarget: number }[];
+    // Both optional: the GET is read-gated and strips them (`redactCrossLakeIdentities`), so typing
+    // `name` as required would have TypeScript vouch for a field the redaction guarantees is absent.
+    conflictingLakes: { lakeId?: string; name?: string; effectiveRequiredTarget: number }[];
   }[];
   crossLakeConflictCount: number;
   scanTruncated: boolean;

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FabFile, FabFileChunk, fabFileRepository, fabFileChunkRepository } from '../models/content/FabFileModel';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
 import { setupMongoTest } from '../__test__/utils';
 
 const TAG = 'datalake:rebuild-test';
@@ -96,6 +97,39 @@ describe('FabFileRepository.findChunkedFilesByScope', () => {
 
     const result = await fabFileRepository.findChunkedFilesByScope(prefixScope);
     expect(result).toEqual([{ id: ownerFile._id.toString(), userId: 'owner' }]);
+  });
+});
+
+describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('finds the shape neither other read can see: chunkless, no error, marker set', async () => {
+    // What a halted wave leaves behind. `findChunkedFilesByScope` needs chunked:true and
+    // `countFailedFilesByScope` needs a non-empty error, so without this read the rebuild door
+    // reported underChunkedCount 0 and hid its own button on the lake that needed it.
+    const [stranded] = await FabFile.create([
+      makeFile({ userId: 'u1', chunked: false, chunkCount: 0, error: null, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+    ]);
+    await FabFile.create([
+      makeFile({ userId: 'u1', chunked: false, chunkCount: 0 }), // chunkless, but never had passages
+      // Marker outlived a rescue-sweep rebuild (that path never resets, so `notes` survives) - the
+      // file is healthy again and must NOT be re-selected.
+      makeFile({ userId: 'u1', chunkCount: 4, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+      makeFile({ userId: 'u2', chunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE, isChunking: true }),
+      makeFile({ userId: 'u2', chunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE, deletedAt: new Date() }),
+      makeFile({
+        userId: 'u3',
+        chunkCount: 0,
+        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        tags: [{ name: 'datalake:other', strength: 1 }],
+      }),
+    ]);
+
+    const result = await fabFileRepository.findConvergencePausedFilesByScope(scope);
+    expect(result).toEqual([{ id: stranded._id.toString(), userId: 'u1' }]);
   });
 });
 

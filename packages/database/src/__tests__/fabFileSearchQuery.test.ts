@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
   buildOwnershipConditions,
@@ -742,7 +743,9 @@ describe('buildFabFileSearchQuery', () => {
         { fileNameLower: { $not: RegExp } } | undefined;
     const hasVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).some(
-        c => JSON.stringify(c) === JSON.stringify({ vectorized: true })
+        c =>
+          JSON.stringify(c) ===
+          JSON.stringify({ $or: [{ vectorized: true }, { notes: CONVERGENCE_PAUSED_CHUNK_NOTE }] })
       );
 
     it('adds a fileNameLower $not clause with a DocumentDB-safe regex when markers are set', () => {
@@ -779,7 +782,11 @@ describe('buildFabFileSearchQuery', () => {
       expect(re.test('axb file.pdf')).toBe(false); // '.' is literal, not wildcard
     });
 
-    it('adds a {vectorized:true} clause when vectorizedOnly is set', () => {
+    it('adds a vectorized clause when vectorizedOnly is set, exempting convergence-stranded files', () => {
+      // The exemption is not cosmetic: a member whose passages a halted wave deleted is
+      // `vectorized: false`, and dropping it HERE is upstream of the in-memory post-filter and of
+      // partitionByIndexAvailability - so a vectorizedOnly lake would answer around the hole and
+      // report full coverage. Must stay in sync with isRetrievalExcluded's own arm.
       const result = buildFabFileSearchQuery(makeParams({ options: { vectorizedOnly: true } }));
       expect(hasVectorizedClause(result)).toBe(true);
     });

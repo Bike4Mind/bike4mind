@@ -1,4 +1,9 @@
-import { CODE_FILE_MIME_TYPES, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  CODE_FILE_MIME_TYPES,
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  normalizeTagPrefix,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
@@ -489,7 +494,12 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   // baseFilter.fileName for the plain-search path). Both are no-ops when unset - an empty
   // marker set yields a null regex (buildFilenameMarkerRegex), so today's queries are unchanged.
   if (options?.vectorizedOnly) {
-    andConditions.push({ vectorized: true });
+    // Same exemption, same reason, as `isRetrievalExcluded`'s in-memory arm - and it has to be here
+    // too, or the file is dropped by the DB before the authoritative post-filter can spare it. A
+    // member whose passages a halted convergence wave deleted is unvectorized because its content
+    // was taken away; it must reach `partitionByIndexAvailability` to be withheld and REPORTED
+    // rather than silently absent. Keep the two predicates in sync.
+    andConditions.push({ $or: [{ vectorized: true }, { notes: CONVERGENCE_PAUSED_CHUNK_NOTE }] });
   }
   // Matched against the pre-lowered, indexed `fileNameLower` (no $options:'i' - index-safe).
   const markerRegex = buildFilenameMarkerRegex(options?.excludeFilenameMarkers);
