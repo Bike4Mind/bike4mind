@@ -23,7 +23,7 @@ interface BugReportModalProps {
 const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMeta }) => {
   const [bugReport, setBugReport] = useState('');
   const [feedbackType, setFeedbackType] = useState<FeedbackType>(FeedbackType.BUG);
-  const [submitting, setSubmitting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const userContext = useUser();
   const theme = useTheme();
   const handleFeedbackTypeChange = (type: FeedbackType) => {
@@ -63,7 +63,8 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
   });
 
   const handleSubmit = async () => {
-    setSubmitting(true);
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       const result = await createFeedbackOnServer({
         userId: userContext?.currentUser?.id ?? 'Unknown',
@@ -84,10 +85,11 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         toast.warning('Saved your report, but we could not notify the team - please ping support if it is urgent.');
       }
       setBugReport('');
-    } catch {
+    } catch (error) {
+      console.error('Failed to submit bug report:', error);
       toast.error('Could not submit your report. Please try again.');
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -144,10 +146,10 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
           <Typography level="body-xs">{JSON.stringify(promptMeta, null, 2)}</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 2 }}>
-          <Button onClick={onClose} variant="outlined" disabled={submitting}>
+          <Button onClick={onClose} variant="outlined" disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button data-testid="bug-report-submit-btn" onClick={handleSubmit} variant="solid" disabled={submitting}>
+          <Button data-testid="bug-report-submit-btn" onClick={handleSubmit} variant="solid" disabled={isSubmitting}>
             Submit
           </Button>
         </Box>

@@ -39,7 +39,7 @@ export const HelpModal: React.FC = () => {
   const logEvent = useLogEvent();
   const { settings, updatePreferences } = useUserSettings();
   const [feedbackContent, setFeedbackContent] = useState<string>('');
-  const [submitting, setSubmitting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const theme = useTheme();
   const [productType] = useState<ProductType>(ProductType.Bike4Mind);
   const [productTitle] = useState<string>(APP_NAME);
@@ -76,11 +76,12 @@ export const HelpModal: React.FC = () => {
   };
 
   const handleSubmitFeedback = async () => {
+    if (isSubmitting) return;
     if (!feedbackContent.trim()) {
       console.error('Feedback content is empty');
       return;
     }
-    setSubmitting(true);
+    setIsSubmitting(true);
     try {
       const feedbackCreated = await createFeedbackOnServer({
         userId: userId,
@@ -114,7 +115,7 @@ export const HelpModal: React.FC = () => {
       console.error('Failed to submit feedback:', error);
       toast.error('Could not submit your feedback. Please try again.');
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false);
     }
   };
   if (!settings.showHelp) return null;
@@ -237,7 +238,7 @@ export const HelpModal: React.FC = () => {
               },
             }}
             onClick={handleSubmitFeedback}
-            disabled={submitting}
+            disabled={isSubmitting}
           >
             Send Feedback
           </Button>

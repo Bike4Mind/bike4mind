@@ -95,7 +95,7 @@ const handler = baseApi()
 
     if (authenticated)
       await logEvent(
-        { userId, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
+        { userId: req.user.id, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
         { ability: req.ability }
       );
 
