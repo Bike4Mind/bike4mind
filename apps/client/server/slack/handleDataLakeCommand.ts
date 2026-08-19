@@ -8,12 +8,20 @@ import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps, type SlackLinkIngest
 /**
  * Deterministic handler for the Slack `@datalake` command.
  *
- * M1 landed the grammar behind the `EnableDataLakeSlackAdd` flag; M2 fills in the FILE ingest
- * (see `dataLakeFileIngest.ts`, which owns lake resolution and the write gate) and `list`. LINK
- * ingest is M3 - a bare URL is refused here rather than silently ignored.
+ * The grammar landed first, then the FILE ingest (see `dataLakeFileIngest.ts`, which owns lake
+ * resolution and the write gate) and `list`, then LINK ingest - a bare URL is refused here rather
+ * than silently ignored.
  *
- * The whole surface stays DORMANT: `runDataLakeSlackCommand` only reaches this once the admin
- * flag is on, and the flag stays off until M4.
+ * This surface is now LIVE BY DEFAULT. `EnableDataLakeSlackAdd` defaults on, so the effective gate
+ * is the parent `EnableDataLakes` - which still defaults OFF, so nothing reaches here on a deployment
+ * that has never enabled Data Lakes.
+ *
+ * Both flags are DEPLOYMENT-GLOBAL, not per-org: `adminSettingsRepository.getSettingsValue` is a
+ * `findOne({ settingName })` against a collection keyed on `settingName` alone, and this path never
+ * touches the scoped-override machinery in `@bike4mind/utils` settings. So the bound is "the whole
+ * deployment, once Data Lakes is on" - do NOT read it as a per-org opt-in. The child flag is the
+ * off switch and rollback lever for that deployment; see `runDataLakeSlackCommand` below, which
+ * enforces both.
  */
 
 /** DataLake repository surface the command needs (injected for testability). */
@@ -245,9 +253,9 @@ export interface RunDataLakeSlackCommandDeps {
 }
 
 /**
- * Orchestrate a `@datalake` Slack command: enforce the admin gates (silent no-op when off, keeping
- * the surface dormant), otherwise dispatch and reply in-thread. The caller intercepts this BEFORE
- * the LLM path and always acks Slack with 200.
+ * Orchestrate a `@datalake` Slack command: enforce the admin gates (silent no-op when either is
+ * off), otherwise dispatch and reply in-thread. The caller intercepts this BEFORE the LLM path and
+ * always acks Slack with 200.
  *
  * BOTH `EnableDataLakes` and `EnableDataLakeSlackAdd` must be on. The child flag declares
  * `dependsOn: 'EnableDataLakes'`, so the admin UI hides it while the parent is off - but that is a

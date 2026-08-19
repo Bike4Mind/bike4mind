@@ -1917,6 +1917,9 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // The local basis never bills cache creation, so recording a count here would
+      // imply a charge that was not made.
+      expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
     });
 
     // Partial provider usage (cache read reported without input/output counts) also
@@ -2098,6 +2101,10 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.creditsUsed).toBe(132);
       // Provider-reported cache read recorded as billed (no local cap on this basis).
       expect(tokenUsage.cacheReadInputTokens).toBe(3000);
+      // The write is the dominant component of this charge ($0.0625 of $0.06594), so it
+      // has to be recorded too - otherwise the row shows a 132-credit charge explained by
+      // 2 input tokens, and the cache-write rate can only be guessed at from read being absent.
+      expect(tokenUsage.cacheCreationInputTokens).toBe(5000);
     });
 
     // A cold turn (provider reports the full prompt as fresh input) and a warm
@@ -2442,6 +2449,7 @@ describe('ChatCompletionProcess', () => {
       message: string;
       sessionAgentIds?: string[];
       allowedAgents?: string[];
+      priorToolNames?: string[];
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -2474,7 +2482,7 @@ describe('ChatCompletionProcess', () => {
         messages: [{ role: 'user', content: params.message }],
         messageTruncation: null,
       });
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, { priorToolNames: params.priorToolNames ?? [] }]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
       const body = {
@@ -2520,6 +2528,29 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: ['researcher'],
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // An @mention is only a delegation signal when it names an agent the store can actually run.
+    // "Any @mention at all" attached the tool (and the tool prompt's agent directory) to ordinary
+    // prose that happened to contain a handle, which is both wasted tokens and a live
+    // self-delegation side-channel on a turn the user never asked to delegate on.
+    it('does NOT expose delegate_to_agent for an @mention that names no delegatable agent', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'can you loop in @dave and compare the smartphones',
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    // No prior-turn rescue here, deliberately, unlike the blog/skill gates: an earlier delegation
+    // must not re-arm autonomous subagent spawning for the rest of the conversation. A real
+    // multi-turn workflow rides session.agentIds, which AgentDetectionFeature persists for any
+    // summon that resolved to a real agent.
+    it('does NOT re-expose delegate_to_agent on a follow-up turn just because an earlier turn delegated', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'now check battery life too',
+        priorToolNames: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
     });
 
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {

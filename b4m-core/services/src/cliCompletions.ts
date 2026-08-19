@@ -32,7 +32,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
-import { subtractCredits, isMemberCreditCapExceeded } from './creditService';
+import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 
 export interface CompletionParams {
@@ -268,7 +268,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // Org-billed keys: enforce the per-member cap before touching the shared pool.
     // Uses the estimate; settlement records the actual usage against the member below.
     if (billToOrg && isMemberCreditCapExceeded(organization!, userId, reservedCredits)) {
-      throw new InsufficientCreditsError('Organization member credit limit reached', 'insufficient_credits');
+      throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
     }
 
     // Atomically reserve credits using incrementCredits with negative value

@@ -13,6 +13,7 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
 import { z } from 'zod';
 
@@ -42,8 +43,8 @@ const EXPIRE_IN_SECONDS = 3600;
 
 type UpdateFabFileParameters = z.infer<typeof updateFabFileSchema>;
 
-interface UpdateFabFileAdapters {
-  db: {
+interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'

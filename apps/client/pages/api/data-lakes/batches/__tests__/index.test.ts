@@ -13,6 +13,13 @@ const h = vi.hoisted(() => ({
   dlFindById: vi.fn(),
   dlSetStats: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  // The draft -> active flip and the audit row it emits. Stubbed because the real repositories are
+  // Mongo-backed: this spec spreads the actual @bike4mind/database module, so anything the audit
+  // path reaches has to be overridden or it hangs on a buffering timeout with no connection.
+  activateIfDraft: vi.fn(),
+  recordConfigChange: vi.fn().mockResolvedValue({}),
+  findBySettingNames: vi.fn().mockResolvedValue([]),
+  findAll: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -43,8 +50,19 @@ vi.mock('@bike4mind/database', async importOriginal => {
       forceFailStuckTaxonomy: h.forceFailStuckTaxonomy,
       markTerminalIfActive: h.markTerminalIfActive,
     },
-    dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById, setStats: h.dlSetStats },
+    dataLakeRepository: {
+      ...actual.dataLakeRepository,
+      findById: h.dlFindById,
+      setStats: h.dlSetStats,
+      activateIfDraft: h.activateIfDraft,
+    },
     fabFileRepository: { ...actual.fabFileRepository, computeDataLakeStats: h.computeDataLakeStats },
+    lakeConfigChangeEventRepository: { ...actual.lakeConfigChangeEventRepository, record: h.recordConfigChange },
+    adminSettingsRepository: {
+      ...actual.adminSettingsRepository,
+      findBySettingNames: h.findBySettingNames,
+      findAll: h.findAll,
+    },
   };
 });
 
@@ -89,6 +107,51 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
       expect.arrayContaining(['queued', 'analyzing', 'applying']),
       expect.any(Date),
       expect.any(String)
+    );
+  });
+
+  // The wiring pin for this route's ...lakeConfigAuditDb spread, written as BEHAVIOUR rather than as
+  // an assertion on the adapters object: this spec deliberately runs the real reconciler (see the
+  // note at the top of the file), so there is no service mock whose arguments could be inspected.
+  // Driving the whole path instead is the stronger pin anyway - it fails if the route stops
+  // spreading the audit repos, and also if reconcileStuckBatches stops forwarding them onward.
+  // Worth pinning here specifically because this reconciler forces terminal exactly the batches that
+  // never reached finalizeBatchIfComplete, making it the only path that can ever publish those lakes.
+  it('records the auto-activate that forcing a stuck batch terminal causes', async () => {
+    const stuckBatch = {
+      id: 'stuck1',
+      userId: 'u1',
+      dataLakeId: 'lake1',
+      status: 'processing',
+      updatedAt: new Date(Date.now() - 4 * 60 * 60 * 1000), // 4h idle > the 3h timeout
+    };
+    h.findActiveByUserId.mockResolvedValue([stuckBatch]);
+    h.findActiveTaxonomyByUserId.mockResolvedValue([]);
+    h.markTerminalIfActive.mockResolvedValue({ ...stuckBatch, status: 'completed_with_errors' });
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      datalakeTag: 'datalake:orga:acme',
+      fileTagPrefix: 'acme:',
+      createdByUserId: 'u1',
+      status: 'draft',
+    });
+    // fileCount > 0 is what makes the flip eligible at all.
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 3, totalSizeBytes: 10, totalChunkedChars: 20 });
+    h.activateIfDraft.mockResolvedValue(true);
+
+    const { res } = makeRes();
+    await run(res);
+
+    expect(h.recordConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: 'lake1',
+        action: 'auto-activate',
+        // `system` on both counts by design: no principal drove this, and activateIfDraft
+        // authorizes nothing (see recomputeLakeStats).
+        principalKind: 'system',
+        manageRung: 'system',
+        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
+      })
     );
   });
 

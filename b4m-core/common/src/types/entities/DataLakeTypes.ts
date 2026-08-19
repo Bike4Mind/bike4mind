@@ -38,9 +38,11 @@ export interface AccessContext {
    * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
    * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
-   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
-   * singular `organizationId` above, which is the caller's selected-org display preference, never an
-   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from
+   * `organizationIds` above: that set is MEMBERSHIP (which orgs the caller may READ), this one is
+   * admin RIGHTS (which orgs the caller may MANAGE) - a member is not an admin. Neither is
+   * `user.organizationId`, the selected-org display preference, which is never an authorization
+   * input (#1674). Optional - absent -> no org-admin rung (back-compat).
    */
   administeredOrgIds?: string[];
   /**
@@ -158,7 +160,8 @@ export interface IDataLake {
    * membership (addFileToLake/removeFileFromDataLake) changes the lake's CONTENT rather than its
    * configuration and is attributed per file; recomputeLakeStats is UNATTRIBUTED BY DESIGN rather
    * than operator-free (a tag edit, a file toggle or a batch completion drives it, and it can flip
-   * status via activateIfDraft - it simply has no actor parameter to stamp with); the lake-memory
+   * status via activateIfDraft - it takes an optional actor only to attribute the config-change
+   * event that flip emits, and deliberately never writes this stamp); the lake-memory
    * lease is genuine headless bookkeeping; and resetEmbeddingSpend moves a cost meter, not an
    * answering behavior. So this reads as "who last changed how this lake is configured", never
    * "who last touched this lake in any way".
@@ -748,7 +751,8 @@ export interface SyncDelta {
  * admin reset or a release-after-failure, not because one is "actual" and the other isn't -
  * the client must label them distinctly (lifetime meter vs. attributed/ledgered cost)
  * without implying either is a true provider-billed number. Budgets mirror
- * `resolveSpendLevers()`'s live values so the view never has to re-derive them.
+ * `resolveSpendLevers()`'s live values so the view never has to re-derive them - resolved at the
+ * lake's OWN cost tier, so they are the same ceilings the ingestion gate enforces on it.
  */
 export interface IDataLakeSpendResponse {
   dataLakeId: string;
@@ -761,6 +765,11 @@ export interface IDataLakeSpendResponse {
   perLakeBudgetMicroUsd: number;
   perPeriodBudgetMicroUsd: number;
   periodHours: number;
+  /**
+   * Cost-tier factor the two per-resource budgets above were scaled by, from the lake's ownership
+   * (individual vs organization). Returned so the view can explain a ceiling rather than just state it.
+   */
+  tierMultiplier: number;
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
   ledger: ILakeUsageSummary;
 }

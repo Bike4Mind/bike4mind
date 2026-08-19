@@ -14,9 +14,10 @@ import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTa
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
-interface ReconcileLakeTagsAdapters {
-  db: {
+interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
     // Grant-aware manage gates: consult a lake's active grants so a curator / org-admin /
@@ -328,12 +329,12 @@ export const reconcileLakeTags = async (
       // gate (where one applies) ran above, before that write. They still need stats.
       const recomputed = new Set<string>();
       for (const lake of joins) {
-        await recomputeLakeStats(lake, { db });
+        await recomputeLakeStats(lake, { db, logger }, { actor });
         recomputed.add(lake.id);
       }
       // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
       for (const lake of statsOnlyJoins) {
-        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
+        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
       }
     },
   };

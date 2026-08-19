@@ -33,6 +33,7 @@ import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS, CHUNK_CLAIM_STALE_M
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 
@@ -85,7 +86,14 @@ export async function runStuckBatchSweep(runLogger: Logger): Promise<{ candidate
   const stuck = await dataLakeBatchRepository.findStuck(cutoff, MAX_PER_RUN);
 
   const forced = await dataLakeService.reconcileStuckBatches(stuck, timeoutMs, {
-    db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+    // Audit repos wired: this reconciler forces terminal the batches that never reached
+    // finalizeBatchIfComplete, so it is the only path that can activate those lakes.
+    db: {
+      dataLakes: dataLakeRepository,
+      batches: dataLakeBatchRepository,
+      fabFiles: fabFileRepository,
+      ...lakeConfigAuditDb,
+    },
     logger: runLogger,
     metrics: {
       // Also backstops the taxonomy enqueue for a batch that never reached upload-complete

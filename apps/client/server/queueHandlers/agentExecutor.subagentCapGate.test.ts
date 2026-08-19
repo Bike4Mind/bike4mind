@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // The per-member cap gate in `processSubagentDispatch` must fire `onDagNodeTerminal`
 // on refusal: without it, a capped-out member's DAG children ALL fail this gate (it's
@@ -153,5 +155,51 @@ describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
         child: expect.objectContaining({ id: 'child-1', dagNodeId: 'node-b', status: 'failed' }),
       })
     );
+  });
+});
+
+describe('buildInProcessCreditCapCheck', () => {
+  it('re-fetches organization on every call, so it reflects credits billed since the calling entry-gate snapshot', async () => {
+    const notYetCapped = { id: 'org-1', maxCreditsPerMember: 5, userDetails: [{ id: 'user-1', usedCredits: 4 }] };
+    const nowCapped = { id: 'org-1', maxCreditsPerMember: 5, userDetails: [{ id: 'user-1', usedCredits: 5 }] };
+    const findById = vi
+      .fn()
+      .mockResolvedValueOnce(notYetCapped as never)
+      .mockResolvedValueOnce(nowCapped as never);
+
+    const { buildInProcessCreditCapCheck } = await import('./agentExecutor');
+    const check = buildInProcessCreditCapCheck({ findById }, 'org-1', 'user-1');
+
+    expect(await check()).toBe(false);
+    expect(await check()).toBe(true);
+    expect(findById).toHaveBeenCalledTimes(2);
+    expect(findById).toHaveBeenCalledWith('org-1');
+  });
+
+  it('returns false without a DB read when there is no organizationId', async () => {
+    const findById = vi.fn();
+    const { buildInProcessCreditCapCheck } = await import('./agentExecutor');
+    const check = buildInProcessCreditCapCheck({ findById }, undefined, 'user-1');
+
+    expect(await check()).toBe(false);
+    expect(findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkMemberCreditCap wiring sites', () => {
+  // buildInProcessCreditCapCheck's own re-fetch behavior is unit tested above, but nothing
+  // stops a future edit from reverting a call site to an inline closure over the stale
+  // `organization` snapshot - the exact bug a human reviewer caught in this same PR. A source
+  // scan is crude, but it directly guards the regression class the wiring itself can't:
+  // both sites must call the shared helper, and neither may reintroduce the old pattern.
+  const source = readFileSync(join(__dirname, 'agentExecutor.ts'), 'utf-8');
+
+  it('wires both the top-level and dispatched-subagent sites through buildInProcessCreditCapCheck', () => {
+    const wiringSites = source.match(/checkMemberCreditCap:\s*buildInProcessCreditCapCheck\(/g) ?? [];
+    expect(wiringSites).toHaveLength(2);
+  });
+
+  it('does not reintroduce a closure over the stale organization snapshot', () => {
+    expect(source).not.toMatch(/checkMemberCreditCap: \(\) =>\s*\n\s*Boolean\(organization/);
   });
 });

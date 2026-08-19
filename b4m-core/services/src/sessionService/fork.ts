@@ -17,7 +17,7 @@ type ForkSessionAdapters = {
     fabFiles: IFabFileRepository;
     chatHistories: Pick<
       IChatHistoryItemRepository,
-      'findById' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
+      'findBySessionIdAndId' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
     >;
   };
 } & CreateSessionAdapters;
@@ -32,7 +32,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   const session = await db.sessions.findByIdAndUserId(sessionId, userId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await db.chatHistories.findById(messageId);
+  const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
 
   const newSession = await createSession(

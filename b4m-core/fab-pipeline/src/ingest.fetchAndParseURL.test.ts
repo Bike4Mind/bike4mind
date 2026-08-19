@@ -13,6 +13,7 @@ const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
 
 import { fetchAndParseURL } from './ingest';
+import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
 
 const logger = { updateMetadata: vi.fn(), log: vi.fn(), debug: vi.fn() } as never;
 
@@ -78,6 +79,26 @@ describe('fetchAndParseURL redirect handling', () => {
 
     // Without this, axios follows up to 21 hops on its own and the guard sees only the first.
     expect(axiosGet.mock.calls[0][1]).toMatchObject({ maxRedirects: 0 });
+  });
+
+  it('pins every request through the SSRF-safe agents', async () => {
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    await fetchAndParseURL(PUBLIC_URL, { logger });
+
+    // These two options ARE the DNS-rebinding defence: without them the per-hop URL check still runs
+    // but the socket re-resolves, so a rebinding host passes validation and connects internally.
+    // Asserted here because deleting them from ingest.ts leaves the whole suite green otherwise - the
+    // only other backstop is an unused-import lint error, which an IDE autofix removes along with them.
+    // BOTH are required: a redirect chain can cross schemes, and axios picks the agent per scheme.
+    expect(axiosGet.mock.calls[0][1]).toMatchObject({
+      httpAgent: ssrfSafeHttpAgent,
+      httpsAgent: ssrfSafeHttpsAgent,
+    });
+    // `proxy: false` is part of the same defence, not a separate nicety: axios honours
+    // HTTPS_PROXY/HTTP_PROXY from the environment by default and installs its own agent, which
+    // displaces ours - so the pin above would silently stop applying wherever a proxy env var is set.
+    expect(axiosGet.mock.calls[0][1]).toMatchObject({ proxy: false });
   });
 
   it('gives up after too many redirects instead of looping', async () => {
@@ -180,7 +201,8 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
   );
 
   it('still parses a NON-pdf url served as octet-stream as text', async () => {
-    // The fallback is extension-gated, so generic-binary alone must not promote anything to PDF.
+    // The fallback needs a positive PDF signal - a .pdf path OR the PDF signature in the bytes - so
+    // generic-binary alone must not promote anything. This body is HTML on both counts.
     axiosGet.mockResolvedValueOnce({
       status: 200,
       data: PAGE,
@@ -191,6 +213,53 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
 
     expect(result.mimeType).toBe('text/plain');
     expect(result.title).toBe('An Article');
+  });
+
+  /**
+   * The door left open after the Content-Type fallback: a download endpoint with NO `.pdf` in its
+   * path, served as `application/octet-stream`. Neither signal the fallback relies on was present, so
+   * PDF bytes went through `toString('utf8')` and were chunked and vectorized as garbage - the exact
+   * corruption the fallback exists to prevent, reached by the one remaining route.
+   */
+  it('treats an EXTENSION-LESS octet-stream download as a PDF when the bytes say so', async () => {
+    axiosGet.mockResolvedValueOnce({
+      status: 200,
+      data: Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n'),
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+
+    const result = await fetchAndParseURL('http://93.184.216.34/download?id=9', { logger });
+
+    expect(result.mimeType).toBe('application/pdf');
+    expect(Buffer.isBuffer(result.textContent)).toBe(true);
+  });
+
+  it('does not promote a generic-binary body that merely CONTAINS the signature later on', async () => {
+    // Offset-0 only. Sniffing ahead would mean re-classifying on arbitrary attacker-supplied content,
+    // and a false positive hands a real text document to the PDF branch.
+    axiosGet.mockResolvedValueOnce({
+      status: 200,
+      data: Buffer.from('not a pdf at all, but it mentions %PDF-1.4 in passing'),
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+
+    const result = await fetchAndParseURL('http://93.184.216.34/download?id=9', { logger });
+
+    expect(result.mimeType).toBe('text/plain');
+  });
+
+  it('does not let the signature override a server that stated a type', async () => {
+    // Deliberate boundary, not an oversight: the sniff is consulted only where the server gave no
+    // format signal. Overriding an explicit Content-Type is a wider change than this fix needs.
+    axiosGet.mockResolvedValueOnce({
+      status: 200,
+      data: Buffer.from('%PDF-1.4 fake'),
+      headers: { 'content-type': 'text/html' },
+    });
+
+    const result = await fetchAndParseURL('http://93.184.216.34/download?id=9', { logger });
+
+    expect(result.mimeType).toBe('text/plain');
   });
 
   it('does not treat a .pdf in the QUERY STRING as a PDF', async () => {

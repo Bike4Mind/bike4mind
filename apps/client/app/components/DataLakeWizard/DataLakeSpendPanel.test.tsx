@@ -27,6 +27,7 @@ const baseSummary = (overrides: Partial<IDataLakeSpendResponse> = {}): IDataLake
   perLakeBudgetMicroUsd: 100_000_000,
   perPeriodBudgetMicroUsd: 50_000_000,
   periodHours: 24,
+  tierMultiplier: 1,
   ledger: emptyLedger,
   ...overrides,
 });

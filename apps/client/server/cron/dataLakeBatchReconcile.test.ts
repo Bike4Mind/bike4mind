@@ -22,7 +22,16 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
   fabFileRepository: {},
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // getSettingsValue for this cron's own flags, plus the retention pair the config-audit
+  // resolver reads - one declaration serving both consumers (see lakeConfigAuditDb).
+  adminSettingsRepository: {
+    getSettingsValue: h.getSettingsValue,
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+  // Wired by this cron now that it records the auto-activate it can cause. Stubbed rather than
+  // omitted: this mock replaces the whole module, so an unlisted export fails at import time.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   FabFile: { find: h.fabFileFind },
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -99,6 +108,15 @@ describe('dataLakeBatchReconcile cron handler', () => {
       [{ id: 'b1', dataLakeId: 'lake1' }],
       TIMEOUT,
       expect.objectContaining({
+        // The config-audit repos, named rather than covered by expect.anything(): this sweep forces
+        // terminal exactly the batches that never reached finalizeBatchIfComplete, so it is the only
+        // path that can activate those lakes. Both keys are optional on the service, so a sweep that
+        // stopped spreading lakeConfigAuditDb would record nothing and still pass every other
+        // assertion in this file.
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.objectContaining({ record: expect.any(Function) }),
+          adminSettings: expect.objectContaining({ findBySettingNames: expect.any(Function) }),
+        }),
         metrics: expect.objectContaining({
           emitForcedTerminal: expect.any(Function),
           emitStuckGauge: expect.any(Function),

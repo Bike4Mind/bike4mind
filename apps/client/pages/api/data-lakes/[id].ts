@@ -13,6 +13,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
@@ -68,7 +69,12 @@ const handler = baseApi()
     dataLakeService.assertLakeWritable(lake);
 
     const updated = await dataLakeService.updateDataLake(ctx, lake.id, params, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        ...lakeConfigAuditDb,
+      },
+      logger: req.logger,
     });
 
     return res.json(updated);
@@ -88,7 +94,9 @@ const handler = baseApi()
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
+        ...lakeConfigAuditDb,
       },
+      logger: req.logger,
     });
 
     return res.json(archived);

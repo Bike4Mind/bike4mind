@@ -6,6 +6,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 // The active account-switcher org (client-supplied) is the org a promotion targets. It is
 // authorization-validated (resolveActiveOrg) before use, so it can't scope a lake into an
@@ -51,7 +52,14 @@ const handler = baseApi()
       },
       lake.id,
       visibility,
-      { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } }
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      }
     );
 
     return res.json(result);
