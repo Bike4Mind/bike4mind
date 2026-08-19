@@ -4410,13 +4410,16 @@ export class ChatCompletionProcess {
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
           : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+        // Provider-basis only: the local fallback deliberately never bills cache creation,
+        // so recording a value there would imply a charge that was not made.
+        const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
         const estimatedCost = hasProviderUsage
           ? getTextModelCost(
               currentModel,
               settledInputTokens,
               settledOutputTokens,
               cacheReadInputTokens,
-              actualTokenUsage.cacheCreationInputTokens ?? 0
+              cacheCreationInputTokens
             )
           : getTextModelCost(
               currentModel,
@@ -4437,6 +4440,7 @@ export class ChatCompletionProcess {
           actualInputTokens: actualTokenUsage?.inputTokens,
           actualOutputTokens: actualTokenUsage?.outputTokens,
           cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
+          cacheCreationInputTokens: cacheCreationInputTokens > 0 ? cacheCreationInputTokens : undefined,
           settledBasis,
           estimatedCost,
           creditsUsed: textCreditsUsed,

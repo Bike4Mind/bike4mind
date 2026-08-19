@@ -1917,6 +1917,9 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // The local basis never bills cache creation, so recording a count here would
+      // imply a charge that was not made.
+      expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
     });
 
     // Partial provider usage (cache read reported without input/output counts) also
@@ -2098,6 +2101,10 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.creditsUsed).toBe(132);
       // Provider-reported cache read recorded as billed (no local cap on this basis).
       expect(tokenUsage.cacheReadInputTokens).toBe(3000);
+      // The write is the dominant component of this charge ($0.0625 of $0.06594), so it
+      // has to be recorded too - otherwise the row shows a 132-credit charge explained by
+      // 2 input tokens, and the cache-write rate can only be guessed at from read being absent.
+      expect(tokenUsage.cacheCreationInputTokens).toBe(5000);
     });
 
     // A cold turn (provider reports the full prompt as fresh input) and a warm
