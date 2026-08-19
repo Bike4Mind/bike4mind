@@ -283,7 +283,11 @@ const handler = baseApi()
         )
       );
       const succeeded = emailResults.filter(r => r.status === 'fulfilled').length;
-      const rejected = emailResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      // emailResults is index-aligned with feedbackEmails (allSettled preserves order), which is
+      // what lets a rejection be tied back to the recipient it actually failed for.
+      const rejected = emailResults
+        .map((result, i) => ({ result, email: feedbackEmails[i] }))
+        .filter((r): r is { result: PromiseRejectedResult; email: string } => r.result.status === 'rejected');
       await Promise.all([
         succeeded > 0 ? recordFeedbackDeliverySuccess('email', stageClass) : undefined,
         succeeded < emailResults.length
@@ -300,12 +304,14 @@ const handler = baseApi()
           feedbackId: newFeedback.id,
           succeeded,
           attempted: emailResults.length,
-          reasons: rejected.map(r => String(r.reason)),
+          failedRecipients: rejected.map(r => r.email),
+          reasons: rejected.map(r => String(r.result.reason)),
         });
       }
-      // 'email delivered' means the outbound-mail event was enqueued (EmailEvents.Send.publish
-      // resolved), not that SMTP actually sent it - the downstream mail consumer that does the
-      // real send is a separate, uninstrumented subsystem.
+      // 'email delivered' means the outbound-mail event was attempted (EmailEvents.Send.publish
+      // resolved), not that it was actually enqueued or sent - the underlying PutEvents call can
+      // return success with a rejected entry that nothing in this repo currently checks for, and
+      // SMTP delivery itself happens in a separate, uninstrumented subsystem.
       email = succeeded > 0 ? { outcome: 'delivered' } : { outcome: 'failed', reason: 'error' };
     }
 

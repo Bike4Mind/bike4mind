@@ -252,11 +252,16 @@ describe('POST /api/feedback - delivery outcome', () => {
 
     expect(Logger.error).toHaveBeenCalledWith(
       '[feedback] email publish rejected for one or more recipients',
-      expect.objectContaining({ succeeded: 1, attempted: 2, reasons: ['Error: smtp down'] })
+      expect.objectContaining({
+        succeeded: 1,
+        attempted: 2,
+        failedRecipients: ['b@x.com'],
+        reasons: ['Error: smtp down'],
+      })
     );
   });
 
-  it('logs the rejection reasons when every email publish rejects', async () => {
+  it('logs the rejection reasons and every failed recipient when every email publish rejects', async () => {
     mockSettings.EnableFeedBackToEmail = true;
     mockSettings.FeedbackReceiveEmail = 'a@x.com, b@x.com';
     mockEmailPublish.mockRejectedValue(new Error('smtp down'));
@@ -265,7 +270,12 @@ describe('POST /api/feedback - delivery outcome', () => {
 
     expect(Logger.error).toHaveBeenCalledWith(
       '[feedback] email publish rejected for one or more recipients',
-      expect.objectContaining({ succeeded: 0, attempted: 2, reasons: ['Error: smtp down', 'Error: smtp down'] })
+      expect.objectContaining({
+        succeeded: 0,
+        attempted: 2,
+        failedRecipients: ['a@x.com', 'b@x.com'],
+        reasons: ['Error: smtp down', 'Error: smtp down'],
+      })
     );
   });
 
