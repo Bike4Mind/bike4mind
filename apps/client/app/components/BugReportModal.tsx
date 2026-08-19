@@ -23,6 +23,7 @@ interface BugReportModalProps {
 const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMeta }) => {
   const [bugReport, setBugReport] = useState('');
   const [feedbackType, setFeedbackType] = useState<FeedbackType>(FeedbackType.BUG);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const userContext = useUser();
   const theme = useTheme();
   const handleFeedbackTypeChange = (type: FeedbackType) => {
@@ -61,20 +62,29 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
     },
   });
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
     console.log('Submitting bug report:', bugReport);
-    createFeedbackOnServer({
-      userId: userContext?.currentUser?.id ?? 'Unknown',
-      username: userContext?.currentUser?.username ?? 'Unknown',
-      userEmail: userContext?.currentUser?.email ?? 'Unknown',
-      tags: ['bug', 'feedback', 'bugReport'],
-      type: feedbackType,
-      content: bugReport || 'No feedback details provided',
-      promptMeta: promptMeta ?? {},
-    });
-    onClose();
-    toast.success(`${feedbackType} report submitted successfully`);
-    setBugReport('');
+    setIsSubmitting(true);
+    try {
+      await createFeedbackOnServer({
+        userId: userContext?.currentUser?.id ?? 'Unknown',
+        username: userContext?.currentUser?.username ?? 'Unknown',
+        userEmail: userContext?.currentUser?.email ?? 'Unknown',
+        tags: ['bug', 'feedback', 'bugReport'],
+        type: feedbackType,
+        content: bugReport || 'No feedback details provided',
+        promptMeta: promptMeta ?? {},
+      });
+      onClose();
+      toast.success(`${feedbackType} report submitted successfully`);
+      setBugReport('');
+    } catch (error) {
+      console.error('Failed to submit bug report:', error);
+      toast.error('Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -132,7 +142,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
           <Button onClick={onClose} variant="outlined">
             Cancel
           </Button>
-          <Button onClick={handleSubmit} variant="solid">
+          <Button onClick={handleSubmit} variant="solid" disabled={isSubmitting}>
             Submit
           </Button>
         </Box>
