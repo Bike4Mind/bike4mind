@@ -120,6 +120,13 @@ export interface ScopeRef {
   scopeId: string;
 }
 
+/** Address + payload for creating or replacing one override row. */
+export interface ScopedOverrideWrite extends ScopeRef {
+  ownerType?: SettingOwnerType;
+  settingName: SettingKey;
+  settingValue: string;
+}
+
 export interface IScopedSettingsRepository extends IBaseRepository<IScopedSetting> {
   /**
    * Batch-read overrides for a set of (level, id) rungs and setting names in a single query. Returns
@@ -128,4 +135,12 @@ export interface IScopedSettingsRepository extends IBaseRepository<IScopedSettin
    * and touches this collection zero times.
    */
   findOverrides: (scopes: ScopeRef[], settingNames: SettingKey[]) => Promise<IScopedSetting[]>;
+  /**
+   * Create the override at this (rung, setting) address, or replace its value/ownerType if a live
+   * row already exists there. Must tolerate a prior soft-deleted row at the same address (the unique
+   * index is partial on `deletedAt: null`) without a duplicate-key error.
+   */
+  upsertOverride: (write: ScopedOverrideWrite) => Promise<IScopedSetting>;
+  /** Soft-delete the live override at this address, if any. A no-op when none exists. */
+  clearOverride: (ref: ScopeRef & { settingName: SettingKey }) => Promise<void>;
 }
