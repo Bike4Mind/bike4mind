@@ -409,8 +409,9 @@ async function processOrgWebhook(message: z.infer<typeof OrgWebhookPayloadSchema
 }
 
 /**
- * Emit DeliveryFailed metrics in batched calls, one per error category, so
- * the alarm sees realistic totals without exploding metric cardinality.
+ * Emit DeliveryFailed metrics in batched calls, one per error category plus a
+ * dimensionless total, so the alarm sees realistic totals without exploding
+ * metric cardinality.
  */
 async function emitDeliveryFailureMetrics(
   orgId: string,
