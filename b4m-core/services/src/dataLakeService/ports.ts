@@ -30,8 +30,10 @@ export interface RetrievalIndexRemoval {
  * phase-1 delete each skip files already in the target state, but the removal covers every member
  * the scope matches, so a re-run after a crash still converges.
  *
- * Wire it at all three doors or not at all - archiveDataLake, deleteDataLake, cleanupDeletedDataLake
- * each take it separately, and a door left unwired silently keeps the old behavior.
+ * Wire it at every door or not at all - archiveDataLake, deleteDataLake, cleanupDeletedDataLake and
+ * purgeDataLakeDocument each take it separately, and a door left unwired silently keeps the old
+ * behavior. The first three act on a whole lake; purgeDataLakeDocument passes a single member id,
+ * which the contract above already allows (`fabFileIds` is the removal set and the whole of it).
  *
  * Removal only: there is no add operation, so an implementer must re-populate through its own
  * ingest path after unarchive or restore. Those doors do not call back in.

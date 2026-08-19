@@ -29,6 +29,7 @@ import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parse
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 import DataLakeTreeView, {
@@ -379,8 +380,9 @@ function ArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          {/* Re-process and Remove mutate lake content, so they are owner-or-admin only
-              (the backend enforces the same). Hidden when viewing a read-only lake. */}
+          {/* These mutate lake content, so they are owner-or-admin only (the backend enforces the
+              same). Hidden when viewing a read-only lake. Remove unpicks lake membership and is
+              reversible; Delete permanently destroys the document everywhere and is not. */}
           {canManage && (
             <>
               <Tooltip title="Re-run chunking + vectorization" size="sm">
@@ -411,6 +413,7 @@ function ArticlePanel({
                   Remove
                 </Button>
               </Tooltip>
+              <PurgeLakeDocumentAction file={file} title={title} dataLakeId={dataLakeId} onPurged={onRemoved} />
             </>
           )}
         </Box>

@@ -1,6 +1,7 @@
 import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
+  DataLakeDocumentPurgeReceipt,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IFabFileDocument,
@@ -451,6 +452,48 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');
+    },
+  });
+}
+
+/**
+ * Hook: permanently destroy one lake document, its chunks and its vectors, and keep the receipt
+ * the server returns as proof. The reversible sibling is `useRemoveFileFromDataLake`, which only
+ * unpicks lake membership - this one is unrecoverable and removes the file everywhere, so the
+ * caller is expected to confirm first and to show the receipt afterwards.
+ *
+ * A receipt with `verified: false` is surfaced as a warning, not a success: the request completed
+ * but the sweep did not converge, and telling the owner their content is gone would be a claim
+ * the server explicitly declined to make.
+ */
+export function usePurgeDataLakeDocument(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fabFileId: string) => {
+      const res = await api.post<DataLakeDocumentPurgeReceipt>(
+        `/api/data-lakes/${dataLakeId}/files/${fabFileId}/purge`
+      );
+      return res.data;
+    },
+    onSuccess: receipt => {
+      if (receipt.verified) {
+        toast.success(
+          `Deleted permanently: the document and its ${receipt.chunksBefore} chunk(s) and vectors are gone.`
+        );
+      } else {
+        toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
+      }
+      // Same invalidation set as membership removal - the file leaves every tag-derived view too.
+      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // The document is gone globally, not just from this lake, so the Files list is stale too.
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to permanently delete this file');
     },
   });
 }

@@ -26,6 +26,7 @@ export * from './deleteDataLake';
 export * from './lakeMembership';
 export * from './prefixArmMembership';
 export * from './removeFileFromDataLake';
+export * from './purgeDataLakeDocument';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';

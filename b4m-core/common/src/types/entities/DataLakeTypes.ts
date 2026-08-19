@@ -572,3 +572,34 @@ export interface SyncDelta {
   removedFiles: SyncDeltaRemovedFile[];
   unchangedFiles: { fileId: string; fileName: string }[];
 }
+
+/**
+ * The evidence a permanent deletion leaves behind. Every field is READ BACK after the writes, not
+ * inferred from them: the point of this receipt is that a deletion which silently did nothing and
+ * one that destroyed everything must not look the same to the caller.
+ */
+export interface DataLakeDocumentPurgeReceipt {
+  dataLakeId: string;
+  datalakeTag: string;
+  fabFileId: string;
+  fileName: string;
+  /** Chunks the document had before the sweep. Vectors live on the chunks, so this counts both. */
+  chunksBefore: number;
+  /** Chunks still present after it. Anything but 0 means the sweep did not finish. */
+  chunksRemaining: number;
+  /**
+   * Every embedding model the document's vectors were generated under, captured before the chunk
+   * delete - names exactly which vector index the removal had to reach. Empty when unvectorized.
+   */
+  embeddingModels: string[];
+  /** The FabFile row is gone, confirmed by re-reading it. */
+  documentDeleted: boolean;
+  /** A retrieval index was wired and accepted the removal. False means vectors lived only in the chunks. */
+  retrievalIndexPurged: boolean;
+  /** documentDeleted AND no chunks left. The single claim a caller may repeat back to a user. */
+  verified: boolean;
+  purgedAt: string;
+  /** The lake's stats after the purge, so a caller can refresh without a second round trip. */
+  fileCount: number;
+  totalSizeBytes: number;
+}

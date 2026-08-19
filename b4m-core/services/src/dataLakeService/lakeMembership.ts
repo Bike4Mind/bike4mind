@@ -1,5 +1,5 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
-import type { IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeDocument, IFabFileDocument, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { canManageLake } from './authorizeLakeWrite';
@@ -13,6 +13,41 @@ export type MembershipActor = { userId: string; isAdmin: boolean };
  * instead of refetching.
  */
 export type MembershipLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
+
+/** The membership-relevant slice of a file: who owns it and what it is tagged with. */
+export type MembershipFile = Pick<IFabFileDocument, 'userId' | 'tags'>;
+
+export interface LakeMembership {
+  /** Whether the lake's read path would admit this file at all. */
+  inLake: boolean;
+  /** Tags carrying the lake's fileTagPrefix that a membership write may clear. */
+  prefixedTags: string[];
+}
+
+/**
+ * Whether a file is a member of a lake, and by which signal - the single predicate every
+ * per-file lake write asks, so removal and permanent deletion cannot disagree about who is in.
+ * Mirrors buildDataLakeMembershipFilter (@bike4mind/database): exact `datalake:` meta-tag OR a
+ * `fileTagPrefix` match on a file the LAKE'S CREATOR owns.
+ *
+ * The ownership conjunct is load-bearing on the prefix arm and is positive (both ids present AND
+ * equal) so a file with no owner does not fall through as a match. Without it, minting a lake
+ * carrying someone else's prefix would be a licence to reach their files - and an admin acting
+ * on this lake could touch a file the read path never admitted to it. Files admitted by meta-tag
+ * alone therefore report no prefixedTags: the prefix arm never saw them, so a write must not
+ * strip prefix-matching tags off them either.
+ */
+export const resolveLakeMembership = (
+  lake: MembershipLake,
+  file: MembershipFile | null | undefined
+): LakeMembership => {
+  if (!file) return { inLake: false, prefixedTags: [] };
+  const tagNames = (file.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
+  const ownsFile = !!file.userId && file.userId === lake.createdByUserId;
+  // `prefixArmTagNames` drops an empty/reserved-namespace prefix, matching what the read arm queries.
+  const prefixedTags = ownsFile ? prefixArmTagNames(tagNames, lake.fileTagPrefix) : [];
+  return { inLake: tagNames.includes(lake.datalakeTag) || prefixedTags.length > 0, prefixedTags };
+};
 
 interface RemoveMembershipAdapters {
   db: { fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'> };
@@ -46,23 +81,10 @@ export const removeFileFromLake = async (
   assertLakeWritable(lake);
 
   const file = await db.fabFiles.findById(fabFileId);
-  const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
-  // Positive ownership, anchored to the LAKE'S CREATOR (not the acting admin) so this matches
-  // buildDataLakeMembershipFilter's own ownership conjunct on the single-lake browse: both ids
-  // must be present AND equal, so a file with no owner does not fall through as a match, and an
-  // admin cannot strip a prefixed tag off a file that predicate never actually admitted to this
-  // lake. Other lake readers (the aggregate browse, semantic search, chat KB tools) still match
-  // the prefix within the VIEWER's own access - that is ownership of the file, not membership in
-  // this lake, and unaffected by this write.
-  const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
-  // Gated on ownsFile, not just prefix: a file admitted to inLake via the META-TAG arm (e.g. an
-  // admin added a stranger's file with addFileToLake, which checks only the ACTOR's access, not
-  // the file's ownership) must not also have its unrelated tags stripped just because one
-  // happens to start with this lake's prefix - the read path's prefix arm never admitted this
-  // file, so the write must not touch prefix-matching tags on it either. `prefixArmTagNames`
-  // itself drops an empty/reserved-namespace prefix, matching what the read arm's query would.
-  const prefixedTags = ownsFile ? prefixArmTagNames(tagNames, lake.fileTagPrefix) : [];
-  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || prefixedTags.length > 0);
+  // Other lake readers (the aggregate browse, semantic search, chat KB tools) still match the
+  // prefix within the VIEWER's own access - that is ownership of the file, not membership in this
+  // lake, and unaffected by this write.
+  const { inLake, prefixedTags } = resolveLakeMembership(lake, file);
   if (!file || !inLake) {
     throw new NotFoundError('File not found in this data lake');
   }
