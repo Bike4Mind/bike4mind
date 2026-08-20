@@ -88,6 +88,8 @@ const MALICIOUS_CONTENT = 'check this out <a href="https://evil.example">click h
 const MALICIOUS_TYPE = '<svg onload=alert(1)>bug</svg>';
 const MALICIOUS_TAG = '<script>alert(1)</script>';
 const MALICIOUS_PROMPT_META = { offeredTools: ['<script>alert(1)</script>'] };
+const MALICIOUS_USERNAME = '<b>reporter</b>';
+const MALICIOUS_USER_EMAIL = '<i>reporter@example.com</i>';
 
 const run = () => {
   const { req, res } = createMocks({
@@ -96,8 +98,8 @@ const run = () => {
       userId: MALICIOUS_USER_ID,
       content: MALICIOUS_CONTENT,
       tags: [MALICIOUS_TAG],
-      username: 'reporter',
-      userEmail: 'reporter@example.com',
+      username: MALICIOUS_USERNAME,
+      userEmail: MALICIOUS_USER_EMAIL,
       type: MALICIOUS_TYPE,
       promptMeta: MALICIOUS_PROMPT_META,
     },
@@ -156,5 +158,16 @@ describe('POST /api/feedback - strips tags from the email notification', () => {
     expect(emailBody).not.toContain('<script>alert(1)</script>');
     // Escaped (not discarded): the reader can still see the attempted payload as inert text.
     expect(emailBody).toContain('&lt;script&gt;');
+  });
+
+  it('does not let a raw username or userEmail inject a tag into the email', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).not.toContain(MALICIOUS_USERNAME);
+    expect(emailBody).not.toContain(MALICIOUS_USER_EMAIL);
+    expect(emailBody).not.toContain('<b>');
+    expect(emailBody).not.toContain('<i>');
   });
 });
