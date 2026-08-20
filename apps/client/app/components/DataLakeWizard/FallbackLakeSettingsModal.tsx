@@ -82,16 +82,20 @@ export function FallbackLakeSettingsModal({
   const handleSave = () => {
     if (!lake) return;
     updateSettings.mutate(
+      // EVERY field is sent only when actually changed, and for this lake kind that is a data-safety
+      // rule, not just tidiness. A registry lake's settings come from a SEPARATE overlay read
+      // (resolveFallbackSettings) that degrades to "nothing set" on a transient failure while the
+      // lake still renders - unlike a DB lake, whose prompt lives on the document itself, so a
+      // failed read means the lake simply does not appear and there is nothing to seed from. Sending
+      // an unchanged field would therefore write a degraded seed back over real stored values.
+      // Omitting one means "leave as-is" server-side; an explicit '' is still a deliberate clear.
       {
         id: lake.id,
-        groundingMode,
-        // Send only when actually changed, mirroring DataLakeSettingsModal: omitting an unchanged
-        // value means "leave as-is" server-side, so a now-delisted id the picker still shows (via
-        // the fallback Option above) never gets re-sent and 400s a save of unrelated fields.
+        ...(groundingMode !== lake.groundingMode ? { groundingMode } : {}),
+        // Also avoids re-sending a now-delisted id the picker still shows (via the fallback Option
+        // above), which would 400 a save of otherwise-unrelated fields.
         ...(preferredSystemPromptId !== lake.preferredSystemPromptId ? { preferredSystemPromptId } : {}),
-        // Always sent (never conditioned on change), matching DataLakeSettingsModal's systemPrompt
-        // field - there is no delisted-value hazard here, so "send only if changed" buys nothing.
-        systemPrompt: systemPrompt.trim(),
+        ...(systemPrompt.trim() !== lake.systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {}),
       },
       { onSuccess: onClose }
     );

@@ -67,7 +67,7 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'inline', systemPrompt: '' },
+      { id: 'opti-knowledge', groundingMode: 'inline' },
       expect.objectContaining({ onSuccess: expect.any(Function) })
     );
   });
@@ -80,11 +80,9 @@ describe('FallbackLakeSettingsModal', () => {
 
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
-    // groundingMode is unchanged here too, so this pins BOTH fields are omitted when neither moved.
-    expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', systemPrompt: '' },
-      expect.anything()
-    );
+    // Nothing moved at all, so the body carries the id and nothing else - the server's own
+    // no-field early-out then makes the whole save a no-op.
+    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge' }, expect.anything());
   });
 
   it('binds a prompt from the picker and sends the new id', async () => {
@@ -96,7 +94,7 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: 'triage_router', systemPrompt: '' },
+      { id: 'opti-knowledge', preferredSystemPromptId: 'triage_router' },
       expect.anything()
     );
   });
@@ -112,10 +110,7 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-preferred-prompt-none'));
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
-    expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: '', systemPrompt: '' },
-      expect.anything()
-    );
+    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge', preferredSystemPromptId: '' }, expect.anything());
   });
 
   it('keeps a delisted bound prompt visible via the fallback Option, and does not clear it on an unrelated save', async () => {
@@ -130,13 +125,10 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     // Unchanged (still bound to the same, now-delisted id) - omitted, never re-sent to 400.
-    expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', systemPrompt: '' },
-      expect.anything()
-    );
+    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge' }, expect.anything());
   });
 
-  it('seeds the system prompt textarea from the lake and always sends the trimmed value', async () => {
+  it('seeds the system prompt textarea from the lake and sends the trimmed value when it changed', async () => {
     const user = userEvent.setup();
     render(<FallbackLakeSettingsModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
@@ -147,9 +139,28 @@ describe('FallbackLakeSettingsModal', () => {
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
-      { id: 'opti-knowledge', groundingMode: 'retrieve', systemPrompt: 'Answer only from this lake.' },
+      { id: 'opti-knowledge', systemPrompt: 'Answer only from this lake.' },
       expect.anything()
     );
+  });
+
+  // The reason every field is conditioned on change for THIS lake kind. A registry lake's settings
+  // come from a separate overlay read that degrades to "nothing set" while the lake still renders,
+  // so the modal can legitimately be seeded blank while real values sit in the store. Saving an
+  // unrelated field must not carry that blank seed back over them.
+  it('does not send an untouched systemPrompt, so a degraded seed cannot clobber a stored prompt', async () => {
+    const user = userEvent.setup();
+    // What a failed overlay read looks like to this component: coded defaults, blank prompt.
+    render(<FallbackLakeSettingsModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    await user.click(screen.getByTestId('fallback-lake-grounding-mode-button'));
+    await user.click(screen.getByTestId('fallback-lake-grounding-mode-inline'));
+    await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
+
+    const body = updateMutate.mock.calls[0][0];
+    expect(body).not.toHaveProperty('systemPrompt');
+    expect(body).not.toHaveProperty('preferredSystemPromptId');
+    expect(body).toEqual({ id: 'opti-knowledge', groundingMode: 'inline' });
   });
 
   it("warns that a GATELESS (no organizationId) lake's prompt is stored but never injected", () => {
