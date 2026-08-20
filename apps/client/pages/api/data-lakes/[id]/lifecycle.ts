@@ -14,6 +14,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 
@@ -55,7 +56,17 @@ const handler = baseApi()
     dataLakeService.assertLakeWritable(lake);
     // Minimal ManageActor: carries administeredOrgIds for the org-manageable rung, and is small
     // enough to ride in the cleanup queue payload below.
-    const actor = { userId: ctx.userId, isAdmin: ctx.isAdmin, administeredOrgIds: ctx.administeredOrgIds };
+    const actor = {
+      userId: ctx.userId,
+      isAdmin: ctx.isAdmin,
+      administeredOrgIds: ctx.administeredOrgIds,
+      // Attribute a key-driven lifecycle change to the KEY, with its owner kept findable.
+      // NOT carried into the cleanup queue: `CleanupPayload` (dataLakeCleanup.ts) is a non-strict
+      // z.object, so this field is silently stripped on the way through. Harmless today because
+      // `cleanupDeletedDataLake` records no config event - but anything there that starts recording
+      // one must re-resolve the principal rather than expect it in the payload.
+      auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+    };
 
     switch (action) {
       case 'archive': {
