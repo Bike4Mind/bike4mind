@@ -1,6 +1,7 @@
 import { FeedbackSubject } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { questRepository, sessionRepository } from '@bike4mind/database';
+import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import mongoose from 'mongoose';
 
 export interface ResolvedFeedbackContext {
@@ -74,7 +75,7 @@ async function resolveOwnedSessionId(
       const quest = await questRepository.findById(claims.questId);
       if (!quest) {
         logger.warn('Dropped feedback questId claim: quest not found');
-      } else if (await isSessionOwnedBy(quest.sessionId, authenticatedUserId, logger)) {
+      } else if (await isOwnedSession(quest.sessionId, authenticatedUserId, logger)) {
         return { questId: claims.questId, sessionId: quest.sessionId };
       } else {
         logger.warn('Dropped feedback questId claim: quest not owned by the submitting user');
@@ -85,7 +86,7 @@ async function resolveOwnedSessionId(
   if (claims.sessionId) {
     if (!mongoose.isValidObjectId(claims.sessionId)) {
       logger.warn(`Dropped feedback sessionId claim: not a valid ObjectId (${claims.sessionId})`);
-    } else if (await isSessionOwnedBy(claims.sessionId, authenticatedUserId, logger)) {
+    } else if (await isOwnedSession(claims.sessionId, authenticatedUserId, logger)) {
       return { sessionId: claims.sessionId };
     }
   }
@@ -93,7 +94,7 @@ async function resolveOwnedSessionId(
   return {};
 }
 
-async function isSessionOwnedBy(
+async function isOwnedSession(
   sessionId: string,
   authenticatedUserId: string,
   logger: Pick<Logger, 'warn'>
@@ -103,5 +104,5 @@ async function isSessionOwnedBy(
     logger.warn('Dropped feedback session claim: session not found');
     return false;
   }
-  return session.userId === authenticatedUserId || session.users?.some(share => share.userId === authenticatedUserId);
+  return isSessionOwnedByUser(session, authenticatedUserId);
 }

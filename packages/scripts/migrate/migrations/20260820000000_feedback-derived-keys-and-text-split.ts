@@ -46,6 +46,11 @@ interface LegacyFeedbackDoc {
   };
 }
 
+interface RawSessionDoc {
+  userId?: string;
+  users?: Array<{ userId?: string }>;
+}
+
 function isValidObjectIdString(value: unknown): value is string {
   return typeof value === 'string' && mongoose.isValidObjectId(value);
 }
@@ -61,7 +66,7 @@ const migration: MigrationFile = {
     const feedbacks = db.collection<LegacyFeedbackDoc>('feedbacks');
     const feedbackTexts = db.collection('feedbacktexts');
     const quests = db.collection('quests');
-    const sessions = db.collection('sessionmodels');
+    const sessions = db.collection<RawSessionDoc>('sessionmodels');
     const users = db.collection('users');
 
     const migrationStart = new Date();
@@ -77,8 +82,19 @@ const migration: MigrationFile = {
       return organizationId;
     }
 
+    // Mirrors apps/client/server/utils/sessionOwnership.ts's isSessionOwnedByUser - a migration
+    // cannot import app-server code (must stay a self-contained, raw-driver point-in-time
+    // record), but the OWNERSHIP RULE itself must still match the live handler's, including the
+    // shared-session branch: a quest whose session was shared with (not owned by) this
+    // document's userId is exactly as legitimate a backfill target as one directly owned.
+    function isOwnedByRawSession(session: RawSessionDoc | null, userId: string): boolean {
+      if (!session) return false;
+      return session.userId === userId || (session.users?.some(share => share.userId === userId) ?? false);
+    }
+
     // Two-hop ownership check: Quest has no userId of its own, so a claimed questId is only
-    // trustworthy if the SESSION it points at belongs to this document's own userId.
+    // trustworthy if the SESSION it points at belongs to (or is shared with) this document's own
+    // userId.
     async function resolveKeysForDoc(
       doc: LegacyFeedbackDoc
     ): Promise<{ questId?: string; sessionId?: string; skippedReason?: string }> {
@@ -96,9 +112,9 @@ const migration: MigrationFile = {
         if (questSessionId && isValidObjectIdString(questSessionId)) {
           const session = await sessions.findOne(
             { _id: new mongoose.Types.ObjectId(questSessionId) },
-            { projection: { userId: 1 } }
+            { projection: { userId: 1, users: 1 } }
           );
-          if (session?.userId === doc.userId) {
+          if (isOwnedByRawSession(session, doc.userId)) {
             return { questId: candidateQuestId, sessionId: questSessionId };
           }
         }
@@ -112,9 +128,9 @@ const migration: MigrationFile = {
         }
         const session = await sessions.findOne(
           { _id: new mongoose.Types.ObjectId(candidateSessionId) },
-          { projection: { userId: 1 } }
+          { projection: { userId: 1, users: 1 } }
         );
-        if (session?.userId === doc.userId) {
+        if (isOwnedByRawSession(session, doc.userId)) {
           return { sessionId: candidateSessionId };
         }
         return { skippedReason: "session does not belong to this document's userId" };
@@ -139,10 +155,21 @@ const migration: MigrationFile = {
         .toArray();
       if (docs.length === 0) break;
 
+      // Each doc's resolution is independent (resolveOrganizationId is memoized in the Map
+      // above, so concurrent calls for the same userId just race on a cache fill, not a
+      // correctness issue) - run the batch concurrently instead of one doc at a time.
+      const resolved = await Promise.all(
+        docs.map(async doc => {
+          const [{ questId, sessionId, skippedReason }, organizationId] = await Promise.all([
+            resolveKeysForDoc(doc),
+            resolveOrganizationId(doc.userId),
+          ]);
+          return { doc, questId, sessionId, skippedReason, organizationId };
+        })
+      );
+
       const ops = [];
-      for (const doc of docs) {
-        const { questId, sessionId, skippedReason } = await resolveKeysForDoc(doc);
-        const organizationId = await resolveOrganizationId(doc.userId);
+      for (const { doc, questId, sessionId, skippedReason, organizationId } of resolved) {
         const subject = questId ? 'turn' : sessionId ? 'session' : 'product';
 
         if (skippedReason) {

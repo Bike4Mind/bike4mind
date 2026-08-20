@@ -126,26 +126,12 @@ const handler = baseApi()
     const organizationDoc = existingUser?.organizationId as unknown as IOrganizationDocument | undefined;
     const organization = organizationDoc?.name || 'Unknown';
 
-    // organizationId/questId/sessionId become authorization keys for downstream scoped readers,
-    // so they are derived server-side here rather than trusted from the request body - see
-    // feedbackContext.ts for the full security rationale. `organization` above (the display
-    // string) is unaffected: it keeps its existing email-fallback resolution regardless.
-    const feedbackContext = await resolveFeedbackContext({
-      authenticatedUserId: authenticated ? req.user.id : undefined,
-      organizationId: organizationDoc?.id ?? null,
-      claims: {
-        questId: questId ?? promptMeta?.questId,
-        sessionId: sessionId ?? promptMeta?.session?.id,
-      },
-      logger: req.logger,
-    });
-
     // Text-first (mirrors LakeAccessEventModel.record()): a FeedbackText write failure just
     // leaves contentStored false rather than failing the submission, but a Feedback save failure
     // after a successful text write must not leave an orphaned, unattributable text row behind.
     const feedbackId = new mongoose.Types.ObjectId();
-    let contentStored = false;
-    if (content.trim().length > 0) {
+    const writeFeedbackText = async (): Promise<boolean> => {
+      if (content.trim().length === 0) return false;
       try {
         const { content: truncatedContent, contentTruncated } = truncateFeedbackContent(content);
         await FeedbackTextModel.create({
@@ -154,11 +140,30 @@ const handler = baseApi()
           contentTruncated,
           expiresAt: feedbackContentExpiresAt(new Date()),
         });
-        contentStored = true;
+        return true;
       } catch (error) {
         req.logger.error('Failed to write FeedbackText sibling', error);
+        return false;
       }
-    }
+    };
+
+    // organizationId/questId/sessionId become authorization keys for downstream scoped readers,
+    // so they are derived server-side here rather than trusted from the request body - see
+    // feedbackContext.ts for the full security rationale. `organization` above (the display
+    // string) is unaffected: it keeps its existing email-fallback resolution regardless.
+    // Independent of the text write above, so the two run concurrently.
+    const [feedbackContext, contentStored] = await Promise.all([
+      resolveFeedbackContext({
+        authenticatedUserId: authenticated ? req.user.id : undefined,
+        organizationId: organizationDoc?.id ?? null,
+        claims: {
+          questId: questId ?? promptMeta?.questId,
+          sessionId: sessionId ?? promptMeta?.session?.id,
+        },
+        logger: req.logger,
+      }),
+      writeFeedbackText(),
+    ]);
 
     const newFeedback = new FeedbackModel({
       _id: feedbackId,

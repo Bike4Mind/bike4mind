@@ -38,6 +38,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useFeedbackOperations } from './hooks/useFeedbackOperations';
 import { useFeedbackFilters } from './hooks/useFeedbackFilters';
 import { useFeedbackPagination } from './hooks/useFeedbackPagination';
+import { getFeedbackDisplayContent } from './types';
 
 const FeedbackTab: React.FC = () => {
   const isMobile = useIsMobile();
@@ -72,7 +73,7 @@ const FeedbackTab: React.FC = () => {
       ID: feedbackItem._id,
       Status: feedbackItem.status,
       Username: feedbackItem.username,
-      Content: feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : ''),
+      Content: getFeedbackDisplayContent(feedbackItem, ''),
       Organization: feedbackItem.organization,
       UpdatedAt: feedbackItem.updatedAt,
     }));
@@ -386,7 +387,7 @@ const FeedbackTab: React.FC = () => {
                             scrollbarWidth: 'thin',
                           }}
                         >
-                          {feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : '')}
+                          {getFeedbackDisplayContent(feedbackItem, '')}
                         </Typography>
                       </Stack>
                     </Card>
@@ -498,7 +499,7 @@ const FeedbackTab: React.FC = () => {
                               scrollbarColor: 'var(--joy-palette-neutral-400) var(--joy-palette-background-level1)',
                             }}
                           >
-                            {feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : '')}
+                            {getFeedbackDisplayContent(feedbackItem, '')}
                           </Typography>
                         </Grid>
                         <Grid xs={2}>

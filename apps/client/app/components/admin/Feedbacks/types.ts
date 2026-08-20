@@ -9,6 +9,17 @@ export interface IExtendedFeedbackDocument extends IFeedbackDocument {
   contentExpired?: boolean;
 }
 
+/** Renders the same expired/never-had-content distinction everywhere a feedback item's content
+ * is displayed - `fallback` covers the "never had content" case, since callers want different
+ * copy for it (a blank CSV cell vs. a "No content" toast). */
+export function getFeedbackDisplayContent(
+  feedbackItem: Pick<IExtendedFeedbackDocument, 'content' | 'contentExpired'> | undefined,
+  fallback: string
+): string {
+  if (!feedbackItem) return fallback;
+  return feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : fallback);
+}
+
 export interface FeedbackFilters {
   searchTerm: string;
   statusFilters: Record<FeedbackStatus, boolean>;
