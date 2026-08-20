@@ -24,11 +24,17 @@ export interface FeedbackPromptMetaInput {
 
 const MAX_FUNCTION_CALL_NAMES = 5;
 const MAX_DATA_LAKE_TAGS = 5;
-// Slack's incoming-webhook `text` has a documented ~40k character ceiling, but a crafted
-// submission pushing anywhere near that turns into a delivery failure (and the alarm noise
-// that follows) rather than just an unreadable message - cap well under it so an oversized
-// field truncates the message instead of losing it.
-const MAX_MESSAGE_CHARS = 3000;
+// This posts via a legacy incoming-webhook { text: message } payload (see postFeedbackToSlack),
+// whose ceiling is ~40k characters - not Block Kit's much lower per-text-object limit, which
+// doesn't apply here. Cap well under 40k so a crafted submission pushing toward it turns into a
+// truncated-but-delivered message (and no alarm noise) rather than a delivery failure, while
+// staying generous enough that an ordinary long bug report (pasted logs, repro steps) isn't cut.
+const MAX_MESSAGE_CHARS = 20000;
+// Each identity field is capped far below MAX_MESSAGE_CHARS so the five of them together can
+// never consume the budget content/Prompt Meta need - without this, a single oversized `type`
+// or `username` (raw body values with no length constraint of their own) could truncate away
+// the feedback text or the diagnostic summary despite being the least useful thing to keep.
+const MAX_IDENTITY_FIELD_CHARS = 200;
 
 /** `$1.23e-7` / `$0.30000000000000004` -> a plain, short decimal string. */
 function formatCost(cost: number): string {
@@ -60,6 +66,15 @@ function truncateSafely(text: string, max: number): string {
  */
 function escapeLine(text: string): string {
   return escapeSlackText(text).replace(/[\r\n]+/g, ' ');
+}
+
+/**
+ * Escapes and collapses like `escapeLine`, then caps to MAX_IDENTITY_FIELD_CHARS - for the
+ * five identity fields specifically, none of which have a length constraint at the request
+ * schema, so a single oversized one shouldn't be able to truncate content/Prompt Meta away.
+ */
+function escapeIdentityField(text: string): string {
+  return truncateSafely(escapeLine(text), MAX_IDENTITY_FIELD_CHARS);
 }
 
 /**
@@ -114,7 +129,7 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
 
   // Independent of the functionCalls branch above - a citation-only turn (citables present,
   // no functionCalls) must not silently lose this diagnostic.
-  if (promptMeta.citables?.length !== undefined) {
+  if (promptMeta.citables) {
     lines.push(`Citables: ${promptMeta.citables.length}`);
   }
 
@@ -146,11 +161,14 @@ export interface FeedbackSlackMessageInput {
  * Slack mrkdwn has no escape for `*`/`_`/newlines, so a multi-line `content` value could
  * otherwise inject what reads as extra top-level `*Label:*` lines into the message.
  * Blockquoting every line (each prefixed with `> `) keeps injected lines visually nested
- * under "Feedback:" instead of sitting as siblings of the real fields above them.
+ * under "Feedback:" instead of sitting as siblings of the real fields above them. Splits on
+ * any line-break variant (`\r\n`, bare `\r`, or `\n`) - a JSON string body can carry a bare
+ * CR, and `escapeLine` already treats CR the same as LF, so this must too or a CR-only value
+ * slips through unquoted.
  */
 function toBlockquote(text: string): string {
   return text
-    .split('\n')
+    .split(/\r\n|\r|\n/)
     .map(line => `> ${line}`)
     .join('\n');
 }
@@ -158,23 +176,33 @@ function toBlockquote(text: string): string {
 /**
  * Builds the Slack mrkdwn message for a feedback report. Every user-influenced string is
  * escaped before interpolation - unescaped, a value like `<https://example/|Open record>`
- * renders as a live Slack link indistinguishable from a real one, and on the unauthenticated
- * submission path type/username/userEmail/userId are raw request-body values, the same
- * exposure class as content. The identity fields and the promptMeta summary's string fields
- * all go through escapeLine, which also collapses newlines - each shares a line with its own
- * `*Label:*`, so an unescaped newline could otherwise forge a fake extra field. `content` is
- * blockquoted instead so its own real line breaks survive. The result is capped to
- * MAX_MESSAGE_CHARS so an oversized field (a huge `content`, an unbounded `model.name`)
- * truncates the delivered message rather than failing to send at all. Prompt Meta sits last,
- * so an oversized submission loses the diagnostic summary before it loses the identity
- * fields or the feedback text itself - the more actionable half of the message for triage.
+ * renders as a live Slack link indistinguishable from a real one. `/api/feedback` requires
+ * auth, and a session-authenticated caller's `username`/`userEmail`/`userId` correctly come
+ * from their own record - but an API-key-authenticated caller falls through to the raw
+ * request body for those three instead (`req.isAuthenticated()` is false for API-key auth,
+ * since `apiKeyAuth` sets `req.user` without a Passport login, so index.ts's `authenticated`
+ * ternaries take their body-value branch), letting them put arbitrary text, including a
+ * forged identity, in those fields. `type` is always the raw body value regardless of auth
+ * path. The identity fields and the
+ * promptMeta summary's string fields all go through escapeLine, which also collapses
+ * newlines - each shares a line with its own `*Label:*`, so an unescaped newline could
+ * otherwise forge a fake extra field. `content` is blockquoted instead so its own real line
+ * breaks survive. Escaping leaves `*`/`_` alone (Slack has no backslash escape for them,
+ * per `slackMarkup.ts`), so a crafted field can still emit inline bold/italic text - a known,
+ * accepted residual, since the newline collapse and the blockquote are what keep it off its
+ * own line, which is the part that actually matters. Each identity field is separately capped
+ * (escapeIdentityField) and the whole result capped to MAX_MESSAGE_CHARS so an oversized field
+ * (a huge `content`, an unbounded `model.name`) truncates the delivered message rather than
+ * failing to send at all. Prompt Meta sits last, so an oversized submission loses the
+ * diagnostic summary before it loses the identity fields or the feedback text itself - the
+ * more actionable half of the message for triage.
  */
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
   const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;
   const message =
-    `${stagePrefix}*Type:* ${escapeLine(type)}\n` +
-    `*User Details:* ${escapeLine(organization)} - ${escapeLine(username)} (ID: ${escapeLine(userId)})\n` +
-    `*User Email:* ${escapeLine(userEmail)}\n` +
+    `${stagePrefix}*Type:* ${escapeIdentityField(type)}\n` +
+    `*User Details:* ${escapeIdentityField(organization)} - ${escapeIdentityField(username)} (ID: ${escapeIdentityField(userId)})\n` +
+    `*User Email:* ${escapeIdentityField(userEmail)}\n` +
     `*Feedback:*\n${toBlockquote(escapeSlackText(content))}\n` +
     `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`;
   return message.length > MAX_MESSAGE_CHARS ? `${truncateSafely(message, MAX_MESSAGE_CHARS)}... [truncated]` : message;

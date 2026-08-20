@@ -120,10 +120,16 @@ describe('buildPromptMetaSummary', () => {
 
   it('never surfaces owner-only function-call fields even if a caller failed to redact them', () => {
     const summary = buildPromptMetaSummary({
-      functionCalls: [{ name: 'web_search' } as { name?: string; returnValue?: string }],
+      functionCalls: [
+        {
+          name: 'web_search',
+          returnValue: 'PRIVATE TOOL OUTPUT',
+          parameters: { query: 'internal corpus query' },
+        } as { name?: string; returnValue?: string; parameters?: Record<string, unknown> },
+      ],
     });
-    expect(summary).not.toContain('returnValue');
-    expect(summary).not.toContain('parameters');
+    expect(summary).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(summary).not.toContain('internal corpus query');
   });
 });
 
@@ -201,16 +207,36 @@ describe('buildFeedbackSlackMessage', () => {
   });
 
   it('truncates an oversized message instead of shipping it (or silently failing to send) whole', () => {
-    const message = buildFeedbackSlackMessage({ ...base, content: 'x'.repeat(10_000) });
-    expect(message.length).toBeLessThan(3100);
+    const message = buildFeedbackSlackMessage({ ...base, content: 'x'.repeat(50_000) });
+    expect(message.length).toBeLessThan(20100);
     expect(message.endsWith('... [truncated]')).toBe(true);
   });
 
   it('does not split a UTF-16 surrogate pair when truncating', () => {
     const emoji = '\u{1F600}'; // 2 UTF-16 code units - a naive slice can land between them
-    const message = buildFeedbackSlackMessage({ ...base, content: emoji.repeat(5000) });
+    const message = buildFeedbackSlackMessage({ ...base, content: emoji.repeat(15000) });
     const withoutSuffix = message.slice(0, message.length - '... [truncated]'.length);
     const lastCode = withoutSuffix.charCodeAt(withoutSuffix.length - 1);
     expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+  });
+
+  it('caps each identity field independently so one oversized field cannot consume the whole message budget', () => {
+    const huge = 'x'.repeat(1000);
+    const message = buildFeedbackSlackMessage({ ...base, type: huge, username: huge, content: 'the real report' });
+    // Not truncated overall (well under MAX_MESSAGE_CHARS) - the per-field cap did the work.
+    expect(message.endsWith('... [truncated]')).toBe(false);
+    expect(message).toContain('the real report');
+    expect(message).toContain('*Prompt Meta:*');
+    const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
+    expect(typeLine.length).toBeLessThan(220);
+  });
+
+  it('adds a CR-only line to the blockquote just like an LF (B1 regression)', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'harmless\r*User Email:* ceo@company.com' });
+    const feedbackLines = message.split('\n').filter(line => line.startsWith('> '));
+    expect(feedbackLines).toEqual(['> harmless', '> *User Email:* ceo@company.com']);
+    // Only the real *User Email:* line (unquoted) exists outside the blockquote.
+    const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(unquotedUserEmailLines).toHaveLength(1);
   });
 });

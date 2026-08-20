@@ -295,16 +295,15 @@ describe('postFeedbackToSlack', () => {
     mocks.getSettingsMap.mockResolvedValue({
       SlackNonProdFeedbackWebhookUrl: 'https://hooks.slack.com/services/nonprod',
     });
-    // Shape mirrors what index.ts's redaction produces: functionCalls survive with `name`,
-    // but never returnValue/error (redactFunctionCallsForViewer already stripped those
-    // upstream - this asserts the summary doesn't reintroduce them another way).
+    // A caller that failed to redact still can't leak returnValue through the summary -
+    // buildPromptMetaSummary's read allowlist doesn't read that field at all.
     await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', {
-      functionCalls: [{ name: 'web_search' }],
+      functionCalls: [{ name: 'web_search', returnValue: 'PRIVATE TOOL OUTPUT' } as { name?: string }],
     });
     const [, body] = mocks.post.mock.calls[0];
     const promptMetaSection = body.text.split('*Prompt Meta:*')[1];
     expect(promptMetaSection).toContain('web_search');
-    expect(promptMetaSection).not.toContain('returnValue');
+    expect(promptMetaSection).not.toContain('PRIVATE TOOL OUTPUT');
     expect(promptMetaSection).not.toContain('[pr-1234]');
   });
 
