@@ -119,7 +119,8 @@ export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
 async function resolveFallbackLake(
   lakeIdOrSlug: string,
   ctx: AccessContext,
-  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>,
+  logger?: LakeAccessLogger
 ): Promise<IDataLakeDocument | null> {
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
@@ -131,7 +132,15 @@ async function resolveFallbackLake(
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
     if (!lakeMatchesAccess(config, normalizedTags, normalizedKeys)) return null;
   }
-  const overlay = fallbackLakeSettings ? await fallbackLakeSettings.findByLakeId(config.id).catch(() => null) : null;
+  // Logged, not swallowed: every sibling degrade in this area reports itself (getDataLakePrompts,
+  // resolveLakeReadAccess). A silent failure here reverts every admin-set default for this lake and
+  // is indistinguishable from "never configured", which is the hard failure mode to notice.
+  const overlay = fallbackLakeSettings
+    ? await fallbackLakeSettings.findByLakeId(config.id).catch(err => {
+        logger?.warn?.('[dataLakes] fallback overlay read failed; resolving lake with coded defaults', err);
+        return null;
+      })
+    : null;
   // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and document writes
   // (rename/delete/visibility/file-removal) are refused wholesale by assertLakeWritable, so no
   // one is the creator. The one exception is assertLakeRebuildAccess (authorizeLakeWrite.ts),
@@ -198,7 +207,7 @@ export const assertLakeAccess = async (
     if (!decision.allowed) throw new NotFoundError('Data lake not found');
     return lake;
   }
-  const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings);
+  const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings, logger);
   if (!fallback) throw new NotFoundError('Data lake not found');
   return fallback;
 };

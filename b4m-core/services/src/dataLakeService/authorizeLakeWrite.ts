@@ -4,6 +4,7 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
 } from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -107,6 +108,13 @@ export const assertFallbackLakeSettingsWriteAccess = async (
     db: {
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      /**
+       * Declared, and non-optional, so the overlay merge cannot be lost by a caller that builds
+       * exactly this type. It previously worked only by structural typing - the one route passes a
+       * wider object - so a second caller assembling the minimal declared shape would have
+       * typechecked green while every overlay field silently read as unset.
+       */
+      fallbackLakeSettings: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>;
     };
   }
 ): Promise<IDataLakeDocument> => {

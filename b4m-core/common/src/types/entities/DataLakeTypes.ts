@@ -851,8 +851,10 @@ export interface IFallbackLakeSetting extends IMongoDocument {
   groundingMode?: DataLakeGroundingMode;
   /**
    * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). Absent (never an
-   * empty-string stand-in) means "no preferred prompt" - the write route's `''` clear sentinel is
-   * translated to absent before it reaches this row, matching how a DB lake treats the same clear.
+   * empty-string stand-in) means "no preferred prompt". NOTE the `''` clear sentinel is stored
+   * VERBATIM rather than translated to absent - `setFields` filters only `undefined` - so a cleared
+   * binding persists as `''`. Every reader treats it as unset (truthiness, or `.trim()`), which is
+   * why the two spellings are interchangeable downstream; do not assume the row holds only absent.
    */
   preferredSystemPromptId?: string;
   /**

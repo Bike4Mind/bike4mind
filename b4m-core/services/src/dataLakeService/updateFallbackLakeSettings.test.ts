@@ -223,6 +223,55 @@ describe('updateFallbackLakeSettings', () => {
     expect(result.systemPrompt).toBeUndefined();
   });
 
+  // Kills the mutant that survived the whole 5084-test suite: flipping this arm's `!== undefined`
+  // to truthiness. Its preferredSystemPromptId twin was already covered; this one was not, so the
+  // PR could claim the clear-sentinel logic was mutation-tested while half of it was unpinned.
+  it("an explicit '' systemPrompt IS written (the clear sentinel), unlike an omitted field", async () => {
+    const setFields = vi.fn().mockResolvedValue({});
+    const findByLakeId = vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', systemPrompt: 'Live prompt.' });
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { systemPrompt: '' }, { db });
+
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', { systemPrompt: '' });
+  });
+
+  it('the response body drops a CLEARED field rather than echoing the pre-write value', async () => {
+    const setFields = vi.fn().mockResolvedValue({});
+    const findByLakeId = vi
+      .fn()
+      .mockResolvedValue({ lakeId: 'opti-knowledge', preferredSystemPromptId: 'triage_router', systemPrompt: 'Live.' });
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    const result = await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { preferredSystemPromptId: '', systemPrompt: '' },
+      { db }
+    );
+
+    expect(result.preferredSystemPromptId).toBeUndefined();
+    expect(result.systemPrompt).toBeUndefined();
+  });
+
+  it('the response body preserves a stored field the caller did not touch', async () => {
+    const setFields = vi.fn().mockResolvedValue({});
+    const findByLakeId = vi
+      .fn()
+      .mockResolvedValue({ lakeId: 'opti-knowledge', preferredSystemPromptId: 'triage_router', systemPrompt: 'Live.' });
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    const result = await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { groundingMode: 'inline' },
+      { db }
+    );
+
+    expect(result.preferredSystemPromptId).toBe('triage_router');
+    expect(result.systemPrompt).toBe('Live.');
+  });
+
   it('refuses a non-admin before ever touching the overlay repo', async () => {
     const setFields = vi.fn();
     const findByLakeId = vi.fn().mockResolvedValue(null);
@@ -312,7 +361,7 @@ describe('updateFallbackLakeSettings - config-change audit', () => {
     expect(JSON.stringify(record.mock.calls[0][0])).not.toContain(SECRET);
   });
 
-  it('records NOTHING when the write moves no value (same prompt saved twice)', async () => {
+  it('records NOTHING when the write moves no value (same groundingMode saved twice)', async () => {
     const { record, db: audit } = auditDb();
     const db = {
       ...fallbackDb(),
@@ -326,6 +375,70 @@ describe('updateFallbackLakeSettings - config-change audit', () => {
     await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { groundingMode: 'inline' }, { db });
 
     expect(record).not.toHaveBeenCalled();
+  });
+
+  // The cases the test above USED to claim in its title while only ever exercising groundingMode.
+  // systemPrompt is the sole FINGERPRINTED field, so its before-side comes from a different place -
+  // these are the two failures that produced when `before` was taken from the synthetic lake.
+  it('re-saving the SAME systemPrompt records nothing (no forged first-time set)', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: {
+        setFields: vi.fn().mockResolvedValue({}),
+        findByLakeId: vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', systemPrompt: 'Same text.' }),
+      },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { systemPrompt: 'Same text.' }, { db });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('CLEARING a stored systemPrompt records a present -> absent fingerprint move', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: {
+        setFields: vi.fn().mockResolvedValue({}),
+        findByLakeId: vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', systemPrompt: 'Live prompt.' }),
+      },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { systemPrompt: '' }, { db });
+
+    expect(record).toHaveBeenCalledTimes(1);
+    const change = record.mock.calls[0][0].changes.find((c: { field: string }) => c.field === 'systemPrompt');
+    expect(change.beforeFingerprint).toMatchObject({ present: true });
+    expect(change.afterFingerprint).toMatchObject({ present: false, length: 0, hash: '' });
+  });
+
+  it('records a genuine A -> B systemPrompt edit as a move between two present fingerprints', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: {
+        setFields: vi.fn().mockResolvedValue({}),
+        findByLakeId: vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', systemPrompt: 'Old guidance.' }),
+      },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { systemPrompt: 'New guidance.' },
+      { db }
+    );
+
+    const change = record.mock.calls[0][0].changes.find((c: { field: string }) => c.field === 'systemPrompt');
+    // Both present with DIFFERENT hashes - the property the fingerprint exists for, and the one a
+    // blind before-side destroyed by making every edit look like an initial set.
+    expect(change.beforeFingerprint.present).toBe(true);
+    expect(change.afterFingerprint.present).toBe(true);
+    expect(change.beforeFingerprint.hash).not.toBe(change.afterFingerprint.hash);
   });
 
   it('never records for a write the gate refused', async () => {

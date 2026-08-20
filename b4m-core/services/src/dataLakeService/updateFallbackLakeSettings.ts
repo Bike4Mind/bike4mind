@@ -57,9 +57,25 @@ export const updateFallbackLakeSettings = async (
   { db, logger }: UpdateFallbackLakeSettingsAdapters
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, UpdateFallbackLakeSettingsRequestInput);
-  // Carries the CURRENT overlay values merged in (see the adapter's findByLakeId note), so this is
-  // both the authorization result and the `before` side of the audit diff.
   const lake = await assertFallbackLakeSettingsWriteAccess(lakeIdOrSlug, ctx, { db });
+
+  // The audit's BEFORE side is read here, from the overlay row itself - deliberately NOT taken from
+  // `lake`. `resolveFallbackLake` merges only the fields that are safe to expose on a synthetic
+  // document every reader receives, and `systemPrompt` is intentionally not among them (it reaches
+  // only the admin projection - see toFallbackConfig). Deriving `before` from what that merge
+  // happens to include made the diff silently blind to the one FINGERPRINTED field: a clear
+  // recorded nothing at all, and every re-save of an unchanged prompt forged a first-time set.
+  //
+  // Read BEFORE the write and deliberately UNGUARDED: a failed read here aborts the request with
+  // nothing persisted, which is strictly better than completing the write and recording a history
+  // entry that claims values moved from nowhere.
+  const overlayBefore = await db.fallbackLakeSettings.findByLakeId(lake.id);
+  const before: Partial<IDataLake> = {
+    ...(lake as Partial<IDataLake>),
+    groundingMode: overlayBefore?.groundingMode,
+    preferredSystemPromptId: overlayBefore?.preferredSystemPromptId,
+    systemPrompt: overlayBefore?.systemPrompt,
+  };
 
   const fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>> = {};
   if (params.groundingMode) fields.groundingMode = params.groundingMode;
@@ -79,7 +95,7 @@ export const updateFallbackLakeSettings = async (
   // spreading `fields` wholesale would let a key present with an `undefined` value overwrite the
   // stored one and read as a deliberate clear. `recordLakeConfigChange` records nothing when the
   // diff is empty, so a write that moved no value needs no guard here.
-  const projected: Partial<IDataLake> = { ...(lake as Partial<IDataLake>) };
+  const projected: Partial<IDataLake> = { ...before };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) (projected as Record<string, unknown>)[key] = value;
   }
@@ -92,7 +108,7 @@ export const updateFallbackLakeSettings = async (
       // nothing for the resolver to read even if it were consulted - which it is not, given the
       // explicit rung below.
       action: 'update',
-      changes: diffLakeConfig(lake as Partial<IDataLake>, projected),
+      changes: diffLakeConfig(before, projected),
       // No `manageRung` override, deliberately. This route's gate is `ctx.isAdmin` directly (see
       // assertFallbackLakeSettingsWriteAccess), and `resolveLakeManageRung`'s FIRST arm is
       // `isAdmin -> 'platform-admin'`, so it already returns the one rung that can ever authorize
@@ -104,13 +120,21 @@ export const updateFallbackLakeSettings = async (
     { db, logger }
   );
 
-  return {
-    ...lake,
-    ...(fields.groundingMode ? { groundingMode: fields.groundingMode } : {}),
-    // Falsy (including the just-applied '' clear) reads as absent, matching how the list
-    // projections and resolveFallbackLake's merge all treat "no preferred prompt".
-    ...(fields.preferredSystemPromptId ? { preferredSystemPromptId: fields.preferredSystemPromptId } : {}),
+  // Built from `before` (which carries the stored overlay) rather than `lake`, and each applied
+  // field is DELETED when it lands blank rather than merely not re-added: spreading a base that
+  // still holds the old value and then skipping the falsy branch left a cleared field reading as
+  // unchanged in the response body.
+  const merged = { ...before } as Record<string, unknown>;
+  const applied: Array<[keyof IFallbackLakeSetting, string | undefined]> = [
+    ['groundingMode', fields.groundingMode],
+    ['preferredSystemPromptId', fields.preferredSystemPromptId],
     // Trimmed + blank-as-absent, matching toManageableConfig's systemPrompt handling for a DB lake.
-    ...(fields.systemPrompt?.trim() ? { systemPrompt: fields.systemPrompt.trim() } : {}),
-  };
+    ['systemPrompt', fields.systemPrompt?.trim()],
+  ];
+  for (const [key, value] of applied) {
+    if (value === undefined) continue; // omitted by the caller - leave whatever was stored
+    if (value) merged[key] = value;
+    else delete merged[key]; // an applied clear must not fall back to the pre-write value
+  }
+  return merged as unknown as IDataLakeDocument;
 };

@@ -162,11 +162,21 @@ type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSy
  */
 const resolveFallbackSettings = async (
   lakeIds: string[],
-  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>,
+  logger?: { warn?: (msg: string, meta?: unknown) => void }
 ): Promise<Map<string, FallbackOverlay>> => {
   const byLakeId = new Map<string, FallbackOverlay>();
   if (!fallbackLakeSettings || lakeIds.length === 0) return byLakeId;
-  const rows = await fallbackLakeSettings.findByLakeIds(lakeIds);
+  // Guarded like the dynamic-lake read above: these are editor SEED values, so a transient overlay
+  // failure must degrade the fallback lakes' settings display, never 500 the whole admin lake list
+  // (DB lakes included) - which is what an unguarded await here did.
+  let rows: Awaited<ReturnType<typeof fallbackLakeSettings.findByLakeIds>>;
+  try {
+    rows = await fallbackLakeSettings.findByLakeIds(lakeIds);
+  } catch (err) {
+    logger?.warn?.('[dataLakes] fallback settings overlay read failed; listing without overrides', err);
+    return byLakeId;
+  }
   for (const row of rows) {
     byLakeId.set(row.lakeId, {
       groundingMode: row.groundingMode,
@@ -236,6 +246,15 @@ const toManageableConfig = (
  * why an org-scoped overlay lake must not let a customer-side org admin pass. This is a
  * deliberate, narrow exception to "actor-less projection"; any field added here under this pattern
  * must repeat the same reasoning.
+ *
+ * NOT identical to the server-side gate, and deliberately so rather than by oversight: the write
+ * path resolves through `resolveFallbackLake`, which applies the lake's ORG PREREQUISITE before its
+ * `ctx.isAdmin` bypass, while this flag is `ctx.isAdmin` alone and `listAllDataLakes` applies no org
+ * filter to fallbacks. So for an ORG-SCOPED registry lake, a platform admin outside that org sees
+ * the affordance and gets a not-found on save. Fail-CLOSED (a lit button that 404s, never an
+ * escalation), and unreachable today - no registry entry carries an organizationId and
+ * NEXT_PUBLIC_PREMIUM_DATA_LAKES is unset in every stage - but narrow the flag here, not widen the
+ * gate, if one is ever added.
  *
  * `groundingMode`, `preferredSystemPromptId` and `systemPrompt` are the exceptions to "no
  * editor-only field for a fallback lake": all three are merged in from the overlay
