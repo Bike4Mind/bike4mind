@@ -1522,4 +1522,60 @@ describe('semanticDataLakeSearch withholds mid-(re)index members (#1681)', () =>
     expect(result.retrievalUnavailable.indexing.count).toBe(1);
     expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
   });
+
+  // #1939. The pending-rebuild stamp is the ONLY in-flight signal a chunkless member carries, so a
+  // builder that drops it hands the partition a file that reads as an image and serves it silently.
+  // Both entrypoints are asserted for the same reason the two above are - and this pair is not
+  // theoretical: the field was carried into the ranking map but NOT into either `fileById` builder,
+  // so `indexing.count` read 0 against a real local lake until that was fixed.
+  const rebuilding = {
+    id: 'rebuilding',
+    fileName: 'Reset.pdf',
+    tags: [],
+    chunkCount: 0,
+    vectorizedChunkCount: 0,
+    notes: '',
+    error: null,
+    chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+  };
+
+  it('withholds a member whose rebuild was requested but never committed', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([rebuilding, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.indexing.sample).toEqual([{ fileId: 'rebuilding', fileName: 'Reset.pdf' }]);
+    // Bucketed as re-indexing, never as paused: the prose for `paused` tells the reader an
+    // administrator has to act, which is wrong for an ordinary rebuild.
+    expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+
+  it('serves the same member once the stamp is cleared, so the stamp is what decides', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([{ ...rebuilding, chunkRebuildRequestedAt: null }, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.partial).toBe(false);
+  });
+
+  it('applies the pending-rebuild withhold to the file-scoped entrypoint as well', async () => {
+    const getAccessibleFiles = vi.fn().mockResolvedValue([rebuilding]);
+    const findVectorsByFabFileIds = pagingChunkMock([] as never);
+
+    const result = await fileScopedSemanticSearch(
+      {
+        query: 'stage III treatment',
+        fileIds: ['rebuilding'],
+        embeddingModel: 'text-embedding-ada-002' as SemanticDataLakeSearchParams['embeddingModel'],
+        apiKeyTable: { openai: 'k' },
+      },
+      { db: { fabfiles: { getAccessibleFiles }, fabfilechunks: { findVectorsByFabFileIds } } } as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
 });

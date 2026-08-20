@@ -1710,7 +1710,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // must not be sent to re-embed a document that is already re-embedding.
       reasons.push(
         `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
-          'their previous passages no longer exist and their new ones are not searchable yet; they return on their own'
+          'their passages are being replaced and the replacements are not searchable yet; they return on their own'
       );
     }
     if (coverage.chunksSkippedDimMismatch > 0) {

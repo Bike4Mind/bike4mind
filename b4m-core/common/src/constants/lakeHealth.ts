@@ -20,6 +20,7 @@ import {
   CHARS_PER_TOKEN_SERVE_BOUND,
   CONVERGENCE_PAUSED_CHUNK_NOTE,
   deriveServeCharBudget,
+  isChunkRebuildPending,
   isConvergencePausedNote,
 } from './chunking';
 
@@ -120,6 +121,16 @@ export type LakeHealthMemberInput = {
    * states these do not auto-resume, so this is durable, not a window.
    */
   notes?: string | null;
+  /**
+   * `FabFile.chunkRebuildRequestedAt` (#1939): a passage rebuild was requested and has not committed.
+   * The THIRD not-a-plain-zero signal, and the only one that fires on a member with no marker of any
+   * kind - the reset that stamps it clears `notes`, leaves `error` null and zeroes both counts, so
+   * the member is otherwise shaped exactly like an image. Read as STILL INDEXING, never as a
+   * failure: the file is mid-rebuild by definition, and grading it as a settled zero would flash
+   * every ordinary reprocess red. It is admitted to the member set (see `summarizeLakeHealth`) so it
+   * shows up as unmeasured coverage rather than disappearing from the lake entirely.
+   */
+  chunkRebuildRequestedAt?: Date | string | null;
   /** Sum of the file's chunks' `charLength`; `null` until measured. */
   chunkedCharCount?: number | null;
   /** Largest single chunk's `charLength`; `null` until measured. */
@@ -193,6 +204,14 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // the success path clears `notes`), so keying on the note alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
   const passagesRemoved = member.chunkCount === 0 && member.notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
+  // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
+  // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
+  // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
+  // paint its lake red for the length of the rebuild - the cries-wolf failure this whole feature is
+  // built to avoid. Ranked below the two settled markers for the same reason as in
+  // `isMemberIndexingInFlight`: a stamp that outlives a rebuild which failed or was halted describes
+  // a rebuild that stopped, not one still running.
+  const rebuildPending = !hasError && !abandonedByKillSwitch && isChunkRebuildPending(member.chunkRebuildRequestedAt);
 
   // Is the file's vectorization settled, or is it still being indexed? chunk-complete stamps the char
   // rollups (making the file "measured") and zeroes the vector rollups in the SAME write, so between
@@ -203,8 +222,12 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // should. A permanently-FAILED file (`error` set) is also settled - it will never reach the terminal
   // count, but it is broken, not in flight, so it must grade (fail P3, count its real reachable chars)
   // rather than hide. A null count predates the field, so treat it as settled to keep legacy files grading.
+  // Mirrors `isMemberIndexingInFlight` (lakeConvergence.ts) arm for arm, including the pending-rebuild
+  // one, so health, convergence and the retrieval withhold cannot disagree about what "still
+  // indexing" means. Keep the two in step.
   const vectorizationSettled =
-    hasError || abandonedByKillSwitch || vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount;
+    !rebuildPending &&
+    (hasError || abandonedByKillSwitch || vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount);
 
   // P1: the largest chunk must not exceed the policy size. Graded as soon as the chunk rollups exist
   // (even mid-vectorize): an oversized chunk is a structural fact, not a timing artifact.
@@ -310,7 +333,16 @@ export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: La
   // The CHUNK marker only, matching `findDataLakeHealthMembers`'s own `$match` and
   // `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
   // already admitted by `chunkCount > 0` and needs no exception here.
-  const withChunks = members.filter(m => m.chunkCount > 0 || m.notes === CONVERGENCE_PAUSED_CHUNK_NOTE);
+  //
+  // The pending-rebuild stamp (#1939) is admitted for the same reason as the marker and with the
+  // opposite grade: chunkless because a wave took its passages, but expected back, so it lands in
+  // `coverage` as an unmeasured member rather than in the ratio. Coverage below 1 is the honest
+  // report while a rebuild is running - and it is also what keeps a rebuild that was never enqueued
+  // visible instead of silently reducing the lake to the members it still has.
+  const withChunks = members.filter(
+    m =>
+      m.chunkCount > 0 || m.notes === CONVERGENCE_PAUSED_CHUNK_NOTE || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+  );
   const results = withChunks.map(m => evaluateMemberHealth(m, policy));
 
   const predicates = {

@@ -802,6 +802,10 @@ describe('buildFabFileSearchQuery', () => {
       expect(clause!.$or[1].notes.$in).toEqual([...CONVERGENCE_PAUSED_NOTES]);
       expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_CHUNK_NOTE);
       expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_NOTE);
+      // Third arm (#1939): the window between the reset and the consumer's marker carries NO note,
+      // so the two arms above cannot cover it. `$ne: null` also excludes a missing field, which is
+      // what keeps this from matching every legacy row.
+      expect(clause!.$or[2]).toEqual({ chunkRebuildRequestedAt: { $ne: null } });
     });
 
     it('does NOT clobber a plain-search fileName filter (markers push to $and, not baseFilter)', () => {
