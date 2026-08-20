@@ -2102,5 +2102,12 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const kbCalls = getSettingsValue.mock.calls.filter(([key]) => key === 'kbSearchDefaultResults');
       expect(kbCalls.length).toBe(1);
     });
+
+    it('clamps a stored default above the tool ceiling', async () => {
+      // A row written before the setting's own max:10 existed, or by any path other than the
+      // admin form, is not re-validated on read - clampMaxResults must not trust it verbatim.
+      const { context } = contextWithConfiguredDefault(99);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
+    });
   });
 });
