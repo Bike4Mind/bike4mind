@@ -34,6 +34,7 @@ import {
   usageEventRepository,
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -146,6 +147,7 @@ const getStaticOptions = () => {
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
+      scopedSettings: scopedSettingsRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

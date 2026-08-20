@@ -24,8 +24,13 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
-import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '../constants/knowledgeBaseSearch';
+import {
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+} from '../constants/knowledgeBaseSearch';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
+import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
   // Test using contextTelemetryAlerts as a representative object setting
@@ -517,11 +522,15 @@ describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fall
     expect(settingsMap.kbSearchDefaultResults.defaultValue).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
   });
 
-  it('is platform-only: declares no scope, unlike its sibling dataLakeSearchMaxFiles/MaxChunks', () => {
-    // Deliberate, not an oversight - see the setting's own description. This path reads the
-    // setting directly rather than through the scoped-settings resolver, so a settableAt block
-    // here would be inert at best.
-    expect(settingsMap.kbSearchDefaultResults.scope).toBeUndefined();
+  it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#1955)', () => {
+    // A knowledge-base search spans a mixed multi-lake corpus plus the caller's own/shared files -
+    // there is no single lake for a Lake rung to key on, unlike dataLakeSearchMaxFiles/MaxChunks
+    // (which scan one lake at a time and do declare Lake). Pinned so adding Lake later is a
+    // deliberate decision rather than silent drift.
+    expect(settingsMap.kbSearchDefaultResults.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
   });
 
   it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
@@ -540,6 +549,77 @@ describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fall
     expect(settingsMap.kbSearchDefaultResults.max).toBe(10);
     expect(() => settingsMap.kbSearchDefaultResults.schema.parse(11)).toThrow();
     expect(settingsMap.kbSearchDefaultResults.schema.parse(10)).toBe(10);
+  });
+});
+
+describe('kbSearchResultTokenBudget (#1955)', () => {
+  it('defaults to the shared off-sentinel constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.defaultValue).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+    // The constant IS 0 today, so the assertion above alone would pass even if someone hand-wrote
+    // a literal 0 instead of importing the constant. Pin the value directly too, with the intent
+    // spelled out: 0 is a deliberate "no budget" sentinel, not "forgot to set a default".
+    expect(settingsMap.kbSearchResultTokenBudget.defaultValue).toBe(0);
+  });
+
+  it('is settable at the org/owner (caller) altitude, not Lake', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(undefined)).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+  });
+
+  it('accepts 0 (the off sentinel) at write time without throwing', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.min).toBe(0);
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(0)).toBe(0);
+  });
+
+  it('rejects a negative value and enforces the declared ceiling at write time', () => {
+    expect(() => settingsMap.kbSearchResultTokenBudget.schema.parse(-1)).toThrow();
+    expect(settingsMap.kbSearchResultTokenBudget.max).toBe(20_000);
+    expect(() => settingsMap.kbSearchResultTokenBudget.schema.parse(20_001)).toThrow();
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(20_000)).toBe(20_000);
+  });
+});
+
+describe('kbSearchMinRelevancePct (#1955)', () => {
+  it('defaults to the shared off-sentinel constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.defaultValue).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT);
+    // Same vacuous-drift-guard caveat as the token budget above: the constant is 0 today, so pin
+    // the literal too and say why - 0 matches today's hardcoded minScore: 0, not an oversight.
+    expect(settingsMap.kbSearchMinRelevancePct.defaultValue).toBe(0);
+  });
+
+  it('is settable at the org/owner (caller) altitude, not Lake', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(undefined)).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT);
+  });
+
+  it('accepts 0 and 100 at write time; rejects outside that range', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.min).toBe(0);
+    expect(settingsMap.kbSearchMinRelevancePct.max).toBe(100);
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(0)).toBe(0);
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(100)).toBe(100);
+    expect(() => settingsMap.kbSearchMinRelevancePct.schema.parse(-1)).toThrow();
+    expect(() => settingsMap.kbSearchMinRelevancePct.schema.parse(101)).toThrow();
+  });
+});
+
+describe('EMBEDDING settings group registration (#1955)', () => {
+  it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
+    const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
+    const entries = API_SERVICE_GROUPS.EMBEDDING.settings.filter(s => keys.includes(s.key));
+    expect(entries.map(s => s.key).sort()).toEqual([...keys].sort());
+    expect(new Set(entries.map(s => s.order)).size).toBe(entries.length);
   });
 });
 

@@ -4,6 +4,9 @@ import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IAdminSettingsRepository,
   IScopedSettingsRepository,
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
   SettingScope,
   deriveServeCharBudget,
 } from '@bike4mind/common';
@@ -25,11 +28,25 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
    * than configured on its own, so a passage cannot be chunked larger than it can be served.
    */
   maxChunkChars: number;
+  /** Passages `search_knowledge_base` serves when a model call omits `max_results` (#1955). */
+  kbDefaultResults: number;
+  /**
+   * Approximate tokens of served passage text one `search_knowledge_base` call may emit. `0` = no
+   * budget; the passage count above is then the only bound (pre-#1955 behavior).
+   */
+  kbResultTokenBudget: number;
+  /**
+   * Minimum cosine score a passage must clear, as a 0..1 FRACTION - the unit `minScore` takes all
+   * the way down to `annVectorSearch`. Stored as an integer percent (`kbSearchMinRelevancePct`);
+   * the /100 conversion lives here so exactly one place owns it. `0` = today's behavior.
+   */
+  kbMinRelevance: number;
 };
 
 /**
- * Read the operator-configured budgets for data-lake semantic search: how far to SCAN, and how much
- * of a matched chunk to SERVE.
+ * Read the operator-configured budgets for data-lake semantic search: how far to SCAN, how much of
+ * a matched chunk to SERVE, and (#1955) how many passages and how relevant they must be for
+ * `search_knowledge_base` specifically.
  *
  * Shared by every entrypoint (the search route, the chat KB tool, forced retrieval) so one
  * surface cannot end up scanning further than another. Uses the CACHED settings accessor, so
@@ -69,7 +86,14 @@ export async function resolveSearchBudgets(
         // this adds no org/lake lever (that is #1662), it only keeps ONE derivation for both paths.
         // Omitting it here instead would make the scoped path serve a different budget than the
         // platform path for the same lake, which is the disagreement this whole change removes.
-        ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks', 'DefaultChunkSize'],
+        [
+          'dataLakeSearchMaxFiles',
+          'dataLakeSearchMaxChunks',
+          'DefaultChunkSize',
+          'kbSearchDefaultResults',
+          'kbSearchResultTokenBudget',
+          'kbSearchMinRelevancePct',
+        ],
         scope,
         db,
         {
@@ -85,6 +109,25 @@ export async function resolveSearchBudgets(
           logger
         ),
         maxChunkChars: resolveServeBudget(values.DefaultChunkSize, logger),
+        kbDefaultResults: positiveIntOr(
+          values.kbSearchDefaultResults,
+          KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+          'kbSearchDefaultResults',
+          logger
+        ),
+        kbResultTokenBudget: nonNegativeIntOr(
+          values.kbSearchResultTokenBudget,
+          KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+          'kbSearchResultTokenBudget',
+          logger
+        ),
+        kbMinRelevance:
+          nonNegativeIntOr(
+            values.kbSearchMinRelevancePct,
+            KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+            'kbSearchMinRelevancePct',
+            logger
+          ) / 100,
       };
     } catch (err) {
       logger?.warn?.('[semanticSearch] scoped budget resolution failed; falling back to platform', err);
@@ -94,7 +137,14 @@ export async function resolveSearchBudgets(
 
   try {
     const values = await getSettingsByNames(
-      ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks', 'DefaultChunkSize'],
+      [
+        'dataLakeSearchMaxFiles',
+        'dataLakeSearchMaxChunks',
+        'DefaultChunkSize',
+        'kbSearchDefaultResults',
+        'kbSearchResultTokenBudget',
+        'kbSearchMinRelevancePct',
+      ],
       db,
       { logger }
     );
@@ -107,6 +157,25 @@ export async function resolveSearchBudgets(
         logger
       ),
       maxChunkChars: resolveServeBudget(values.DefaultChunkSize, logger),
+      kbDefaultResults: positiveIntOr(
+        values.kbSearchDefaultResults,
+        KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+        'kbSearchDefaultResults',
+        logger
+      ),
+      kbResultTokenBudget: nonNegativeIntOr(
+        values.kbSearchResultTokenBudget,
+        KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+        'kbSearchResultTokenBudget',
+        logger
+      ),
+      kbMinRelevance:
+        nonNegativeIntOr(
+          values.kbSearchMinRelevancePct,
+          KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+          'kbSearchMinRelevancePct',
+          logger
+        ) / 100,
     };
   } catch (err) {
     logger?.warn?.('[semanticSearch] could not read scan-budget settings; using defaults', err);
@@ -115,6 +184,9 @@ export async function resolveSearchBudgets(
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       // No configured target reached us, so the chunker's own default is the honest basis.
       maxChunkChars: deriveServeCharBudget(undefined).maxChunkChars,
+      kbDefaultResults: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+      kbResultTokenBudget: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+      kbMinRelevance: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100,
     };
   }
 }
@@ -176,6 +248,28 @@ export function positiveIntOr(
   if (raw === null || raw === undefined || raw === '') return fallback;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 1) {
+    logger?.warn?.(`[semanticSearch] ignoring unusable ${label} setting ${JSON.stringify(raw)}; using ${fallback}`);
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+/**
+ * Sibling of `positiveIntOr` for settings where `0` is a MEANINGFUL value, not an unusable one - a
+ * disabled budget or an absent relevance floor. `positiveIntOr` cannot express this: it treats
+ * anything below 1 as a misconfiguration and warns, which would fire on every search for a
+ * legitimately-zero setting. Same contract otherwise: unset is silent, set-but-unusable warns and
+ * falls back.
+ */
+export function nonNegativeIntOr(
+  raw: string | number | null | undefined,
+  fallback: number,
+  label: string,
+  logger?: Logger
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
     logger?.warn?.(`[semanticSearch] ignoring unusable ${label} setting ${JSON.stringify(raw)}; using ${fallback}`);
     return fallback;
   }

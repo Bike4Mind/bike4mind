@@ -26,6 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {},
   projectRepository: {},
   lakeAccessEventRepository: {},
+  scopedSettingsRepository: {},
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;

@@ -17,6 +17,7 @@ import {
   IUsageEventRepository,
   IOrganizationRepository,
   ILakeAccessEventRepository,
+  IScopedSettingsRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -119,6 +120,12 @@ export interface ToolContext {
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
      */
     lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
+    /**
+     * Scoped-settings overlay for org/owner setting rungs (epic #1658 seam). Optional -
+     * `resolveSearchBudgets` falls back to the byte-identical platform path when this is absent,
+     * so a lean tool harness that omits it keeps platform-only resolution rather than failing.
+     */
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side

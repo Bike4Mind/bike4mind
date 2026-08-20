@@ -5,6 +5,9 @@ import {
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IScopedSetting,
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
   MIN_PASSAGE_TOKEN_TARGET,
   ScopeRef,
   SERVE_CHUNK_CHARS_CEILING,
@@ -15,6 +18,13 @@ import {
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { resetServeCeilingWarnLimiter, resolveSearchBudgets } from './resolveSearchBudgets';
+
+/** The three #1955 kb* fields at their coded, behavior-preserving defaults. */
+const KB_DEFAULTS = {
+  kbDefaultResults: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  kbResultTokenBudget: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+  kbMinRelevance: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100,
+};
 
 function makeDb(
   platform: Record<string, string>,
@@ -79,6 +89,7 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       maxChunkChars: DEFAULT_SERVE_CHARS,
+      ...KB_DEFAULTS,
     });
   });
 
@@ -86,7 +97,7 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
     const budgets = await resolveSearchBudgets(
       makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '200' })
     );
-    expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS });
+    expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS, ...KB_DEFAULTS });
   });
 
   it('floors a non-integer and ignores an unusable value with a warning', async () => {
@@ -251,6 +262,7 @@ describe('resolveSearchBudgets - serve budget', () => {
       maxFiles: 10,
       maxChunks: 250,
       maxChunkChars: deriveServeCharBudget(512).maxChunkChars,
+      ...KB_DEFAULTS,
     });
   });
 
@@ -269,13 +281,119 @@ describe('resolveSearchBudgets - serve budget', () => {
 
     const budgets = await resolveSearchBudgets(exploding, logger);
 
-    // The never-throws contract has to cover the new field too, or the serve path gets undefined and
+    // The never-throws contract has to cover the new fields too, or the serve path gets undefined and
     // clips to nothing at exactly the moment settings are already broken.
     expect(budgets).toEqual({
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       maxChunkChars: deriveServeCharBudget(undefined).maxChunkChars,
+      ...KB_DEFAULTS,
     });
     expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('resolveSearchBudgets - kb* fields (#1955)', () => {
+  it('resolves configured platform values for the token budget and relevance threshold', async () => {
+    const budgets = await resolveSearchBudgets(
+      makeDb({ kbSearchDefaultResults: '8', kbSearchResultTokenBudget: '4000', kbSearchMinRelevancePct: '30' })
+    );
+    expect(budgets.kbDefaultResults).toBe(8);
+    expect(budgets.kbResultTokenBudget).toBe(4000);
+    expect(budgets.kbMinRelevance).toBeCloseTo(0.3);
+  });
+
+  it('honors an explicit 0 for the token budget and relevance threshold, with no warning', async () => {
+    const logger = loggerStub();
+    const budgets = await resolveSearchBudgets(
+      makeDb({ kbSearchResultTokenBudget: '0', kbSearchMinRelevancePct: '0' }),
+      logger
+    );
+    expect(budgets.kbResultTokenBudget).toBe(0);
+    expect(budgets.kbMinRelevance).toBe(0);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('warns and falls back to the coded default for a negative or non-numeric value', async () => {
+    const logger = loggerStub();
+    const budgets = await resolveSearchBudgets(
+      makeDb({ kbSearchResultTokenBudget: '-5', kbSearchMinRelevancePct: 'not-a-number' }),
+      logger
+    );
+    expect(budgets.kbResultTokenBudget).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+    expect(budgets.kbMinRelevance).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchResultTokenBudget'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchMinRelevancePct'));
+  });
+
+  it('a settings outage falls back to the coded constants for all three kb* fields', async () => {
+    const logger = loggerStub();
+    const exploding = {
+      adminSettings: {
+        findBySettingNames: vi.fn(async () => {
+          throw new Error('settings outage');
+        }),
+        findAll: vi.fn(async () => {
+          throw new Error('settings outage');
+        }),
+      },
+    } as unknown as Parameters<typeof resolveSearchBudgets>[0];
+
+    const budgets = await resolveSearchBudgets(exploding, logger);
+
+    expect(budgets.kbDefaultResults).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    expect(budgets.kbResultTokenBudget).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+    expect(budgets.kbMinRelevance).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100);
+  });
+
+  it('an org-rung override wins over the platform value', async () => {
+    const orgScope: SettingScope = {
+      organizationId: 'org-1',
+      owner: { id: 'org-1', type: CreditHolderType.Organization },
+    };
+    const db = makeDb({ kbSearchResultTokenBudget: '1000' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'org-1',
+        settingName: 'kbSearchResultTokenBudget',
+        settingValue: '5000',
+      },
+    ]);
+    const budgets = await resolveSearchBudgets(db, undefined, orgScope);
+    expect(budgets.kbResultTokenBudget).toBe(5000);
+  });
+
+  it('an owner-rung override wins over an org-rung override', async () => {
+    const ownerScope: SettingScope = {
+      organizationId: 'org-1',
+      owner: { id: 'user-1', type: CreditHolderType.User },
+    };
+    const db = makeDb({ kbSearchMinRelevancePct: '10' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'org-1',
+        settingName: 'kbSearchMinRelevancePct',
+        settingValue: '20',
+      },
+      {
+        scopeLevel: SettingScopeLevel.Owner,
+        scopeId: 'user-1',
+        settingName: 'kbSearchMinRelevancePct',
+        settingValue: '40',
+      },
+    ]);
+    const budgets = await resolveSearchBudgets(db, undefined, ownerScope);
+    expect(budgets.kbMinRelevance).toBeCloseTo(0.4);
+  });
+
+  it('two-way drift guard: the resolver falls back to each setting-schema default, not a hand-copied literal', async () => {
+    // settings.test.ts pins the schema side (defaultValue === the same imported constant); this
+    // pins the RESOLVER side against the setting's declared defaultValue directly, so the two
+    // cannot silently diverge even if one side's import is later swapped for a literal.
+    const { settingsMap } = await import('@bike4mind/common');
+    const budgets = await resolveSearchBudgets(makeDb({}));
+    expect(budgets.kbDefaultResults).toBe(settingsMap.kbSearchDefaultResults.defaultValue);
+    expect(budgets.kbResultTokenBudget).toBe(settingsMap.kbSearchResultTokenBudget.defaultValue);
+    expect(budgets.kbMinRelevance).toBe((settingsMap.kbSearchMinRelevancePct.defaultValue as number) / 100);
   });
 });

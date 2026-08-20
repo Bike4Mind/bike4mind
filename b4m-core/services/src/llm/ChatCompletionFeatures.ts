@@ -45,6 +45,7 @@ import {
   OpenAIEmbeddingModel,
   ImageModerationIncident,
   ILakeAccessEventRepository,
+  IScopedSettingsRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
@@ -184,6 +185,11 @@ interface DatabaseAdapters {
    * a host hasn't wired it in rather than blocking forced retrieval.
    */
   lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
+  /**
+   * Scoped-settings overlay for org/owner setting rungs (epic #1658 seam). Optional -
+   * `resolveSearchBudgets` falls back to the byte-identical platform path when this is absent.
+   */
+  scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
 }
 export type featureNames =
   | 'slack'
