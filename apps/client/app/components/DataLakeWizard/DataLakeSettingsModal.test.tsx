@@ -21,10 +21,22 @@ const useDataLakeSpendMock = vi.fn(() => ({
   refetch: vi.fn(),
 }));
 
+// Steady state for the tests that don't care about the history tab. The history suite below
+// overrides it per test.
+const useLakeConfigHistoryMock = vi.fn(() => ({
+  data: undefined,
+  isLoading: false,
+  isFetching: false,
+  isForbidden: false,
+  error: null,
+  refetch: vi.fn(),
+}));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
   useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
+  useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
 }));
 
 // The picker's options come from an async react-query hook. Mock it so the modal renders
@@ -70,6 +82,15 @@ beforeEach(() => {
   activatableError = false;
   useDataLakeSpendMock.mockClear();
   useDataLakeSpendMock.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isForbidden: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  useLakeConfigHistoryMock.mockClear();
+  useLakeConfigHistoryMock.mockReturnValue({
     data: undefined,
     isLoading: false,
     isFetching: false,
@@ -714,6 +735,124 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - History tab', () => {
+  const managerLake = { ...openLake, id: 'lake-hist-1', canManage: true };
+  const readerLake = { ...openLake, id: 'lake-hist-2', canManage: false, embeddingSpendMicroUsd: undefined };
+
+  const historyView = {
+    lakeId: 'lake-hist-1',
+    lakeName: 'Open Lake',
+    truncated: false,
+    generatedAt: new Date('2026-08-18T12:00:00Z'),
+    entries: [
+      {
+        eventId: 'evt-1',
+        changedAt: new Date('2026-08-17T10:30:00Z'),
+        principalKind: 'user' as const,
+        principalId: '000000000000000000000001',
+        principalName: 'Ada Lovelace',
+        manageRung: 'grant-owner' as const,
+        action: 'update' as const,
+        changes: [{ field: 'name' as const, kind: 'literal' as const, before: 'Old', after: 'New' }],
+      },
+    ],
+  };
+
+  it('shows the History tab for a manager', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-history')).toBeInTheDocument();
+  });
+
+  it('shows NO History tab to a non-manager - the history is editor-only, like the fields it describes', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-history')).not.toBeInTheDocument();
+  });
+
+  it('does not fetch the history until the tab is actually clicked (lazy)', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(useLakeConfigHistoryMock).toHaveBeenCalledWith('lake-hist-1', false);
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+
+    expect(useLakeConfigHistoryMock).toHaveBeenCalledWith('lake-hist-1', true);
+  });
+
+  it('removes the tab retroactively on a 403 and shows no error paint', () => {
+    useLakeConfigHistoryMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: true,
+      error: { message: 'Forbidden' },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-history')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-config-history-error')).not.toBeInTheDocument();
+  });
+
+  it('renders the recorded changes once the tab is open', async () => {
+    const user = userEvent.setup();
+    useLakeConfigHistoryMock.mockReturnValue({
+      data: historyView,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+
+    expect(screen.getByTestId('datalake-config-history-table')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Old -> New')).toBeInTheDocument();
+  });
+
+  it('hides Save/Cancel on the read-only History tab, and restores them on Settings', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
     expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));

@@ -1,4 +1,10 @@
-import type { AccessContext, IDataLakeAccessGrant, IDataLakeDocument, LakeManageRung } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IDataLakeAccessGrant,
+  IDataLakeDocument,
+  LakeAuditPrincipal,
+  LakeManageRung,
+} from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 
 /**
@@ -7,7 +13,22 @@ import { normalizeId } from '@bike4mind/utils';
  * (see AccessContext.administeredOrgIds); it powers the org-manageable rung. Optional so a caller
  * that has not threaded it yet still compiles - the org rung simply does not fire (back-compat).
  */
-export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin' | 'administeredOrgIds'>;
+export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin' | 'administeredOrgIds'> & {
+  /**
+   * Who to ATTRIBUTE an audited write to, when that is not simply `userId`. Set by a route that
+   * accepts API-key auth: `baseApi()` admits either a session or a `b4m_live_` key, so `userId`
+   * alone conflates a human editing in the app with a key acting on their behalf, and an audit row
+   * that named the human for a key-driven change would be wrong in the one field it exists to get
+   * right. Derived at the route from `resolveAuditPrincipal` - the SAME helper the read side uses,
+   * so the two halves of the trail describe a principal identically.
+   *
+   * Optional and additive: absent, `recordLakeConfigChange` falls back to deriving the principal
+   * from `userId`, which is correct for a session write and for a script with no principal at all.
+   * It rides on the actor rather than on each service's params so no config-write service signature
+   * has to change - they already forward `actor` to the audit call.
+   */
+  auditPrincipal?: LakeAuditPrincipal;
+};
 
 /**
  * The slice of a lake's access grant a manage decision needs. The caller pre-fetches the lake's

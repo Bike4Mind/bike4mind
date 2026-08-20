@@ -207,7 +207,11 @@ export const archiveDataLake = async (
   // Always recompute from source, never short-circuit on the sweep's own count ("it archived
   // nothing, so stats can't have changed"): a re-entry sweeps 0 for rows a PRIOR attempt already
   // archived, and those rows are exactly what this recompute needs to reflect.
-  await recomputeLakeStats(existing, { db });
+  // Logger forwarded for parity with every other recompute call, not because an audit row is
+  // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's
+  // draft/null window, so the recompute cannot emit an auto-activate event. Passing it anyway costs
+  // nothing and saves the next reader re-deriving that.
+  await recomputeLakeStats(existing, { db, logger });
 
   return updated;
 };
