@@ -119,12 +119,6 @@ export class NotebookImportService {
     if (!id) {
       throw new Error(`${kind} store returned no id`);
     }
-    // TEMP-VERIFY: remove before merge. Ids only, no names or content.
-    this.adapters.logger.info('[TEMP-VERIFY] attachment id taken from store', {
-      kind,
-      recordedId: id,
-      looksLikeObjectId: /^[0-9a-f]{24}$/i.test(id),
-    });
     return id;
   }
 
@@ -276,24 +270,6 @@ export class NotebookImportService {
     // Create session
     const createdSession = await this.adapters.sessionRepository.create(sessionData);
 
-    // TEMP-VERIFY: remove before merge. Confirms on a real deploy that (a) the notebook takes a
-    // store-assigned id even with preserveIds on, and (b) every attachment reference recorded on
-    // the session is store-shaped: ObjectIds for knowledge/tools/agents, `artifact_*` for
-    // artifacts, and never the uuids this service used to invent. Ids and counts only.
-    this.adapters.logger.info('[TEMP-VERIFY] session created', {
-      preserveIds: options.preserveIds,
-      exportedNotebookId: notebook.id,
-      createdNotebookId: createdSession.id,
-      notebookIdPreserved: createdSession.id === notebook.id,
-      knowledgeIds: sessionData.knowledgeIds,
-      artifactIds: sessionData.artifactIds,
-      toolIds: sessionData.toolIds,
-      agentIds: sessionData.agentIds,
-      allAttachmentRefsResolvable: [...sessionData.toolIds, ...sessionData.agentIds, ...sessionData.knowledgeIds].every(
-        id => /^[0-9a-f]{24}$/i.test(id)
-      ),
-    });
-
     // Import chat history
     if (notebook.chatHistory.length > 0) {
       await this.importChatHistory(notebook.chatHistory, createdSession.id, targetUserId, options);
@@ -399,18 +375,6 @@ export class NotebookImportService {
       questMasterPlanId: message.questMasterPlanId,
     }));
 
-    // TEMP-VERIFY: remove before merge. Messages are where `preserveIds` really applies - they
-    // write an explicit `_id` - so confirm the toggle works here rather than only that it no
-    // longer pretends to work elsewhere. Ids and counts only.
-    this.adapters.logger.info('[TEMP-VERIFY] chat history about to be written', {
-      preserveIds: options.preserveIds,
-      messageCount: chatItems.length,
-      exportedIds: chatHistory.map(m => m.id),
-      writtenIds: chatItems.map(item => (item as { id?: string }).id ?? '(store-assigned)'),
-      allIdsPreserved:
-        options.preserveIds && chatHistory.every((m, i) => (chatItems[i] as { id?: string }).id === m.id),
-    });
-
     await this.adapters.chatHistoryRepository.bulkCreate(chatItems);
   }
 
@@ -497,14 +461,6 @@ export class NotebookImportService {
         };
 
         await this.adapters.artifactRepository.create(artifactData);
-        // TEMP-VERIFY: remove before merge. Artifacts keep the id this service sets, unlike the
-        // other attachments - readers resolve them by `id`, not `_id`.
-        this.adapters.logger.info('[TEMP-VERIFY] artifact id recorded', {
-          preserveIds: options.preserveIds,
-          exportedId: artifact.id,
-          recordedId: newArtifactId,
-          idPreserved: newArtifactId === artifact.id,
-        });
         importedIds.push(newArtifactId);
       } catch (error) {
         this.attachmentWarnings.push(
