@@ -108,4 +108,56 @@ describe('POST /api/projects/:id/invites', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(createInvite).not.toHaveBeenCalled();
   });
+
+  it('accepts a future ISO expiresAt and coerces it to Date', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: 'proj-1' },
+      body: { permissions: ['read'], expiresAt: '2099-12-31T00:00:00.000Z' },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+    expect(createInvite).toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ expiresAt: expect.any(Date) }),
+      expect.anything()
+    );
+  });
+
+  it('maps null expiresAt to undefined so the service prefault applies', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: 'proj-1' },
+      body: { permissions: ['read'], expiresAt: null },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+    expect(createInvite).not.toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ expiresAt: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it('rejects a past expiresAt without calling the service', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: 'proj-1' },
+      body: { permissions: ['read'], expiresAt: '2020-01-01T00:00:00.000Z' },
+    });
+    (req as any).user = { id: 'u1' };
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing permissions field without calling the service', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: 'proj-1' },
+      body: {},
+    });
+    (req as any).user = { id: 'u1' };
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
 });

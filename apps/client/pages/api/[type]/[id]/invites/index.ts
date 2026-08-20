@@ -54,13 +54,17 @@ const resolveInviteType = (segment: string | undefined): InviteType | undefined 
   return Object.values(InviteType).find(value => value === segment);
 };
 
-// z.coerce.date() accepts ISO strings from axios (z.date() would not).
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
   permissions: z.array(z.enum(Permission)),
   recipients: z.string().array().optional(),
   description: z.string().optional(),
-  expiresAt: z.coerce.date().optional(),
+  // null is the client's "no expiry" (hooks/data/invites.ts DataInput) -- map to undefined so
+  // the service's 100-year prefault applies. z.coerce.date(null) would silently produce epoch.
+  expiresAt: z.preprocess(
+    v => (v === null ? undefined : v),
+    z.coerce.date().min(new Date(), 'expiresAt must be in the future').optional()
+  ),
   available: z.number().optional(),
 });
 
@@ -120,8 +124,8 @@ const handler = baseApi()
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          // Omit expiresAt when undefined so the service's prefault default applies.
-          { id, type: inviteType, ...restBody, ...(expiresAt !== undefined && { expiresAt }) },
+          // id and type come last so path params are always authoritative over any body field.
+          { ...restBody, ...(expiresAt !== undefined && { expiresAt }), id, type: inviteType },
           {
             db: {
               invites: inviteRepository,
