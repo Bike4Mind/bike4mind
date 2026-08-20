@@ -85,6 +85,7 @@ import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/service
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
@@ -1427,6 +1428,10 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
+      questId: resolveExecutionQuestId({
+        startPayloadQuestId: startPayload?.questId,
+        executionLinkedQuestId: execution.linkedQuestId,
+      }),
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },

@@ -73,6 +73,18 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.createdAt).toBeInstanceOf(Date);
     });
 
+    it('round-trips questId and sessionId (#1867 turn linkage)', async () => {
+      const event = await repo.record(baseInput({ questId: 'quest-1', sessionId: 'session-1' }));
+      expect(event.questId).toBe('quest-1');
+      expect(event.sessionId).toBe('session-1');
+    });
+
+    it('leaves questId/sessionId absent, not null or empty string, when the caller supplies neither', async () => {
+      const event = await repo.record(baseInput());
+      expect(event.questId).toBeUndefined();
+      expect(event.sessionId).toBeUndefined();
+    });
+
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {
       const event = await repo.record(baseInput());
       expect((event as unknown as { updatedAt?: Date }).updatedAt).toBeUndefined();
@@ -293,6 +305,12 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(ttlText?.expireAfterSeconds).toBe(0);
     });
 
+    it('has a sparse questId index (#1867 turn linkage) - most rows have none, so plain would waste space', async () => {
+      const indexes = await LakeAccessEventModel.collection.indexes();
+      const questIdIndex = indexes.find(idx => idx.key?.questId === 1);
+      expect(questIdIndex?.sparse).toBe(true);
+    });
+
     it('is not fooled by system-clock manipulation - record() always uses the real clock, not a caller-supplied one', async () => {
       // RecordLakeAccessEventInput has no `now` field; this asserts the type-level removal holds
       // at runtime too - an extra `now` on the input object is simply ignored.
@@ -309,6 +327,36 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.returnedChunkIds.length).toBe(500);
       expect(event.returnedChunkCount).toBe(600);
       expect(event.identifiersTruncated).toBe(true);
+    });
+
+    it('truncates scores in lockstep with chunkIds at the same 500-element boundary (#1867)', async () => {
+      const manyIds = Array.from({ length: 600 }, (_, i) => `chunk-${i}`);
+      const manyScores = Array.from({ length: 600 }, (_, i) => i / 600);
+      const event = await repo.record(baseInput({ chunkIds: manyIds, scores: manyScores }));
+      expect(event.scores?.length).toBe(500);
+      expect(event.scores).toEqual(manyScores.slice(0, 500));
+      expect(event.returnedChunkIds.length).toBe(event.scores?.length);
+    });
+  });
+
+  describe('scores (#1867 similarity scores)', () => {
+    it('round-trips scores index-aligned with chunkIds', async () => {
+      const event = await repo.record(baseInput({ chunkIds: ['c1', 'c2', 'c3'], scores: [0.9, 0.8, 0.7] }));
+      expect(event.scores).toEqual([0.9, 0.8, 0.7]);
+      expect(event.returnedChunkIds).toEqual(['c1', 'c2', 'c3']);
+    });
+
+    it('leaves scores absent (not an empty array) when the caller supplies none - distinguishes no-score-concept from ran-found-nothing', async () => {
+      const event = await repo.record(baseInput({ chunkIds: ['c1'] }));
+      expect(event.scores).toBeUndefined();
+    });
+
+    it('drops a mismatched-length scores array rather than risk misattributing a score to the wrong chunk', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const event = await repo.record(baseInput({ chunkIds: ['c1', 'c2'], scores: [0.9] }));
+      expect(event.scores).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('scores.length'));
+      warnSpy.mockRestore();
     });
   });
 

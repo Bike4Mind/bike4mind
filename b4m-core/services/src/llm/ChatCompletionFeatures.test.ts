@@ -1720,6 +1720,11 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         chunkIds: ['chA1'],
         surface: 'forced-retrieval',
         queryText: 'pto policy',
+        // #1867 turn linkage + similarity scores: quest is a direct method param here, so
+        // zero new plumbing was needed - questId/sessionId come straight from it.
+        questId: 'quest1',
+        sessionId: 'session1',
+        scores: [expect.any(Number)],
       })
     );
   });

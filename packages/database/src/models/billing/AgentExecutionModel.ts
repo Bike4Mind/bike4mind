@@ -216,7 +216,17 @@ export interface IAgentExecution {
   userId: string;
   organizationId?: string;
   sessionId: string;
+  /** NOT the Quest id despite the name - this is `cmd.questId` from the client dispatch, which is
+   * actually the sessionId (a back-ref hack). See `linkedQuestId` for the real Quest id. */
   questId: string;
+  /**
+   * The REAL Quest id created at dispatch time (`agentExecute.ts`'s `Quest.create`), persisted
+   * here so it survives a resumed/checkpointed Lambda invocation - the start payload only carries
+   * it on the first invocation. Used to link `LakeAccessEvent` audit rows back to this execution's
+   * turn (`ToolContext.questId`); never used for anything else. Absent when the dispatch-time
+   * Quest write failed (best-effort, logged, does not block dispatch).
+   */
+  linkedQuestId?: string;
   query: string;
   model: string;
 
@@ -562,6 +572,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     organizationId: { type: String },
     sessionId: { type: String, required: true },
     questId: { type: String, required: true },
+    linkedQuestId: { type: String },
     query: { type: String, required: true },
     model: { type: String, required: true },
 
@@ -1276,6 +1287,15 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async persistMementoIds(id: string, mementoIds: string[]): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { usedMementoIds: mementoIds } });
+  }
+
+  /**
+   * Persist the real Quest id (created at dispatch) so it survives a resumed/checkpointed Lambda
+   * invocation - see `IAgentExecution.linkedQuestId`'s doc comment. Best-effort: the caller logs
+   * and continues on failure, same as the dispatch-time Quest write it depends on.
+   */
+  async persistLinkedQuestId(id: string, linkedQuestId: string): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { linkedQuestId } });
   }
 
   /**
