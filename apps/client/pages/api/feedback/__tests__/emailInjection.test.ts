@@ -137,6 +137,7 @@ describe('POST /api/feedback - strips tags from the email notification', () => {
     const { req, res } = run();
     await mockRefs.postHandler!(req, res);
 
+    expect(mockEmailPublish).toHaveBeenCalled();
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain('<svg');
     expect(emailBody).not.toContain(MALICIOUS_TYPE);
@@ -146,6 +147,7 @@ describe('POST /api/feedback - strips tags from the email notification', () => {
     const { req, res } = run();
     await mockRefs.postHandler!(req, res);
 
+    expect(mockEmailPublish).toHaveBeenCalled();
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain('<script>alert(1)</script>');
   });
@@ -154,6 +156,7 @@ describe('POST /api/feedback - strips tags from the email notification', () => {
     const { req, res } = run();
     await mockRefs.postHandler!(req, res);
 
+    expect(mockEmailPublish).toHaveBeenCalled();
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain('<script>alert(1)</script>');
     // Escaped (not discarded): the reader can still see the attempted payload as inert text.
@@ -164,6 +167,7 @@ describe('POST /api/feedback - strips tags from the email notification', () => {
     const { req, res } = run();
     await mockRefs.postHandler!(req, res);
 
+    expect(mockEmailPublish).toHaveBeenCalled();
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain(MALICIOUS_USERNAME);
     expect(emailBody).not.toContain(MALICIOUS_USER_EMAIL);
