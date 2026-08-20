@@ -102,14 +102,19 @@ export const HelpModal: React.FC = () => {
       // contentStored false (with non-empty submitted text - this modal never sends an empty
       // one) means the text-sibling write itself failed server-side: the report exists, but the
       // words the user typed are gone, which is worth telling them rather than a plain success.
+      const deliveryFailed = feedbackCreated.delivery?.delivered === false;
       if (feedbackCreated.contentStored === false) {
         toast.warning('Your feedback was received, but we could not save the message text - please try again.');
+      } else if (feedbackCreated.contentTruncated && deliveryFailed) {
+        toast.warning(
+          'Your feedback was saved (trimmed a bit), but we could not notify the team - please ping support if it is urgent.'
+        );
       } else if (feedbackCreated.contentTruncated) {
         toast.warning('Your feedback was saved, but it was long enough that we had to trim it a bit.');
-      } else if (feedbackCreated.delivery?.delivered !== false) {
-        toast.success('Thank you! Your feedback has been submitted.');
-      } else {
+      } else if (deliveryFailed) {
         toast.warning('Saved your feedback, but we could not notify the team - please ping support if it is urgent.');
+      } else {
+        toast.success('Thank you! Your feedback has been submitted.');
       }
 
       // Never log the verbatim report text: CounterLog (where this analytics event lands)

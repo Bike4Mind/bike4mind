@@ -133,6 +133,25 @@ describe('HelpModal', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  it('combines the truncation and delivery-failure warnings when both happen on the same submission', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      content: 'a very long report cut at the cap',
+      contentTruncated: true,
+      delivery: { delivered: false, channels: {} },
+    });
+    renderModal();
+
+    submitFeedback('a very long report cut at the cap');
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const [warningText] = vi.mocked(toast.warning).mock.calls[0];
+    expect(warningText).toContain('trimmed');
+    expect(warningText).toContain('could not notify');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it('warns the reporter when the text itself failed to save', async () => {
     h.createFeedbackOnServer.mockResolvedValue({
       id: 'fb1',
