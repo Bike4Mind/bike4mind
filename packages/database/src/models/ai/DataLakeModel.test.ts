@@ -1463,6 +1463,71 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
   });
 });
 
+describe('DataLakeRepository archive-axis lifecycle claims', () => {
+  setupMongoTest();
+
+  it('claimRestoringFromArchived LOSES to a delete that settled first', async () => {
+    // The race the archive axis was missing: the unarchive read 'archived', a teardown settled the
+    // lake, and a plain status write revived it - leaving it 'active' with every file soft-deleted
+    // and out of the deleted list, so neither restore path could reach it.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-loses', status: 'archived' }));
+    expect(await dataLakeRepository.claimDeleting(created.id)).toBe(true);
+
+    expect(await dataLakeRepository.claimRestoringFromArchived(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleting');
+  });
+
+  it('claimDeleting LOSES to an unarchive that claimed first', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'delete-loses', status: 'archived' }));
+    expect(await dataLakeRepository.claimRestoringFromArchived(created.id)).toBe(true);
+
+    expect(await dataLakeRepository.claimDeleting(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+  });
+
+  it.each(['deleting', 'deleted', 'purging', 'active'] as const)(
+    'claimRestoringFromArchived refuses a lake in %s status',
+    async status => {
+      const created = await dataLakeRepository.create(baseLake({ slug: `unarchive-from-${status}`, status }));
+      expect(await dataLakeRepository.claimRestoringFromArchived(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  );
+
+  it.each(['restoring', 'deleted', 'purging'] as const)('claimDeleting refuses a lake in %s status', async status => {
+    const created = await dataLakeRepository.create(baseLake({ slug: `delete-from-${status}`, status }));
+    expect(await dataLakeRepository.claimDeleting(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+  });
+
+  it.each(['archived', 'restoring', 'deleting', 'deleted', 'purging'] as const)(
+    'claimArchiving refuses a lake in %s status',
+    async status => {
+      const created = await dataLakeRepository.create(baseLake({ slug: `archive-from-${status}`, status }));
+      expect(await dataLakeRepository.claimArchiving(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  );
+
+  it.each(['draft', 'active'] as const)('claimArchiving admits a lake in %s status', async status => {
+    const created = await dataLakeRepository.create(baseLake({ slug: `archive-ok-${status}`, status }));
+    expect(await dataLakeRepository.claimArchiving(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('archiving');
+  });
+
+  // matchedCount, not modifiedCount: re-entering a transitional state is a legitimate retry of a
+  // crashed attempt, and reporting it as a loss would refuse work the service guards allow.
+  it.each([
+    ['claimArchiving', 'archiving'],
+    ['claimDeleting', 'deleting'],
+    ['claimRestoringFromArchived', 'restoring'],
+  ] as const)('%s is re-entrant from its own transitional state', async (method, status) => {
+    const created = await dataLakeRepository.create(baseLake({ slug: `reentrant-${status}`, status }));
+    expect(await dataLakeRepository[method](created.id)).toBe(true);
+    expect(await dataLakeRepository[method](created.id)).toBe(true);
+  });
+});
+
 describe('DataLakeRepository.activateIfDraft', () => {
   setupMongoTest();
 

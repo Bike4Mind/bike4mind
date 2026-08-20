@@ -541,6 +541,31 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
+  async claimArchiving(id: string): Promise<boolean> {
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving'], 'archiving');
+  }
+
+  async claimDeleting(id: string): Promise<boolean> {
+    // 'restoring' is deliberately absent: a teardown must lose to an unarchive or restore already
+    // in flight rather than plain-write over it, which is what left a lake 'active' with every one
+    // of its files soft-deleted. 'deleted'/'purging' are handled by deleteDataLake's own guards.
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
+  }
+
+  async claimRestoringFromArchived(id: string): Promise<boolean> {
+    return this.claimLifecycleStatus(id, ['archived', 'restoring'], 'restoring');
+  }
+
+  /**
+   * Conditional status hop: `$set` the new status only for a lake still sitting in one of `from`.
+   * matchedCount, not modifiedCount, so a re-entry that changes nothing (retrying a crashed
+   * transitional attempt) still reports as won - see claimRestoring's note.
+   */
+  private async claimLifecycleStatus(id: string, from: DataLakeStatus[], to: DataLakeStatus): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: { $in: from } }, { $set: { status: to } });
+    return res.matchedCount === 1;
+  }
+
   async releasePurgingToDeleted(id: string): Promise<boolean> {
     // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
     // 'purging' may be released, so this can never resurrect one another transition has moved on.

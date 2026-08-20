@@ -23,7 +23,7 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find' | 'claimFilesDeletedAt'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find' | 'claimFilesDeletedAt' | 'claimDeleting'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
@@ -72,6 +72,24 @@ export const deleteDataLake = async (
     throw new BadRequestError('This data lake is being permanently deleted and can no longer be deleted');
   }
 
+  // A restore or unarchive already in flight wins, and this teardown is refused rather than run on
+  // top of it. Before this, phase 1 tore down a 'restoring' lake anyway and the in-flight restore's
+  // terminal 'active' write landed last, leaving a lake that reads live but holds only soft-deleted
+  // files and appears in no deleted list, so nothing could recover it.
+  if (existing.status === 'restoring') {
+    throw new BadRequestError('This data lake is being restored and cannot be deleted right now');
+  }
+
+  // Claimed BEFORE any side effect, and conditional on the states the guards above admitted: the
+  // guards ran against a document read two round trips ago (the grant load), so an archive, restore
+  // or second teardown landing in that gap must make this LOSE rather than be overwritten by it.
+  // Claiming first also means a lost claim leaves the lake untouched - no cancelled batches, no
+  // spent `filesDeletedAt`.
+  const entered = await db.dataLakes.claimDeleting(dataLakeId);
+  if (!entered) {
+    throw new BadRequestError('This data lake changed status mid-request and can no longer be deleted');
+  }
+
   // Quiesce in-flight batches before teardown.
   const activeBatches = await db.batches.findActiveByDataLakeId(dataLakeId);
   await Promise.all(activeBatches.map(b => db.batches.markTerminalIfActive(b.id, 'cancelled')));
@@ -97,8 +115,6 @@ export const deleteDataLake = async (
       logger?.warn('[dataLakes] teardown recorded no stamp; this lake will restore unbounded', { dataLakeId });
     }
   }
-
-  await db.dataLakes.update({ id: dataLakeId, status: 'deleting' });
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);

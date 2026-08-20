@@ -21,7 +21,10 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
+    dataLakes: Pick<
+      IDataLakeRepository,
+      'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimRestoringFromArchived'
+    >;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -65,7 +68,15 @@ export const unarchiveDataLake = async (
     throw new BadRequestError(`Cannot restore a data lake in '${existing.status}' status`);
   }
 
-  await db.dataLakes.update({ id: dataLakeId, status: 'restoring' });
+  // Conditional on the statuses the guard above admitted, NOT a blind $set: the check ran against a
+  // document read several round trips ago (the grant load), so a delete that lands in that gap must
+  // make this LOSE rather than be overwritten. A plain write here revived a lake the teardown had
+  // already settled and left it 'active' with every file soft-deleted and absent from the deleted
+  // list, so neither restore path could recover it - the same defect class claimPurging closes.
+  const entered = await db.dataLakes.claimRestoringFromArchived(dataLakeId);
+  if (!entered) {
+    throw new BadRequestError('This data lake changed status mid-request and can no longer be restored');
+  }
 
   const scope = lakeMembershipScope(existing);
   // undefined for a lake archived before `filesArchivedAt` existed, which keeps both the dedup

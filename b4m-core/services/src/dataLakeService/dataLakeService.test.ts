@@ -1518,6 +1518,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
       activateIfDraft: vi.fn(),
+      claimRestoringFromArchived: vi.fn().mockResolvedValue(true),
     };
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
@@ -1549,6 +1550,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
       activateIfDraft: vi.fn(),
+      claimRestoringFromArchived: vi.fn().mockResolvedValue(true),
     };
 
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
@@ -1570,15 +1572,14 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
       activateIfDraft: vi.fn(),
+      claimRestoringFromArchived: vi.fn().mockResolvedValue(true),
     };
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
 
-    // Both calls, not just the last: reading only `.at(-1)` would let someone add
-    // `...lakeConfigWriteStamp(actor)` to the transitional 'restoring' hop without any test failing,
-    // which is exactly the one-stamp-per-operator-action rule this design exists to hold. Archive and
-    // delete already pin their transitional payload this way.
-    const [transitional] = dataLakes.update.mock.calls[0];
-    expect(transitional).toEqual({ id: 'lake1', status: 'restoring' });
+    // The transitional 'restoring' hop is a claim, not an update, so `update` must carry the
+    // terminal write and nothing else - the one-stamp-per-operator-action rule stated as a count.
+    expect(dataLakes.claimRestoringFromArchived).toHaveBeenCalledWith('lake1');
+    expect(dataLakes.update).toHaveBeenCalledTimes(1);
 
     const settle = dataLakes.update.mock.calls.at(-1)?.[0];
     expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null, lastUpdatedByUserId: 'owner' });
@@ -1668,6 +1669,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
         activateIfDraft: vi.fn(),
         find: vi.fn().mockResolvedValue([]),
         claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimArchiving: vi.fn().mockResolvedValue(true),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -1717,13 +1719,15 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
   it('stamps the actor on the terminal transition only, never on the transitional hop', async () => {
     // One stamp per operator action: a crashed run that never settles must leave no record of an
-    // archive that did not happen.
+    // archive that did not happen. The 'archiving' hop is a claim rather than an update, so the
+    // rule is now a call count on `update` - it must carry the terminal write and nothing else.
     const adapters = makeAdapters();
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
-    const [[transitional], [terminal]] = adapters.db.dataLakes.update.mock.calls;
-    expect(transitional).toEqual({ id: 'lake1', status: 'archiving' });
-    expect(terminal).toEqual({ id: 'lake1', status: 'archived', lastUpdatedByUserId: 'owner' });
+    expect(adapters.db.dataLakes.claimArchiving).toHaveBeenCalledWith('lake1');
+    expect(adapters.db.dataLakes.update.mock.calls).toEqual([
+      [{ id: 'lake1', status: 'archived', lastUpdatedByUserId: 'owner' }],
+    ]);
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1897,6 +1901,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
           .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
         find: vi.fn().mockResolvedValue([]),
         claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -1969,6 +1974,7 @@ describe('teardown stamp bookkeeping', () => {
         find: vi.fn().mockResolvedValue([]),
         // The real claim echoes back the stamp in force, which is the offered one when unclaimed.
         claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -2030,14 +2036,13 @@ describe('teardown stamp bookkeeping', () => {
       const adapters = teardownAdapters(lake());
       await deleteDataLake(owner, 'lake1', adapters);
 
-      expect(adapters.db.dataLakes.update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting' });
-      // The terminal transition carries the actor stamp; the transitional hop above deliberately
-      // does not (one stamp per operator action - see lakeConfigWriteStamp).
-      expect(adapters.db.dataLakes.update.mock.calls[1][0]).toEqual({
-        id: 'lake1',
-        status: 'deleted',
-        lastUpdatedByUserId: 'owner',
-      });
+      expect(adapters.db.dataLakes.claimDeleting).toHaveBeenCalledWith('lake1');
+      // The terminal transition carries the actor stamp, and it is the ONLY update: the
+      // transitional 'deleting' hop is a claim, which carries no payload to stamp (one stamp per
+      // operator action - see lakeConfigWriteStamp).
+      expect(adapters.db.dataLakes.update.mock.calls).toEqual([
+        [{ id: 'lake1', status: 'deleted', lastUpdatedByUserId: 'owner' }],
+      ]);
     });
 
     it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
@@ -2260,6 +2265,117 @@ describe('restore, delete and archive against a purge-accepted lake (#1744)', ()
     expect(db.dataLakes.update).not.toHaveBeenCalled();
     expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
     expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('the archive-axis lifecycle claims - a raced delete and unarchive', () => {
+  const owner = { userId: 'owner', isAdmin: false };
+
+  it('refuses the unarchive when claimRestoringFromArchived LOSES to a delete settled mid-call', async () => {
+    // The bug this closes: the lake still read as 'archived', so the status guard passed, and the
+    // plain 'restoring' write revived a lake the teardown had already settled. It then ran the
+    // reversal and wrote its terminal 'active', leaving a lake that reads live but holds only
+    // soft-deleted files and appears in no deleted list - unrecoverable by either restore path.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
+        claimRestoringFromArchived: vi.fn().mockResolvedValue(false),
+        update: vi.fn(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      fabFiles: { findArchivedByDataLakeTag: vi.fn(), unarchiveByDataLakeTag: vi.fn(), deleteManyInIds: vi.fn() },
+    };
+    await expect(unarchiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be restored/i
+    );
+    // Losing the claim must abort before any file work: an un-archive that half-ran is what left
+    // the two states disagreeing in the first place.
+    expect(db.fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.fabFiles.deleteManyInIds).not.toHaveBeenCalled();
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a soft-delete of a lake already being restored, rather than tearing it down anyway', async () => {
+    // The other interleaving of the same race: phase 1 used to refuse only 'deleted' and 'purging',
+    // so a lake sitting in 'restoring' was torn down and the in-flight restore's terminal 'active'
+    // write landed last regardless.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'restoring' })),
+        claimDeleting: vi.fn(),
+        update: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { softDeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being restored and cannot be deleted right now/i
+    );
+    expect(db.dataLakes.claimDeleting).not.toHaveBeenCalled();
+    expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses the soft-delete when claimDeleting LOSES to an unarchive that claimed first', async () => {
+    // The guard above only sees the document as it was read; this is the atomic half. Pinned
+    // separately because a lake can enter 'restoring' after that read and before this claim.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
+        claimDeleting: vi.fn().mockResolvedValue(false),
+        claimFilesDeletedAt: vi.fn(),
+        update: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { softDeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be deleted/i
+    );
+    // Claimed before any side effect, so a loss cancels no batch and spends no filesDeletedAt.
+    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
+    expect(db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
+    expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+  });
+
+  it.each(['deleting', 'deleted', 'restoring'] as const)(
+    'refuses to archive a lake in %s rather than settling it on archived',
+    async status => {
+      const db = {
+        dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status })), claimArchiving: vi.fn(), update: vi.fn() },
+        dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+        batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+        fabFiles: { archiveByDataLakeTag: vi.fn() },
+      };
+      await expect(archiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+        new RegExp(`Cannot archive a data lake in '${status}' status`)
+      );
+      expect(db.dataLakes.claimArchiving).not.toHaveBeenCalled();
+      expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses the archive when claimArchiving LOSES to a delete settled mid-call', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'active' })),
+        claimArchiving: vi.fn().mockResolvedValue(false),
+        claimFilesArchivedAt: vi.fn(),
+        update: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { archiveByDataLakeTag: vi.fn(), hasArchivedMemberExclusiveToDataLakeTag: vi.fn() },
+    };
+    await expect(archiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be archived/i
+    );
+    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
+    expect(db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
+    expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
   });
 });
 

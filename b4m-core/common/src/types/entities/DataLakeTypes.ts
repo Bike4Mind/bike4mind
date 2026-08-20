@@ -430,6 +430,30 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   claimRestoring(id: string): Promise<boolean>;
   /**
+   * Enter the transitional `archiving` state, claimed rather than set for the same reason as
+   * `claimPurging`: `archiveDataLake` guards a document it read several round trips earlier, so a
+   * delete or restore that lands in that gap must make this LOSE rather than be overwritten by it.
+   * Admits only the states that guard admits (`draft`/`active`, plus `archiving` itself so a
+   * crashed prior attempt can re-enter) - must stay in sync with it. Returns whether this caller
+   * may proceed.
+   */
+  claimArchiving(id: string): Promise<boolean>;
+  /**
+   * Enter the transitional `deleting` state - the phase-1 teardown's twin of `claimArchiving`, and
+   * the other half of the delete-vs-unarchive race `claimRestoringFromArchived` closes. What the
+   * admitted set EXCLUDES is the point: `restoring` (an unarchive or a restore already in flight),
+   * `deleted` and `purging`. Must stay in sync with `deleteDataLake`'s entry guard.
+   */
+  claimDeleting(id: string): Promise<boolean>;
+  /**
+   * Enter `restoring` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, which
+   * enters the same state from the deleted axis. Separate methods rather than one union filter
+   * because the admitted set is the guard: an unarchive must not revive a lake a delete has since
+   * torn down, and a restore must not revive one a purge has claimed. Re-entrant from `restoring`
+   * itself so a crashed prior attempt can retry.
+   */
+  claimRestoringFromArchived(id: string): Promise<boolean>;
+  /**
    * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
    * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
    * on `purging` so it can never resurrect a lake that some other transition has since moved.
