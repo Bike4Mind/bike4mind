@@ -251,10 +251,32 @@ describe('UploadStep - Drive-only commit (#1916)', () => {
     // Matches useCreateLakeFromDrive's rollback: a failed connect archives the lake it created, so
     // the user has nothing to clean up before retrying. Archive, not erase - the copy must not
     // promise a hard delete (verified live: the row survives with status 'archived').
-    renderDriveCommit('error', { errorMessage: 'This Drive folder is already connected to another data lake' });
+    renderDriveCommit('error', {
+      errorMessage: 'This Drive folder is already connected to another data lake',
+      driveRollback: 'archived',
+    });
     const failed = screen.getByTestId('drive-only-commit-error');
     expect(failed).toHaveTextContent('This Drive folder is already connected to another data lake');
     expect(failed).toHaveTextContent('The new Data Lake was rolled back');
+  });
+
+  // The compound failure: connect refused AND the rollback archive itself failed. The lake is still
+  // live in the user's list, so claiming it was rolled back would send them off looking for nothing.
+  it('does not claim a rollback when the rollback itself failed', () => {
+    renderDriveCommit('error', { errorMessage: 'nope', driveRollback: 'failed' });
+    const failed = screen.getByTestId('drive-only-commit-error');
+    expect(failed).not.toHaveTextContent('The new Data Lake was rolled back');
+    expect(failed).toHaveTextContent('may still be in your Data Lakes list');
+    expect(failed.textContent ?? '').not.toMatch(/Data Lakes\S/);
+  });
+
+  it('claims nothing about a rollback that was never attempted', () => {
+    // No driveRollback means no delete ran (e.g. the create itself was refused), so the screen
+    // states only the refusal.
+    renderDriveCommit('error', { errorMessage: 'nope' });
+    const failed = screen.getByTestId('drive-only-commit-error');
+    expect(failed).not.toHaveTextContent('rolled back');
+    expect(failed).not.toHaveTextContent('may still be in your');
   });
 
   it('sends a failed commit back to Configure, where the name and prefix can be fixed', () => {

@@ -75,6 +75,13 @@ export interface UploadProgress {
   /** Always a human-friendly, translated message - never raw zod/validator text. */
   errorMessage?: string;
   errorKind?: UploadErrorKind;
+  /**
+   * Outcome of the Drive-only commit's own rollback (useCreateLakeFromDrive archives the lake it
+   * just created when the Drive connect is refused). 'failed' means the archive call itself failed,
+   * so the lake is still live in the user's list - the Failed screen must not claim otherwise.
+   * Undefined when no rollback was attempted (the upload path, or a create that never succeeded).
+   */
+  driveRollback?: 'archived' | 'failed';
   currentBatchId?: string;
   /**
    * Background AI-tag suggestion phase, pushed over the same batch-progress

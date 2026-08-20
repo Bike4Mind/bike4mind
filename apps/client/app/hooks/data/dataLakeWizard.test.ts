@@ -760,6 +760,8 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(
       'You do not have permission to read that Google Drive folder.'
     );
+    // Archive succeeded, so the Failed screen is cleared to say the lake is gone.
+    expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBe('archived');
   });
 
   it('still reports the refusal when the rollback archive also fails', async () => {
@@ -786,6 +788,8 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(
       'This Drive folder is already connected to another data lake'
     );
+    // ...and the screen must not claim a rollback that did not happen: the lake is still live.
+    expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBe('failed');
   });
 
   it('creates nothing at all when the lake create itself is refused', async () => {
@@ -805,6 +809,8 @@ describe('useCreateLakeFromDrive (#1916)', () => {
 
     expect(postCall('/api/data-lakes/drive-sync')).toBeUndefined();
     expect(apiDelete).not.toHaveBeenCalled();
+    // No rollback was attempted because no lake exists - the screen claims nothing either way.
+    expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBeUndefined();
   });
 
   it('fails fast without ever calling the API when offline', async () => {

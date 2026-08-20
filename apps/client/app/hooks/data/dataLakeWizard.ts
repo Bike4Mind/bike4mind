@@ -746,6 +746,7 @@ export function useCreateLakeFromDrive() {
         // Clear any error from a prior attempt so a retry starts clean.
         errorMessage: undefined,
         errorKind: undefined,
+        driveRollback: undefined,
       });
 
       try {
@@ -753,8 +754,15 @@ export function useCreateLakeFromDrive() {
       } catch (err) {
         // Archives the lake (the route is a reversible archive, not a hard delete), which is enough
         // to keep it out of every list the user sees. Best-effort: a cleanup failure must not mask
-        // the refusal the user needs to read.
-        await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+        // the refusal the user needs to read - but its outcome has to reach the Failed screen,
+        // which otherwise tells the user the lake is gone while it is still live in their list.
+        // Set before rethrowing: updateUploadProgress merges, so onError's status/error fields
+        // land on top of this rather than replacing it.
+        const driveRollback = await api
+          .delete(`/api/data-lakes/${dataLakeId}`)
+          .then(() => 'archived' as const)
+          .catch(() => 'failed' as const);
+        updateUploadProgress({ driveRollback });
         throw err;
       }
 

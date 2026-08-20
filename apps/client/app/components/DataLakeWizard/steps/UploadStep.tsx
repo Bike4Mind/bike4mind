@@ -73,12 +73,14 @@ function describeFailures(failedFiles: number, processingFailedFiles: number): s
 function DriveOnlyCommitStatus({
   status,
   errorMessage,
+  driveRollback,
   folderLabel,
   onDone,
   onBack,
 }: {
   status: UploadProgress['status'];
   errorMessage: string | undefined;
+  driveRollback: UploadProgress['driveRollback'];
   folderLabel: string;
   onDone: () => void;
   onBack: () => void;
@@ -100,6 +102,9 @@ function DriveOnlyCommitStatus({
     `Google Drive ingest is running in the background for ${quoted}. ` +
     `Files appear in this ${DATA_LAKE} as they are pulled in - the ${DATA_LAKES} list shows the connection's status.`;
   const idleSentence = `Ready to create this ${DATA_LAKE} and sync ${quoted}.`;
+  const rollbackFailedSentence =
+    `The empty ${DATA_LAKE} could not be cleaned up, so it may still be in your ${DATA_LAKES} list. ` +
+    `Check the list and delete it before trying again, or contact support if it will not go away.`;
 
   if (status === 'complete') {
     return (
@@ -126,12 +131,20 @@ function DriveOnlyCommitStatus({
         <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
           {errorMessage || 'The Google Drive folder could not be connected. Please try again.'}
         </Typography>
-        {/* The rollback is the reason this can be retried from Configure with no cleanup: a failed
-            connect archives the lake it just created (see useCreateLakeFromDrive). Archived, not
-            erased - so this says what the user can observe, and does not promise a hard delete. */}
-        <Typography level="body-xs" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
-          The new {DATA_LAKE} was rolled back - nothing was added to your list.
-        </Typography>
+        {/* Say only what the rollback actually did. 'archived' is the reason this can be retried
+            from Configure with no cleanup; 'failed' means the archive call itself failed, so the
+            empty lake is still live and a blind retry would add a second one next to it. Anything
+            else (no rollback attempted, e.g. the create never succeeded) claims nothing. */}
+        {driveRollback === 'archived' && (
+          <Typography level="body-xs" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
+            The new {DATA_LAKE} was rolled back - nothing was added to your list.
+          </Typography>
+        )}
+        {driveRollback === 'failed' && (
+          <Typography level="body-xs" color="warning" textAlign="center" sx={{ maxWidth: 420 }}>
+            {rollbackFailedSentence}
+          </Typography>
+        )}
         <Button variant="outlined" color="neutral" onClick={onBack}>
           Back to Configuration
         </Button>
@@ -204,6 +217,7 @@ export default function UploadStep() {
         <DriveOnlyCommitStatus
           status={progress.status}
           errorMessage={progress.errorMessage}
+          driveRollback={progress.driveRollback}
           folderLabel={driveFolderLabel}
           onDone={resetWizard}
           onBack={() => setStep('config')}
