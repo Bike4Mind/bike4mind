@@ -136,6 +136,11 @@ export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdata
   keyof UpdateDataLakeRequestInputType
 >;
 
+/**
+ * `purging` is deliberately absent from `status`. It is transitional and past the point of no
+ * return, so a lake in it is on its way out and is never something a caller should filter for.
+ * Keep it out if this schema is ever wired to a route. Full set: `DataLakeStatus`.
+ */
 export const DataLakeListRequestInput = z.object({
   organizationId: z.string().optional(),
   status: z.enum(['draft', 'active', 'archived', 'deleted']).optional(),
