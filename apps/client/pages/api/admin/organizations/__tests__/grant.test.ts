@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import dayjs from 'dayjs';
 import { ApiKeyScope } from '@bike4mind/common';
 
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
@@ -28,11 +27,6 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@server/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
-
-vi.mock('@bike4mind/common', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
-  return { ...actual, dayjs };
-});
 
 const mockOrgCreate = vi.fn();
 vi.mock('@bike4mind/services', () => ({
