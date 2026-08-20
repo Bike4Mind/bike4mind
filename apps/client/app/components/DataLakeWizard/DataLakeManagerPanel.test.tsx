@@ -17,8 +17,8 @@ const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 // Stable spy (not the shared `mutation` stub, which mints a fresh vi.fn per call) so the tests
 // below can assert WHAT the convergence action sent - specifically that `confirm: true` only ever
 // leaves the dialog.
-const convergeMutate = vi.fn(
-  (_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.()
+const convergeMutate = vi.fn((_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) =>
+  opts?.onSuccess?.()
 );
 // Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
 // empty-section rendering.

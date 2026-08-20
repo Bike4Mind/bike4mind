@@ -721,7 +721,6 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
   });
 });
 
-
 // An EXPLICIT target is the sole trigger for convergence (isConvergeablePolicy), so without a
 // control for it the whole feature is unreachable from the app - which is how it shipped to QA.
 describe('DataLakeSettingsModal - required passage size', () => {

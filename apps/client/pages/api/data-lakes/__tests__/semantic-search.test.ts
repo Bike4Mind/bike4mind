@@ -81,9 +81,8 @@ vi.mock('@bike4mind/services', async () => ({
     describeSearchLimitations: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
     ).describeSearchLimitations,
-    isPartialSearch: (
-      await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
-    ).isPartialSearch,
+    isPartialSearch: (await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable'))
+      .isPartialSearch,
     emptyEmbeddingMismatchReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,

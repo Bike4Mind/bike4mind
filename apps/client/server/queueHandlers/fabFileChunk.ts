@@ -17,11 +17,7 @@ import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fa
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
-import {
-  dispatchWithLogger,
-  MARK_PAUSED_MAX_ATTEMPTS,
-  MARK_PAUSED_RETRY_DELAY_MS,
-} from '@server/queueHandlers/utils';
+import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   isBatchComplete,
