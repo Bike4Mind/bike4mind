@@ -3033,7 +3033,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
-        surfaces: ['forced-retrieval'],
+        surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
     });
@@ -3047,7 +3047,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
-        surfaces: ['forced-retrieval'],
+        surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
     });
@@ -3063,7 +3063,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
-        surfaces: ['forced-retrieval'],
+        surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
     });
@@ -3084,7 +3084,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'no_lakes',
-        surfaces: ['forced-retrieval'],
+        surfaces: ['lake-memory'],
         dataLakeTags: [],
       });
     });

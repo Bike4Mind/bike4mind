@@ -315,11 +315,21 @@ export const CitableSourceSchema = z.object({
  * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
  * where retrieval never ran at all.
  *
- * Deliberately holds NO counts and NO identifiers. Counts already exist and are more precise:
- * `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
- * `applyQuestStatusChanges`, while this shape (identifier-free by design, so it never needs
- * redaction) cannot dedupe and would have to sum - producing a second, disagreeing number for the
- * same question. Similarity scores live on `LakeAccessEvent`, not here.
+ * Deliberately holds NO counts and NO chunk/document identifiers. Counts already exist and are
+ * more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * `applyQuestStatusChanges`, while this shape cannot dedupe (no identifiers to dedupe by) and
+ * would have to sum - producing a second, disagreeing number for the same question. Similarity
+ * scores live on `LakeAccessEvent`, not here.
+ *
+ * CAUTION, not a guarantee: the absence of chunk/document identifiers is what keeps this shape
+ * OUT of `promptMetaRedaction.ts`'s scope (that helper is a functionCalls-only denylist and would
+ * not catch a nested nonidentifier field like `dataLakeTags` regardless). It does NOT mean this
+ * field never needs redaction consideration - `dataLakeTags` (which lakes were involved) already
+ * reaches non-owner viewers the same way `lakeMemory.dataLakeTags` does (session shares, feedback
+ * egress, admin logs, session clone - see redactedFeedback.ts, admin/model-logs.ts, clone.ts, none
+ * of which touch this field). That exposure is not new in the general case, but it IS new
+ * specifically on a zero-recall turn: `lakeMemory` was never written there before this field
+ * existed, so a turn that previously carried no lake-identity signal at all now carries one.
  *
  * `attempted`/`outcome` on their own would still be ambiguous about WHICH lakes were searched on a
  * zero-recall turn (dataLakeTags otherwise lives only inside `lakeMemory`, written after the
@@ -337,7 +347,7 @@ export const RetrievalSummarySchema = z.object({
    * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
    * 'failed' - threw; recall did not complete.
    * On multiple retrieval calls within one turn, merge priority is failed > no_lakes > ok (see
-   * ToolBuilder.ts mergeRetrievalSummary), so a single failure is never masked by a later success.
+   * retrievalSummaryMerge.ts's mergeRetrievalSummary), so a single failure is never masked by a later success.
    */
   outcome: z.enum(['ok', 'no_lakes', 'failed']),
   /** Which retrieval-capable surface(s) ran this turn, e.g. 'forced-retrieval', 'knowledgeBaseSearch'. */

@@ -1816,6 +1816,23 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       dataLakeTags: ['datalake:x'],
     });
   });
+
+  it('records outcome:failed when the search throws, instead of leaving retrieval byte-identical to never-attempted', async () => {
+    getDynamicDataLakeAccessMock.mockRejectedValue(new Error('lake access resolution down'));
+    const ctx = makeContext();
+
+    const out = await run(ctx);
+
+    expect(out).toContain('An error occurred while searching your knowledge base');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
 });
 
 describe('search_knowledge_base max_results clamp (#1757)', () => {

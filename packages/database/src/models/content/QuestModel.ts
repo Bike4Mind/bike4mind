@@ -49,7 +49,9 @@ const LakeMemorySchema = subSchema({
 // one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
 const RetrievalSummarySchema = subSchema({
   attempted: { type: Boolean, required: true },
-  outcome: { type: String, enum: ['ok', 'no_lakes', 'failed'], required: true },
+  // No enum -- see the file header on why this schema's job is to not lose the value, not
+  // to validate it. Zod (RetrievalSummarySchema, promptMeta.ts) remains the contract.
+  outcome: { type: String, required: true },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
 });

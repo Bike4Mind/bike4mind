@@ -517,6 +517,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           return prependRetrievedLakePrompts(context, result, datalakeTags, injectedLakeTags);
         } catch (error) {
           context.logger.error('❌ Knowledge Retrieve: Error during retrieval:', error);
+          // A retrieval that threw must not be byte-identical to one never attempted (#1867).
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'An error occurred while retrieving document content. Please try again.';
         }
       },

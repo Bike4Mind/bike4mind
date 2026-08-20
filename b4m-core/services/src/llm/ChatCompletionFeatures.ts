@@ -676,7 +676,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
-        surfaces: ['forced-retrieval'],
+        surfaces: ['lake-memory'],
         dataLakeTags,
       });
     };

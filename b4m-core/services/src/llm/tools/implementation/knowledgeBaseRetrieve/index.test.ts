@@ -637,6 +637,23 @@ describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
       dataLakeTags: [],
     });
   });
+
+  it('records outcome:failed when retrieval throws, instead of leaving retrieval byte-identical to never-attempted', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('An error occurred while retrieving document content');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
 });
 
 /**

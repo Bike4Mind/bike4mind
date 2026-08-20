@@ -2545,7 +2545,10 @@ async function processExecution(
       const userFacingMessage = toUserFacingFailureMessage(errorMessage);
       await sendWs('failed', { executionId, reason: 'error', message: userFacingMessage });
       // Persist the failed run in chat history so the user still sees their
-      // prompt after refresh, with the (sanitized) reason as the reply.
+      // prompt after refresh, with the (sanitized) reason as the reply. Pre-existing 3-arg call
+      // (matches origin/main): generatedImages/finishReason/allSideEffects/retrievalSummary are
+      // all omitted here already, not something this PR changed - a hard-error path deliberately
+      // does not claim partial content or partial retrieval signal alongside the failure.
       await persistRunAsQuest(executionId, `${userFacingMessage}.`, logger);
     } catch (cleanupErr) {
       logger.error('[Error] Failed to update execution status on error', {

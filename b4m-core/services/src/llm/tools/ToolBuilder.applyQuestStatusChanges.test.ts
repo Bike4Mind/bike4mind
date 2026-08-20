@@ -114,7 +114,7 @@ describe('applyQuestStatusChanges', () => {
     it('merges a tool-arm write onto an existing forced-arm value instead of clobbering it', () => {
       const quest = makeQuest({
         promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['forced-retrieval'], dataLakeTags: ['lake-a'] },
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['lake-a'] },
         },
       } as Partial<IChatHistoryItemDocument>);
       applyQuestStatusChanges(quest, {
@@ -125,7 +125,7 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
-        surfaces: ['forced-retrieval', 'knowledgeBaseSearch'],
+        surfaces: ['lake-memory', 'knowledgeBaseSearch'],
         dataLakeTags: ['lake-a', 'lake-b'],
       });
     });
@@ -133,7 +133,7 @@ describe('applyQuestStatusChanges', () => {
     it('never lets a later ok mask an earlier failure within the same turn', () => {
       const quest = makeQuest({
         promptMeta: {
-          retrieval: { attempted: true, outcome: 'failed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
+          retrieval: { attempted: true, outcome: 'failed', surfaces: ['lake-memory'], dataLakeTags: [] },
         },
       } as Partial<IChatHistoryItemDocument>);
       applyQuestStatusChanges(quest, {
@@ -144,25 +144,44 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     });
 
-    it('dedupes surfaces and dataLakeTags on repeated calls', () => {
+    it('dedupes the union of surfaces/dataLakeTags rather than replacing with the incoming value', () => {
+      // Partially overlapping, not identical, on both sides: an incoming write that shares ONE
+      // entry with the existing state and adds ONE new entry can only produce the full union
+      // (both old and new) via a real merge. A wholesale overwrite would drop 'lake-memory' and
+      // 'lake-a' entirely, since neither appears in the incoming payload - so this distinguishes
+      // dedup-merge from overwrite, which a repeated-identical-call test cannot (#1867 review).
       const quest = makeQuest({
         promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+          retrieval: {
+            attempted: true,
+            outcome: 'ok',
+            surfaces: ['knowledgeBaseSearch', 'lake-memory'],
+            dataLakeTags: ['lake-a'],
+          },
         },
       } as Partial<IChatHistoryItemDocument>);
       applyQuestStatusChanges(quest, {
         promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+          retrieval: {
+            attempted: true,
+            outcome: 'ok',
+            surfaces: ['knowledgeBaseSearch', 'knowledgeBaseRetrieve'],
+            dataLakeTags: ['lake-a', 'lake-b'],
+          },
         },
       } as Partial<IChatHistoryItemDocument>);
-      expect(quest.promptMeta?.retrieval?.surfaces).toEqual(['knowledgeBaseSearch']);
-      expect(quest.promptMeta?.retrieval?.dataLakeTags).toEqual(['lake-a']);
+      expect(quest.promptMeta?.retrieval?.surfaces).toEqual([
+        'knowledgeBaseSearch',
+        'lake-memory',
+        'knowledgeBaseRetrieve',
+      ]);
+      expect(quest.promptMeta?.retrieval?.dataLakeTags).toEqual(['lake-a', 'lake-b']);
     });
 
     it('does not erase an existing retrieval value when the change set carries none', () => {
       const quest = makeQuest({
         promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['forced-retrieval'], dataLakeTags: ['lake-a'] },
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['lake-a'] },
         },
       } as Partial<IChatHistoryItemDocument>);
       applyQuestStatusChanges(quest, {
@@ -171,7 +190,7 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
-        surfaces: ['forced-retrieval'],
+        surfaces: ['lake-memory'],
         dataLakeTags: ['lake-a'],
       });
     });

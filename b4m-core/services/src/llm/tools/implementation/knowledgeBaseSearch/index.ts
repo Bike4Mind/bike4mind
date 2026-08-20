@@ -1031,6 +1031,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           );
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
+          // A retrieval that threw must not be byte-identical to one never attempted (#1867).
+          // dataLakeTags is empty here - the error can occur before any arm resolves which lakes
+          // were in scope, so there is nothing honest to stamp at this outer catch.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return 'An error occurred while searching your knowledge base. Please try again.';
         }
       },
