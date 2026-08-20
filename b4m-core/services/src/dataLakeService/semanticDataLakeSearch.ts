@@ -997,6 +997,10 @@ export async function semanticDataLakeSearch(
         chunkCount: f.chunkCount,
         error: f.error,
         notes: f.notes,
+        // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
+        // ranking map below still names it) is exactly the omission this comment warns about, and it
+        // fails silently - the member reads as an image and is served.
+        chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
       },
     ])
   );
@@ -1090,6 +1094,10 @@ export async function fileScopedSemanticSearch(
         chunkCount: f.chunkCount,
         error: f.error,
         notes: f.notes,
+        // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
+        // ranking map below still names it) is exactly the omission this comment warns about, and it
+        // fails silently - the member reads as an image and is served.
+        chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
       },
     ])
   );
