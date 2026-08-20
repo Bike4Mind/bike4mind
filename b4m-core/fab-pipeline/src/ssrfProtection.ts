@@ -114,9 +114,8 @@ function stripIpv6Brackets(hostname: string): string {
  * This cannot over-block: dropping leading zeros only shortens hextets below 0x1000, and every
  * globally routable address is inside 2000::/3 (first hextet 0x2000-0x3fff), which never carries one.
  * Input that does not parse as IPv6 is returned untouched, so it keeps whatever verdict it has today -
- * which is also why the redundant zero-padded arms further down (`2001:0db8:`, `2001:0000:`, `0064:ff9b:`,
- * `0100::`)
- * are left in place rather than deleted.
+ * which is also why the redundant zero-padded arms further down (`2001:0db8:`, `2001:0000:`,
+ * `0064:ff9b:`, `0100::`) are left in place rather than deleted.
  */
 function normalizeIpv6(ip: string): string {
   // A bracketed literal may carry a port (`[fe80::1]:8080`), which `stripIpv6Brackets` leaves alone
@@ -182,29 +181,42 @@ function isPrivateIPv6(ip: string): boolean {
   // without this gate `fetch.example.com` matches the fe00::/8 arm, and `ffmpeg.org` / `fdic.gov` match
   // multicast and ULA. A colon alone is not enough - `fedex.com:8080` has one - so the charset has to
   // hold too: an IPv6 literal is only hex digits, colons, and an optional dotted tail. Names whose every
-  // character happens to be hex still slip past this and are refused when they share a family prefix -
-  // `fed.cafe:80` returns true, while `face.cafe:80` matches no family and returns false. That is the safe
-  // direction, and the reason the arms are not the place to fix it.
+  // character happens to be hex still slip past this gate - `fed.cafe:80`, `face.cafe:80` - and are then
+  // refused below, either by sharing a family prefix or by the dotted-quad-shape arm. Refusing a name is
+  // the safe direction; judging one is `isPrivateOrInternalHostname`'s job, not this predicate's.
   // Callers that need name-based blocking use `isPrivateOrInternalHostname`, which does its own name
   // checks before dispatching here.
   if (!normalized.includes(':')) return false;
 
-  // A leftover `[`, `]` or `%` means the literal was spelled in a shape the strip above does not recognise
-  // - `[fe80::1]:8080:9090`, `[fe80::1]:`, `[fe80::1`, `fe80::1]`. REFUSE those rather than letting the
+  // A leftover `[` or `]` means the literal was spelled in a shape the strip above does not recognise -
+  // `[fe80::1]:8080:9090`, `[fe80::1]:`, `[fe80::1`, `fe80::1]`. REFUSE those rather than letting the
   // charset gate below drop them: `fe80::1]` was refused before that gate existed, so permitting it would
-  // be a loosening, and an address-shaped string we cannot parse is exactly what this guard should not
-  // wave through. A name carrying `%` and a colon is refused too; that is the safe direction for a string
-  // that is not a hostname in any normal spelling.
-  if (/[[\]%]/.test(normalized)) return true;
+  // be a loosening, and an address-shaped string we cannot parse is exactly what this guard should not wave
+  // through. `%` is deliberately NOT tested here - `normalizeIpv6` strips a zone index on every path, so it
+  // can never reach this line; the zone case is handled in `isPrivateIP` instead, where an IPv4 literal
+  // carrying one also needs it.
+  if (/[[\]]/.test(normalized)) return true;
 
   if (!/^[0-9a-f:.]+$/.test(normalized)) return false;
 
-  // A dotted quad is legal ONLY as the last two hextets. Anywhere else it is not IPv6 in any spelling -
-  // `127.0.0.1::`, `169.254.169.254::`, `0:1.2.3.4::` - and `normalizeIpv6` hands those back untouched, so
-  // without this arm they fall past every family test and read as public. That included the cloud metadata
-  // endpoint and RFC1918 space. Refuse the shape instead of trying to decode it; a caller with a real
-  // address has a spelling this module already accepts.
-  if (normalized.includes('.') && !/:\d+\.\d+\.\d+\.\d+$/.test(normalized)) return true;
+  // A dotted quad may appear in exactly two canonical shapes - `::ffff:a.b.c.d` (mapped) and `::a.b.c.d`
+  // (compatible). Anything else carrying a dot is malformed or misplaced, `normalizeIpv6` hands it back
+  // untouched, and it then falls past every family test and reads as public: that covered
+  // `169.254.169.254::`, `0:1.2.3.4::`, `169.254.169.254:1.2.3.4` (the metadata endpoint again, with a
+  // second quad appended instead of `::`), `dead:beef:1.2.3.4` and `a:b:c:d:e:f:127.0.0.1` (`000a::`,
+  // inside reserved `0000::/8`).
+  //
+  // Matching the WHOLE string is what makes this hold. An end-anchored test alone (`/:quad$/`) proves the
+  // string ends in a quad, never that it contains only one, which is how the metadata endpoint walked back
+  // in after the first version of this arm.
+  //
+  // Two consequences, both deliberate and both the safe direction. A name carrying a dot and a colon
+  // (`face.cafe:80`) is refused rather than judged - it is not an address, and `isPrivateOrInternalHostname`
+  // is where names belong. And an UNBRACKETED `ipv6:port` (`::ffff:8.8.8.8:443`) is refused while the
+  // bracketed spelling `[::ffff:8.8.8.8]:443` resolves to public, because only the bracketed form has an
+  // unambiguous port to strip. That pair is the one place the spelling-invariance property in the test file
+  // does not hold, and it is excluded there by name.
+  if (normalized.includes('.') && !/^::(ffff:)?\d+\.\d+\.\d+\.\d+$/.test(normalized)) return true;
 
   // ::1 - Loopback, and :: - unspecified. The written-out spellings cannot match any more: a string
   // equal to one of them is well-formed, so `normalizeIpv6` compresses it to `::1` / `::` first. They
@@ -222,6 +234,13 @@ function isPrivateIPv6(ip: string): boolean {
   // ranges slip through in turn: it originally stopped at `feb` (fe80::/10 ends at febf), leaving
   // fec0-feff open, and adding `fec`-`fef` still left fe00-fe7f open. `fe80::/10` reads as covered
   // while its neighbours quietly are not.
+  //
+  // Know the amplification before reaching for this shape on another prefix, because this is the widest
+  // ban in the file: `validateUrlForFetch` refuses a hostname when ANY resolved IP is private, so a single
+  // AAAA record inside a banned prefix takes that host's healthy A record down with it. It is acceptable
+  // here for a structural reason rather than an empirical one - global unicast is 2000::/3, so nothing
+  // under `fe` is routable and no live traffic can be refused. On a prefix that still sees traffic, "refuse
+  // the whole /8, it costs nothing" would NOT hold; see the same warning on the `2002:` arm below.
   if (normalized.startsWith('fe')) return true;
 
   // fc00::/7 - Unique local addresses (ULA) - includes fc00::/8 and fd00::/8
@@ -275,10 +294,11 @@ function isPrivateIPv6(ip: string): boolean {
   // 0000::/16 - the rest of the reserved low space, reached when canonicalisation moves the zero run.
   // RFC 5952 compresses the LONGEST run, not the leading one, so `::1:0:0:0:0:0` canonicalises to
   // `0:0:1::` and no longer starts with `::` - it would fall past the branch above that exists to
-  // refuse exactly this space. A zero first hextet is inside 0000::/16, which RFC 4291 reserves, and
-  // global unicast is 2000::/3, so no routable address reaches this line. Note what this arm does NOT
-  // decide: the two branches above run first and own every `::`-leading form, including the mapped one -
-  // this catches only what canonicalisation moved out of their reach.
+  // refuse exactly this space. Read the scope before the reasoning: the two branches above run first and
+  // own every `::`-leading form, so most of 0000::/16 never reaches this line at all - `::40.0.0.0` is
+  // inside the range this arm names but is decoded to a public v4 above. What is left for this arm is only
+  // what canonicalisation moved out of their reach, and for that remainder a zero first hextet means
+  // 0000::/16, which RFC 4291 reserves, while global unicast is 2000::/3 - so nothing routable lands here.
   if (normalized.startsWith('0:')) return true;
 
   // The zero-padded alternates in the four arms below (`2001:0db8:`, `2001:0000:`, `0064:ff9b:`,
@@ -354,27 +374,39 @@ function isPrivateIPv6(ip: string): boolean {
 }
 
 /**
+ * Strip what belongs to the interface or the transport rather than to the address: a zone index
+ * (`fe80::1%eth0`) and, for an IPv4 literal, a trailing port (`8.8.8.8:443`).
+ *
+ * MUST be shared by every exported entry point. `isPrivateIP` and `isPrivateOrInternalHostname` each carry
+ * their own family gate, and the comment on those gates says why they are kept identical: three gates
+ * disagreeing about what counts as IPv4 is how the bracketed-IPv6 hole happened. Stripping in one of them
+ * only reproduced exactly that - `8.8.8.8:443` came back public from one export and private from the other,
+ * because the second missed its IPv4 branch and was then caught by the misplaced-quad arm.
+ *
+ * Only a DOTTED port is stripped. An unbracketed `ipv6:port` is genuinely ambiguous - a bare IPv6 address is
+ * mostly colons - so it stays refused, and the bracketed spelling is what `normalizeIpv6` handles.
+ */
+function stripZoneAndIpv4Port(host: string): string {
+  const zoneless = host.replace(/%.*$/, '');
+  return zoneless.match(/^((?:\d+\.){3}\d+):\d+$/)?.[1] ?? zoneless;
+}
+
+/**
  * Check if an IP address (IPv4 or IPv6) is in a private/internal range.
  */
 export function isPrivateIP(ip: string): boolean {
+  const address = stripZoneAndIpv4Port(ip);
+
   // Check if it's IPv4. Deliberately `\d+` rather than `\d{1,3}`: a non-canonical octet like the
   // `0177` in `0177.0.0.1` is four digits, so a `\d{1,3}` gate here would route an ambiguous IPv4
   // literal into the IPv6 branch, which returns false for it. `isPrivateIPv4` is what decides whether
   // the form is acceptable; this only decides which family to hand it to.
-  if (/^(\d+\.){3}\d+$/.test(ip)) {
-    return isPrivateIPv4(ip);
-  }
-
-  // An IPv4 literal carrying a port is still IPv4. Without this it falls into the IPv6 branch, where the
-  // dotted-quad-placement arm refuses anything whose quad is not in the tail - which would over-block
-  // `8.8.8.8:443`. Judge the address and ignore the port.
-  const ipv4WithPort = ip.match(/^((?:\d+\.){3}\d+):\d+$/);
-  if (ipv4WithPort) {
-    return isPrivateIPv4(ipv4WithPort[1]);
+  if (/^(\d+\.){3}\d+$/.test(address)) {
+    return isPrivateIPv4(address);
   }
 
   // Assume IPv6
-  return isPrivateIPv6(ip);
+  return isPrivateIPv6(address);
 }
 
 /**
@@ -383,8 +415,10 @@ export function isPrivateIP(ip: string): boolean {
  */
 export function isPrivateOrInternalHostname(hostname: string): boolean {
   // Brackets stripped FIRST: every comparison below is against an unbracketed form, so `[::1]` used
-  // to match none of them and be reported as safe.
-  const normalized = stripIpv6Brackets(hostname);
+  // to match none of them and be reported as safe. Zone index and IPv4 port come off through the SAME
+  // helper `isPrivateIP` uses - this export's documented job is checking a hostname, and a raw `Host:`
+  // header carries `:port`, so the two must not disagree about `8.8.8.8:443`.
+  const normalized = stripZoneAndIpv4Port(stripIpv6Brackets(hostname));
 
   // Block localhost variations
   if (
