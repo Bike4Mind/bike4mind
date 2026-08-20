@@ -1833,6 +1833,115 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       dataLakeTags: [],
     });
   });
+
+  it('records outcome:failed when the fabfiles repository is not available at all (#1971 review)', async () => {
+    const ctx = makeContext({ db: {} as never });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('not available at this time');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:no_lakes when the agent kbScope is empty (#1971 review)', async () => {
+    const ctx = makeContext({ kbScope: { fileIds: [] } });
+
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'no_lakes',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed from the semantic arm even though the keyword arm succeeds right after (#1971 review)', async () => {
+    // This tool call emits TWO raw statusUpdate writes here (the semantic catch's 'failed', then
+    // the keyword arm's own 'ok' on its hit) - this test only proves the 'failed' write happens
+    // at all, which previously it did not. Whether the merged QUEST STATE survives as 'failed'
+    // despite the later 'ok' is mergeRetrievalSummary's job and is covered independently in
+    // ToolBuilder.applyQuestStatusChanges.test.ts's outcome-priority tests.
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'k', fileName: 'Keyword doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('Keyword doc.pdf');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievals = calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+    expect(retrievals).toContainEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed from the scoped semantic arm even though the scoped keyword arm succeeds right after (#1971 review)', async () => {
+    fileScopedSemanticSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      kbScope: { fileIds: ['a'] },
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'a', fileName: 'Scoped doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('Scoped doc.pdf');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievals = calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+    expect(retrievals).toContainEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
 });
 
 describe('search_knowledge_base max_results clamp (#1757)', () => {

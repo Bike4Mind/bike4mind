@@ -467,7 +467,16 @@ async function trySemanticKbSearch(
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
-    // A genuine failure must not fabricate a notice.
+    // A genuine failure must not fabricate a notice. It also must not go unrecorded: the
+    // keyword arm below runs next and, on a hit, would otherwise be the only write this turn,
+    // stamping outcome:'ok' over a search that actually threw. Recording 'failed' here relies on
+    // mergeRetrievalSummary's worst-of-severity merge (failed always outranks ok) to survive that
+    // later write (#1867 review).
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+      },
+    } as any);
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -534,6 +543,13 @@ async function tryScopedSemanticKbSearch(
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
+    // See the matching catch in trySemanticKbSearch above: relies on mergeRetrievalSummary's
+    // worst-of-severity merge to survive the scoped keyword arm's later 'ok' write.
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+      },
+    } as any);
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -727,6 +743,13 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Base Search: fabfiles repository not available');
+          // Both the semantic and keyword arms below depend on context.db.fabfiles - with it
+          // absent, nothing can be searched, so this is a genuine failure, not an abstain.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base search is not available at this time.';
         }
 
@@ -737,6 +760,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
           // empty-scope agent surface must read as a pure "nothing in scope" early return, not
           // acquire new behavior tied to a signal this surface was never designed to receive.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return formatSearchResults([]);
         }
 

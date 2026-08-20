@@ -144,6 +144,37 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     });
 
+    it('never lets an abstain (no_lakes) on one surface mask a real success on another (#1971 review)', () => {
+      // lake-memory abstains (no lakes in scope for that surface) while knowledgeBaseSearch
+      // independently succeeds in the same turn -- the merged outcome must be 'ok', not
+      // 'no_lakes', since the turn genuinely retrieved and grounded its answer.
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['lake-memory'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
+    });
+
+    it('still lets a failure mask an earlier no_lakes abstain', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['lake-memory'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    });
+
     it('dedupes the union of surfaces/dataLakeTags rather than replacing with the incoming value', () => {
       // Partially overlapping, not identical, on both sides: an incoming write that shares ONE
       // entry with the existing state and adds ONE new entry can only produce the full union

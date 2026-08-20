@@ -2,10 +2,15 @@ import type { PromptMeta } from '@bike4mind/common';
 
 export type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
 
+// 'ok' outranks 'no_lakes': a turn where one surface abstained (no lakes in scope) while another
+// surface actually retrieved successfully is reachable (e.g. LakeMemoryFeature abstains but
+// search_knowledge_base succeeds independently), and the merged outcome must reflect the success,
+// not the abstain. 'failed' still outranks both -- a genuine failure on any surface is never
+// masked by a success or an abstain elsewhere in the same turn.
 const OUTCOME_SEVERITY: Record<RetrievalSummary['outcome'], number> = {
   failed: 2,
-  no_lakes: 1,
-  ok: 0,
+  ok: 1,
+  no_lakes: 0,
 };
 
 /**
@@ -18,8 +23,9 @@ const OUTCOME_SEVERITY: Record<RetrievalSummary['outcome'], number> = {
  * and llm-adapters purely for this function.
  *
  * - attempted: OR - once any surface attempted retrieval this turn, it stays true.
- * - outcome: worst-of by severity (failed > no_lakes > ok), so a single failure within a turn is
- *   never masked by a later success.
+ * - outcome: worst-of by severity (failed > ok > no_lakes), so a single failure within a turn is
+ *   never masked by a later success or abstain, and a real success is never masked by an abstain
+ *   from a different surface in the same turn.
  * - surfaces / dataLakeTags: union, deduped.
  */
 export function mergeRetrievalSummary(

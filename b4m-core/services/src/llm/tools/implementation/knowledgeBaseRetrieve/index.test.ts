@@ -654,6 +654,44 @@ describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
       dataLakeTags: [],
     });
   });
+
+  it('records outcome:no_lakes when the agent kbScope is empty (#1971 review)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [] } });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'anything' })) as string;
+
+    expect(out).toContain('No documents found matching your request');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'no_lakes',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when Path B (tag/query search) runs to completion and matches no documents (#1971 review)', async () => {
+    // Distinct from and broader than the retrievedFiles.length===0 case above: this is Path B's
+    // OWN zero case (the search itself matched nothing), not a matched-file-with-no-stored-text
+    // case - previously silent.
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'nothing matches this' })) as string;
+
+    expect(out).toContain('No documents found matching');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
 });
 
 /**

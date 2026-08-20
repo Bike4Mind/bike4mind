@@ -101,6 +101,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         const notFoundMsg = (id: string) =>
           `No document found with ID "${id}". The file may not exist or you may not have access to it. Try using search_knowledge_base to find the correct file ID.`;
         if (scope && scope.fileIds.length === 0) {
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: {
+                attempted: true,
+                outcome: 'no_lakes',
+                surfaces: ['knowledgeBaseRetrieve'],
+                dataLakeTags: [],
+              },
+            },
+          } as any);
           return file_id ? notFoundMsg(file_id) : 'No documents found matching your request in your knowledge base.';
         }
 
@@ -230,6 +240,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const inlinedNote = inlinedCount
                 ? ` ${inlinedCount} file(s) attached to this conversation may not be indexed for search yet - if so, their content was already included directly in the conversation above; answer from that instead of reporting them as inaccessible.`
                 : '';
+              // Ran to completion (the search itself succeeded) and legitimately found no
+              // matching documents - must be distinguishable from "never asked" (#1867 review).
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+                },
+              } as any);
               return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
