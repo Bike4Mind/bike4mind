@@ -12,7 +12,7 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
-import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
+import { DefaultLLMParams, isValidEnumValue, KnowledgeType } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 import type { IChatHistoryItem } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
@@ -489,6 +489,9 @@ export class NotebookImportService {
 
     for (const tool of tools) {
       try {
+        // No `workBenchFiles`: it holds whole knowledge-file documents, which would need remapping
+        // onto the files this import creates under new ids. Mongoose defaults it to [].
+        // `description`/`configuration`/`metadata` are not ToolSchema paths and are dropped.
         const toolData = {
           userId: targetUserId,
           name: tool.name,
@@ -496,6 +499,10 @@ export class NotebookImportService {
           configuration: tool.configuration,
           createdAt: new Date(tool.createdAt),
           metadata: tool.metadata,
+          // ToolSchema requires llmParams and no export carries one, so an imported tool takes the
+          // app's declared defaults. Not `{}`: that would apply the schema's own defaults, which
+          // still name gpt-3.5-turbo.
+          llmParams: DefaultLLMParams,
         };
 
         importedIds.push(this.takeStoreId(await this.adapters.toolRepository.create(toolData), 'tool'));

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { DefaultLLMParams } from '@bike4mind/common';
 import { NotebookImportService } from './index';
 import type { NotebookImportAdapters } from './index';
 
@@ -190,6 +191,11 @@ describe('an attachment store that returns no id is not recorded', () => {
         ...OPTIONS,
         importTools: true,
       } as never
+    );
+
+    // ToolSchema requires llmParams; without it every tool write was rejected and swallowed.
+    expect(adapters.toolRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ llmParams: DefaultLLMParams })
     );
 
     const sessionData = (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
