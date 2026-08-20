@@ -61,6 +61,7 @@ import {
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
+import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
@@ -1526,6 +1527,13 @@ interface ForcedRetrievalCoverage {
   moreFilesBeyondCap: boolean;
   /** Files withheld before the chunk load because they were embedded with a different model. */
   filesExcludedForeignModel: number;
+  /**
+   * Files withheld because their (re)indexing has not settled (#1681 constraint 1). Their old
+   * passages are already deleted and the new ones carry no vector, so they cannot contribute -
+   * the only choice is whether the turn SAYS so, and silence here is the confident-wrong-answer
+   * failure mode this whole feature exists to prevent.
+   */
+  filesWithheldReindexing: number;
   chunksScanned: number;
   chunksSkippedDimMismatch: number;
   filesWithDimMismatch: number;
@@ -1558,9 +1566,9 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
  * and citation-index construction - it is NOT routed through semanticDataLakeSearch.
  *
  * Coverage is bounded and self-reporting: the candidate-file cap, the per-turn chunk budget, any
- * excluded foreign-model files, and any dimension mismatches are surfaced via reportCoverage (log
- * + promptMeta) and hedged to the model, because "cited answer over a silently partial library" is
- * the failure mode that matters most here. Keyed purely on the session
+ * excluded foreign-model files, any files withheld mid-(re)index, and any dimension mismatches are
+ * surfaced via reportCoverage (log + promptMeta) and hedged to the model, because "cited answer over
+ * a silently partial library" is the failure mode that matters most here. Keyed purely on the session
  * flag; no product-specific branching here. When the session sets
  * `citationStyle: 'indexed'`, each distinct source document is numbered in the
  * injected context and the model is instructed to cite by `[N]` only - the
@@ -1634,7 +1642,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     embeddingModel: SupportedEmbeddingModel
   ): boolean {
     const anyMismatch = coverage.chunksSkippedDimMismatch > 0 || coverage.filesExcludedForeignModel > 0;
-    const partial = coverage.moreFilesBeyondCap || coverage.stoppedByChunkBudget || anyMismatch;
+    const partial =
+      coverage.moreFilesBeyondCap ||
+      coverage.stoppedByChunkBudget ||
+      anyMismatch ||
+      coverage.filesWithheldReindexing > 0;
     if (!partial) return false;
 
     const reasons: string[] = [];
@@ -1650,6 +1662,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       reasons.push(
         `${coverage.filesExcludedForeignModel} document(s) are embedded with a different model than the ` +
           `${embeddingModel} query and were excluded entirely`
+      );
+    }
+    if (coverage.filesWithheldReindexing > 0) {
+      // Names TIME as the remedy, matching describeRetrievalUnavailable's wording rule: the reader
+      // must not be sent to re-embed a document that is already re-embedding.
+      reasons.push(
+        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
+          'their previous passages no longer exist and their new ones are not searchable yet; they return on their own'
       );
     }
     if (coverage.chunksSkippedDimMismatch > 0) {
@@ -1849,6 +1869,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
 
+      // Withhold mid-(re)index files up front, on the SAME predicate the search tool and the
+      // semantic-search API apply (#1681 constraint 1). This path does its own candidate scan rather
+      // than routing through semanticDataLakeSearch, so it does not inherit that partition - and it
+      // is the highest-traffic reader of the corpus, running on every turn of a forced-retrieval
+      // session, which is exactly when a convergence wave makes the window common. A member whose
+      // chunks are committed but not yet vectorized contributes nothing either way; the difference
+      // is whether the turn reports it or lets its neighbours be re-ranked into the top-K and
+      // answered from confidently. Removed from the model electorate below too: a file mid-rewrite
+      // has no standing opinion on which embedding space the corpus lives in.
+      const { servable: indexedFiles, withheld: reindexingFiles } = partitionByIndexAvailability(scanOrder);
+
       // 2. Embed the query with the lake's embedding model (must match the chunks').
       //    The model MOST of the corpus declares wins, with unlabeled files voting for the
       //    admin's configured default. Taking the first declaring file instead let one re-vectorized
@@ -1857,7 +1888,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    The electorate is restricted to files that actually have vectors: an unvectorized file
       //    (an image, a failed job) carries no opinion on which embedding space the corpus lives
       //    in, and letting it vote can hand a non-vectorized majority the deciding say.
-      const votingFiles = scanOrder.filter(f => (f.vectorizedChunkCount ?? 0) > 0);
+      const votingFiles = indexedFiles.filter(f => (f.vectorizedChunkCount ?? 0) > 0);
       const declaredModels = new Set(votingFiles.map(f => f.embeddingModel).filter(Boolean));
       if (declaredModels.size > 1) {
         this.logger.warn(
@@ -1867,7 +1898,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       const fallbackModel = await this.resolveEmbeddingModelFallback(embeddingFactory);
       const embeddingModel = resolveMajorityEmbeddingModel(
-        votingFiles.length > 0 ? votingFiles : scanOrder,
+        votingFiles.length > 0 ? votingFiles : indexedFiles,
         fallbackModel
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
@@ -1878,7 +1909,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // which one large re-embedded file sorting early could otherwise exhaust on its own,
       // reporting a budget cap when the real cause was the mismatch.
       const { rankable: scanCandidates, foreign: excludedForeignFiles } = partitionFilesByEmbeddingModel(
-        scanOrder,
+        indexedFiles,
         embeddingModel
       );
 
@@ -1893,6 +1924,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // session. `hasMore` is the only honest "the cap cut something off" signal here.
         moreFilesBeyondCap: fileResults.hasMore === true,
         filesExcludedForeignModel: excludedForeignFiles.length,
+        filesWithheldReindexing: reindexingFiles.length,
         chunksScanned: 0,
         chunksSkippedDimMismatch: 0,
         filesWithDimMismatch: 0,

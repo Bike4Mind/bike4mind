@@ -1,5 +1,6 @@
 import {
   adminSettingsRepository,
+  scopedSettingsRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
@@ -39,6 +40,10 @@ export function buildSlackLakeIngestDeps(args: {
     // shared adapter so BOTH the attachment and link paths are gated - a link path that quietly
     // skipped it would be a tag-write hole, since this PR is what gives that path caller-set tags.
     dataLakes: dataLakeRepository,
+    // Scoped-override store for the admission contract's enforcement lever (#1680); without it the
+    // lever would resolve platform-only and a per-lake enforcement setting would silently do
+    // nothing on the Slack door.
+    scopedSettings: scopedSettingsRepository,
   };
   const storage = {
     upload: async (
@@ -62,6 +67,7 @@ export function buildSlackLakeIngestDeps(args: {
   return {
     dataLakes: dataLakeRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    adminSettings: adminSettingsRepository,
     fabFiles: fabFileRepository,
     downloadFile: args.downloadFile,
     logger: args.logger,

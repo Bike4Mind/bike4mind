@@ -6,6 +6,11 @@ import { z } from 'zod';
 // updateMetadata call - no embedding path is exercised.
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
+  // Declared, not spread from the real module: this mock exists to keep `utils`' import-time
+  // Config/DB wiring out of the test. Any NEW export the handler starts importing has to be added
+  // here too, or it arrives as undefined and the handler misbehaves silently.
+  MARK_PAUSED_MAX_ATTEMPTS: 3,
+  MARK_PAUSED_RETRY_DELAY_MS: 0, // 0 so the backoff does not add real delay to the suite
 }));
 
 const h = vi.hoisted(() => ({
@@ -173,7 +178,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
-    h.fabFileUpdate.mockResolvedValue(undefined); // the flag-write is `.update(...).catch(...)`
+    h.fabFileUpdate.mockResolvedValue(undefined); // the flag-write is retried, then throws (see below)
   });
 
   it('flags the file and skips embedding when a convergence message hits the paused switch', async () => {
@@ -198,6 +203,31 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
     // User work short-circuits before any settings read; the file is never flagged paused.
     expect(h.getSettingsValue).not.toHaveBeenCalled();
     expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+  });
+
+  // The marker is what makes an abandoned chunked-but-unvectorized file ENUMERABLE - the rebuild
+  // door selects on it - so losing the write and acking anyway leaves a file that reports as "still
+  // indexing" forever with no repair offered. QA measured this arm as the dominant one (~33 to 1
+  // against the chunk arm), so it is the one most worth making durable.
+  it('retries the flag-write and acks once it succeeds', async () => {
+    h.getSettingsValue.mockResolvedValue(true);
+    h.fabFileUpdate.mockRejectedValueOnce(new Error('pool timeout')).mockResolvedValueOnce(undefined);
+
+    await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.fabFileUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  // fabFileVectorizeQueue sets `dlq: { retry: 3 }` with a 6-minute visibility timeout and its DLQ is
+  // in DLQ_DESCRIPTORS + dlqRegistry, so this cannot spin - it retries at most three times, then
+  // alarms and is replayable. A redelivery is idempotent: nothing destructive has run, and the
+  // already-vectorized guard upstream means a resumed file is never re-embedded.
+  it('fails the delivery when the flag-write keeps failing, rather than stranding it unenumerable', async () => {
+    h.getSettingsValue.mockResolvedValue(true);
+    h.fabFileUpdate.mockRejectedValue(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).rejects.toThrow('mongo down');
+    // Still no embedding work, which is what makes the redelivery safe.
+    expect(h.getVector).not.toHaveBeenCalled();
   });
 
   it('lets convergence work proceed when the switch is off', async () => {

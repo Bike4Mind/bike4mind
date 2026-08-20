@@ -4,6 +4,7 @@ import {
   IOrganizationRepository,
   IUserShare,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORG_MEMBERSHIP_ACL_PERMISSIONS,
 } from '@bike4mind/common';
 import mongoose, { HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
@@ -19,17 +20,12 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
-// The users[] ACL permission values that constitute org membership. 'write' implies membership
-// even when 'read' was never explicitly granted - the #1674 read-side set (findMembershipOrgIds)
-// already treats it so, and search() must agree or a write-only member can reach an org they
-// cannot find. Consumed only by orgMembershipFilter below, which is what keeps them agreeing.
-//
-// 'write' is deliberately NOT a Permission enum member: adding it broke apps/client typecheck
-// (SkillShareDialog's Record<Permission, string> must be exhaustive) and would widen
-// UserShareableSchema's validator plus the public share/invite contracts. This array exists
-// only to match legacy/out-of-band rows - every app write path persists ['read'], so a
-// write-only row can only come from a raw-driver insert or old data.
-const MEMBER_PERMISSIONS = ['read', 'write'] as const;
+// The users[] ACL permission values that constitute org membership, from the one shared definition
+// (see the constant for why 'write' counts and why it is not a Permission enum member). Consumed
+// here only by orgMembershipFilter below, which is what keeps this file's two call sites agreeing;
+// shared with the engine's derived member counts (assembleLakeAccessView's org holderCount), which
+// must count exactly the members this gate admits.
+const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
 
 /**
  * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.

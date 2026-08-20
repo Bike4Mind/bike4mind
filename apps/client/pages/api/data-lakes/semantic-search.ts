@@ -410,7 +410,10 @@ const handler = baseApi()
 
       if (isAborted()) return res.end();
 
-      const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+      // One seam for every reason a search returned less than the whole corpus (embedding-space
+      // mismatch, and content withheld because it is mid-(re)index), so a third reason added later
+      // reaches this response without another edit here.
+      const warning = dataLakeService.describeSearchLimitations(search);
 
       return res.json({
         results: search.results.map(r => ({
@@ -426,10 +429,21 @@ const handler = baseApi()
         embedding_model: search.embeddingModel,
         latency_ms: Date.now() - t0,
         chunks_scored: search.chunksScored,
-        // The single flag a caller branches on to know the answer is incomplete for EMBEDDING
-        // reasons; scan.truncated is the separate "did we reach everything" signal.
-        partial_results: search.embeddingMismatch.partial,
+        // The single flag a caller branches on to know the answer is incomplete because content was
+        // WITHHELD - either because it could not be compared (embedding space) or because it could
+        // not be served (mid-re-index, #1681). scan.truncated is the separate "did we reach
+        // everything" signal.
+        partial_results: dataLakeService.isPartialSearch(search),
         embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
+        // Flat counts rather than the whole report: a caller needs to know how much is temporarily
+        // unsearchable, and the file names are already in `warning`.
+        retrieval_unavailable: {
+          indexing_files: search.retrievalUnavailable.indexing.count,
+          // Counted apart from `indexing_files` because waiting does not fix these - see the report
+          // type. A caller that adds them together would tell the user to retry and be wrong.
+          paused_files: search.retrievalUnavailable.paused.count,
+          partial: search.retrievalUnavailable.partial,
+        },
         // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
         // healthy search instead of present-and-undefined.
         ...(warning ? { warning } : {}),

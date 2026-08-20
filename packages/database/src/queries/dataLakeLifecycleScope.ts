@@ -54,6 +54,25 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
 }
 
 /**
+ * Conjoins the membership predicate with a caller's own conditions. Use this instead of spreading
+ * `buildDataLakeMembershipFilter` into an object literal whenever those conditions name a top-level
+ * Mongo operator.
+ *
+ * Spreading is a trap: the prefix arm returns a top-level `$or`, so a literal that also names `$or`
+ * SILENTLY DELETES the membership predicate (last key wins in JS) and the query degrades to every
+ * file in the install. That is a cross-lake read on the health and convergence surfaces, and a
+ * convergence wave built from it re-chunks other lakes' documents at this lake's target. There is no
+ * type error and no runtime error - the query just widens. Route it through here and the two can
+ * only ever be ANDed.
+ */
+export function buildDataLakeMembershipQuery(
+  scope: DataLakeMembershipScope,
+  conditions: Record<string, unknown>
+): Record<string, unknown> {
+  return { $and: [buildDataLakeMembershipFilter(scope), conditions] };
+}
+
+/**
  * Datastore mirror of `satisfiesTagPrefix`, NEGATED: matches files carrying no tag that places
  * them under `prefix`. What the backfill migration selects, so it stamps exactly the files the
  * write-door reconciler would have. A parity test asserts the two agree; change them together.

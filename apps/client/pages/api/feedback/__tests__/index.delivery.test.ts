@@ -5,9 +5,10 @@ import { createMocks } from 'node-mocks-http';
  * Each of the four independent delivery gates (EnableFeedBackToSlack, EnableFeedBackToEmail +
  * a non-empty FeedbackReceiveEmail, the webhook-URL configuration, and the deploy-stage routing)
  * must fail or succeed on its own without the submitter being told delivery succeeded when no
- * channel actually fired. The stage-routing gate itself is covered independently in slack.test.ts;
- * this file covers the route's aggregation of postFeedbackToSlack's reported outcome plus the
- * email path, which the route owns directly.
+ * channel actually fired. Slack's stage-routing gate is covered independently in slack.test.ts,
+ * and email's resolver logic in isolation in resolveFeedbackEmailRoute.test.ts; this file covers
+ * the route's aggregation of postFeedbackToSlack's reported outcome plus the email path
+ * end-to-end, including the email channel's own stage-based routing.
  */
 
 const mockRefs = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ const mockSettings = vi.hoisted(() => ({
   EnableFeedBackToSlack: false as boolean,
   EnableFeedBackToEmail: false as boolean,
   FeedbackReceiveEmail: '' as string,
+  FeedbackReceiveEmailNonProd: '' as string,
 }));
 
 vi.mock('@bike4mind/utils', () => ({
@@ -70,8 +72,9 @@ vi.mock('@bike4mind/utils', () => ({
   }),
 }));
 
+const mockConfig = vi.hoisted(() => ({ STAGE: 'production' as string | undefined }));
 vi.mock('@server/utils/config', () => ({
-  Config: { STAGE: 'production' },
+  Config: mockConfig,
   classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 
@@ -116,6 +119,8 @@ describe('POST /api/feedback - delivery outcome', () => {
     mockSettings.EnableFeedBackToSlack = false;
     mockSettings.EnableFeedBackToEmail = false;
     mockSettings.FeedbackReceiveEmail = '';
+    mockSettings.FeedbackReceiveEmailNonProd = '';
+    mockConfig.STAGE = 'production';
     mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'delivered' });
     mockEmailPublish.mockResolvedValue(undefined);
   });
@@ -301,5 +306,46 @@ describe('POST /api/feedback - delivery outcome', () => {
     const body = res._getJSONData();
     expect(body.delivery.channels.email).toEqual({ outcome: 'failed', reason: 'error' });
     expect(body.delivery.delivered).toBe(false);
+  });
+
+  it('sends only to FeedbackReceiveEmail on a production stage', async () => {
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'prod-team@example.com';
+    mockSettings.FeedbackReceiveEmailNonProd = 'staging-team@example.com';
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockEmailPublish).toHaveBeenCalledTimes(1);
+    expect(mockEmailPublish.mock.calls[0][0].to).toBe('prod-team@example.com');
+    const body = res._getJSONData();
+    expect(body.delivery.channels.email).toEqual({ outcome: 'delivered' });
+  });
+
+  it('sends only to FeedbackReceiveEmailNonProd on a non-production stage', async () => {
+    mockConfig.STAGE = 'pr-1234';
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'prod-team@example.com';
+    mockSettings.FeedbackReceiveEmailNonProd = 'staging-team@example.com';
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockEmailPublish).toHaveBeenCalledTimes(1);
+    expect(mockEmailPublish.mock.calls[0][0].to).toBe('staging-team@example.com');
+    const body = res._getJSONData();
+    expect(body.delivery.channels.email).toEqual({ outcome: 'delivered' });
+  });
+
+  it('never falls back to FeedbackReceiveEmail when a non-production stage has no non-prod address set, and logs at warn not error', async () => {
+    mockConfig.STAGE = 'pr-1234';
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'prod-team@example.com';
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockEmailPublish).not.toHaveBeenCalled();
+    const body = res._getJSONData();
+    expect(body.delivery.channels.email).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
+    expect(Logger.warn).toHaveBeenCalled();
+    expect(Logger.error).not.toHaveBeenCalled();
   });
 });
