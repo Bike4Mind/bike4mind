@@ -266,6 +266,54 @@ describe('wafPolicy', () => {
     });
   });
 
+  // A rate limit that matches the raw path is evadable. Verified against staging with
+  // curl --path-as-is: /./api/otc/send and //api/otc/send both reach the API and answer with
+  // application/json, while neither literally starts with "/api/", so a rule matching the
+  // untransformed path never counts them. NORMALIZE_PATH closes that; URL_DECODE does not,
+  // because the percent-encoded form (/%61pi/...) is routed to the SPA shell and never reaches
+  // an endpoint. Limits only - for an Allow or an exemption, an unrecognised path failing to
+  // match is the safe direction.
+  describe('rate limit path matching', () => {
+    for (const stage of ['dev', 'production']) {
+      it(`normalizes the path before matching in every ${stage} rate limit`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+        // any: RateBasedStatement scope-down shape is deeply nested and varies by statement type
+        const limits = rules.filter(r => (r.Statement as any).RateBasedStatement?.ScopeDownStatement);
+        expect(limits.length).toBeGreaterThan(0);
+
+        for (const rule of limits) {
+          const byteMatch = (rule.Statement as any).RateBasedStatement.ScopeDownStatement.ByteMatchStatement;
+          const types = (byteMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type);
+
+          expect(types, `${rule.Name} must normalize the path`).toContain('NORMALIZE_PATH');
+          // NONE alongside real transformations is dead weight that reads as intent.
+          expect(types, `${rule.Name} should not carry a NONE transformation`).not.toContain('NONE');
+        }
+      });
+    }
+
+    // /_next/image is a live server-side fetch and resize, not a static file: it answers with
+    // application/json from a function. The blanket rule used to cover it and the scoped rule
+    // does not, so without this it is the one expensive path with no ceiling at all.
+    it('bounds the production image optimizer, below the static-asset ceiling', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const image = rules.find(r => r.Name === 'image-rate-limit');
+      expect(image).toBeDefined();
+
+      // any: see above
+      const rateBased = (image!.Statement as any).RateBasedStatement;
+      const staticRule = rules.find(r => r.Name === 'static-asset-rate-limit');
+      const staticLimit = (staticRule!.Statement as any).RateBasedStatement.Limit;
+
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/image');
+      expect(rateBased.Limit).toBeLessThan(staticLimit);
+    });
+  });
+
   describe('buildDevWafRuleJson — production stage', () => {
     it('pins Allow-LLM-API at Priority 0 so completions endpoint is not counted by ai-route-rate-limit', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });

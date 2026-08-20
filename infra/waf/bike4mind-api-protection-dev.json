@@ -145,7 +145,15 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NONE"
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
                 }
               ],
               "PositionalConstraint": "STARTS_WITH"
@@ -455,7 +463,15 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NONE"
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
                 }
               ],
               "PositionalConstraint": "STARTS_WITH"
@@ -489,10 +505,14 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 1,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
                   "Type": "LOWERCASE"
                 }
               ],
@@ -527,7 +547,15 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NONE"
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
                 }
               ],
               "PositionalConstraint": "STARTS_WITH"
@@ -561,11 +589,15 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "LOWERCASE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 1,
                   "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
                 }
               ],
               "PositionalConstraint": "STARTS_WITH"
@@ -599,10 +631,14 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 1,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
                   "Type": "LOWERCASE"
                 }
               ],
@@ -618,6 +654,48 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "register-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "image-rate-limit-prod-shadow",
+      "Priority": 15,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 1000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/_next/image",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "image-rate-limit-prod-shadow"
       }
     }
   ],
