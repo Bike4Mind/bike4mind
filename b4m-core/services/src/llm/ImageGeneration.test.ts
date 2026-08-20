@@ -1,10 +1,44 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
-import { ImageModels, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import { ImageModels, ModelBackend, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 
-const silentLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+vi.mock('@bike4mind/llm-adapters', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
+  return { ...actual, getAvailableModels: vi.fn() };
+});
+
+vi.mock('../apiKeyService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../apiKeyService')>();
+  return { ...actual, getEffectiveLLMApiKeys: vi.fn(async () => ({ gemini: 'gemini-key' })) };
+});
+
+const mockGeminiEdit = vi.fn();
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    aiImageService: vi.fn(() => ({ edit: mockGeminiEdit })),
+    getSettingsMap: vi.fn().mockResolvedValue({}),
+    ClientMessageSender: vi.fn().mockImplementation(function () {
+      return { sendToClient: vi.fn().mockResolvedValue(undefined) };
+    }),
+  };
+});
+
+vi.mock('./questHeartbeat', () => ({
+  startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
+}));
+
+const silentLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  updateMetadata: vi.fn(),
+} as unknown as Logger;
 
 const makeService = (overrides: {
   invokeSummarizeSession?: ReturnType<typeof vi.fn>;
@@ -193,6 +227,75 @@ describe('ImageGenerationService.selectInputImage', () => {
     });
     expect(result.fileImage?.id).toBe('good');
     expect(result.imageSource).toBe('notebook_attachment');
+  });
+});
+
+describe('ImageGenerationService.process (Gemini edit-path model passthrough)', () => {
+  // Regression: process()'s Gemini edit branch (fired on any continuation/edit turn - a workbench
+  // image or carried-forward prior image) never passed `model` to geminiService.edit(), so it
+  // silently ran on GeminiImageService's hardcoded default (GEMINI_2_5_FLASH_IMAGE) regardless of
+  // which Gemini model the user actually selected. The sibling generate() call (fresh, no input
+  // image) already passed model correctly - this only affected the edit path.
+  const geminiModelInfo = {
+    id: ImageModels.GEMINI_3_PRO_IMAGE,
+    type: 'image',
+    name: ImageModels.GEMINI_3_PRO_IMAGE,
+    backend: ModelBackend.Gemini,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: true,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const makeEditService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    const findById = vi.fn(async () => quest as any);
+    const update = vi.fn(async () => undefined);
+    const updateMany = vi.fn(async () => undefined);
+    const findAllInIds = vi.fn(async () => [
+      { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
+    ]);
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById, update, updateMany },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAllInIds },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') } as any,
+      fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => path) } as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    return service;
+  };
+
+  it('forwards the selected model to GeminiImageService.edit on a continuation/edit turn', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+
+    const service = makeEditService();
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: ImageModels.GEMINI_3_PRO_IMAGE,
+        fabFileIds: ['f1'],
+        intent: 'continuation',
+      } as any,
+      logger: silentLogger,
+    });
+
+    expect(mockGeminiEdit).toHaveBeenCalledWith(
+      expect.any(String),
+      'make it blue',
+      expect.objectContaining({ model: ImageModels.GEMINI_3_PRO_IMAGE })
+    );
   });
 });
 

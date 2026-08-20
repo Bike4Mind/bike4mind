@@ -58,3 +58,39 @@ describe('GeminiImageService.generateImageViaContent', () => {
     ).rejects.toThrow(/Would you like me to generate an image/);
   });
 });
+
+describe('GeminiImageService.edit (model passthrough)', () => {
+  // Regression: edit() silently defaulted to GEMINI_2_5_FLASH_IMAGE whenever a caller omitted
+  // `model`, so a user who selected e.g. Gemini 3 Pro Image got a different model's output on
+  // any continuation/edit turn with no indication the model had changed.
+  beforeEach(() => vi.clearAllMocks());
+
+  it('uses the model passed in options rather than the GEMINI_2_5_FLASH_IMAGE default', async () => {
+    const generateContent = vi.fn().mockResolvedValue(imageResponse);
+    const svc = makeService(generateContent);
+
+    await svc.edit('data:image/png;base64,SOURCE', 'make it blue', {
+      model: ImageModels.GEMINI_3_PRO_IMAGE,
+      aspect_ratio: '16:9',
+      output_format: 'png',
+      safety_tolerance: 2,
+    });
+
+    expect(generateContent).toHaveBeenCalledWith(expect.objectContaining({ model: ImageModels.GEMINI_3_PRO_IMAGE }));
+  });
+
+  it('falls back to GEMINI_2_5_FLASH_IMAGE only when no model is given', async () => {
+    const generateContent = vi.fn().mockResolvedValue(imageResponse);
+    const svc = makeService(generateContent);
+
+    await svc.edit('data:image/png;base64,SOURCE', 'make it blue', {
+      aspect_ratio: '16:9',
+      output_format: 'png',
+      safety_tolerance: 2,
+    });
+
+    expect(generateContent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+    );
+  });
+});
