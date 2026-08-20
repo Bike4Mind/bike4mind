@@ -22,7 +22,8 @@ import {
 } from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
-import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
+import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import axios from 'axios';
