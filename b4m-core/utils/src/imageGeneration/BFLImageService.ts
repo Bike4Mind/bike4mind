@@ -117,7 +117,7 @@ export class BFLImageService extends AIImageService {
           // params, which is all this needed.
           const safeRequestBody = {
             ...cleanedBody,
-            prompt: `${prompt.substring(0, 100)}...`,
+            prompt: prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt,
             ...(cleanedBody.image_prompt
               ? { image_prompt: `[BASE64_DATA_${(cleanedBody.image_prompt as string).length}_CHARS]` }
               : {}),
