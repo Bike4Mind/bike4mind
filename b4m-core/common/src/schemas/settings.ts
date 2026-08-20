@@ -224,6 +224,7 @@ export const SettingKeySchema = z.enum([
   'ReferralCreditsAmount',
   'registrationLink',
   'FeedbackReceiveEmail',
+  'FeedbackReceiveEmailNonProd',
   'FeedbackKyle',
   'EnableFeedBackToEmail',
   'EnableFeedBackToSlack',
@@ -1552,6 +1553,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'FeedbackSendEmailUsername', order: 7 },
       { key: 'FeedbackSendEmailPassword', order: 8 },
       { key: 'FeedbackReceiveEmail', order: 9 },
+      { key: 'FeedbackReceiveEmailNonProd', order: 9.5 },
       { key: 'liveFeedbackEmail', order: 10 },
       { key: 'FeedbackKyle', order: 11 },
       { key: 'feedbackErik', order: 12 },
@@ -2459,6 +2461,16 @@ export const settingsMap = {
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 9,
+  }),
+  FeedbackReceiveEmailNonProd: makeStringSetting({
+    key: 'FeedbackReceiveEmailNonProd',
+    name: 'Non-Production Feedback Email',
+    defaultValue: '',
+    description:
+      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 9.5,
   }),
   FeedbackKyle: makeStringSetting({
     key: 'FeedbackKyle',
