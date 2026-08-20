@@ -64,10 +64,9 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
 
   const handleSubmit = async () => {
     if (isSubmitting) return;
-    console.log('Submitting bug report:', bugReport);
     setIsSubmitting(true);
     try {
-      await createFeedbackOnServer({
+      const result = await createFeedbackOnServer({
         userId: userContext?.currentUser?.id ?? 'Unknown',
         username: userContext?.currentUser?.username ?? 'Unknown',
         userEmail: userContext?.currentUser?.email ?? 'Unknown',
@@ -77,11 +76,18 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         promptMeta: promptMeta ?? {},
       });
       onClose();
-      toast.success(`${feedbackType} report submitted successfully`);
+      // Optional chaining: a rolling deploy can route this request to a server instance
+      // still on the pre-delivery-field handler, where the record saved but `delivery` is
+      // absent - fall back to the success toast (the pre-fix default) rather than throwing.
+      if (result.delivery?.delivered !== false) {
+        toast.success(`${feedbackType} report submitted successfully`);
+      } else {
+        toast.warning('Saved your report, but we could not notify the team - please ping support if it is urgent.');
+      }
       setBugReport('');
     } catch (error) {
       console.error('Failed to submit bug report:', error);
-      toast.error('Something went wrong. Please try again.');
+      toast.error('Could not submit your report. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -123,6 +129,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         <Box sx={{ mt: 2 }}>
           <Typography level="h3">Please give us as much information as possible to improve your experience.</Typography>
           <Textarea
+            slotProps={{ textarea: { 'data-testid': 'bug-report-modal-content-textarea' } }}
             minRows={10}
             value={bugReport || ''}
             onChange={e => setBugReport(e.target.value)}
@@ -139,10 +146,20 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
           <Typography level="body-xs">{JSON.stringify(promptMeta, null, 2)}</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 2 }}>
-          <Button onClick={onClose} variant="outlined">
+          <Button
+            data-testid="bug-report-modal-cancel-btn"
+            onClick={onClose}
+            variant="outlined"
+            disabled={isSubmitting}
+          >
             Cancel
           </Button>
-          <Button onClick={handleSubmit} variant="solid" disabled={isSubmitting}>
+          <Button
+            data-testid="bug-report-modal-submit-btn"
+            onClick={handleSubmit}
+            variant="solid"
+            disabled={isSubmitting}
+          >
             Submit
           </Button>
         </Box>

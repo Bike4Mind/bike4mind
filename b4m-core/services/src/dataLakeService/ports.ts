@@ -67,12 +67,14 @@ export async function bestEffortIndexRemove(
  * Phase-2 purge: propagates. An entry stranded here is permanent - the file it points at is about
  * to be hard-deleted, so no later run can reconcile it. Call it BEFORE anything destructive, so a
  * throw leaves zero progress and the cleanup queue's retry re-runs the sweep intact. The cost is
- * that a persistently failing index wedges the lake in 'deleted', which beats half-purged.
+ * that a persistently failing index wedges the lake in 'purging', which beats half-purged.
  *
  * "Zero progress" covers the THROW only, and is not an absolute. If removal succeeds and a later
- * step then fails terminally, the lake stays 'deleted' and restorable - but restoreDeletedDataLake
- * brings the files back with their entries already dropped, and this port has no add operation to
- * put them back. That much is progress no retry undoes; re-population is the implementer's job.
+ * step then fails terminally, the lake stays 'purging' with its entries already dropped, and this
+ * port has no add operation to put them back. That much is progress no retry undoes; re-population
+ * is the implementer's job. Note that restore is NOT the way out of this state since #1744 -
+ * `restoreDeletedDataLake` refuses a purge-accepted lake outright, so recovery is a DLQ replay of
+ * the sweep (`api/admin/dlq/replay.ts`), which finishes the purge rather than reversing it.
  *
  * This is the canonical description of both postures. Call sites point here rather than restating.
  */

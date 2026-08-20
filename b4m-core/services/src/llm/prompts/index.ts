@@ -25,6 +25,18 @@
  * own domain, worse than abstaining, and not caught by the "don't invent facts" framing above. The rule
  * forbids that too: absence from retrieval is absence of information, not evidence the thing is unreal.
  * Kept as one shared const so the surfaces cannot drift apart.
+ *
+ * A MEASURED BEHAVIOUR DEPENDS ON THIS RULE'S SCOPE. `triage_router` STEP 1 (apps/client/server/utils/
+ * systemPrompts/defaults.ts) tells the model to DERIVE figures the request supplies the inputs for -
+ * size a problem, carry the arithmetic - and to label them as derived. That is deliberately outside
+ * this rule, which governs facts asserted as *retrieved*: "do not state a specific ... figure unless
+ * it appears there" is about sourcing a claim, not about doing arithmetic in front of the user.
+ *
+ * The two were measured together (both arms carried this rule) and the split was worth +25.2 composite
+ * on a resource-sizing question the model had previously refused to compute. **If this rule is ever
+ * widened to cover derived or computed figures, that behaviour regresses** - and it will regress
+ * silently, because the router's own tests assert only the router's text and nothing here asserts this
+ * boundary. Re-measure with optihashi-eval rather than reasoning it through.
  */
 export const GROUNDED_NO_INVENTION_RULE =
   'Ground every specific claim in the retrieved content, or in a fact shown above under a "Memory" or ' +

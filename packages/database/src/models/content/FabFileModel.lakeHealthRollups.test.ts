@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, KnowledgeType } from '@bike4mind/common';
 import { FabFile, FabFileChunk, fabFileChunkRepository, fabFileRepository } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -115,5 +115,75 @@ describe('lake-health rollup primitives (#1666)', () => {
     expect(byName['unmeasured.txt'].maxChunkCharLength).toBeNull();
     expect(byName['unmeasured.txt'].embeddedChunkCount).toBeNull();
     expect(byName['unmeasured.txt'].embeddedCharCount).toBeNull();
+  });
+
+  // QA reproduced a converge run on a ONE-file lake rewriting a DIFFERENT lake's twelve documents:
+  // both reads reported `membersConsidered: 28` - every chunked file in the install - on lakes
+  // holding 12, 21 and 1 files. Cause: the membership predicate's prefix arm is a top-level `$or`,
+  // and spreading it into a `$match` that ALSO named `$or` (added to admit the paused marker) let
+  // the literal win and deleted membership outright. No type error, no runtime error.
+  //
+  // The pre-existing cases above could not catch it because they only ever seed files that ARE
+  // members: a predicate that matches everything and a predicate that matches exactly the lake are
+  // indistinguishable unless a NON-member is present. Both reads are covered because the
+  // convergence one decides which files a wave REWRITES, and a foreign file reaching it is a
+  // cross-lake write rather than only a disclosure.
+  describe('membership scope is conjoined, not overwritten, by the paused-marker $or', () => {
+    const tag = 'datalake:acme';
+    const scope = { datalakeTag: tag, fileTagPrefix: 'acme:', creatorUserId: 'u1' };
+
+    const seedOneMemberAndThreeStrangers = async () => {
+      // Member via the meta-tag arm.
+      await makeFile('mine.txt', { chunkCount: 3, tags: [{ name: tag, strength: 1 }] });
+      // Another lake's member: chunked, live, complete - identical in every respect EXCEPT membership.
+      await makeFile('other-lake.txt', { chunkCount: 3, tags: [{ name: 'datalake:other', strength: 1 }] });
+      // Untagged file belonging to the same user. Ownership alone must not confer membership.
+      await makeFile('untagged.txt', { chunkCount: 3 });
+      // The prefix arm's own negative case: right prefix, WRONG owner.
+      await makeFile('prefix-other-owner.txt', {
+        userId: 'u2',
+        chunkCount: 3,
+        tags: [{ name: 'acme:reports', strength: 1 }],
+      });
+    };
+
+    it('findDataLakeHealthMembers returns only this lake, not every chunked file in the install', async () => {
+      await seedOneMemberAndThreeStrangers();
+      const members = await fabFileRepository.findDataLakeHealthMembers(scope);
+      expect(members.map(m => m.fileName)).toEqual(['mine.txt']);
+    });
+
+    it('findLakeConvergenceMembers returns only this lake, so a wave cannot rewrite another lake', async () => {
+      await seedOneMemberAndThreeStrangers();
+      const members = await fabFileRepository.findLakeConvergenceMembers(scope);
+      expect(members.map(m => m.fileName)).toEqual(['mine.txt']);
+    });
+
+    it("still admits this lake's paused member, and still does not admit another lake's", async () => {
+      // The `$or` this whole class of bug came from has to keep doing its job: a member the kill
+      // switch stopped mid-wave is chunkless and is admitted by its marker alone.
+      await makeFile('mine-paused.txt', {
+        chunkCount: 0,
+        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        tags: [{ name: tag, strength: 1 }],
+      });
+      await makeFile('other-lake-paused.txt', {
+        chunkCount: 0,
+        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        tags: [{ name: 'datalake:other', strength: 1 }],
+      });
+      // Prefix arm, owned by the creator: a member, and admitted by the marker despite no chunks.
+      await makeFile('mine-by-prefix-paused.txt', {
+        chunkCount: 0,
+        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        tags: [{ name: 'acme:reports', strength: 1 }],
+      });
+
+      const health = await fabFileRepository.findDataLakeHealthMembers(scope);
+      expect(health.map(m => m.fileName).sort()).toEqual(['mine-by-prefix-paused.txt', 'mine-paused.txt']);
+
+      const converge = await fabFileRepository.findLakeConvergenceMembers(scope);
+      expect(converge.map(m => m.fileName).sort()).toEqual(['mine-by-prefix-paused.txt', 'mine-paused.txt']);
+    });
   });
 });

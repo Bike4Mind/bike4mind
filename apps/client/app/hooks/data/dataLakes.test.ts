@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
+// Mocked below (vi.mock is hoisted); imported so the refusal-toast assertion can read the spy.
+import { toast } from 'sonner';
 
 /**
  * Offset paging for the public-lake discovery catalog. The regression this guards: `limit` used
@@ -46,6 +48,7 @@ import {
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
   useRechunkDataLake,
+  useTransferLakeOwnership,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -255,6 +258,29 @@ describe('useCleanupDataLake queued purge', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
+  it('brings the row back on the next fetch when the consumer releases a guard-refused purge (#1744)', async () => {
+    // The case the server-side release exists to recover, and the one a prune that ALSO required
+    // absence could never reach: the sweep's guard refused the purge, the consumer released the
+    // lake back to 'deleted', so the server lists it again. A response from a request that started
+    // after the purge is authoritative either way - still listed means released, and the row must
+    // reappear rather than stay hidden in this tab until a full page reload.
+    apiGet.mockResolvedValue(listing('lk9', 'lk10'));
+    const { result, queryClient } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk9');
+    });
+    await settle();
+    expect(result.current.deleted.data).toEqual([deletedLake('lk10')]);
+
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['data-lakes', 'deleted'] });
+    });
+    await settle();
+    expect(result.current.deleted.data).toEqual([deletedLake('lk9'), deletedLake('lk10')]);
+  });
+
   it('invalidates no key that prefix-matches the deleted list', async () => {
     apiGet.mockResolvedValue(listing('lk3', 'lk4'));
     const { result, invalidate } = mountPurgeSurface();
@@ -275,9 +301,12 @@ describe('useCleanupDataLake queued purge', () => {
 
   it('stays gone when a sibling mutation refetches the list before the sweep has run', async () => {
     // The realistic trigger: every other lake mutation invalidates dataLakeKeys.list, which
-    // prefix-matches this key, and re-expanding the section refetches too. The server still lists
-    // the lake for the whole sweep window, so the cache write alone would be undone here.
-    apiGet.mockResolvedValue(listing('lk5', 'lk6'));
+    // prefix-matches this key, and re-expanding the section refetches too. Since #1744 the accept
+    // claims 'purging' BEFORE the route answers, so any refetch that starts after the mutation
+    // resolves answers WITHOUT the lake - the row stays gone because the server says so, which is
+    // what makes this survivable without the client map.
+    apiGet.mockResolvedValueOnce(listing('lk5', 'lk6'));
+    apiGet.mockResolvedValue(listing('lk6'));
     const { result, queryClient } = mountPurgeSurface();
     await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
 
@@ -331,10 +360,11 @@ describe('useCleanupDataLake queued purge', () => {
     expect(result.current.deleted.data).toEqual([]);
   });
 
-  it('does not prune on a response from a request that predates the purge', async () => {
-    // The prune must only trust a request that STARTED after the purge. An older one can be missing
-    // the lake for an unrelated reason (it predates the soft-delete), and pruning on it would
-    // un-hide a row whose sweep has not run.
+  it('filters a response from a request that predates the purge, and does not prune on it', async () => {
+    // The map's ONE remaining job since #1744, and the only case the server cannot cover: a fetch
+    // that STARTED before the accept and lands after it, carrying a payload that still names the
+    // lake because the server had not claimed 'purging' yet when it was taken. That response must
+    // be filtered and must NOT prune - it settles nothing about the sweep.
     let releaseStale = (_value: unknown) => {};
     const stale = new Promise(resolve => {
       releaseStale = resolve;
@@ -344,10 +374,11 @@ describe('useCleanupDataLake queued purge', () => {
     const { result, queryClient } = mountPurgeSurface();
     await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
 
-    // In-flight fetch that will answer WITHOUT lk11 - as if taken before lk11 was soft-deleted.
+    // In-flight fetch taken BEFORE the purge, so it still lists lk11 the way the pre-accept server
+    // would have answered.
     apiGet.mockImplementationOnce(async () => {
       await stale;
-      return listing('lk12');
+      return listing('lk11', 'lk12');
     });
     act(() => {
       void queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
@@ -362,15 +393,9 @@ describe('useCleanupDataLake queued purge', () => {
       await settle();
     });
 
-    // lk11 must still be suppressed: a later fetch that DOES list it keeps the row hidden.
-    apiGet.mockResolvedValue(listing('lk11', 'lk12'));
-    await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: ['data-lakes', 'deleted'] });
-    });
-    // Settle before asserting: waitFor would pass instantly against the pre-render snapshot, which
-    // makes the assertion unfailable (it did, until this was caught).
-    await settle();
-    expect(deletedFetchCount()).toBe(3);
+    // Filtered on arrival, and the id is still tracked: pruning on a pre-purge request would have
+    // un-hidden a row whose purge had only just been accepted.
+    expect(deletedFetchCount()).toBe(2);
     expect(result.current.deleted.data).toEqual([deletedLake('lk12')]);
   });
 
@@ -534,5 +559,51 @@ describe('useRechunkDataLake cache invalidation', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+  });
+});
+
+describe('useTransferLakeOwnership cache invalidation', () => {
+  it('refreshes the access view, the picker and the lake LIST - ownership decides canManage', async () => {
+    // The list matters as much as the view: once the actor is no longer the owner, controls that
+    // were theirs (transfer, the visibility expose gate) must disappear from the panel rather than
+    // linger until something else happens to refetch. `dataLakeKeys.list` is the bare ['data-lakes']
+    // prefix, so this one invalidation also covers the public/archived/deleted catalogs.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u9', demotedUserIds: ['u1'] } });
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u9' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/transfer-ownership', { newOwnerUserId: 'u9' });
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+  });
+
+  it("surfaces the server refusal text, not axios's generic status message", async () => {
+    // These 400s are the actionable kind ("name another member"), and the modal keeps the dialog
+    // open on failure - so the toast is the only thing telling the manager what to do differently.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(
+      Object.assign(new Error('Request failed with status code 400'), {
+        isAxiosError: true,
+        response: { data: { error: 'An organization admin cannot transfer a data lake to themselves' } },
+      })
+    );
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'self' })).rejects.toThrow();
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
   });
 });

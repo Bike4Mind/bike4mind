@@ -61,6 +61,17 @@ export const deleteDataLake = async (
     return existing;
   }
 
+  // 'purging' is refused rather than short-circuited, and refused rather than fallen through.
+  // Falling through would re-run phase 1 on a lake whose hard delete is already accepted, and its
+  // closing `status: 'deleted'` write would silently un-purge it - the sweep's guard would then
+  // throw and the consumer would swallow the purge (#1744). Returning the lake unchanged would
+  // avoid that but report SUCCESS for a soft-delete that did not happen, which the client renders
+  // as `Data lake deleted (recoverable)` over an irreversible purge. Same answer as archive, for
+  // the same reason: deleting a lake whose purge is accepted is a caller error, not a no-op.
+  if (existing.status === 'purging') {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be deleted');
+  }
+
   // Quiesce in-flight batches before teardown.
   const activeBatches = await db.batches.findActiveByDataLakeId(dataLakeId);
   await Promise.all(activeBatches.map(b => db.batches.markTerminalIfActive(b.id, 'cancelled')));
