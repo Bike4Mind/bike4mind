@@ -269,6 +269,9 @@ interface RankableFile {
   chunkCount?: number;
   error?: string | null;
   notes?: string | null;
+  /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
+   *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
+  chunkRebuildRequestedAt?: Date | string | null;
 }
 
 /**
@@ -609,6 +612,7 @@ async function rankChunksForFiles(args: {
       chunkCount: file?.chunkCount,
       error: file?.error,
       notes: file?.notes,
+      chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
     };
   });
   // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old

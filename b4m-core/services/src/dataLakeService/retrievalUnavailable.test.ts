@@ -87,6 +87,29 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
   it('serves a file whose vector rollup predates the field', () => {
     expect(partitionByIndexAvailability([{ ...settled, vectorizedChunkCount: null }]).withheld).toEqual([]);
   });
+
+  // #1939, and the case the `chunkCount > 0` guard used to route to `servable`: the reset that takes
+  // a member's passages leaves NO note and NO error, so this is byte-for-byte the shape of the image
+  // in the test above. The stamp is the entire difference, and without it a rebuild that was reset
+  // and never enqueued is indistinguishable from a lake that simply never had the document.
+  it('withholds a chunkless file with a rebuild outstanding, though the same shape without the stamp is served', () => {
+    const rebuilding = {
+      ...settled,
+      chunkCount: 0,
+      vectorizedChunkCount: 0,
+      notes: '',
+      chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+    };
+    expect(partitionByIndexAvailability([rebuilding]).withheld.map(f => f.id)).toEqual(['f1']);
+    expect(partitionByIndexAvailability([{ ...rebuilding, chunkRebuildRequestedAt: null }]).withheld).toEqual([]);
+  });
+
+  // The stamp must not outrank the two settled markers, or a halted member would be reported as one
+  // that returns on its own and a permanently failed one would mark every search partial forever.
+  it('does not withhold on a stamp left behind by a rebuild that failed', () => {
+    const stamped = { ...settled, chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date() };
+    expect(partitionByIndexAvailability([{ ...stamped, error: 'boom' }]).withheld).toEqual([]);
+  });
 });
 
 describe('buildRetrievalUnavailableReport', () => {
@@ -105,6 +128,20 @@ describe('buildRetrievalUnavailableReport', () => {
     expect(report.paused.count).toBe(1);
     expect(report.paused.sample).toEqual([{ fileId: 'f2', fileName: 'stranded.pdf' }]);
     expect(report.partial).toBe(true);
+  });
+
+  // A pending rebuild carries no note, so it lands in `indexing` by construction - and it MUST, or
+  // an ordinary wave would tell every reader that an administrator has to intervene. Pinned here
+  // because "which bucket" is the difference between "search again in a minute" and "escalate".
+  it('buckets a file with a rebuild outstanding as re-indexing, never as paused', () => {
+    const report = buildRetrievalUnavailableReport([
+      { id: 'f1', fileName: 'rebuilding.pdf', notes: '', chunkRebuildRequestedAt: new Date() },
+    ]);
+    expect(report.indexing.count).toBe(1);
+    expect(report.paused.count).toBe(0);
+    const prose = describeRetrievalUnavailable(report);
+    expect(prose).toContain('will return on their own');
+    expect(prose).not.toContain('administrator');
   });
 
   // EITHER arm buckets as paused. Bucketing the vectorize arm as `indexing` would print "they will
