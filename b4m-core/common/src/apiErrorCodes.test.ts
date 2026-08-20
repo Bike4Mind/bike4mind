@@ -21,8 +21,14 @@ describe('API_ERROR_CODES', () => {
   // Every shared code must be reachable from some published surface, or it is a
   // classifier we document and never send. `response_too_large` was exactly that
   // before it was dropped: named in the status table, emitted by nothing.
+  //
+  // NOTE: the narrowing tuples cannot be enumerated (there is no registry of them),
+  // so this list is hand-maintained. Adding a new narrowing tuple elsewhere means
+  // adding it HERE too - which is the point: a code with no surface should have to
+  // justify itself rather than sit in the published vocabulary unemitted.
   it('carries no code that no surface emits', () => {
-    const emitted = new Set<string>([...QUEST_ERROR_CODES, ...TTS_ERROR_CODES]);
+    const NARROWING_TUPLES = [QUEST_ERROR_CODES, TTS_ERROR_CODES];
+    const emitted = new Set<string>(NARROWING_TUPLES.flat());
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });
 
