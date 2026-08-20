@@ -5,7 +5,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
-import { MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
+import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
 /**
  * Background AI-tag suggestion status, shown only while the wizard's Complete screen
