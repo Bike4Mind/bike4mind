@@ -618,6 +618,58 @@ describe('ServerSubagentOrchestrator', () => {
       expect(resolveBackend).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps walking the ladder when a candidate throws instead of returning null', async () => {
+      stubAgentRun();
+      // getLlmByModel throws (rather than returning null) on an unknown adapter
+      // family and on an expired provider key. Letting that escape would discard
+      // every remaining candidate, including the degrade-to-parent rung.
+      const resolveBackend = vi.fn((modelId: string) => {
+        if (modelId === BEDROCK_ID) throw new Error('Unsupported adapter family');
+        return modelId === DIRECT_ID ? makeLlm(modelId) : null;
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: [DIRECT_ID] }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).toHaveBeenNthCalledWith(2, DIRECT_ID);
+      expect(result.model).toBe(DIRECT_ID);
+    });
+
+    it("degrades to the parent's model when every candidate throws", async () => {
+      stubAgentRun();
+      const resolveBackend = vi.fn(() => {
+        throw new Error('OpenAI API key is expired');
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: ['gpt-4.1'] }),
+        thoroughness: 'medium',
+      });
+
+      // The parent is already running on this model, so the delegation survives.
+      expect(result.model).toBe(PARENT_ID);
+    });
+
     it('persists a serviceable model on a background child, not the unserviceable default', async () => {
       const tracker = makeTracker();
       const orchestrator = new ServerSubagentOrchestrator({

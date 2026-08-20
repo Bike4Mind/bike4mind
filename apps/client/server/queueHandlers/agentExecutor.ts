@@ -2838,6 +2838,16 @@ async function processSubagentDispatch(
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
       availableModels: models,
+      // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
+      // orchestrator cannot test whether a grandchild's model is serviceable and
+      // falls back to pairing this child's backend with the grandchild's model id
+      // - the 404 that the pairing fix exists to prevent, one level down.
+      resolveBackend: (modelId: string) => {
+        const info = models.find((m: { id: string }) => m.id === modelId);
+        return info
+          ? getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo: info, logger, endUserId: child.userId })
+          : null;
+      },
       signal: abortController.signal,
       onProgress: async (status: string) => {
         await sendWs('progress', { executionId: parentId, status });
