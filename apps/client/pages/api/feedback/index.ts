@@ -56,10 +56,12 @@ type FeedbackEmailRoute =
 
 // Every value below reaches the email as a raw string interpolation, and on the unauthenticated
 // submission path every one of them (including userId) is attacker-controlled request-body input.
-// Strip all tags rather than sanitize-html's default allowlist (which still permits a clickable
-// <a href>), since this template has no legitimate use for any markup in these fields.
+// disallowedTagsMode: 'escape' (rather than sanitize-html's default 'discard') turns a tag into
+// its visible, inert entity form instead of deleting it - this template has no legitimate use for
+// any markup, but the promptMeta JSON dump is a diagnostic field where silently deleting a
+// bracketed substring would hide information from the staff reading it.
 function sanitizeForEmail(value: string): string {
-  return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {} });
+  return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
 }
 
 /**

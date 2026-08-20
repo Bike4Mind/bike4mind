@@ -85,6 +85,9 @@ import '../index';
 
 const MALICIOUS_USER_ID = '<img src=x onerror=alert(1)>';
 const MALICIOUS_CONTENT = 'check this out <a href="https://evil.example">click here</a>';
+const MALICIOUS_TYPE = '<svg onload=alert(1)>bug</svg>';
+const MALICIOUS_TAG = '<script>alert(1)</script>';
+const MALICIOUS_PROMPT_META = { offeredTools: ['<script>alert(1)</script>'] };
 
 const run = () => {
   const { req, res } = createMocks({
@@ -92,9 +95,11 @@ const run = () => {
     body: {
       userId: MALICIOUS_USER_ID,
       content: MALICIOUS_CONTENT,
-      tags: [],
+      tags: [MALICIOUS_TAG],
       username: 'reporter',
       userEmail: 'reporter@example.com',
+      type: MALICIOUS_TYPE,
+      promptMeta: MALICIOUS_PROMPT_META,
     },
   });
   (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
@@ -124,5 +129,32 @@ describe('POST /api/feedback - strips tags from the email notification', () => {
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain('<a href');
     expect(emailBody).toContain('click here');
+  });
+
+  it('does not let a raw type value inject a live tag', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).not.toContain('<svg');
+    expect(emailBody).not.toContain(MALICIOUS_TYPE);
+  });
+
+  it('does not let a raw tag value inject a live tag', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).not.toContain('<script>alert(1)</script>');
+  });
+
+  it('escapes rather than deletes a bracketed substring in the promptMeta diagnostic dump', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).not.toContain('<script>alert(1)</script>');
+    // Escaped (not discarded): the reader can still see the attempted payload as inert text.
+    expect(emailBody).toContain('&lt;script&gt;');
   });
 });
