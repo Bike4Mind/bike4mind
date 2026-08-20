@@ -710,6 +710,47 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Quests still showing as in-flight for the given agent executions.
+   *
+   * Used by the abandoned sweep to find bubbles stranded by an execution it just
+   * terminated: the execution reaches a terminal status but nothing else writes
+   * the quest, so without this the UI spins forever on a run the backend knows
+   * is dead. Returns only the content fields the terminal-patch decision reads
+   * (`terminalRecoveryFor`), not whole quest documents - a sweep can match many
+   * rows and the checkpoint/context fields are large.
+   *
+   * `done` and `stopped` are the terminal statuses; anything else (`pending`,
+   * `running`) is still claiming to be live. Terminal quests are excluded rather
+   * than re-patched so a natural completion racing the sweep always wins.
+   */
+  async findUnfinishedByAgentExecutionIds(
+    agentExecutionIds: string[]
+  ): Promise<Array<{ id: string; reply?: string; replies?: string[]; images?: string[]; videos?: string[] }>> {
+    if (agentExecutionIds.length === 0) return [];
+    const docs = await this.model
+      .find(
+        { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: ['done', 'stopped'] } },
+        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1 }
+      )
+      .lean<
+        Array<{
+          _id: mongoose.Types.ObjectId;
+          reply?: string;
+          replies?: string[];
+          images?: string[];
+          videos?: string[];
+        }>
+      >();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      reply: d.reply,
+      replies: d.replies,
+      images: d.images,
+      videos: d.videos,
+    }));
+  }
+
+  /**
    * Append generated-file names to a Quest's `images` array, keyed by the agent execution
    * that produced them. Uses `$addToSet` so concurrent writers - the parent run and any
    * subagents, each in its own Lambda - accumulate into the same array instead of clobbering
