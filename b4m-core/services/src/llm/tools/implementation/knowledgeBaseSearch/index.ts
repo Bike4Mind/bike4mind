@@ -86,7 +86,7 @@ function formatSemanticResults(
   scan?: SemanticSearchScanAccounting,
   skipNotice?: string | null,
   logger?: Logger,
-  bounding?: { budgetBound: boolean; droppedCount: number; tokenBudget: number }
+  bounding?: { budgetBound: boolean; droppedCount: number }
 ): string {
   let clippedCount = 0;
   let longestChars = 0;
@@ -134,7 +134,7 @@ function formatSemanticResults(
   // the response to stay inside the configured token budget.
   const budgetNote =
     bounding?.budgetBound && bounding.droppedCount > 0
-      ? `NOTE: ${bounding.droppedCount} further relevant passage(s) matched but were not included, to stay within the ${bounding.tokenBudget}-token retrieval budget. Do not state or imply the knowledge base has nothing further on this topic; call retrieve_knowledge_content for a specific file if you need more.\n\n`
+      ? `NOTE: ${bounding.droppedCount} further relevant passage(s) matched but were not included, to stay within a configured retrieval budget. Do not state or imply the knowledge base has nothing further on this topic; call retrieve_knowledge_content for a specific file if you need more.\n\n`
       : '';
   return (
     formatSkipNotice(skipNotice) +
@@ -460,7 +460,7 @@ async function trySemanticKbSearch(
 
     await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
     context.logger.log(
-      `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}, ${bound.tokensUsed} tokens${bound.budgetBound ? ', budget-bound' : ''})`
+      `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
     );
 
     // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
@@ -468,7 +468,6 @@ async function trySemanticKbSearch(
       output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger, {
         budgetBound: bound.budgetBound,
         droppedCount: search.results.length - ranked.length,
-        tokenBudget: budgets.kbResultTokenBudget,
       }),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
@@ -568,7 +567,6 @@ async function tryScopedSemanticKbSearch(
       output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger, {
         budgetBound: bound.budgetBound,
         droppedCount: search.results.length - ranked.length,
-        tokenBudget: budgets.kbResultTokenBudget,
       }),
       skipNotice,
       datalakeTags: [],
@@ -645,11 +643,11 @@ async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBud
  * package's validation.
  */
 function clampMaxResults(raw: unknown, defaultResults: number): number {
-  const safeDefault = Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  const safeDefault = Math.min(Math.max(defaultResults, KB_SEARCH_MIN_RESULTS), KB_SEARCH_MAX_RESULTS);
   if (raw === undefined || raw === null || raw === '') return safeDefault;
   const n = Number(raw);
   if (!Number.isFinite(n)) return safeDefault;
-  return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
+  return Math.min(Math.max(Math.floor(n), KB_SEARCH_MIN_RESULTS), KB_SEARCH_MAX_RESULTS);
 }
 
 /** What each semantic arm needs to derive its own passage-count safety rail (#1955 item 3). */
