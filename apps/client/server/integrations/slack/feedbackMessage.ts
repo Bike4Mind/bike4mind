@@ -56,16 +56,23 @@ function truncateSafely(text: string, max: number): string {
   return lastCode >= 0xd800 && lastCode <= 0xdbff ? sliced.slice(0, -1) : sliced;
 }
 
+// The full Unicode line-terminator set (CR, LF, TAB, VT, FF, NEL, LINE/PARAGRAPH SEPARATOR),
+// matching the collapse-to-single-line convention already established elsewhere in this repo
+// for the identical threat (see agentExecutor.firstIterationQuery.ts's escapePreambleFilename
+// and getFirstIterationMementosPreamble.ts's sanitizeSummary) - CR/LF alone misses TAB/VT/FF/
+// U+0085/U+2028/U+2029, which Slack's white-space: pre-wrap rendering also treats as breaks.
+const LINE_TERMINATORS = /\r\n|[\r\n\t\v\f\u0085\u2028\u2029]/g;
+
 /**
  * Every field this module interpolates onto a single labeled line (`*Label:* <value>`) goes
- * through this, never bare `escapeSlackText`. Slack mrkdwn has no escape for newlines, so an
- * unescaped one lets a value forge what reads as an extra top-level `*Label:*` line elsewhere
- * in the message - collapsing is lossless here since every caller of this helper is a
- * single-line value by nature. `content` is the one exception: it's blockquoted instead
- * (see `toBlockquote`) so its own real line breaks survive.
+ * through this, never bare `escapeSlackText`. Slack mrkdwn has no escape for line-terminator
+ * characters, so an unescaped one lets a value forge what reads as an extra top-level
+ * `*Label:*` line elsewhere in the message - collapsing is lossless here since every caller of
+ * this helper is a single-line value by nature. `content` is the one exception: it's
+ * blockquoted instead (see `toBlockquote`) so its own real line breaks survive.
  */
 function escapeLine(text: string): string {
-  return escapeSlackText(text).replace(/[\r\n]+/g, ' ');
+  return escapeSlackText(text).replace(LINE_TERMINATORS, ' ');
 }
 
 /**
@@ -80,9 +87,11 @@ function escapeIdentityField(text: string): string {
 /**
  * A short, readable summary of the diagnostic signals that matter for triaging a bug
  * report - not a dump of the full object (unreadable, and Slack truncates long messages
- * anyway). Uses `!== undefined` throughout: a zero token count or a zero belief count
- * (the epic's own zero-retrieval signal, at context.lakeMemory.beliefCount) is meaningful
- * and must not be swallowed by a truthy check.
+ * anyway). Checks `!== undefined` (or `!= null`) rather than truthiness for every numeric
+ * field: a zero token count or a zero belief count (the epic's own zero-retrieval signal,
+ * at context.lakeMemory.beliefCount) is meaningful and must not be swallowed. `citables` is
+ * the one array-presence check (`if (promptMeta.citables)`), which reads clearer and behaves
+ * the same, since an empty array is still truthy and still renders `Citables: 0`.
  */
 export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | null | undefined): string {
   if (!promptMeta) return 'none';
@@ -158,44 +167,35 @@ export interface FeedbackSlackMessageInput {
 }
 
 /**
- * Slack mrkdwn has no escape for `*`/`_`/newlines, so a multi-line `content` value could
- * otherwise inject what reads as extra top-level `*Label:*` lines into the message.
+ * Slack mrkdwn has no escape for line-terminator characters, so a multi-line `content` value
+ * could otherwise inject what reads as extra top-level `*Label:*` lines into the message.
  * Blockquoting every line (each prefixed with `> `) keeps injected lines visually nested
  * under "Feedback:" instead of sitting as siblings of the real fields above them. Splits on
- * any line-break variant (`\r\n`, bare `\r`, or `\n`) - a JSON string body can carry a bare
- * CR, and `escapeLine` already treats CR the same as LF, so this must too or a CR-only value
- * slips through unquoted.
+ * the same LINE_TERMINATORS class as `escapeLine` (CRLF kept as one break, not two).
  */
 function toBlockquote(text: string): string {
   return text
-    .split(/\r\n|\r|\n/)
+    .split(LINE_TERMINATORS)
     .map(line => `> ${line}`)
     .join('\n');
 }
 
 /**
- * Builds the Slack mrkdwn message for a feedback report. Every user-influenced string is
- * escaped before interpolation - unescaped, a value like `<https://example/|Open record>`
- * renders as a live Slack link indistinguishable from a real one. `/api/feedback` requires
- * auth, and a session-authenticated caller's `username`/`userEmail`/`userId` correctly come
- * from their own record - but an API-key-authenticated caller falls through to the raw
- * request body for those three instead (`req.isAuthenticated()` is false for API-key auth,
- * since `apiKeyAuth` sets `req.user` without a Passport login, so index.ts's `authenticated`
- * ternaries take their body-value branch), letting them put arbitrary text, including a
- * forged identity, in those fields. `type` is always the raw body value regardless of auth
- * path. The identity fields and the
- * promptMeta summary's string fields all go through escapeLine, which also collapses
- * newlines - each shares a line with its own `*Label:*`, so an unescaped newline could
- * otherwise forge a fake extra field. `content` is blockquoted instead so its own real line
- * breaks survive. Escaping leaves `*`/`_` alone (Slack has no backslash escape for them,
- * per `slackMarkup.ts`), so a crafted field can still emit inline bold/italic text - a known,
- * accepted residual, since the newline collapse and the blockquote are what keep it off its
- * own line, which is the part that actually matters. Each identity field is separately capped
- * (escapeIdentityField) and the whole result capped to MAX_MESSAGE_CHARS so an oversized field
- * (a huge `content`, an unbounded `model.name`) truncates the delivered message rather than
- * failing to send at all. Prompt Meta sits last, so an oversized submission loses the
- * diagnostic summary before it loses the identity fields or the feedback text itself - the
- * more actionable half of the message for triage.
+ * Builds the Slack mrkdwn message for a feedback report. `type` and `content` are raw request
+ * body values (`index.ts:29-36,129`); the identity fields (`username`/`userEmail`/`userId`)
+ * are resolved server-side from the caller's own record either way (JWT or API-key auth -
+ * `index.ts:76-81`) and escaped here for defense in depth, not because a specific forgery path
+ * exists. Every field is escaped before interpolation - unescaped, a value like
+ * `<https://example/|Open record>` renders as a live Slack link indistinguishable from a real
+ * one. The identity fields and the promptMeta summary's string fields all go through
+ * `escapeLine`, which also collapses line-terminator characters, since each shares a line with
+ * its own `*Label:*` and an unescaped one could otherwise forge a fake extra field; `content`
+ * is blockquoted instead so its own real line breaks survive. `*`/`_` are left unescaped (Slack
+ * has no backslash escape for them) as an accepted residual - the line-terminator collapse and
+ * the blockquote are what keep a crafted field off its own line, which is what actually
+ * matters. Each identity field is capped (`escapeIdentityField`) and the whole result capped to
+ * `MAX_MESSAGE_CHARS`, so an oversized field truncates the delivered message rather than
+ * failing to send, with Prompt Meta (least actionable for triage) truncated away first.
  */
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
   const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;

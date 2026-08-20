@@ -228,7 +228,8 @@ describe('buildFeedbackSlackMessage', () => {
     expect(message).toContain('the real report');
     expect(message).toContain('*Prompt Meta:*');
     const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
-    expect(typeLine.length).toBeLessThan(220);
+    expect(typeLine).toBeDefined();
+    expect(typeLine!.length).toBeLessThan(220);
   });
 
   it('adds a CR-only line to the blockquote just like an LF (B1 regression)', () => {
@@ -236,6 +237,23 @@ describe('buildFeedbackSlackMessage', () => {
     const feedbackLines = message.split('\n').filter(line => line.startsWith('> '));
     expect(feedbackLines).toEqual(['> harmless', '> *User Email:* ceo@company.com']);
     // Only the real *User Email:* line (unquoted) exists outside the blockquote.
+    const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(unquotedUserEmailLines).toHaveLength(1);
+  });
+
+  it('blockquotes a U+2028 LINE SEPARATOR in content the same way as CR/LF (B2 regression)', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'harmless\u2028*User Email:* ceo@company.com' });
+    const feedbackLines = message.split('\n').filter(line => line.startsWith('> '));
+    expect(feedbackLines).toEqual(['> harmless', '> *User Email:* ceo@company.com']);
+    const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(unquotedUserEmailLines).toHaveLength(1);
+  });
+
+  it('collapses a U+2028 LINE SEPARATOR in an identity field the same way as CR/LF (B2 regression)', () => {
+    const forged = 'bug\u2028*User Email:* ceo@company.com';
+    const message = buildFeedbackSlackMessage({ ...base, type: forged });
+    const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
+    expect(typeLine).toBe('*Type:* bug *User Email:* ceo@company.com');
     const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
     expect(unquotedUserEmailLines).toHaveLength(1);
   });
