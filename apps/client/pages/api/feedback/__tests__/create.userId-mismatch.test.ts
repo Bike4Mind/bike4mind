@@ -7,7 +7,14 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, User, UserActivityCounter, Organization, CounterLog } from '@bike4mind/database';
+import {
+  FeedbackModel,
+  FeedbackTextModel,
+  User,
+  UserActivityCounter,
+  Organization,
+  CounterLog,
+} from '@bike4mind/database';
 import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
 
@@ -108,6 +115,17 @@ const runHandler = async (req: unknown, res: unknown) => {
   }
 };
 
+/**
+ * Locate a saved record by its prose. Since #1864 the free text lives in the TTL'd `FeedbackText`
+ * sibling rather than on the `Feedback` document, so a `findOne({ content })` against the parent
+ * always returns null - the lookup has to go through the sibling. Doing it this way also makes
+ * every assertion below double as proof that the split actually happened on write.
+ */
+async function findSavedByContent(content: string) {
+  const text = await FeedbackTextModel.findOne({ content });
+  return text ? await FeedbackModel.findById(text.feedbackId) : null;
+}
+
 describe('POST /api/feedback - authenticated caller with a mismatched body userId', () => {
   it('saves the feedback and returns 201, not a 404 from the analytics side-effect', async () => {
     const realUser = await User.create({
@@ -142,7 +160,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'it broke' });
+    const saved = await findSavedByContent('it broke');
     expect(saved).not.toBeNull();
     // The saved document and the analytics call must agree on the same resolved id -- the
     // authenticated user's real id, not the untrusted body value.
@@ -215,7 +233,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'org mismatch check' });
+    const saved = await findSavedByContent('org mismatch check');
     expect(saved!.organization).toBe('Real Org');
   });
 
@@ -258,7 +276,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     // duplicate retry.
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'email outage should not mask this save' });
+    const saved = await findSavedByContent('email outage should not mask this save');
     expect(saved).not.toBeNull();
   });
 
@@ -298,9 +316,71 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'analytics write failure should not mask this save' });
+    const saved = await findSavedByContent('analytics write failure should not mask this save');
     expect(saved).not.toBeNull();
 
     createSpy.mockRestore();
+  });
+
+  // #1864 acceptance: the structured foreign keys are AUTHORIZATION keys once a scoped reader
+  // filters on them, so a value the client put in promptMeta must never reach the column. Here the
+  // body names a foreign org and a foreign quest; both must be discarded in favour of the
+  // server-derived org, and the quest must be dropped entirely because its session is not the
+  // caller's.
+  it('stores the server-derived organizationId and drops a foreign promptMeta quest claim', async () => {
+    const realUser = await User.create({
+      username: 'e2e-derive-user',
+      name: 'Derive User',
+      email: 'derive-user@example.com',
+    });
+    const realOrg = await Organization.create({ name: 'Derive Real Org', userId: realUser.id });
+    await User.findByIdAndUpdate(realUser.id, { organizationId: realOrg._id });
+
+    const foreignOrg = await Organization.create({ name: 'Foreign Org', userId: realUser.id });
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: realUser.id,
+        content: 'derivation check',
+        tags: [],
+        username: 'reporter',
+        userEmail: realUser.email,
+        promptMeta: {
+          // A quest id that does not resolve to any session this caller owns.
+          questId: new mongoose.Types.ObjectId().toString(),
+          session: {
+            id: new mongoose.Types.ObjectId().toString(),
+            userId: realUser.id,
+            // The decoy: a foreign org, as a String, exactly where the type trap lives.
+            organizationId: String(foreignOrg._id),
+          },
+        },
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => true;
+    (req as unknown as { user: { id: string; username: string; email: string } }).user = {
+      id: realUser.id,
+      username: realUser.username,
+      email: realUser.email,
+    };
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
+
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    const saved = await findSavedByContent('derivation check');
+    expect(saved).not.toBeNull();
+    // Server-derived org wins over the one named in the blob.
+    expect(String(saved!.organizationId)).toBe(String(realOrg._id));
+    expect(String(saved!.organizationId)).not.toBe(String(foreignOrg._id));
+    // Unverifiable quest/session claims contribute nothing at all.
+    expect(saved!.questId).toBeUndefined();
+    expect(saved!.sessionId).toBeUndefined();
+    expect(saved!.subject).toBe('product');
+    // And the prose went to the sibling, not the parent document.
+    expect(saved!.content).toBeUndefined();
   });
 });

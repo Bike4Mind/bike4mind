@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { attachFeedbackText } from '@server/utils/attachFeedbackText';
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -23,7 +24,8 @@ const handler = baseApi().get(
       throw new NotFoundError('Feedback not found');
     }
 
-    return res.json(toRedactedFeedback(feedback));
+    const [withText] = await attachFeedbackText([toRedactedFeedback(feedback)]);
+    return res.json(withText);
   })
 );
 

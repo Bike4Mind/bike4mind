@@ -5,6 +5,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { attachFeedbackText } from '@server/utils/attachFeedbackText';
+import { FeedbackTextModel } from '@bike4mind/database';
 import { z } from 'zod';
 
 const UpdateFeedbackRequestSchema = z.object({
@@ -47,7 +49,11 @@ const handler = baseApi().put(
 
     const updatedFeedback = await FeedbackModel.findOneAndUpdate(
       { _id: id },
-      { $set: { content, status, username } },
+      // `content` is deliberately NOT set here (#1864). Writing it back onto this document would
+      // put the prose on the permanent record and silently defeat the retention split for every
+      // edited row - the one path that would quietly undo the whole change. It goes to the TTL'd
+      // sibling below instead.
+      { $set: { status, username } },
       { new: true }
     );
 
@@ -56,7 +62,22 @@ const handler = baseApi().put(
       { ability: req.ability }
     );
 
-    return res.json(updatedFeedback ? toRedactedFeedback(updatedFeedback) : updatedFeedback);
+    if (!updatedFeedback) return res.json(updatedFeedback);
+
+    // Upsert rather than update: a row written before the split (or one whose text has already
+    // expired) has no sibling document to modify, and an edit should not fail on that.
+    try {
+      await FeedbackTextModel.updateOne(
+        { feedbackId: String(updatedFeedback.id) },
+        { $set: { content } },
+        { upsert: true }
+      );
+    } catch (error) {
+      req.logger?.error('Failed to persist edited feedback text', error);
+    }
+    // Join the free text back from its TTL'd sibling so the response shape matches the read route.
+    const [withText] = await attachFeedbackText([toRedactedFeedback(updatedFeedback)]);
+    return res.json(withText);
   })
 );
 

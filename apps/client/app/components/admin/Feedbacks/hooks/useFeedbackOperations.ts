@@ -71,8 +71,10 @@ export const useFeedbackOperations = (): UseFeedbackOperationsReturn => {
           prevFeedback.map(item => (item._id === feedbackItem._id ? { ...item, status: updatedStatus } : item))
         );
         const reporter = formatReporter(feedbackItem);
-        const preview =
-          feedbackItem.content.length > 50 ? feedbackItem.content.substring(0, 50) + '...' : feedbackItem.content;
+        // Content is absent once its retention window has passed (#1864), so the toast describes
+        // the record rather than dereferencing prose that may be gone.
+        const body = feedbackItem.content ?? '';
+        const preview = body.length > 50 ? body.substring(0, 50) + '...' : body || '(no content retained)';
 
         showFeedbackToast.success(`"${preview}" feedback from ${reporter} updated to: ${updatedStatus}`);
       } else {

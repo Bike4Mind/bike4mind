@@ -40,6 +40,16 @@ function FeedbackModelMock(this: any, data: unknown) {
 }
 
 vi.mock('@bike4mind/database', () => ({
+  // Added for #1864: the route now writes free text to the TTL'd sibling and derives its foreign
+  // keys, so the module graph needs these even when the test only exercises delivery.
+  FeedbackTextModel: {
+    create: vi.fn().mockResolvedValue({}),
+    deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    exists: vi.fn().mockResolvedValue(null),
+    find: vi.fn().mockReturnValue({ select: () => ({ lean: async () => [] }) }),
+  },
+  Quest: { findById: vi.fn().mockReturnValue({ select: () => ({ lean: async () => null }) }) },
+  Session: { findById: vi.fn().mockReturnValue({ select: () => ({ lean: async () => null }) }) },
   FeedbackModel: FeedbackModelMock,
   User: { findOne: vi.fn().mockReturnValue({ populate: vi.fn().mockResolvedValue(null) }) },
   adminSettingsRepository: {},

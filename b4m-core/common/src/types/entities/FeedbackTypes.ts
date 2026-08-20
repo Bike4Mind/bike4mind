@@ -13,9 +13,22 @@ export enum FeedbackType {
   THUMBS_DOWN = 'Thumbs Down',
 }
 
+/**
+ * What a feedback record is ABOUT, which decides how it can be rolled up. Derived server-side from
+ * which foreign keys resolved, never taken from the client: a turn-scoped report needs a quest, a
+ * session-scoped one needs only a session, and product feedback is attached to neither.
+ */
+export type FeedbackSubject = 'turn' | 'session' | 'product';
+
 export interface IFeedback {
   userId: string;
-  content: string;
+  /**
+   * The reporter's free text. OPTIONAL because it does not live on this document: it is stored in
+   * the TTL'd `FeedbackText` sibling collection and joined back on read, so it is absent once that
+   * document has expired (90 days) while everything else here persists. Readers must treat it as
+   * possibly-absent rather than assuming a string - see FeedbackTextModel for why the split exists.
+   */
+  content?: string;
   status: FeedbackStatus;
   tags?: Array<string>;
   username: string;
@@ -24,9 +37,39 @@ export interface IFeedback {
   organization: string;
   type: FeedbackType;
   promptMeta: PromptMeta;
+  /**
+   * Server-derived foreign keys (#1864). All three are resolved from the authenticated identity and
+   * a re-read of the referenced quest - NEVER from the request body, because they become
+   * authorization keys the moment a scoped reader (#1866) filters on them.
+   *
+   * TYPE TRAP: `organizationId` is an ObjectId here while the quest side
+   * (`promptMeta.session.organizationId`) is a String. An aggregation `$match` across the two
+   * without an explicit cast matches zero documents and throws nothing, which renders as "no
+   * reports" - i.e. it reads as good news. Cast explicitly when joining.
+   */
+  sessionId?: string;
+  questId?: string;
+  organizationId?: string;
+  subject: FeedbackSubject;
 }
 
 export interface IFeedbackDocument extends IFeedback, IMongoDocument {}
+
+/**
+ * The reporter's free text, split out of `Feedback` so it can expire on its own (#1864). Mongo
+ * cannot TTL a single field of a document, so the text needs its own document for the retention
+ * policy to be expressible at all: 90 days on free text, permanent on the structured signal.
+ *
+ * 90 days matches this repo's existing precedents (HelpEventModel's TTL and the context-telemetry
+ * window). A TTL index rather than a scheduled job: self-maintaining, with no job to own and no
+ * failure mode where retention silently stops.
+ */
+export interface IFeedbackText {
+  feedbackId: string;
+  content: string;
+}
+
+export interface IFeedbackTextDocument extends IFeedbackText, IMongoDocument {}
 
 /**
  * Delivery-outcome types for the feedback notification fan-out (Slack + email). These describe

@@ -1,4 +1,4 @@
-import { FeedbackModel, User } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
 import {
   classifyStage,
   FeedbackEvents,
@@ -22,6 +22,8 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { deriveFeedbackKeys } from '@server/utils/deriveFeedbackKeys';
+import { attachFeedbackText } from '@server/utils/attachFeedbackText';
 import { Config } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
@@ -32,6 +34,17 @@ import {
 } from '@server/utils/cloudwatch';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
+
+/**
+ * The raw ObjectId of a populated organization subdocument, as a string. Narrow local cast because
+ * `IOrganizationDocument` describes the logical entity (which exposes `id`) while what is in hand
+ * here is a hydrated Mongoose subdocument.
+ */
+function orgObjectId(org: IOrganizationDocument | undefined): string | undefined {
+  const raw = (org as unknown as { _id?: unknown; id?: string } | undefined) ?? undefined;
+  const value = raw?._id ?? raw?.id;
+  return value ? String(value) : undefined;
+}
 
 const CreateFeedbackRequestSchema = z.object({
   userId: z.string(),
@@ -103,7 +116,8 @@ const handler = baseApi()
       throw new NotFoundError('Feedback not found');
     }
 
-    return res.json(feedback.map(toRedactedFeedback));
+    // Free text lives in the TTL'd sibling collection, so it is joined back here (#1864).
+    return res.json(await attachFeedbackText(feedback.map(toRedactedFeedback)));
   })
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);
@@ -121,11 +135,30 @@ const handler = baseApi()
       ? await User.findById(req.user.id).populate('organizationId')
       : await User.findOne({ email: userEmail }).populate('organizationId');
 
-    const organization = (existingUser?.organizationId as unknown as IOrganizationDocument)?.name || 'Unknown';
+    const populatedOrg = existingUser?.organizationId as unknown as IOrganizationDocument | undefined;
+    const organization = populatedOrg?.name || 'Unknown';
+
+    // Foreign keys are DERIVED, never taken from the body (#1864). `promptMeta` is client-supplied
+    // and persisted verbatim below, so its questId/session.id are claims: deriveFeedbackKeys
+    // re-reads each one and keeps it only if the owning session belongs to this caller. Without
+    // that, a reporter could attach a record to someone else's turn and then read it back through
+    // the scoped reader (#1866), whose filter trusts the key.
+    const resolvedUserId = authenticated ? req.user.id : undefined;
+    const derived = await deriveFeedbackKeys({
+      claimedQuestId: promptMeta?.questId,
+      claimedSessionId: promptMeta?.session?.id,
+      userId: resolvedUserId,
+      // The caller's OWN org, read from their user record above - not any org id the body named.
+      // `_id` rather than the `id` virtual: this is a populated subdocument, and reading the raw
+      // key does not depend on virtuals being enabled on the Organization schema.
+      organizationId: orgObjectId(populatedOrg),
+      logger: req.logger,
+    });
 
     const newFeedback = new FeedbackModel({
       userId: req.isAuthenticated() ? req.user.id : userId,
-      content,
+      // `content` is deliberately NOT stored here - it goes to the TTL'd FeedbackText sibling
+      // below so it can expire on its own while the structured signal persists (#1864).
       tags,
       status: FeedbackStatus.New,
       username: req.isAuthenticated() ? req.user.username : username,
@@ -133,8 +166,23 @@ const handler = baseApi()
       organization: organization,
       promptMeta: promptMeta,
       type,
+      sessionId: derived.sessionId,
+      questId: derived.questId,
+      organizationId: derived.organizationId,
+      subject: derived.subject,
     });
     await newFeedback.save();
+
+    // The free text lands in its own expiring document. Written AFTER the parent save so it always
+    // has a real feedbackId, and guarded: losing the prose must not fail a submission whose
+    // structured signal (and whose Slack/email delivery below) already succeeded.
+    if (content) {
+      try {
+        await FeedbackTextModel.create({ feedbackId: newFeedback.id, content });
+      } catch (error) {
+        req.logger?.error('Failed to persist feedback text; structured record was saved', error);
+      }
+    }
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const stageClass = classifyStage(Config.STAGE);
