@@ -135,6 +135,8 @@ export async function proposeDataLakeContent(
     // A missing `admittedFabFileId` is the same answer: it is the approved-but-empty row a failed
     // admission leaves, which never put anything in the lake either. Falling through re-proposes it
     // VISIBLY, carrying `priorDisposition: 'approved'` so the reviewer sees the history.
+    // NOTE: "live" here counts a file still mid-ingest as held - see isLiveDataLakeMember for why
+    // this arm must NOT reuse the hash arm's 'pending'-excluding predicate.
     const stillHeld =
       !!latest.admittedFabFileId &&
       (await db.fabFiles.isLiveDataLakeMember(latest.admittedFabFileId, lake.datalakeTag));

@@ -903,12 +903,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByServerTextHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
-   * Whether ONE named file is still a live member of a lake - same META-TAG scope and same liveness
-   * rule as findByServerTextHashesInDataLake (not deleted, not archived, not an orphaned `pending`
-   * ingest), keyed on the id instead of the hash. The acquisition queue asks this about the file a
-   * prior approval admitted (#1671): a stored `approved` status alone would keep answering "the lake
-   * already holds this" long after ordinary file management removed the file, leaving the source
-   * permanently unproposable with no human ever seeing it again.
+   * Whether ONE named file is still a member of a lake: same META-TAG scope as
+   * findByServerTextHashesInDataLake, not deleted and not archived - but NOT filtered on `status`,
+   * unlike every hash-keyed sibling. The acquisition queue asks this about the file a prior approval
+   * admitted (#1671), where a stored `approved` status alone would keep answering "the lake already
+   * holds this" long after ordinary file management removed the file, leaving the source permanently
+   * unproposable with no human ever seeing it again.
+   *
+   * The `status` divergence is deliberate: the caller already knows a human approved THIS file, so a
+   * file still mid-ingest ('pending', before the S3 ObjectCreated handler completes it) is held, not
+   * absent. Excluding it would re-open the source for the whole approval->ingest window and let a
+   * reviewer be handed a second card for content already on its way in.
    */
   isLiveDataLakeMember(fabFileId: string, datalakeTag: string): Promise<boolean>;
   /**

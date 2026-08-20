@@ -63,3 +63,38 @@ describe('FabFileRepository.findByServerTextHashesInDataLake', () => {
     expect(await fabFileRepository.findByServerTextHashesInDataLake([], LAKE_TAG)).toEqual([]);
   });
 });
+
+describe('FabFileRepository.isLiveDataLakeMember', () => {
+  setupMongoTest();
+
+  it('counts a member of the lake as held', async () => {
+    const file = await makeFile({});
+
+    expect(await fabFileRepository.isLiveDataLakeMember(file.id, LAKE_TAG)).toBe(true);
+  });
+
+  // The regression this method exists to prevent, found on a live walk: a just-approved file sits at
+  // 'pending' until the S3 ObjectCreated handler completes it. Excluding 'pending' the way the
+  // hash-keyed siblings do re-opened the source for proposal across that whole window, handing a
+  // reviewer a second card for content already being admitted.
+  it('counts a file still mid-ingest as held - admitted is admitted', async () => {
+    const file = await makeFile({ status: 'pending' });
+
+    expect(await fabFileRepository.isLiveDataLakeMember(file.id, LAKE_TAG)).toBe(true);
+  });
+
+  it('does not count a file removed from the lake', async () => {
+    const deleted = await makeFile({ deleted: true, fileName: 'gone' });
+    const archived = await makeFile({ archived: true, fileName: 'shelved' });
+
+    expect(await fabFileRepository.isLiveDataLakeMember(deleted.id, LAKE_TAG)).toBe(false);
+    expect(await fabFileRepository.isLiveDataLakeMember(archived.id, LAKE_TAG)).toBe(false);
+  });
+
+  it('is scoped to the lake asked about, not to any lake the file is in', async () => {
+    const file = await makeFile({ tags: ['datalake:other-lake'] });
+
+    expect(await fabFileRepository.isLiveDataLakeMember(file.id, LAKE_TAG)).toBe(false);
+    expect(await fabFileRepository.isLiveDataLakeMember(file.id, 'datalake:other-lake')).toBe(true);
+  });
+});

@@ -1056,15 +1056,21 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async isLiveDataLakeMember(fabFileId: string, datalakeTag: string): Promise<boolean> {
-    // Same predicate as findByServerTextHashesInDataLake, id-keyed: the two must agree on what
-    // "live member" means, or the acquisition queue's two dedup arms would disagree about the same
-    // lake. Kept as an existence check rather than a fetch - no caller needs the document.
+    // Deliberately WITHOUT the `status: { $ne: 'pending' }` conjunct its hash-keyed siblings carry,
+    // and that divergence is the whole point. Those match on `serverTextHash`, which a file that has
+    // not chunked yet does not have - so excluding 'pending' there costs nothing and stops an
+    // orphaned upload from suppressing a legitimate re-upload. Here the caller already KNOWS a human
+    // approved this exact file (it passes `admittedFabFileId` off the proposal row), so the only
+    // question is whether the lake still holds it. A file mid-ingest is held: it was admitted, its
+    // bytes are landing, and its chunks are coming. Treating 'pending' as absent re-opened the source
+    // for proposal during the whole approval->ingest window, which is how a reviewer could be handed
+    // a second card for content already on its way in - and approving both admits one source twice.
+    // Verified live: a just-approved file sits at 'pending' until the S3 ObjectCreated handler runs.
     const found = await this.fabFileModel.exists({
       _id: fabFileId,
       deletedAt: null,
       archivedAt: null,
       tags: { $elemMatch: { name: datalakeTag } },
-      status: { $ne: 'pending' },
     });
     return found !== null;
   }
