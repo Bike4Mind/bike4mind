@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { useEffect, useState } from 'react';
+import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import SectionContainer from '../SectionContainer';
 import NotionPagePicker, { type AllowedPage } from './NotionPagePicker';
 
@@ -52,7 +53,24 @@ const ConnectedAppsSection = () => {
   const connectGoogleDrive = useConnectGoogleDrive();
   const disconnectGoogleDrive = useDisconnectGoogleDrive();
 
+  // Unlinking revokes the OAuth grant at Google: the user cannot undo it without a fresh consent
+  // round-trip, and it stops any org folder sync authorized with this account. Destructive enough to
+  // confirm, via the same global danger dialog the org integrations use. The sibling integrations
+  // here stay one-click on purpose - none of them provably revokes a third-party grant today.
+  const confirm = useConfirmation();
+
   const handleDisconnectGoogleDrive = () => {
+    confirm({
+      type: 'danger',
+      title: 'Unlink Google Drive',
+      description:
+        "This revokes Bike4Mind's access to your Google Drive at Google. Any organization Drive folder sync authorized with this account will stop until an owner reconnects it. You can link Google Drive again at any time.",
+      okLabel: 'Unlink',
+      onOk: () => runDisconnectGoogleDrive(),
+    });
+  };
+
+  const runDisconnectGoogleDrive = () => {
     disconnectGoogleDrive.mutate(undefined, {
       onSuccess: affectedOrgConnections => {
         // The card's connected state reads from the zustand `currentUser`, which only a /api/identify
@@ -64,9 +82,9 @@ const ConnectedAppsSection = () => {
         // starts failing with no visible cause.
         if (affectedOrgConnections > 0) {
           toast.warning(
-            `Google Drive disconnected. ${affectedOrgConnections} organization Drive folder ${
-              affectedOrgConnections === 1 ? 'sync' : 'syncs'
-            } used this account and now need reconnecting.`,
+            affectedOrgConnections === 1
+              ? 'Google Drive disconnected. 1 organization Drive folder sync used this account and now needs reconnecting.'
+              : `Google Drive disconnected. ${affectedOrgConnections} organization Drive folder syncs used this account and now need reconnecting.`,
             { duration: 8000 }
           );
           return;
