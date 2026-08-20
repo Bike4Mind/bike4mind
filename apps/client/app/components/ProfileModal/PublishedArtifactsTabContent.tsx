@@ -53,9 +53,10 @@ import { downloadData } from '@client/app/utils/download';
 import { printHtmlForPdf } from '@client/app/utils/printToPdf';
 import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
 
-/** Page size. Small enough that the tab opens instantly on a large library, large enough that
- *  most people never page at all. */
-const PAGE_SIZE = 25;
+/** Page size. Small enough that the tab opens instantly on a large library, large enough that most
+ *  people never page at all. Exported so the paging tests assert against one number rather than a
+ *  copy, and named the same as the server's own bound so the two are greppable together. */
+export const PAGE_SIZE = 25;
 
 /** Sort options, mirroring the keys the list endpoint accepts. */
 const SORTS: Array<{ value: string; label: string }> = [
@@ -127,8 +128,6 @@ export default function PublishedArtifactsTabContent() {
       gate: filters.gate ?? undefined,
       comments: filters.comments ?? undefined,
       sort: filters.sort,
-      // The tab renders the chips, so it is the one caller that wants the counts.
-      facets: true,
       limit: PAGE_SIZE,
       skip,
     }),
@@ -144,10 +143,20 @@ export default function PublishedArtifactsTabContent() {
     placeholderData: prev => prev,
   });
 
+  // Facets are their own query: they are group-bys over the caller's WHOLE library and by design
+  // ignore the current selection, so they do not change when you turn a page. Folding them into the
+  // list query re-ran five group-bys on every paging click. staleTime keeps them out of the way of
+  // ordinary navigation; the tab's invalidation still refreshes them when the library changes.
+  const { data: facetData } = useQuery({
+    queryKey: ['published-artifacts', 'mine', 'facets'] as const,
+    queryFn: () => listMyPublishedArtifacts({ facets: true, limit: 1 }),
+    staleTime: 60_000,
+  });
+
   const artifacts = data?.artifacts ?? [];
   const total = data?.total ?? 0;
 
-  const facets: ManagedListFacets = data?.facets ?? { kind: {}, visibility: {}, gate: {}, comments: 0 };
+  const facets: ManagedListFacets = facetData?.facets ?? { kind: {}, visibility: {}, gate: {}, comments: 0 };
   const filtering = isFiltering(filters, q);
 
   /** Change a filter. Always resets to the first page - staying on page 4 of a narrower result

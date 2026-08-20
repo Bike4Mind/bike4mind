@@ -279,7 +279,11 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
  */
 describe('PublishedArtifactsTabContent - search, facets and paging', () => {
   /** The query argument of the most recent list call. */
-  const lastQuery = () => mockList.mock.calls[mockList.mock.calls.length - 1][0] as Record<string, unknown>;
+  /** The most recent LIST call, ignoring the separate facet-counts query. */
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
 
   it('requests a bounded page instead of the whole library', async () => {
     renderTab();
@@ -401,7 +405,11 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
 
 /** Regressions from review on #1961. Both were on ordinary paths and neither had coverage. */
 describe('PublishedArtifactsTabContent - review regressions', () => {
-  const lastQuery = () => mockList.mock.calls[mockList.mock.calls.length - 1][0] as Record<string, unknown>;
+  /** The most recent LIST call, ignoring the separate facet-counts query. */
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
 
   it('closes the sharing panel when the row collapses', async () => {
     // The </> button that toggles the panel lives INSIDE the disclosure, so leaving the panel
@@ -466,9 +474,20 @@ describe('PublishedArtifactsTabContent - review regressions', () => {
     expect(screen.queryByTestId('published-artifacts-empty')).toBeNull();
   });
 
-  it('asks the server for facet counts only from the tab that renders them', async () => {
+  it('fetches facet counts in a separate query, so paging does not recompute them', async () => {
+    // Facets are group-bys over the whole library and by design ignore the current selection, so
+    // they do not change when you turn a page. Recomputing them per page was five wasted group-bys.
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
-    expect(lastQuery().facets).toBe(true);
+
+    const calls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>);
+    const listCalls = calls.filter(c => c.facets !== true);
+    const facetCalls = calls.filter(c => c.facets === true);
+
+    expect(listCalls.length).toBeGreaterThan(0);
+    expect(listCalls.every(c => c.limit === 25)).toBe(true);
+    // The facet query asks for a single row - it wants the counts, not the page.
+    expect(facetCalls).toHaveLength(1);
+    expect(facetCalls[0].limit).toBe(1);
   });
 });
