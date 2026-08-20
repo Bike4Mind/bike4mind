@@ -15,6 +15,10 @@ import { setupMongoTest } from './utils';
  *
  * These tests pin both halves so the write-path asymmetry stays visible: the copy paths must
  * supply the session block themselves (see rebindPromptMetaSession in @bike4mind/common).
+ *
+ * The second block below covers `prompt`, which had the same gap through a different creator -
+ * a required field the unvalidated writes can omit, so a copy of such a quest died on
+ * validation no matter what the copy path did about promptMeta.
  */
 describe('Quest promptMeta.session write-path asymmetry', () => {
   setupMongoTest();
@@ -73,5 +77,61 @@ describe('Quest promptMeta.session write-path asymmetry', () => {
     } as any);
 
     expect(created.promptMeta?.session).toMatchObject({ id: 'forked-session', userId: 'user1' });
+  });
+
+  it('accepts create() of a quest that has no promptMeta at all', async () => {
+    // The copy paths deliberately do NOT invent a promptMeta for a source quest that has none
+    // (rebindPromptMetaSession returns undefined). Asserted here against the real schema, not
+    // just at the unit-mock level, so "absent is fine" is pinned by the store itself.
+    const created = await questRepository.create({
+      sessionId: 'forked-session',
+      timestamp: new Date(),
+      type: 'message',
+      prompt: 'Hello',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal quest shape for this test
+    } as any);
+
+    expect(created.promptMeta).toBeUndefined();
+  });
+});
+
+/**
+ * Same asymmetry, one field over. `ChatHistoryItemSchema.prompt` was `required: true`, but the
+ * writes that can create a quest without one bypass validators entirely:
+ * `upsertBySessionIdAndConversationItemId` (a bare upsert, used by the voice transcript handler,
+ * whose assistant branch only ever sets replies/status/type/timestamp) and `update()`. Prompt-less
+ * quests are therefore normal on disk - 17 of 55 in one local database - and a copy of one died on
+ * `prompt: Path 'prompt' is required.` before the promptMeta rebind could matter.
+ *
+ * Note `prompt: quest.prompt ?? ''` is NOT a fix: Mongoose's `required` on a String rejects '' too.
+ * The field is now `required: false`, which is what the data has always said.
+ */
+describe('Quest prompt write-path asymmetry', () => {
+  setupMongoTest();
+
+  it('lets the unvalidated upsert create a quest with no prompt', async () => {
+    const upserted = await questRepository.upsertBySessionIdAndConversationItemId('session1', 'item-1', {
+      replies: ['assistant said this'],
+      status: 'done',
+      type: 'voice_transcript',
+      timestamp: new Date(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the voice handler's exact partial write
+    } as any);
+
+    expect(upserted?.prompt).toBeUndefined();
+  });
+
+  it('accepts create() of a copy of a prompt-less quest', async () => {
+    const created = await questRepository.create({
+      sessionId: 'forked-session',
+      timestamp: new Date(),
+      type: 'voice_transcript',
+      replies: ['assistant said this'],
+      promptMeta: { session: { id: 'forked-session', userId: 'user1' } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reproducing the copied prompt-less shape
+    } as any);
+
+    expect(created.prompt).toBeUndefined();
+    expect(created.replies).toEqual(['assistant said this']);
   });
 });

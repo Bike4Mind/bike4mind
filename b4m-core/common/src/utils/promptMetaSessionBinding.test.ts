@@ -53,6 +53,19 @@ describe('rebindPromptMetaSession', () => {
     });
   });
 
+  it('replaces an explicitly null session rather than spreading null into the result', () => {
+    // A read path can hand back `session: null` where the field was never written. Spreading null
+    // is a no-op in JS, so this lands as a well-formed block - but Mongoose rejects a null
+    // subdocument outright, so it must not survive the rebind.
+    const rebound = rebindPromptMetaSession(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- null is off-contract for the Zod type, on-contract for a raw read
+      { session: null } as any,
+      { sessionId: 'fork-1', userId: 'caller-1' }
+    );
+
+    expect(rebound?.session).toEqual({ id: 'fork-1', userId: 'caller-1' });
+  });
+
   it('does not mutate the source promptMeta', () => {
     const source = { session: { id: 'source-session', userId: 'source-owner' } };
 

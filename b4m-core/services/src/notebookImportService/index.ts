@@ -349,6 +349,11 @@ export class NotebookImportService {
       // The store requires the owning session on promptMeta. The export carries metrics only,
       // and an imported message belongs to the new notebook, so this is rebuilt rather than
       // carried over.
+      //
+      // Deliberately NOT rebindPromptMetaSession (@bike4mind/common), which fork/snip/clone use:
+      // that spreads the source session block, and an import can land in a different tenant than
+      // it was exported from, so organizationId/projectId must be dropped here rather than carried
+      // into another org's analytics rollups. Must stay in sync with that helper's doc comment.
       promptMeta: message.promptMeta && {
         ...message.promptMeta,
         session: { id: sessionId, userId: ownerUserId },
