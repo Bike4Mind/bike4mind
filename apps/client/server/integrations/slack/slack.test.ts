@@ -33,16 +33,6 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-// classifyStage and isPlaceholderValue are imported actual (not hand-copied) so a future
-// change to either fails this suite instead of silently drifting from the real implementation.
-vi.mock('@bike4mind/common', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
-  return {
-    classifyStage: actual.classifyStage,
-    isPlaceholderValue: actual.isPlaceholderValue,
-  };
-});
-
 vi.mock('@bike4mind/observability', () => ({
   Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
