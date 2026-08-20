@@ -70,6 +70,14 @@ describe('Page Tools', () => {
     registerPageTools(mock.server);
   });
 
+  it('all page tools should have non-empty descriptions', () => {
+    for (const toolName of [TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE]) {
+      const tool = registeredTools.get(toolName)!;
+      expect(tool.description, `${toolName} should have a description`).toBeTruthy();
+      expect(typeof tool.description).toBe('string');
+    }
+  });
+
   describe(TOOL_NOTION_CREATE_PAGE, () => {
     it('should register the tool', () => {
       expect(registeredTools.has(TOOL_NOTION_CREATE_PAGE)).toBe(true);

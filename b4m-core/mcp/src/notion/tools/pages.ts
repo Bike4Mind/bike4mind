@@ -403,6 +403,7 @@ export function registerPageTools(server: McpServer): void {
   // --- Create Page ---
   server.tool(
     TOOL_NOTION_CREATE_PAGE,
+    'Create a new page in the connected Notion workspace. Requires write access to be enabled. The page is created under the configured root page or a specified parent.',
     {
       title: z.string().min(1).max(200).describe('Title of the Notion page to create'),
       content: z
@@ -506,6 +507,7 @@ export function registerPageTools(server: McpServer): void {
   // --- Append Blocks ---
   server.tool(
     TOOL_NOTION_APPEND_BLOCKS,
+    'Append content blocks (paragraphs, headings, lists, code, etc.) to an existing Notion page or block. Requires write access.',
     {
       blockId: notionPageIdSchema.describe('The ID of the page or block to append children to (UUID format).'),
       blocks: z
@@ -563,6 +565,7 @@ export function registerPageTools(server: McpServer): void {
   // --- Read Page ---
   server.tool(
     TOOL_NOTION_READ_PAGE,
+    'Read the content of a Notion page by its ID. Returns the child blocks (text, headings, lists, etc.) and a plain-text summary.',
     {
       pageId: notionPageIdSchema.describe('Notion page ID to read content from'),
       page_size: z

@@ -134,6 +134,7 @@ async function isPageAccessibleViaAncestry(
 export function registerSearchTools(server: McpServer): void {
   server.tool(
     TOOL_NOTION_SEARCH,
+    'Search for pages and databases in the connected Notion workspace by text query. Returns matching page titles, IDs, and URLs.',
     {
       query: z.string().min(1).max(200).describe('Text to search for in the connected Notion workspace'),
       ...paginationParams,

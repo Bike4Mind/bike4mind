@@ -54,6 +54,12 @@ describe('Search Tools', () => {
       expect(registeredTools.has(TOOL_NOTION_SEARCH)).toBe(true);
     });
 
+    it('should have a non-empty description', () => {
+      const tool = registeredTools.get(TOOL_NOTION_SEARCH)!;
+      expect(tool.description).toBeTruthy();
+      expect(typeof tool.description).toBe('string');
+    });
+
     it('should return search results', async () => {
       vi.mocked(notionRequest).mockResolvedValueOnce({
         results: [makeSearchResult('page-id-1', 'My Page')],

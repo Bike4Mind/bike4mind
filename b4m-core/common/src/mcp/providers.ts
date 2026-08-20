@@ -69,6 +69,18 @@ const atlassianDescriptions: Record<string, string> = {
 };
 
 export const MCP_PROVIDER_METADATA: Record<string, McpProviderMetadata> = {
+  notion: {
+    defaultToolDescriptions: {
+      notion_search:
+        'Search for pages and databases in the connected Notion workspace by text query. Returns matching page titles, IDs, and URLs.',
+      notion_create_page:
+        'Create a new page in the connected Notion workspace. Requires write access to be enabled. The page is created under the configured root page or a specified parent.',
+      notion_read_page:
+        'Read the content of a Notion page by its ID. Returns the child blocks (text, headings, lists, etc.) and a plain-text summary.',
+      notion_append_blocks:
+        'Append content blocks (paragraphs, headings, lists, code, etc.) to an existing Notion page or block. Requires write access.',
+    },
+  },
   atlassian: {
     defaultToolDescriptions: atlassianDescriptions,
   },
