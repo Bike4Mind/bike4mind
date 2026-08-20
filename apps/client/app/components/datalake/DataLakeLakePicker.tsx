@@ -69,6 +69,12 @@ const SEARCH_THRESHOLD = 8;
 /** Monospaced count, right-aligned, so the column of numbers lines up down the menu. */
 const COUNT_SX = { fontFamily: 'monospace', color: 'text.tertiary', flexShrink: 0 } as const;
 
+/**
+ * Same column treatment for the trigger's count, but inheriting the button's color rather than
+ * `text.tertiary`. See the trigger label below for why: on the button, tertiary is unreadable.
+ */
+const TRIGGER_COUNT_SX = { fontFamily: 'monospace', flexShrink: 0 } as const;
+
 export default function DataLakeLakePicker({
   lakes,
   isLoading,
@@ -99,6 +105,14 @@ export default function DataLakeLakePicker({
   const showSearch = (lakes?.length ?? 0) >= SEARCH_THRESHOLD;
   const selectedCount = selectedLake ? lakeFileCounts?.[selectedLake.datalakeTag] : totalFileCount;
 
+  const lakeTotal = lakes?.length ?? 0;
+  // While a filter is narrowing the list, the bare total reads as a stale count sitting under a
+  // shorter set of rows (or under "No matches"), so name both numbers.
+  const lakeCountLabel =
+    query && filtered.length !== lakeTotal
+      ? `${filtered.length} of ${lakeTotal} lakes`
+      : `${lakeTotal} ${lakeTotal === 1 ? 'lake' : 'lakes'}`;
+
   return (
     <Box sx={{ px: '12px', pt: '12px' }}>
       <Dropdown>
@@ -115,12 +129,22 @@ export default function DataLakeLakePicker({
           ) : (
             <LayersOutlinedIcon sx={{ fontSize: 16, flexShrink: 0, color: 'text.tertiary' }} />
           )}
-          <Typography noWrap level="body-sm" sx={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
+          {/* textColor=inherit is load-bearing: Joy defaults `body-sm`/`body-xs` to
+              `text.tertiary`, which this theme defines as the brand hue at 50% alpha (~2.2:1 on
+              the light surface). That is fine for a subtitle but not for the label naming the
+              current scope - the one thing this control exists to tell you. The button's own
+              color is solid, so inheriting it is both legible and themed. */}
+          <Typography noWrap level="body-sm" textColor="inherit" sx={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             {selectedLake ? selectedLake.name : copy.allLakesLabel}
           </Typography>
           {/* Withheld while the counts are unknown so the trigger never shows a confident zero. */}
           {typeof selectedCount === 'number' && selectedCount > 0 && (
-            <Typography level="body-xs" sx={COUNT_SX} data-testid="datalake-lake-picker-count">
+            <Typography
+              level="body-xs"
+              textColor="inherit"
+              sx={TRIGGER_COUNT_SX}
+              data-testid="datalake-lake-picker-count"
+            >
               {selectedCount}
             </Typography>
           )}
@@ -207,7 +231,9 @@ export default function DataLakeLakePicker({
               {filtered.length === 0 ? (
                 <ListItem>
                   <Typography level="body-xs" sx={{ px: 1, py: 1, color: 'text.tertiary' }}>
-                    {query ? 'No matches' : `No ${copy.allLakesLabel.toLowerCase()} yet`}
+                    {/* rootLabel, not allLakesLabel: the latter is the "All data lakes" ROW label,
+                        which reads as "No all data lakes yet" in a sentence. */}
+                    {query ? 'No matches' : `No ${copy.rootLabel.toLowerCase()} yet`}
                   </Typography>
                 </ListItem>
               ) : (
@@ -291,7 +317,7 @@ export default function DataLakeLakePicker({
                 data-testid="datalake-lake-picker-lake-count"
                 sx={{ fontSize: '11px' }}
               >
-                {lakes?.length ?? 0} {lakes?.length === 1 ? 'lake' : 'lakes'}
+                {lakeCountLabel}
               </Chip>
             </ListItem>
           )}

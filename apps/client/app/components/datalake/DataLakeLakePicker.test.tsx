@@ -153,4 +153,41 @@ describe('DataLakeLakePicker', () => {
     expect(screen.queryByTestId('datalake-lake-picker-create-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-lake-picker-discover-btn')).not.toBeInTheDocument();
   });
+
+  it('names the zero state after the surface, not after the all-lakes row', () => {
+    renderPicker({ lakes: [] });
+    openMenu();
+
+    // Reading allLakesLabel ("All data lakes") into the sentence produced the nonsense
+    // "No all data lakes yet" on the first-run path.
+    expect(screen.getByTestId('datalake-lake-picker-menu')).toHaveTextContent('No data lakes yet');
+    expect(screen.getByTestId('datalake-lake-picker-menu')).not.toHaveTextContent('No all data lakes yet');
+  });
+
+  it('counts the filtered rows against the total while a filter narrows the list', () => {
+    // 8 lakes is the threshold at which the filter box appears.
+    const lakes = Array.from({ length: 8 }, (_, i) => lake({ id: `l${i}`, name: `Lake ${i}` }));
+    renderPicker({ lakes });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('8 lakes');
+
+    fireEvent.change(screen.getByTestId('datalake-lake-picker-search'), { target: { value: 'Lake 3' } });
+
+    // A bare total under a single visible row reads as a stale count.
+    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('1 of 8 lakes');
+  });
+
+  it('lets the trigger label inherit the button color, which the themed body-sm default does not', () => {
+    renderPicker({ lakes: [lake({ id: 'a', name: 'Research Corpus' })], selectedLakeId: 'a' });
+
+    // text.tertiary is the brand hue at 50% alpha in this theme - around 2.2:1 on the light
+    // surface, which is not a contrast the primary scope label can afford.
+    const label = screen.getByTestId('datalake-lake-picker-btn').querySelector('p');
+    expect(label).toHaveTextContent('Research Corpus');
+    // Resolves through the button's own variant color instead of the themed body-sm default.
+    const labelColor = label ? getComputedStyle(label).color : '';
+    expect(labelColor).toMatch(/variant-outlinedColor/i);
+    expect(labelColor).not.toMatch(/text-tertiary/i);
+  });
 });
