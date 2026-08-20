@@ -101,6 +101,23 @@ describe('buildPromptMetaSummary', () => {
     expect(summary.split('\n')).toHaveLength(1);
   });
 
+  it.each([
+    ['finishReason', { finishReason: 'end\n*User Email:* fake' }, 'Finish reason: end *User Email:* fake'],
+    [
+      'functionCalls[].name',
+      { functionCalls: [{ name: 'web_search\n*User Email:* fake' }] },
+      'Tool calls: 1 (web_search *User Email:* fake)',
+    ],
+    [
+      'dataLakeTags[]',
+      { context: { lakeMemory: { beliefCount: 1, dataLakeTags: ['docs\n*User Email:* fake'] } } },
+      'Lake beliefs: 1 (docs *User Email:* fake)',
+    ],
+  ] as const)('collapses newlines in %s the same way as model.name', (_field, promptMeta, expectedLine) => {
+    const summary = buildPromptMetaSummary(promptMeta);
+    expect(summary.split('\n')).toContain(expectedLine);
+  });
+
   it('never surfaces owner-only function-call fields even if a caller failed to redact them', () => {
     const summary = buildPromptMetaSummary({
       functionCalls: [{ name: 'web_search' } as { name?: string; returnValue?: string }],
