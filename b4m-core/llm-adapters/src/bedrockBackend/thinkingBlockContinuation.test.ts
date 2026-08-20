@@ -8,7 +8,8 @@
  * a multi-round tool turn came back with no text and no tool call and tripped the
  * fail-loud EMPTY-response guard in base.ts.
  *
- * Asserted against the real request bodies the backend sends:
+ * Asserted against the real request bodies the backend sends, over both transports
+ * (streaming and non-streaming are separate commands, translators and tool loops):
  *  - a thinking turn's blocks (with signature) lead the rebuilt assistant turn;
  *  - a parallel round attaches them to every turn it rebuilds, not just the first;
  *  - a non-thinking turn is byte-identical to before - exactly `[tool_use]`.
@@ -37,14 +38,20 @@ const adaptiveRecord: ModelInfo = {
 } as ModelInfo;
 
 /**
- * Serves one canned raw-Bedrock stream per round and records the request body of each,
+ * Serves one canned raw-Bedrock response per round and records the request body of each,
  * which is what the assertions read. `updateClientForModel` is neutered so no
  * BedrockRuntimeClient (or credential lookup) is built.
+ *
+ * Streaming and non-streaming are separate Bedrock commands behind separate seams, so
+ * both are stubbed: `streamRounds` are event lists, `jsonRounds` whole response bodies.
  */
 class RecordingBedrockBackend extends AnthropicBedrockBackend {
   sentBodies: string[] = [];
 
-  constructor(private readonly rounds: unknown[][]) {
+  constructor(
+    private readonly streamRounds: unknown[][] = [],
+    private readonly jsonRounds: unknown[] = []
+  ) {
     super();
   }
 
@@ -58,7 +65,7 @@ class RecordingBedrockBackend extends AnthropicBedrockBackend {
     accept: string;
     body: string;
   }): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
-    const round = this.rounds[this.sentBodies.length] ?? [];
+    const round = this.streamRounds[this.sentBodies.length] ?? [];
     this.sentBodies.push(input.body);
     return {
       body: {
@@ -69,6 +76,18 @@ class RecordingBedrockBackend extends AnthropicBedrockBackend {
         },
       },
     };
+  }
+
+  protected override async invokeModel(input: {
+    modelId: string;
+    contentType: string;
+    accept: string;
+    body: string;
+  }): Promise<{ body?: Uint8Array }> {
+    const round = this.jsonRounds[this.sentBodies.length];
+    this.sentBodies.push(input.body);
+    if (!round) throw new Error(`no canned non-streaming round ${this.sentBodies.length - 1}`);
+    return { body: new TextEncoder().encode(JSON.stringify(round)) };
   }
 }
 
@@ -166,6 +185,38 @@ function synthesisRound(): unknown[] {
   ];
 }
 
+/**
+ * The non-streaming shapes of the same two rounds. `invokeModel` returns one whole JSON
+ * body rather than an event stream, so `translateChunk` collects the reasoning blocks
+ * from `response.content` instead of accumulating them delta by delta.
+ */
+function thinkingToolResponse(): unknown {
+  return {
+    id: 'msg_round1',
+    type: 'message',
+    role: 'assistant',
+    model: ADAPTIVE_MODEL,
+    content: [
+      { type: 'thinking', thinking: THINKING_TEXT, signature: SIGNATURE },
+      { type: 'tool_use', id: 'toolu_round1', name: 'get_weather', input: { location: 'Paris' } },
+    ],
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 110000, output_tokens: 900 },
+  };
+}
+
+function synthesisResponse(): unknown {
+  return {
+    id: 'msg_round2',
+    type: 'message',
+    role: 'assistant',
+    model: ADAPTIVE_MODEL,
+    content: [{ type: 'text', text: 'It is sunny in Paris.' }],
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 111000, output_tokens: 60 },
+  };
+}
+
 const weatherTool: ICompletionOptionTools = {
   toolFn: async () => 'sunny, 24C',
   toolSchema: {
@@ -208,8 +259,7 @@ function rebuiltAssistantContent(body: string): WireBlock[] {
   return first;
 }
 
-async function runToolTurn(rounds: unknown[][], options: Partial<ICompletionOptions> = {}) {
-  const backend = new RecordingBedrockBackend(rounds);
+async function run(backend: RecordingBedrockBackend, options: Partial<ICompletionOptions>) {
   backend.setDispatchModel(adaptiveRecord);
   const messages: IMessage[] = [{ role: 'user', content: 'What is the weather in Paris?' }];
   const emitted: string[] = [];
@@ -217,13 +267,21 @@ async function runToolTurn(rounds: unknown[][], options: Partial<ICompletionOpti
   await backend.complete(
     ADAPTIVE_MODEL,
     messages,
-    { stream: true, tools, maxTokens: 64000, ...options } as Partial<ICompletionOptions>,
+    { tools, maxTokens: 64000, ...options } as Partial<ICompletionOptions>,
     async text => {
       emitted.push(text.filter((t): t is string => typeof t === 'string').join(''));
     }
   );
 
   return { backend, emitted: emitted.join('') };
+}
+
+async function runToolTurn(rounds: unknown[][], options: Partial<ICompletionOptions> = {}) {
+  return run(new RecordingBedrockBackend(rounds), { stream: true, ...options });
+}
+
+async function runNonStreamingToolTurn(rounds: unknown[], options: Partial<ICompletionOptions> = {}) {
+  return run(new RecordingBedrockBackend([], rounds), { stream: false, ...options });
 }
 
 describe('Bedrock Claude tool continuation preserves signed thinking blocks', () => {
@@ -289,5 +347,18 @@ describe('Bedrock Claude tool continuation preserves signed thinking blocks', ()
       expect(content[1]).toMatchObject({ type: 'tool_use' });
     }
     expect(turns.map(c => (c[1] as { name?: string }).name)).toEqual(['get_weather', 'get_time']);
+  });
+
+  // The non-streaming half of both the capture and the replay: a different Bedrock command
+  // (invokeModel), a different translator (translateChunk), and a different loop in base.ts.
+  it('replays the thinking block on the non-streaming path too', async () => {
+    const { backend, emitted } = await runNonStreamingToolTurn([thinkingToolResponse(), synthesisResponse()]);
+
+    expect(backend.sentBodies).toHaveLength(2);
+    const content = rebuiltAssistantContent(backend.sentBodies[1]);
+
+    expect(content[0]).toEqual({ type: 'thinking', thinking: THINKING_TEXT, signature: SIGNATURE });
+    expect(content[1]).toMatchObject({ type: 'tool_use', name: 'get_weather' });
+    expect(emitted).toContain('It is sunny in Paris.');
   });
 });
