@@ -33,18 +33,13 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-// Match the canonical helper from @bike4mind/common (same approach as mailer/index.test.ts).
-// classifyStage is imported actual (not hand-copied) so a future stage-routing change fails
-// this suite instead of silently drifting from the real implementation.
+// classifyStage and isPlaceholderValue are imported actual (not hand-copied) so a future
+// change to either fails this suite instead of silently drifting from the real implementation.
 vi.mock('@bike4mind/common', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
   return {
     classifyStage: actual.classifyStage,
-    isPlaceholderValue: (value: string | undefined | null) => {
-      if (!value) return true;
-      const normalized = value.trim().toLowerCase();
-      return normalized === 'my-secret-placeholder-value' || normalized === 'not-configured';
-    },
+    isPlaceholderValue: actual.isPlaceholderValue,
   };
 });
 
