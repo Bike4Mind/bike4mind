@@ -509,7 +509,9 @@ describe('SSRF - connect-time lookup pin (DNS rebinding)', () => {
  * comparing verdicts rather than by reading the code. Hand-picked cases only ever prove the cases someone
  * thought of, so these assert the two properties the arms are supposed to have:
  *
- *   1. spelling invariance - all legal spellings of one address get one verdict;
+ *   1. spelling invariance - all legal spellings of one address get one verdict, with ONE deliberate
+ *      exception named and pinned below: the two v4-embedding branches judge a dotted tail exactly and
+ *      refuse a hex tail undecoded;
  *   2. range coverage - a family is refused across its WHOLE prefix, not at the hextets someone listed.
  *
  * Keep these table-driven and cheap. They are the regression net for the defect class, not for a case.
@@ -565,6 +567,46 @@ describe('SSRF - IPv6 verdicts follow the address, not its spelling', () => {
 
     const permitted = refused.filter(ip => !isPrivateIP(ip));
     expect(permitted, `these should be refused: ${permitted.slice(0, 8).join(', ')}`).toEqual([]);
+  });
+
+  it('judges a hex tail strictly and a dotted tail exactly, on purpose', () => {
+    // The one place spelling invariance does NOT hold, and it must not be "fixed" to satisfy the property.
+    // A dotted tail is decoded through `isPrivateIPv4`; a hex tail is refused undecoded. So these pairs are
+    // the same address with opposite verdicts. Decoding the hex tail instead is the over-block the mapped-arm
+    // comment rules out: an `ffff` hextet appears in ordinary public addresses, and `validateUrlForFetch`
+    // refuses a host when ANY resolved IP is private, so it would sink a dual-stack host's healthy A record.
+    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::ffff:808:808')).toBe(true);
+    expect(isPrivateIP('::8.8.8.8')).toBe(false);
+    expect(isPrivateIP('::808:808')).toBe(true);
+    // The strictness is only about DECODING, not about which addresses are private: a private embedded quad
+    // is refused in either spelling.
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true);
+  });
+
+  it('keeps every exported gate agreeing about what counts as IPv4', () => {
+    // The port strip lives in one shared helper for this reason: when it went into `isPrivateIP` alone,
+    // `8.8.8.8:443` came back public from one export and private from the other, which is the same
+    // gates-disagree shape that produced the original bracketed-IPv6 hole.
+    for (const host of ['8.8.8.8:443', '1.2.3.4:80', '10.0.0.1:8080', '127.0.0.1:80', '169.254.169.254:8080']) {
+      expect(isPrivateOrInternalHostname(host), host).toBe(isPrivateIP(host));
+    }
+    expect(isPrivateIP('8.8.8.8:443')).toBe(false);
+    expect(isPrivateIP('10.0.0.1:8080')).toBe(true);
+    // Zone indexes travel through the same helper, so a bare quad with one is still judged as IPv4.
+    expect(isPrivateIP('127.0.0.1%eth0')).toBe(true);
+    expect(isPrivateIP('169.254.169.254%1')).toBe(true);
+    expect(isPrivateIP('8.8.8.8%eth0')).toBe(false);
+  });
+
+  it('refuses an address-shaped string it cannot parse, whatever the tail looks like', () => {
+    // Found by a reviewer sweep at 7c49de04: nine hextets' worth, so canonicalisation bails on the width
+    // check, and the end-anchored quad test then waved it past as public. The whole-string match closes it.
+    expect(isPrivateIP('1:2:3:4:5:6:7:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('169.254.169.254:1.2.3.4')).toBe(true);
+    expect(isPrivateIP('dead:beef:1.2.3.4')).toBe(true);
+    expect(isPrivateIP('a:b:c:d:e:f:127.0.0.1')).toBe(true);
   });
 
   it('leaves global unicast alone outside the prefixes it names', () => {
