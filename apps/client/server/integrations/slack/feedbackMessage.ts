@@ -144,12 +144,30 @@ function toBlockquote(text: string): string {
 }
 
 /**
+ * type/organization/username/userEmail/userId each share a line with their own `*Label:*` -
+ * a newline in any of them would read as a fabricated extra top-level field (e.g. a fake
+ * `*User Email:*` line), the same forging risk `toBlockquote` closes for `content`. These are
+ * single-line values by nature, so collapsing rather than blockquoting is lossless.
+ */
+function toSingleLine(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ');
+}
+
+/** Escapes Slack mrkdwn special characters, then collapses newlines - for the single-line
+ * identity fields, not `content` (which is blockquoted instead so its own line breaks survive). */
+function escapeIdentityField(text: string): string {
+  return toSingleLine(escapeSlackText(text));
+}
+
+/**
  * Builds the Slack mrkdwn message for a feedback report. Every user-influenced string
- * (content, username, userEmail, type, organization, userId) is escaped via
- * escapeSlackText before interpolation - unescaped, a value like
- * `<https://example/|Open record>` renders as a live Slack link indistinguishable
- * from a real one, and on the unauthenticated submission path username/userEmail/type
- * are raw request-body values, the same exposure class as content. The result is capped
+ * (content, username, userEmail, type, organization, userId) is escaped before interpolation -
+ * unescaped, a value like `<https://example/|Open record>` renders as a live Slack link
+ * indistinguishable from a real one, and on the unauthenticated submission path
+ * type/username/userEmail/userId are raw request-body values, the same exposure class as
+ * content. The five identity fields also get newlines collapsed (escapeIdentityField), since
+ * each shares a line with its own `*Label:*` and a newline could otherwise forge a fake extra
+ * field; `content` is blockquoted instead so its real line breaks survive. The result is capped
  * to MAX_MESSAGE_CHARS so an oversized field (a huge `content`, an unbounded `model.name`)
  * truncates the delivered message rather than failing to send at all. Prompt Meta sits last,
  * so an oversized submission loses the diagnostic summary before it loses the identity
@@ -158,9 +176,9 @@ function toBlockquote(text: string): string {
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
   const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;
   const message =
-    `${stagePrefix}*Type:* ${escapeSlackText(type)}\n` +
-    `*User Details:* ${escapeSlackText(organization)} - ${escapeSlackText(username)} (ID: ${escapeSlackText(userId)})\n` +
-    `*User Email:* ${escapeSlackText(userEmail)}\n` +
+    `${stagePrefix}*Type:* ${escapeIdentityField(type)}\n` +
+    `*User Details:* ${escapeIdentityField(organization)} - ${escapeIdentityField(username)} (ID: ${escapeIdentityField(userId)})\n` +
+    `*User Email:* ${escapeIdentityField(userEmail)}\n` +
     `*Feedback:*\n${toBlockquote(escapeSlackText(content))}\n` +
     `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`;
   return message.length > MAX_MESSAGE_CHARS ? `${truncateSafely(message, MAX_MESSAGE_CHARS)}... [truncated]` : message;

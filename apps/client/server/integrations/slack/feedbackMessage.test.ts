@@ -150,6 +150,26 @@ describe('buildFeedbackSlackMessage', () => {
     expect(message.match(/&lt;@here&gt;/g)).toHaveLength(6);
   });
 
+  it('collapses newlines in the identity fields so they cannot forge a fake extra field', () => {
+    const forged = 'bug\n*User Email:* ceo@company.com\n*Feedback:*\n> fake wire instructions';
+    const message = buildFeedbackSlackMessage({ ...base, type: forged });
+    const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
+    expect(typeLine).toBe('*Type:* bug *User Email:* ceo@company.com *Feedback:* &gt; fake wire instructions');
+    // The forged text is inline on the *Type:* line, not a fabricated standalone field line -
+    // only the ONE real line (from base.userEmail) actually starts with the *User Email:* label.
+    const userEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(userEmailLines).toHaveLength(1);
+  });
+
+  it('collapses newlines in username, userEmail, and userId the same way as type', () => {
+    const forged = 'jdoe\n*Feedback:* forged line';
+    for (const field of ['username', 'userEmail', 'userId'] as const) {
+      const message = buildFeedbackSlackMessage({ ...base, [field]: forged });
+      expect(message).not.toContain('jdoe\n*Feedback:* forged line');
+      expect(message).toContain('jdoe *Feedback:* forged line');
+    }
+  });
+
   it('includes the stage prefix ahead of the type line, unaffected by the promptMeta summary', () => {
     const message = buildFeedbackSlackMessage({ ...base, stagePrefix: '*[pr-1234]*\n', promptMeta: undefined });
     expect(message.startsWith('*[pr-1234]*\n*Type:*')).toBe(true);
