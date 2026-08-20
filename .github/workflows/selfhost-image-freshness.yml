@@ -21,6 +21,12 @@ on:
     - cron: '0 9 * * *' # 09:00 UTC daily
   workflow_dispatch: {}
 
+# Serialize the daily cron against a manual dispatch so two runs can't both
+# take the "no tracking issue found" branch and open a duplicate.
+concurrency:
+  group: selfhost-image-freshness
+  cancel-in-progress: false
+
 permissions:
   actions: read
   issues: write
@@ -62,14 +68,16 @@ jobs:
             core.info(lastLine);
             core.info(`Freshness window: ${maxAgeHours}h. Stale: ${stale}.`);
 
-            // Find any existing tracking issue by marker.
-            const existing = await github.rest.issues.listForRepo({
+            // Find any existing tracking issue by marker. Paginate: this repo
+            // carries well over 100 open issues, so a single page would miss an
+            // older tracking issue and open a duplicate.
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
               per_page: 100,
             });
-            const found = existing.data.find(i => i.body && i.body.includes(marker));
+            const found = openIssues.find(i => i.body && i.body.includes(marker));
 
             if (!stale) {
               if (found) {
