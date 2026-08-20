@@ -67,3 +67,4 @@ export * from './openSearchChunkAdapter';
 export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
+export * from './assembleLakeConfigHistory';

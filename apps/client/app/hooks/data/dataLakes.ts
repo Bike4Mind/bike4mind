@@ -8,6 +8,7 @@ import type {
   LakeAccessView,
   LakeOwnershipCandidateList,
   LakeHealthApiResponse,
+  LakeConfigHistoryView,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
@@ -87,6 +88,40 @@ export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) 
       return response.data;
     },
   });
+}
+
+/**
+ * One lake's config-change history (#1769): who changed how this lake answers, what moved, and which
+ * manage rung authorized it. Manager-only server-side - a mere reader gets a 403.
+ *
+ * `staleTime: 0` unlike the other lake reads, because this surface mounts in the same modal that
+ * EDITS the lake: a cached history would show an owner their own just-saved change as absent, which
+ * reads as "the audit missed it" - the one impression an audit surface must never give. `retry: false`
+ * matches the sibling reads (the feature-gate 403 and the manage 403 are both terminal, not transient).
+ */
+export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, limit?: number) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.configHistory(dataLakeId, limit),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeConfigHistoryView }>(
+        `/api/data-lakes/${dataLakeId}/config-history`,
+        limit == null ? undefined : { params: { limit } }
+      );
+      return response.data.data;
+    },
+  });
+  // Same derivation as useDataLakeSpend, and used the same way: a rejection RETRACTS the surface
+  // rather than painting an error into it. Both of this route's refusals are permission-shaped (the
+  // EnableDataLakes gate and the manage gate), and neither becomes true by retrying.
+  const isForbidden =
+    isAxiosError(query.error) &&
+    (query.error.response?.status ?? 0) >= 400 &&
+    (query.error.response?.status ?? 0) < 500;
+  return { ...query, isForbidden };
 }
 
 /**
@@ -271,15 +306,18 @@ export function useUpdateDataLake() {
       const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}`, params);
       return response.data;
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // This write is exactly what adds a config-history row, and the history renders in the same
+      // modal that submitted it - without this the owner sees their own change missing from the audit.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       // This mutation is the ONLY writer of `requiredPassageTokenTarget`, and that value is the sole
       // input both the health report (#1666) and the convergence plan (#1681) are graded against -
       // change it and which files are conformant, the reachable-content headline, the convergeable
       // count and the bulk-change share all move at once. Neither query polls or refetches on focus,
       // so without this they keep rendering the pre-change verdict against the new policy.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(variables.id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(variables.id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
       toast.success('Data lake updated');
     },
     onError: (error: Error) => {
@@ -316,8 +354,13 @@ export function useSetLakeVisibility() {
       });
       return response.data;
     },
-    onSuccess: (_data, { visibility }) => {
+    onSuccess: (_data, { id, visibility }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // A visibility change records a config-history row, same as an update. Not relying on the
+      // History tab's staleTime:0 + enabled-toggle refetch: that pairing happens to refresh today,
+      // but it is incidental, and raising staleTime or dropping the toggle would silently strand
+      // the new row.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success(VISIBILITY_TOAST[visibility]);
     },
     onError: (error: Error) => {
@@ -369,7 +412,7 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postLifecycle(id, action),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
@@ -378,6 +421,10 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
       // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
       // row while the tree beside it still shows that lake's branches and counts it in the totals.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      // Every lifecycle action records a config-history row. Invalidated for all five rather than
+      // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
+      // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success(successMessage);
     },
     onError: (error: Error) => {
@@ -695,6 +742,12 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
         // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        // A removal can still reach activateIfDraft's draft -> active flip (see
+        // removeFileFromDataLake), which records a `system`-principal config-history row. Inert
+        // today because this hook fires from the file wizard, where the History observer is
+        // unmounted - invalidated anyway for the same reason the lifecycle hook does it: the cost
+        // is nothing, and reasoning about which paths qualify is what rots.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       }
       // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
       // files only, so removing a file that was in the lake by prefix alone drops a row from

@@ -42,6 +42,8 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileRepository: {},
   userRepository: {},
+  lakeConfigChangeEventRepository: { record: vi.fn() },
+  adminSettingsRepository: { findBySettingNames: vi.fn(), findAll: vi.fn() },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
@@ -77,6 +79,30 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith({ success: true, fileCount: 2, totalSizeBytes: 30 });
+  });
+
+  /**
+   * The audit wiring, asserted HERE because a services test structurally cannot see it: the service
+   * takes both repositories as OPTIONAL and `recordLakeConfigChange` returns early when they are
+   * absent, so a route that forgets them records nothing and reports success. That is exactly what
+   * this route did - it passed a `logger` with no event repo, so the draft -> active flip a removal
+   * can trigger was silently unrecorded and the logger had nothing to report. The services test
+   * passed throughout, because its own fixture supplied the repos the route did not.
+   */
+  it('wires the config-audit repositories, so a removal that activates the lake is actually recorded', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    const { res } = makeRes();
+
+    await call(req({ id: 'my-lake', fabFileId: 'f1' }), res);
+
+    const adapters = h.removeFileFromDataLake.mock.calls[0][3] as {
+      db: Record<string, unknown>;
+      logger?: unknown;
+    };
+    expect(adapters.db.lakeConfigChangeEvents).toBeDefined();
+    // adminSettings too: without it the retention lever is never read, so events land at the floor
+    // default and the lever has no consumer on this path.
+    expect(adapters.db.adminSettings).toBeDefined();
   });
 
   it('does not remove anything when the access gate denies the lake', async () => {
