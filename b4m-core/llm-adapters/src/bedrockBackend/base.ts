@@ -532,7 +532,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               messages,
               {
                 ...options,
-                thinking: { enabled: false, budget_tokens: 0 },
+                // `thinking` carries forward rather than being forced off: pushToolMessages
+                // replays this turn's signed thinking blocks, and those belong on a request
+                // that declares thinking the same way the round that produced them did.
+                // Matches anthropicBackend, which spreads options unchanged on its recursion.
+                //
                 // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
                 // tool_choice, so this is a no-op today but keeps the recursion uniform.
                 tool_choice: 'auto',
@@ -635,7 +639,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 messages,
                 {
                   ...options,
-                  thinking: { enabled: false, budget_tokens: 0 },
+                  // `thinking` carries forward, not forced off - see the streaming recursion above.
+                  //
                   // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
                   // tool_choice, so this is a no-op today but keeps the recursion uniform.
                   tool_choice: 'auto',
