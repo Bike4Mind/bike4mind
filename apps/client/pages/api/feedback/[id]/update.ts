@@ -51,12 +51,19 @@ const handler = baseApi().put(
     // contentApplied stays true when the caller didn't touch content at all - false only signals
     // a genuine no-op (the sibling had already expired under the 90-day TTL).
     let contentApplied = true;
+    // Only ever `true` (never explicitly `false`) - `undefined` means the caller didn't originate
+    // a fresh sibling this request, which is what cleanupOrphanedSibling's guard below relies on.
     let contentStoredChange: boolean | undefined;
     if (content !== undefined) {
       const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
       if (feedback.contentStored) {
         // upsert:false is deliberate: expiresAt is immutable, so a report whose text already
         // expired must not be resurrected by editing it back in.
+        //
+        // Not rolled back if the status/username update below then fails: the sibling would keep
+        // the caller's edited text while the rest of the document reverts. Left as-is rather than
+        // adding a compensating write - the sibling holding what the caller actually submitted is
+        // arguably closer to correct than reverting it, and the update failing at all is rare.
         const result = await FeedbackTextModel.updateOne(
           { _id: id },
           { $set: { content: truncated, contentTruncated } }
