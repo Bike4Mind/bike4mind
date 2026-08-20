@@ -69,6 +69,8 @@ const atlassianDescriptions: Record<string, string> = {
 };
 
 export const MCP_PROVIDER_METADATA: Record<string, McpProviderMetadata> = {
+  // Must stay in sync with TOOL_DESCRIPTIONS in b4m-core/mcp/src/notion/constants.ts
+  // (common cannot import from mcp due to the dependency direction).
   notion: {
     defaultToolDescriptions: {
       notion_search:
@@ -76,7 +78,7 @@ export const MCP_PROVIDER_METADATA: Record<string, McpProviderMetadata> = {
       notion_create_page:
         'Create a new page in the connected Notion workspace. Requires write access to be enabled. The page is created under the configured root page or a specified parent.',
       notion_read_page:
-        'Read the content of a Notion page by its ID. Returns the child blocks (text, headings, lists, etc.) and a plain-text summary.',
+        'Read the content of a Notion page by its ID. Returns the child blocks (text, headings, lists, etc.) and a plain-text summary. Results are paginated; pass start_cursor with the returned next_cursor when has_more is true.',
       notion_append_blocks:
         'Append content blocks (paragraphs, headings, lists, code, etc.) to an existing Notion page or block. Requires write access.',
     },
