@@ -94,6 +94,13 @@ describe('buildPromptMetaSummary', () => {
     expect(summary.match(/&lt;@here&gt;/g)).toHaveLength(4);
   });
 
+  it('collapses newlines in model.name so it cannot forge a fake extra field below the identity block', () => {
+    const forged = 'claude\n*User Email:* ceo@company.com';
+    const summary = buildPromptMetaSummary({ model: { name: forged } });
+    expect(summary).toBe('Model: claude *User Email:* ceo@company.com');
+    expect(summary.split('\n')).toHaveLength(1);
+  });
+
   it('never surfaces owner-only function-call fields even if a caller failed to redact them', () => {
     const summary = buildPromptMetaSummary({
       functionCalls: [{ name: 'web_search' } as { name?: string; returnValue?: string }],

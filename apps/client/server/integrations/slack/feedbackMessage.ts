@@ -51,6 +51,18 @@ function truncateSafely(text: string, max: number): string {
 }
 
 /**
+ * Every field this module interpolates onto a single labeled line (`*Label:* <value>`) goes
+ * through this, never bare `escapeSlackText`. Slack mrkdwn has no escape for newlines, so an
+ * unescaped one lets a value forge what reads as an extra top-level `*Label:*` line elsewhere
+ * in the message - collapsing is lossless here since every caller of this helper is a
+ * single-line value by nature. `content` is the one exception: it's blockquoted instead
+ * (see `toBlockquote`) so its own real line breaks survive.
+ */
+function escapeLine(text: string): string {
+  return escapeSlackText(text).replace(/[\r\n]+/g, ' ');
+}
+
+/**
  * A short, readable summary of the diagnostic signals that matter for triaging a bug
  * report - not a dump of the full object (unreadable, and Slack truncates long messages
  * anyway). Uses `!== undefined` throughout: a zero token count or a zero belief count
@@ -63,7 +75,7 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   const lines: string[] = [];
 
   if (promptMeta.model?.name !== undefined) {
-    lines.push(`Model: ${escapeSlackText(promptMeta.model.name)}`);
+    lines.push(`Model: ${escapeLine(promptMeta.model.name)}`);
   }
 
   const tokenUsage = promptMeta.tokenUsage;
@@ -87,7 +99,7 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   }
 
   if (promptMeta.finishReason !== undefined) {
-    lines.push(`Finish reason: ${escapeSlackText(promptMeta.finishReason)}`);
+    lines.push(`Finish reason: ${escapeLine(promptMeta.finishReason)}`);
   }
 
   const functionCalls = promptMeta.functionCalls;
@@ -95,7 +107,7 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
     const names = functionCalls
       .map(fc => fc.name)
       .filter((name): name is string => name !== undefined)
-      .map(escapeSlackText);
+      .map(escapeLine);
     const namesPart = names.length ? ` (${joinWithOverflow(names, MAX_FUNCTION_CALL_NAMES)})` : '';
     lines.push(`Tool calls: ${functionCalls.length}${namesPart}`);
   }
@@ -108,7 +120,7 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
 
   const lakeMemory = promptMeta.context?.lakeMemory;
   if (lakeMemory?.beliefCount !== undefined) {
-    const tags = lakeMemory.dataLakeTags?.map(escapeSlackText) ?? [];
+    const tags = lakeMemory.dataLakeTags?.map(escapeLine) ?? [];
     const tagsPart = tags.length ? ` (${joinWithOverflow(tags, MAX_DATA_LAKE_TAGS)})` : '';
     lines.push(`Lake beliefs: ${lakeMemory.beliefCount}${tagsPart}`);
   }
@@ -144,31 +156,15 @@ function toBlockquote(text: string): string {
 }
 
 /**
- * type/organization/username/userEmail/userId each share a line with their own `*Label:*` -
- * a newline in any of them would read as a fabricated extra top-level field (e.g. a fake
- * `*User Email:*` line), the same forging risk `toBlockquote` closes for `content`. These are
- * single-line values by nature, so collapsing rather than blockquoting is lossless.
- */
-function toSingleLine(text: string): string {
-  return text.replace(/[\r\n]+/g, ' ');
-}
-
-/** Escapes Slack mrkdwn special characters, then collapses newlines - for the single-line
- * identity fields, not `content` (which is blockquoted instead so its own line breaks survive). */
-function escapeIdentityField(text: string): string {
-  return toSingleLine(escapeSlackText(text));
-}
-
-/**
- * Builds the Slack mrkdwn message for a feedback report. Every user-influenced string
- * (content, username, userEmail, type, organization, userId) is escaped before interpolation -
- * unescaped, a value like `<https://example/|Open record>` renders as a live Slack link
- * indistinguishable from a real one, and on the unauthenticated submission path
- * type/username/userEmail/userId are raw request-body values, the same exposure class as
- * content. The five identity fields also get newlines collapsed (escapeIdentityField), since
- * each shares a line with its own `*Label:*` and a newline could otherwise forge a fake extra
- * field; `content` is blockquoted instead so its real line breaks survive. The result is capped
- * to MAX_MESSAGE_CHARS so an oversized field (a huge `content`, an unbounded `model.name`)
+ * Builds the Slack mrkdwn message for a feedback report. Every user-influenced string is
+ * escaped before interpolation - unescaped, a value like `<https://example/|Open record>`
+ * renders as a live Slack link indistinguishable from a real one, and on the unauthenticated
+ * submission path type/username/userEmail/userId are raw request-body values, the same
+ * exposure class as content. The identity fields and the promptMeta summary's string fields
+ * all go through escapeLine, which also collapses newlines - each shares a line with its own
+ * `*Label:*`, so an unescaped newline could otherwise forge a fake extra field. `content` is
+ * blockquoted instead so its own real line breaks survive. The result is capped to
+ * MAX_MESSAGE_CHARS so an oversized field (a huge `content`, an unbounded `model.name`)
  * truncates the delivered message rather than failing to send at all. Prompt Meta sits last,
  * so an oversized submission loses the diagnostic summary before it loses the identity
  * fields or the feedback text itself - the more actionable half of the message for triage.
@@ -176,9 +172,9 @@ function escapeIdentityField(text: string): string {
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
   const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;
   const message =
-    `${stagePrefix}*Type:* ${escapeIdentityField(type)}\n` +
-    `*User Details:* ${escapeIdentityField(organization)} - ${escapeIdentityField(username)} (ID: ${escapeIdentityField(userId)})\n` +
-    `*User Email:* ${escapeIdentityField(userEmail)}\n` +
+    `${stagePrefix}*Type:* ${escapeLine(type)}\n` +
+    `*User Details:* ${escapeLine(organization)} - ${escapeLine(username)} (ID: ${escapeLine(userId)})\n` +
+    `*User Email:* ${escapeLine(userEmail)}\n` +
     `*Feedback:*\n${toBlockquote(escapeSlackText(content))}\n` +
     `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`;
   return message.length > MAX_MESSAGE_CHARS ? `${truncateSafely(message, MAX_MESSAGE_CHARS)}... [truncated]` : message;
