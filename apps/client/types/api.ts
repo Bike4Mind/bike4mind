@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { CurationType, CurationTypeSchema, CurationArtifactTypeSchema, ExportFormatSchema } from '@bike4mind/common';
+import {
+  CurationType,
+  CurationTypeSchema,
+  CurationArtifactTypeSchema,
+  DATA_LAKE_GROUNDING_MODES,
+  ExportFormatSchema,
+} from '@bike4mind/common';
 import {
   RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH,
   RETRIEVAL_EXCLUDE_MARKERS_MAX,
@@ -42,11 +48,20 @@ export const CreateSessionRequestSchema = z.object({
   artifactIds: z.array(z.string()).optional(),
   projectId: z.string().optional(),
   systemPromptText: z.string().optional(),
+  systemPromptId: z.string().optional(),
+  // Create a session "for" this data lake: the route resolves the lake's session defaults
+  // (forced retrieval scoped to it + its preferred prompt id) server-side. Consumed at the route
+  // and NOT persisted as a session field (core's createSessionParametersSchema strips it).
+  dataLakeId: z.string().optional(),
   surface: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   disabledTools: z.array(z.string()).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
+  // params carry it through to core; declared here for the shared type only. NOT client-supplied:
+  // the route strips any client-sent value, so the lake stays authoritative for the grounding mode.
+  corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   retrievalExcludeFilenameMarkers: z
     .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
     .max(RETRIEVAL_EXCLUDE_MARKERS_MAX)

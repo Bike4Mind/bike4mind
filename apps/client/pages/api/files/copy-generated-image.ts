@@ -6,7 +6,14 @@ import {
   extensionFromMimeType,
   isImageServeable,
 } from '@bike4mind/common';
-import { FabFile, User, withTransaction, adminSettingsRepository } from '@bike4mind/database';
+import {
+  FabFile,
+  User,
+  withTransaction,
+  adminSettingsRepository,
+  dataLakeRepository,
+  scopedSettingsRepository,
+} from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -57,8 +64,12 @@ const handler = baseApi()
           {
             db: {
               adminSettings: adminSettingsRepository,
+              // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
+              // enforcement override would silently not apply on this door.
+              scopedSettings: scopedSettingsRepository,
               fabFiles: FabFile,
               users: User,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               upload: async (filepath, _content, option) => {

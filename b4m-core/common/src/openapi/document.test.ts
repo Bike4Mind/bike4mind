@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import { buildOpenApiDocument, toPythonLiteral } from './document';
+import { registerContracts } from './operations';
+import { assertUniqueOperations } from './assertUniqueOperations';
+import { assertContractConventions } from '../api-contract/assertContractConventions';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
-import { chatContract } from '../api-contract';
+import { chatContract, synthesizeSpeechContract } from '../api-contract';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
@@ -49,24 +53,24 @@ describe('buildOpenApiDocument', () => {
   it('models the completions response as an SSE stream referencing the stream-event component', () => {
     const ok = completions.responses['200'];
     expect(Object.keys(ok.content)).toEqual(['text/event-stream']);
-    expect(ok.content['text/event-stream'].schema).toEqual(ref('CompletionStreamEvent'));
+    expect(ok.content['text/event-stream'].schema).toEqual(ref('createCompletionResponse200'));
   });
 
   it('wires request bodies and responses via $ref (no inline duplication)', () => {
-    expect(completions.requestBody.content['application/json'].schema).toEqual(ref('CompletionRequest'));
-    expect(tools.requestBody.content['application/json'].schema).toEqual(ref('ToolExecutionRequest'));
+    expect(completions.requestBody.content['application/json'].schema).toEqual(ref('createCompletionRequest'));
+    expect(tools.requestBody.content['application/json'].schema).toEqual(ref('executeToolRequest'));
     // 4xx references the shared error envelope; tools 500 returns the full result body.
     expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(tools.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('ToolExecutionResponse'));
-    expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('ToolExecutionResponse'));
+    expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('executeToolResponse200'));
+    expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
   it('provides request AND response examples for both operations', () => {
-    expect(doc.components.schemas.CompletionRequest.example).toBeDefined();
-    expect(doc.components.schemas.CompletionStreamEvent.example).toBeDefined();
-    expect(doc.components.schemas.ToolExecutionRequest.example).toBeDefined();
-    expect(doc.components.schemas.ToolExecutionResponse.example).toBeDefined();
+    expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
+    expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();
+    expect(doc.components.schemas.executeToolRequest.example).toBeDefined();
+    expect(doc.components.schemas.executeToolResponse200.example).toBeDefined();
   });
 
   it('attaches x-required-scopes ONLY where scopes are enforced, x-codeSamples on both', () => {
@@ -87,19 +91,6 @@ describe('buildOpenApiDocument', () => {
     expect(chat['x-required-scopes']).toEqual([...(chatContract.scopes ?? [])]);
     expect(chat['x-required-scopes'].length).toBeGreaterThan(0);
     expect(chat['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
-    // `apiKeyOrJwt` must publish both accepted credentials - the same pair the
-    // legacy completions op declares, since both run the same apiKeyAuth chain.
-    expect(chat.security).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }]);
-  });
-
-  it('auto-injects the 422/401/403 responses every contract-derived op can return', () => {
-    // registerContract injects these so no author has to remember them; each is a
-    // real runtime path (ZodError -> 422, apiKeyAuth -> 401 invalid / 403 under-scoped).
-    for (const status of ['422', '401', '403']) {
-      expect(chat.responses[status].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    }
-    // The contract declares no 422/401/403 itself - these come from the registrar.
-    expect(Object.keys(chatContract.responses)).not.toContain('422');
   });
 
   it('documents tools 401/429 and JWT-only code samples (matches the JWT-only handler)', () => {
@@ -112,6 +103,20 @@ describe('buildOpenApiDocument', () => {
     const toolsCurl = tools['x-codeSamples'].find((s: { lang: string }) => s.lang === 'curl').source as string;
     expect(toolsCurl).toContain('Bearer <access_token>');
     expect(toolsCurl).not.toContain('b4m_live_');
+  });
+
+  it('auto-injects 401 (and 403 for scoped ops) on non-streaming authenticated endpoints', () => {
+    // Guards the central auth-response injection in registerContract. chatContract
+    // declares neither 401 nor 403 itself, so both come purely from the injection;
+    // dropping it silently narrows /api/chat's published spec and generated SDKs
+    // stop modelling the missing-credential / under-scoped-key paths.
+    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // Streaming completions opens the stream first, so auth/scope failures are
+    // in-band SSE events - it must NOT declare HTTP 401/403 even though it is
+    // authenticated and scoped.
+    expect(completions.responses['401']).toBeUndefined();
+    expect(completions.responses['403']).toBeUndefined();
   });
 
   it('documents OR semantics for required scopes in info.description', () => {
@@ -174,9 +179,59 @@ describe('buildOpenApiDocument', () => {
     expect(doc.info.description).not.toContain('ai.completions:write');
   });
 
-  it('declares X-Request-ID on every response and rate-limit headers on tools', () => {
+  it('declares X-Request-ID on every response', () => {
     expect(completions.responses['200'].headers['X-Request-ID']).toBeDefined();
-    expect(tools.responses['200'].headers['X-RateLimit-Limit']).toBeDefined();
+    expect(tools.responses['200'].headers['X-Request-ID']).toBeDefined();
+    expect(chat.responses['200'].headers['X-Request-ID']).toBeDefined();
+  });
+
+  it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
+    // The unwindowed spelling is what the spec used to publish; nothing sets it,
+    // so a client coding against it reads undefined.
+    for (const window of ['Minute', 'Day']) {
+      for (const field of ['Limit', 'Remaining', 'Reset']) {
+        expect(chat.responses['200'].headers[`X-RateLimit-${field}-${window}`]).toBeDefined();
+      }
+    }
+    expect(chat.responses['200'].headers['X-RateLimit-Limit']).toBeUndefined();
+  });
+
+  it('attaches rate-limit headers only where the contract declares them', () => {
+    // tools is JWT-only on the Lambda adapter and completions is the Fargate SSE
+    // route: neither sets a rate-limit header, so neither may publish one.
+    expect(tools.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(completions.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    // Every baseApi-served endpoint does emit them. This list is deliberately
+    // spelled out rather than derived from the flag: enumerating the real
+    // baseApi-served surface is what catches a contract that forgot to declare it,
+    // which is how PUT /api/sessions/{id} shipped without the flag.
+    const baseApiServed: readonly [string, string][] = [
+      ['/api/ai/tts', 'post'],
+      ['/api/ai/music', 'post'],
+      ['/api/ai/sound-effects', 'post'],
+      ['/api/sessions/{id}', 'put'],
+    ];
+    for (const [path, method] of baseApiServed) {
+      const headers = doc.paths[path][method].responses['200'].headers;
+      expect(headers['X-RateLimit-Limit-Minute'], `${method.toUpperCase()} ${path}`).toBeDefined();
+    }
+  });
+
+  it('excludes rate-limit headers from the INJECTED 401/403 but keeps them on a contract-declared 401', () => {
+    // chat declares neither status: both come from registerContract's auth injection
+    // and mean "apiKeyAuth rejected the credential", which happens before
+    // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers.
+    expect(chat.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(chat.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    // tts declares its OWN 401 (provider_not_configured), thrown from the handler
+    // long after the middleware set all six. A status-keyed exclusion would have
+    // published it as header-less, which is the same spec-vs-runtime drift as the
+    // unwindowed names above.
+    expect(synthesizeSpeechContract.responses[401]).toBeDefined();
+    const tts = doc.paths['/api/ai/tts'].post;
+    for (const window of ['Minute', 'Day']) {
+      expect(tts.responses['401'].headers[`X-RateLimit-Limit-${window}`]).toBeDefined();
+    }
   });
 
   it('emits no orphaned component schemas (every schema is $ref-ed somewhere)', () => {
@@ -192,5 +247,44 @@ describe('buildOpenApiDocument', () => {
       const rest = JSON.stringify({ paths: doc.paths, schemas: others });
       expect(rest, `component ${name} is never referenced`).toContain(`#/components/schemas/${name}`);
     }
+  });
+});
+
+// The guards are called from operations.ts at module scope. Testing them directly
+// proves they WORK; this proves they are actually WIRED - delete either call in
+// registerContracts and these fail, which was not true when they were inlined.
+//
+// Only the REJECTING cases may go through registerContracts. It writes into the
+// module-global registry and zod-openapi's `definitions` getter returns a copy, so
+// there is no removal API: a conforming contract would leave a phantom
+// /api/v1/widgets operation behind for anything that builds a document afterwards.
+// That is invisible today only because `doc` above is built at module load, before
+// any test body runs - which is exactly the trap. The positive control therefore
+// calls the two guards directly, registering nothing.
+describe('registerContracts wiring', () => {
+  const conformingContract = {
+    method: 'post' as const,
+    path: '/api/v1/widgets',
+    operationId: 'createWidget',
+    summary: 'Create a widget',
+    auth: 'apiKeyOrJwt' as const,
+    scopes: [ApiKeyScope.AI_GENERATE],
+    responses: { 200: { description: 'Created.', schema: z.object({ id: z.string() }) } },
+  };
+
+  it('runs the conventions guard before registering', () => {
+    expect(() => registerContracts([{ ...conformingContract, path: '/api/widgets' }])).toThrow(/version root/);
+  });
+
+  it('runs the uniqueness guard before registering', () => {
+    expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
+  });
+
+  it('rejects those two for the injected violation, not for the fixture itself', () => {
+    // Without this control, both throws above would still pass if the fixture were
+    // independently non-conforming and the guards were rejecting everything.
+    const { operationId, method, path } = conformingContract;
+    expect(() => assertUniqueOperations([{ operationId, method, path }])).not.toThrow();
+    expect(() => assertContractConventions([conformingContract])).not.toThrow();
   });
 });

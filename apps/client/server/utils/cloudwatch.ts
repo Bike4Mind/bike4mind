@@ -1,4 +1,9 @@
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
+import type {
+  FeedbackDeliveryChannel,
+  FeedbackDeliveryStageClass,
+  FeedbackDeliverySkipReason,
+} from '@bike4mind/common';
 
 /**
  * CloudWatch metric dimensions
@@ -228,6 +233,9 @@ export async function recordWebhookDeliveryFailure(
       dimensions: { ...baseDimensions, errorType },
       unit: StandardUnit.Count,
     },
+    // Dimensionless copy: webhookDeliveryHighFailures (infra/alarms.ts) alarms on this metric
+    // with no dimension filter, so it needs its own dimensionless data point to receive any data.
+    { name: WebhookMetrics.DELIVERY_FAILED, value: 1, dimensions: {}, unit: StandardUnit.Count },
     { name: WebhookMetrics.DELIVERY_LATENCY, value: latencyMs, dimensions: { orgId }, unit: StandardUnit.Milliseconds },
     ...(httpStatusCode > 0
       ? [
@@ -501,4 +509,139 @@ export async function recordReconcileRun(): Promise<void> {
  */
 export async function recordTaxonomyTagsApplySkipped(count: number): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_TAGS_APPLY_SKIPPED, count, {}, StandardUnit.Count);
+}
+
+// Feedback Delivery Metrics - Namespace: Lumina5/FeedbackDelivery
+// DeliverySucceeded, DeliveryFailed, DeliverySkipped, each split by channel (slack|email) and
+// stageClass (production|nonprod). DeliveryFailed and DeliverySkipped-for-an-alarm-worthy-reason
+// additionally emit a coarse `{ Stage }`-only rollup entry, which is what feedbackDeliveryFailures
+// and feedbackDeliveryMisconfigured (infra/alarms.ts) actually read - see
+// buildFeedbackDeliveryFailureMetrics / buildFeedbackDeliverySkippedMetrics below.
+
+const FEEDBACK_DELIVERY_NAMESPACE = 'Lumina5/FeedbackDelivery';
+
+export const FeedbackDeliveryMetrics = {
+  DELIVERY_SUCCEEDED: 'DeliverySucceeded',
+  DELIVERY_FAILED: 'DeliveryFailed',
+  DELIVERY_SKIPPED: 'DeliverySkipped',
+} as const;
+
+// Skip reasons that mean "enabled but actually broken" - worth paging on. 'disabled' and
+// 'nonprod_unconfigured' are deliberate, expected-silent operator choices, not incidents. Exported
+// so callers deciding LOG severity (not just metric emission) can reuse the same taxonomy instead
+// of drifting from it - see pages/api/feedback/index.ts's isIncident check.
+export const ALARM_WORTHY_SKIP_REASONS: readonly FeedbackDeliverySkipReason[] = [
+  'unconfigured_webhook',
+  'no_recipients',
+];
+
+export async function emitFeedbackDeliveryMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.Count
+): Promise<void> {
+  return emitMetric(FEEDBACK_DELIVERY_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+export async function emitFeedbackDeliveryMetrics(
+  metrics: Array<{ name: string; value: number; dimensions?: MetricDimensions; unit?: StandardUnit }>
+): Promise<void> {
+  return emitMetrics(FEEDBACK_DELIVERY_NAMESPACE, metrics);
+}
+
+type FeedbackMetricEntry = { name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit };
+
+/**
+ * The exact MetricData shape a delivery failure emits - exported so the alarm's dimension
+ * contract is unit-testable on its own, without mocking the AWS SDK.
+ *
+ * A dimensioned metric is a DISTINCT stream from one with fewer dimensions in CloudWatch (see
+ * `webhookDeliveryHighFailures`, an existing sibling alarm that alarms on a dimensionless
+ * `DeliveryFailed` stream `recordWebhookDeliveryFailure` never populates - it always emits WITH
+ * dimensions, so that alarm can never receive data). This always emits a full drill-down entry
+ * PLUS a coarse `{ Stage: <raw deploy stage> }`-only rollup that `feedbackDeliveryFailures`
+ * (infra/alarms.ts) reads, matching the `Stage`-dimension pattern `anthropicRateLimitErrors`
+ * already uses to scope an alarm to its own deploying stage. Scoping the rollup by the RAW stage
+ * (not the binary `stageClass`) matters: `stageClass` alone can't tell the 'dev'-stage alarm's own
+ * failures apart from an unrelated PR-preview's, since both classify as 'nonprod' - keying by the
+ * real stage value means each deployed stage's alarm only ever matches its own stage's failures.
+ */
+export function buildFeedbackDeliveryFailureMetrics(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  errorType: string,
+  stage: string | undefined
+): FeedbackMetricEntry[] {
+  return [
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
+      value: 1,
+      dimensions: { channel, stageClass, errorType },
+      unit: StandardUnit.Count,
+    },
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
+      value: 1,
+      dimensions: { Stage: stage ?? 'unknown' },
+      unit: StandardUnit.Count,
+    },
+  ];
+}
+
+/**
+ * Same twin-entry shape as failures, for the acceptance criterion the diff's own tests can't
+ * exercise directly: a delivery that is quietly SKIPPED (an admin left it enabled but broken -
+ * `unconfigured_webhook`, `no_recipients`) is exactly the silent-failure mode the ticket opens
+ * with, not merely a hard error. `disabled` and `nonprod_unconfigured` are deliberate operator
+ * choices, so no rollup entry is added for those - a page for a setting an admin chose is noise.
+ */
+export function buildFeedbackDeliverySkippedMetrics(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  reason: FeedbackDeliverySkipReason,
+  stage: string | undefined
+): FeedbackMetricEntry[] {
+  const metrics: FeedbackMetricEntry[] = [
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_SKIPPED,
+      value: 1,
+      dimensions: { channel, stageClass, reason },
+      unit: StandardUnit.Count,
+    },
+  ];
+  if (ALARM_WORTHY_SKIP_REASONS.includes(reason)) {
+    metrics.push({
+      name: FeedbackDeliveryMetrics.DELIVERY_SKIPPED,
+      value: 1,
+      dimensions: { Stage: stage ?? 'unknown' },
+      unit: StandardUnit.Count,
+    });
+  }
+  return metrics;
+}
+
+export async function recordFeedbackDeliverySuccess(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass
+): Promise<void> {
+  return emitFeedbackDeliveryMetric(FeedbackDeliveryMetrics.DELIVERY_SUCCEEDED, 1, { channel, stageClass });
+}
+
+export async function recordFeedbackDeliveryFailure(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  errorType: string,
+  stage: string | undefined
+): Promise<void> {
+  return emitFeedbackDeliveryMetrics(buildFeedbackDeliveryFailureMetrics(channel, stageClass, errorType, stage));
+}
+
+export async function recordFeedbackDeliverySkipped(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  reason: FeedbackDeliverySkipReason,
+  stage: string | undefined
+): Promise<void> {
+  return emitFeedbackDeliveryMetrics(buildFeedbackDeliverySkippedMetrics(channel, stageClass, reason, stage));
 }

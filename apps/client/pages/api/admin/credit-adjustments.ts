@@ -1,6 +1,7 @@
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -33,7 +34,11 @@ export interface IAdminAdjustmentsResponse {
   totalPages: number;
 }
 
-const handler = baseApi().get(
+// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+// before req.user is set, so a key issued for a narrow integration can't read
+// admin credit adjustments just because its owner is an admin. JWT/browser admins
+// skip that check and still pass the isAdmin gate below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler<{}, unknown, unknown, { page?: string; limit?: string; days?: string }>(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, agentExecutionRepository } from '@bike4mind/database';
 import {
+  ApiKeyScope,
   CreditHolderType,
   type ISessionAgentExecution,
   type ISessionAgentModelUsage,
@@ -35,8 +36,16 @@ const QuerySchema = z.object({
  * that starts personal and later runs under an org). So a non-admin's view is
  * scoped to their org: they see only their org's slice, never another owner's.
  * Admins keep the full cross-org rollup.
+ *
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+ * before req.user is set, so a key issued for a narrow integration can't read
+ * session spend just because its owner is an admin. JWT/browser callers (admin or
+ * org owner/manager) skip that check and still go through the access logic above.
+ * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
+ * rejected server-side), so this closes the API-key path entirely for a
+ * non-admin org owner/manager - only a JWT/browser session still works for them.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }

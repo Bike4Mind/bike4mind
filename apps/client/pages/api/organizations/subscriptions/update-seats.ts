@@ -4,7 +4,10 @@ import { ForbiddenError } from '@server/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { z } from 'zod';
-import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@client/lib/subscriptions/constants';
+import {
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+} from '@client/lib/subscriptions/constants';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import dayjs from 'dayjs';
@@ -17,7 +20,10 @@ import {
 
 const UpdateSeatsSchema = z.object({
   organizationId: z.string(),
-  seats: z.number().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS),
+  // Whole seats only, within platform bounds. validateSeatChange re-checks the floor
+  // against team size and the ceiling, but only for finite integers - keep the .int()
+  // and .max() here so a fractional or over-cap value is rejected before Stripe.
+  seats: z.number().int().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
 });
 
 const handler = baseApi()

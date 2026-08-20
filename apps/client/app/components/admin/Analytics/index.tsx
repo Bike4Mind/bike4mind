@@ -16,11 +16,11 @@ const AnalyticsTab: React.FC = () => {
 
   const analyticsQuery = useAnalyticsData();
 
-  const isLoading = analyticsQuery.isLoading || analyticsQuery.isFetching;
+  const { isLoading, isFetching, refetch } = analyticsQuery;
 
   const handleRefresh = useCallback(() => {
-    analyticsQuery.refetch();
-  }, [analyticsQuery]);
+    refetch();
+  }, [refetch]);
 
   const getTabIcon = (tabId: AnalyticsSubTab) => {
     switch (tabId) {
@@ -65,7 +65,10 @@ const AnalyticsTab: React.FC = () => {
           </Stack>
         </Grid>
 
-        {isLoading && <LinearProgress size={'lg'} sx={{ marginX: '5px', width: '100%' }} />}
+        {/* Reserved height keeps the bar from shifting the content below it on every page turn. */}
+        <Box data-testid="analytics-progress-slot" sx={{ width: '100%', height: 4, mx: '5px' }}>
+          {isFetching && <LinearProgress size={'sm'} sx={{ width: '100%' }} />}
+        </Box>
 
         {!isLoading && (
           <Grid xs={12} mt={0.5}>
@@ -74,28 +77,18 @@ const AnalyticsTab: React.FC = () => {
                 <UserActivityTab
                   rows={analyticsQuery.data?.logs || []}
                   total={analyticsQuery.data?.total || 0}
-                  loading={isLoading}
+                  isFetching={isFetching}
                   error={analyticsQuery.error}
                   onRefresh={handleRefresh}
                 />
               )}
 
               {activeSubTab === AnalyticsSubTab.DailyReport && (
-                <DailyReportTab
-                  rawData={analyticsQuery.data?.reports || []}
-                  loading={isLoading}
-                  error={analyticsQuery.error}
-                  onRefresh={handleRefresh}
-                />
+                <DailyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
               )}
 
               {activeSubTab === AnalyticsSubTab.WeeklyReport && (
-                <WeeklyReportTab
-                  rawData={analyticsQuery.data?.reports || []}
-                  loading={isLoading}
-                  error={analyticsQuery.error}
-                  onRefresh={handleRefresh}
-                />
+                <WeeklyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
               )}
             </Sheet>
           </Grid>

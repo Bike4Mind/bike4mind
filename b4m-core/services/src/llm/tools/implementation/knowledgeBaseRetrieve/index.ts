@@ -1,9 +1,18 @@
 import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import {
+  defangRetrievedContent,
+  renderRetrievedContentBlock,
+  toContentLabel,
+} from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
+import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
 interface KnowledgeBaseRetrieveParams {
   file_id?: string;
@@ -96,6 +105,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         }
 
         try {
+          // Memoized per call: Path A's shared-file fallback, Path B's search, and the audit
+          // attribution below each need the caller's dynamic lake access, but at most one of the
+          // first two ever runs (Path A returns before Path B on a resolved/missing file_id) - this
+          // makes whichever one runs first, plus the attribution step, share a single round trip
+          // instead of each re-resolving it.
+          let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
+          const dynamicAccess = () => (dynamicAccessPromise ??= getDynamicDataLakeAccess(context));
+
           let files: IFabFileDocument[] = [];
 
           // Path A: direct file_id lookup
@@ -126,7 +143,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
                 const sharedFile = await context.db.fabfiles.findById(file_id);
                 if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
-                  const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
+                  const { dataLakeTags, dataLakeTagPrefixes } = await dynamicAccess();
                   const fileTags = sharedFile.tags?.map(t => t.name) || [];
                   const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
                   const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
@@ -177,7 +194,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 }
               );
             } else {
-              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await dynamicAccess();
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -204,7 +221,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const searchDesc = [query && `query "${query}"`, tags?.length && `tags [${tags.join(', ')}]`]
                 .filter(Boolean)
                 .join(' and ');
-              return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.`;
+              // This search is over file NAME/TAGS/NOTES, not content, so a freshly attached file
+              // whose metadata does not match the query lands here even though its raw content is
+              // already in the prompt - the caller cannot tell which specific file that is from a
+              // metadata miss alone, so the note stays generic (see attachmentInlineNotice in
+              // knowledgeBaseSearch for the sibling case where the matched file IS identifiable).
+              const inlinedCount = context.inlinedAttachmentIds?.length ?? 0;
+              const inlinedNote = inlinedCount
+                ? ` ${inlinedCount} file(s) attached to this conversation may not be indexed for search yet - if so, their content was already included directly in the conversation above; answer from that instead of reporting them as inaccessible.`
+                : '';
+              return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
 
@@ -212,6 +238,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           let totalCharsUsed = 0;
           const sections: string[] = [];
           const retrievedFiles: IFabFileDocument[] = [];
+          const zeroChunkFiles: IFabFileDocument[] = [];
 
           for (const file of files) {
             if (totalCharsUsed >= charBudget) break;
@@ -275,6 +302,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             if (chunksRead === 0) {
               context.logger.log(`📖 Knowledge Retrieve: No chunks for file ${file.fileName} (${file.id})`);
+              zeroChunkFiles.push(file);
               continue;
             }
 
@@ -302,12 +330,18 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   ? `${content.length} (truncated at budget)`
                   : `${content.length}`;
 
+            // Untrusted on every part that comes from the document, not just the body: the file
+            // name and tag list are attacker-influenced too, and a newline in either would carry a
+            // forged marker into the header lines. See renderRetrievedContentBlock.
             sections.push(
-              `### ${file.fileName} (ID: ${file.id})\n` +
-                `Tags: ${fileTags}\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+                `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
+                // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
+                // file's metadata from its body, while that constant joins one section to the next.
+                // Same glyph, different jobs - they are free to diverge.
                 `---\n` +
-                content
+                defangRetrievedContent(content)
             );
 
             totalCharsUsed += content.length;
@@ -315,7 +349,97 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           if (retrievedFiles.length === 0) {
-            return 'Found matching documents but they have no indexed content. The files may not have been processed yet.';
+            // A file already inlined into this turn's prompt (attached but still chunking) has its
+            // content in front of the model regardless of this zero-chunk result - say so explicitly
+            // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
+            // and discard content it already has. A file NOT in inlinedAttachmentIds (e.g. a lake doc
+            // genuinely still indexing) keeps the honest "not yet processed" wording - it is not
+            // inline anywhere, so claiming otherwise would be false. "Full content" is only claimed
+            // for fullyInlinedAttachmentIds - a merely-inlined file can be a cosine excerpt or a
+            // truncated head (#1163 review), so that claim would be false for it.
+            const inlined = new Set(context.inlinedAttachmentIds ?? []);
+            const fullyInlined = new Set(context.fullyInlinedAttachmentIds ?? []);
+            const inlinedZeroChunkFiles = zeroChunkFiles.filter(f => inlined.has(f.id));
+            const fullNames = inlinedZeroChunkFiles.filter(f => fullyInlined.has(f.id)).map(f => `"${f.fileName}"`);
+            const partialNames = inlinedZeroChunkFiles.filter(f => !fullyInlined.has(f.id)).map(f => `"${f.fileName}"`);
+            if (fullNames.length > 0 || partialNames.length > 0) {
+              const parts: string[] = [];
+              if (fullNames.length > 0) {
+                parts.push(
+                  `The document(s) ${fullNames.join(', ')} are attached to this conversation and still ` +
+                    `being indexed, so this tool has no stored text for them yet. Their full content was ` +
+                    `already provided earlier in this conversation (look for a message starting with ` +
+                    `"Here is the content from the attached file" or, with multiple files, "Here are the ` +
+                    `contents from"). Answer the user's question from that content.`
+                );
+              }
+              if (partialNames.length > 0) {
+                parts.push(
+                  `The document(s) ${partialNames.join(', ')} are attached to this conversation and still ` +
+                    `being indexed, so this tool has no stored text for them yet. PART of their content was ` +
+                    `already provided earlier in this conversation, but what was shown may be an excerpt or ` +
+                    `a truncated head - answer from that if it covers the question, but do not assume it is ` +
+                    `the whole document.`
+                );
+              }
+              return `${parts.join(' ')} Do NOT tell the user you cannot access the attachment.`;
+            }
+            return (
+              'Found matching documents but no stored text for them yet - indexing may still be in ' +
+              'progress. If content for these documents already appears earlier in this conversation, ' +
+              'answer from that; only report them as unavailable if nothing about them appears above.'
+            );
+          }
+
+          // Best-effort audit write, computed and recorded OFF the critical path: Path A's owned-
+          // file fast path (the common case - a caller retrieving their own file_id) never touches
+          // dynamicAccess() at all, so awaiting it here would add a full entitlement-resolution
+          // round trip to that common case purely for the audit's sake. Deferred into the same
+          // fire-and-forget shape as the write itself instead, with its own .catch() so a failure
+          // resolving dynamic access can only ever drop the audit row - never (as an inline
+          // `await` here would) propagate into the outer catch and turn a successful retrieval
+          // into "An error occurred while retrieving document content."
+          // Shared by both branches below - only resolvedLakeIds and the await-vs-defer timing differ.
+          const baseAuditPayload = {
+            // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+            principalKind: 'user' as const,
+            principalId: context.userId,
+            organizationId: normalizeId(context.user.organizationId),
+            fileIds: retrievedFiles.map(f => f.id),
+            surface: 'chat-kb-retrieve' as const,
+            ...(query ? { queryText: query } : {}),
+          };
+          if (scope) {
+            // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is
+            // recorded regardless, same as the search tool's scoped arm - membership IS the
+            // authorization, so there is nothing to await here either.
+            recordLakeAccessEvent(
+              context.db.lakeAccessEvents,
+              { ...baseAuditPayload, resolvedLakeIds: [] },
+              context.logger,
+              context.db.adminSettings
+            );
+          } else if (context.db.lakeAccessEvents) {
+            const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
+            dynamicAccess()
+              .then(({ lakes }) => {
+                // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
+                // Path B's search is owner+shared+org+lake too), so a retrieved file with no
+                // recoverable datalake tag may just be the caller's own private file - never fall
+                // back to the full scope, and skip the row entirely if nothing retrieved is
+                // actually attributable to a lake.
+                const resolvedLakeIds = attributeAccessedLakeIds(fileTagLists, lakes, {
+                  allowFullScopeFallback: false,
+                });
+                if (resolvedLakeIds.length === 0) return;
+                return recordLakeAccessEvent(
+                  context.db.lakeAccessEvents,
+                  { ...baseAuditPayload, resolvedLakeIds },
+                  context.logger,
+                  context.db.adminSettings
+                );
+              })
+              .catch(err => context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err));
           }
 
           // Create citable source chips for the UI - mirrors web_search pattern
@@ -352,8 +476,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
           }
 
+          // This channel returns WHOLE documents (up to ABSOLUTE_MAX_CHARS) and is reachable
+          // without a prior search, so the delimiter matters more here than on the search path.
+          // The count line is ours and stays outside the block.
           const header = `Retrieved content from ${retrievedFiles.length} of ${files.length} document(s):\n`;
-          const result = header + '\n' + sections.join('\n\n---\n\n');
+          // Anti-invention rule ahead of the raw document text so it frames how to use it: this tool
+          // returns the largest, unclipped block of chunk content, and both patched search surfaces
+          // route the model here for "more detail" - the exact moment a leading question tempts it to
+          // top off the answer with an unsupported specific. Same shared const as the other surfaces.
+          // The rule is our framing and stays outside the delimited content block.
+          const result = header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + renderRetrievedContentBlock(sections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

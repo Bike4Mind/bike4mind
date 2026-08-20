@@ -29,8 +29,28 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeBatchRepository: {},
   fabFileRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
+  // The GET read gate reads the EnforceLakeReadGrants cutover flag (#1673) via assertLakeAccess;
+  // default off keeps these redaction tests on the legacy report-only path.
+  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', async () => {

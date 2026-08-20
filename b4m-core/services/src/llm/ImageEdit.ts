@@ -20,6 +20,7 @@ import {
   IOrganizationRepository,
   IOrganizationDocument,
   ImageModerationIncident as ImageModerationIncidentInput,
+  insufficientCreditsError,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -56,7 +57,7 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
-import { deductCreditsWithOrgSupport } from '../creditService';
+import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
@@ -251,7 +252,18 @@ export class ImageEditService {
 
     // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart),
     // so both paths bill identically. Returns { requiredCredits, usdCost } n-scaled.
-    return validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
+    const result = await validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
+
+    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
+    // shared pool. This is the only enforcement point - the settlement write
+    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
+    if (organization && isMemberCreditCapExceeded(organization, user.id, result.requiredCredits)) {
+      throw insufficientCreditsError(
+        `Your organization member credit limit has been reached for image editing. Contact your organization administrator.`
+      );
+    }
+
+    return result;
   }
 
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {

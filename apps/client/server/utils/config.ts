@@ -53,6 +53,8 @@ const Config = {
   MAIL_USERNAME: Resource.MAIL_USERNAME.value,
   MAIL_PASSWORD: Resource.MAIL_PASSWORD.value,
   ANTHROPIC_API_KEY: Resource.ANTHROPIC_API_KEY.value,
+  ANTHROPIC_ADMIN_API_KEY: readOptionalSecret('ANTHROPIC_ADMIN_API_KEY', () => Resource.ANTHROPIC_ADMIN_API_KEY.value),
+  OPENAI_ADMIN_API_KEY: readOptionalSecret('OPENAI_ADMIN_API_KEY', () => Resource.OPENAI_ADMIN_API_KEY.value),
   GEMINI_API_KEY: Resource.GEMINI_API_KEY.value,
   OKTA_AUDIENCE: Resource.OKTA_AUDIENCE.value,
   OKTA_CLIENT_ID: Resource.OKTA_CLIENT_ID.value,
@@ -97,6 +99,16 @@ const Config = {
 } as const;
 
 const isProduction = () => Resource.App.stage === 'production';
+
+/**
+ * Binary production/non-production bucket for a raw stage string - the same comparison as
+ * isProduction(), but as a pure function of an explicit stage argument (not Resource.App.stage
+ * directly) so callers that need to unit-test stage-dependent routing/dimensioning can pass an
+ * arbitrary stage without mocking Resource. Single source of truth for callers that used to each
+ * repeat `stage === 'production'` themselves.
+ */
+const classifyStage = (stage: string | undefined): 'production' | 'nonprod' =>
+  stage === 'production' ? 'production' : 'nonprod';
 // True only for local development, never in deployed environments.
 const isDevelopment = () => {
   const isLocal = process.env.IS_LOCAL === 'true';
@@ -115,4 +127,4 @@ const isE2EEnabled = () => {
   return isDevelopment();
 };
 
-export { Config, isProduction, isDevelopment, isE2EEnabled };
+export { Config, isProduction, classifyStage, isDevelopment, isE2EEnabled };

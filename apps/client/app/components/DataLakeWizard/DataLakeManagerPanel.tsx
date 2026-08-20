@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -26,6 +26,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import StorageIcon from '@mui/icons-material/Storage';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -35,8 +36,16 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -64,19 +73,31 @@ import {
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
+  useUnderChunkedCount,
+  useRechunkDataLake,
+  useLakeConvergencePlan,
+  useConvergeDataLake,
 } from '@client/app/hooks/data/dataLakes';
+import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
+import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
+import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
+import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
+import { DataLakeAccessModal } from './DataLakeAccessModal';
 import type { EditableLake } from './DataLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { satisfiesTagPrefix, submittedTagPrefix, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
 
@@ -84,11 +105,32 @@ type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[numbe
  *  meta-tag-only files), so every file is always reachable in the manager. */
 const UNCATEGORIZED_KEY = '__uncategorized__';
 
-const normalizePrefix = (fileTagPrefix: string) => (fileTagPrefix.endsWith(':') ? fileTagPrefix : `${fileTagPrefix}:`);
+/** The lake's prefix in the form its tags carry, via the same helper the wizard's request-rule
+ *  mirror uses so trimming and colon-appending cannot drift between the two surfaces.
+ *  The `|| ':'` keeps an unusable (empty) prefix matching NOTHING: submittedTagPrefix returns ''
+ *  there, and every tag startsWith(''), which would pull the whole knowledge base into one
+ *  lake's tree and empty its Uncategorized bucket. */
+const normalizePrefix = (fileTagPrefix: string) => submittedTagPrefix(fileTagPrefix) || ':';
 
 /** The prefix's namespace segments, e.g. 'books' -> ['books']. Lake navigation seeds the
  *  path past these so clicking a lake lands directly on its categories. */
 const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '').split(':').filter(Boolean);
+
+/** Splits "[Category] Title.ext" into [category, title] so files sharing a bracketed source
+ *  prefix sort by the group then the title instead of piling up on the shared leading "[".
+ *  Mirrors DataLakeTreeView's compareByCategoryThenTitle - this surface carries its own tag-tree
+ *  browsing logic rather than routing through DataLakeTreeView, so the two stay in sync by hand. */
+function categoryTitleKey(fileName: string): [string, string] {
+  const withoutExt = fileName.replace(/\.[^/.]+$/, '');
+  const match = withoutExt.match(/^\[(.*?)\]\s*(.*)$/);
+  return match ? [match[1], match[2]] : ['', withoutExt];
+}
+
+function compareByCategoryThenTitle(a: IFabFileDocument, b: IFabFileDocument): number {
+  const [categoryA, titleA] = categoryTitleKey(a.fileName);
+  const [categoryB, titleB] = categoryTitleKey(b.fileName);
+  return categoryA.localeCompare(categoryB) || titleA.localeCompare(titleB);
+}
 
 /**
  * Data Lakes management surface: one persistent two-pane layout. The left sidebar navigates
@@ -123,6 +165,7 @@ export default function DataLakeManagerPanel() {
   // sidebar footer's Discover button flips it the same way.
   const managerTab = useDataLakeWizardStore(s => s.managerTab);
   const openManager = useDataLakeWizardStore(s => s.openManager);
+  const managerLakeId = useDataLakeWizardStore(s => s.managerLakeId);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
@@ -139,6 +182,17 @@ export default function DataLakeManagerPanel() {
   const [path, setPath] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
+  const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
+
+  // Deep-link: a per-lake action elsewhere (the page rail's header) opens the manager already
+  // pointed at that lake. Only a non-null id steers; null is the plain "open at root" case and
+  // must not wipe a selection the user made inside the panel.
+  useEffect(() => {
+    if (!managerLakeId) return;
+    setLakeId(managerLakeId);
+    setPath([]);
+    setSelectedFile(null);
+  }, [managerLakeId]);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
@@ -162,10 +216,26 @@ export default function DataLakeManagerPanel() {
           // '' both when unset and when the server withheld it (non-editors never receive
           // the text); the modal renders the field off canManage, never off this value.
           systemPrompt: l.systemPrompt ?? '',
+          // Same as systemPrompt: '' when unset OR withheld from a non-editor; rendered off canManage.
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          // Absent when withheld from a non-editor OR the lake predates the field; seed the default
+          // so the picker always shows a concrete mode (matching how the resolver treats absence).
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
+          // the field renders as blank - and the state in which this lake never converges.
+          requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,
           canManage: !!l.canManage,
+          embeddingSpendMicroUsd: l.embeddingSpendMicroUsd,
         }
       : null;
   }, [dataLakes, editingLakeId]);
+
+  // Same live-list derivation as editingLake: the access modal only needs the lake's id + name,
+  // and re-deriving from the list keeps it in step if the lake is renamed while the modal is open.
+  const accessLake = useMemo(() => {
+    const l = dataLakes?.find(d => d.id === accessLakeId);
+    return l ? { id: l.id, name: l.name } : null;
+  }, [dataLakes, accessLakeId]);
 
   const selectLake = (lake: ManagerLake) => {
     setLakeId(lake.id);
@@ -180,13 +250,10 @@ export default function DataLakeManagerPanel() {
 
   // Discover swaps the right pane, but the activeLake branch below outranks it - so a click
   // while a lake was open changed nothing on screen, then surfaced later as the catalog
-  // appearing when the user pressed Back. Exit the lake on the way in. Toggling back out is
-  // the only exit that does not require owning a lake to click.
-  const toggleDiscover = () => {
-    if (managerTab === 'discover') {
-      openManager('mine');
-      return;
-    }
+  // appearing when the user pressed Back. Exit the lake on the way in. One-way by design: the
+  // catalog is a place you go, not a mode you hold, so the nav's Back row is the way out (which
+  // also means leaving never depends on owning a lake to click).
+  const openDiscover = () => {
     setLakeId(null);
     setPath([]);
     setSelectedFile(null);
@@ -226,8 +293,7 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
-        isDiscovering={managerTab === 'discover'}
-        onDiscover={toggleDiscover}
+        onDiscover={openDiscover}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -244,8 +310,14 @@ export default function DataLakeManagerPanel() {
             fileCount={lakeCount(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
+            onOpenAccess={() => setAccessLakeId(activeLake.id)}
             onReviewTaxonomy={setReviewingBatchId}
             onArchived={() => {
+              setLakeId(null);
+              setPath([]);
+              setSelectedFile(null);
+            }}
+            onDeleted={() => {
               setLakeId(null);
               setPath([]);
               setSelectedFile(null);
@@ -262,6 +334,8 @@ export default function DataLakeManagerPanel() {
       )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+
+      <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />
 
       {/* Review/apply the background AI tag suggestions for a batch */}
       {reviewingBatch && (
@@ -293,9 +367,7 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
-  isDiscovering: boolean;
-  /** Toggles the public-lake Discover catalog in the right pane. */
+  /** Opens the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
@@ -314,7 +386,6 @@ function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
-  isDiscovering,
   onDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
@@ -336,8 +407,10 @@ function ManagerNav({
   const restoreDeletedLake = useRestoreDeletedDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const cleanupLake = useCleanupDataLake();
-  const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
-  const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
+  // Fetched up front rather than on first expand: an empty section renders as a single "No
+  // archived" row instead of an accordion, and that needs the count before anyone clicks.
+  const { data: archivedLakes } = useGetArchivedDataLakes();
+  const { data: deletedLakes } = useGetDeletedDataLakes();
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   const articles = useMemo(() => filesResult?.data ?? [], [filesResult]);
@@ -358,6 +431,7 @@ function ManagerNav({
   }, [articles, activeLake]);
 
   const currentNodes = useMemo(() => getNodesAtPath(tree, path), [tree, path]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, path), [tree, path]);
 
   const filteredNodes = useMemo(() => {
     let nodes = currentNodes;
@@ -384,7 +458,7 @@ function ManagerNav({
             prefix
           )
       )
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+      .sort(compareByCategoryThenTitle);
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
@@ -398,10 +472,18 @@ function ManagerNav({
   const files = useMemo(() => {
     if (isUncategorized) return uncategorizedFiles;
     if (!leafTag) return [];
-    return [...articles]
-      .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+    return articles.filter(f => (f.tags ?? []).some(t => t.name === leafTag)).sort(compareByCategoryThenTitle);
   }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
+
+  // A branch node (has children) can ALSO carry files tagged with its own exact path, not just a
+  // deeper child tag - shown as file rows mixed into the folder list below rather than a separate
+  // route, matching how DataLakeTreeView handles the same case for the standalone/chat surfaces.
+  const ownTag = activeLake && !isUncategorized && !leafTag && path.length > seedDepth ? path.join(':') : null;
+  const ownFiles = useMemo(() => {
+    if (!ownTag || !currentNode?.ownFileCount) return [];
+    return articles.filter(f => (f.tags ?? []).some(t => t.name === ownTag)).sort(compareByCategoryThenTitle);
+  }, [ownTag, currentNode, articles]);
+  const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];
@@ -555,6 +637,26 @@ function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {/* Owner marker in the LIST itself, not just the detail pane: the
+                                  row otherwise shows only a name, so an admin (who sees every
+                                  tenant's lakes, even private) can't tell whose is whose without
+                                  opening each one. The owner name is already on the row, so this
+                                  costs no extra request. */}
+                              {lake.isOwn === false && (
+                                <Tooltip
+                                  title={
+                                    lake.ownerDisplayName
+                                      ? `Owned by ${lake.ownerDisplayName}`
+                                      : 'Owned by another user'
+                                  }
+                                  size="sm"
+                                >
+                                  <PersonOutlineIcon
+                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
+                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
                               {/* Background AI-tag suggestion indicator - an independent clock
                                   from ingest, so this can appear well after the lake's files
                                   are already fully uploaded/searchable. */}
@@ -621,76 +723,57 @@ function ManagerNav({
               open={showArchived}
               onToggle={() => setShowArchived(v => !v)}
               testid="datalake-archived-section"
-              emptyText="No archived data lakes."
-              lakes={showArchived ? filterByName(archivedLakes) : undefined}
+              emptyLabel="No files"
+              lakes={archivedLakes ? filterByName(archivedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-btn-${lake.id}`}
-                      onClick={() => unarchiveLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete (recoverable)" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-delete-btn-${lake.id}`}
-                      onClick={() => deleteLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
+              // An array, not a fragment: Joy's Menu clones its first child with data-first-child,
+              // which a Fragment rejects with a console error.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-btn-${lake.id}`}
+                  icon={<UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => unarchiveLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="delete"
+                  testId={`datalake-delete-btn-${lake.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Delete"
+                  onClick={() => deleteLake.mutate(lake.id)}
+                  danger
+                />,
+              ]}
             />
 
             {/* Deleted (recoverable until purged) */}
             <NavLifecycleSection
-              label="Deleted (recoverable)"
+              label="Deleted"
               open={showDeleted}
               onToggle={() => setShowDeleted(v => !v)}
               testid="datalake-deleted-section"
-              emptyText="No deleted data lakes."
-              lakes={showDeleted ? filterByName(deletedLakes) : undefined}
+              emptyLabel="No files"
+              lakes={deletedLakes ? filterByName(deletedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                      onClick={() => restoreDeletedLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <RestoreIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Purge permanently" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-purge-btn-${lake.id}`}
-                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
+              // Array for the same data-first-child reason as the archived section above.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-deleted-btn-${lake.id}`}
+                  icon={<RestoreIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => restoreDeletedLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="purge"
+                  testId={`datalake-purge-btn-${lake.id}`}
+                  icon={<DeleteForeverIcon sx={{ fontSize: 16 }} />}
+                  label="Purge permanently"
+                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                  danger
+                />,
+              ]}
             />
 
             {/* Irreversible purge confirmation */}
@@ -700,6 +783,7 @@ function ManagerNav({
                 <DialogContent>
                   This irreversibly deletes “{purgeTarget?.name}” and all its files, chunks, and batches. This cannot be
                   undone.
+                  {purgeTarget && <PurgeDriveWarning lakeId={purgeTarget.id} />}
                 </DialogContent>
                 <DialogActions>
                   <Button
@@ -750,12 +834,7 @@ function ManagerNav({
                       }}
                     />
                     <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
+                      <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
                     </ListItemContent>
                   </ListItemButton>
                 </ListItem>
@@ -808,28 +887,46 @@ function ManagerNav({
               </ListItem>
             )}
 
-            {filteredNodes.length === 0 && !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) && (
-              <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />
-            )}
+            {/* Files tagged with this branch's own exact path, mixed in alongside its subfolders. */}
+            {showOwnFiles &&
+              ownFiles.map(file => (
+                <ListItem key={file.id}>
+                  <ListItemButton
+                    selected={selectedFileId === file.id}
+                    onClick={() => onSelectFile(file)}
+                    data-testid={`datalake-manager-file-${file.id}`}
+                    sx={treeRowSx(hoverBg)}
+                  >
+                    <ArticleOutlinedIcon
+                      sx={{
+                        fontSize: 16,
+                        color: selectedFileId === file.id ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <ListItemContent>
+                      <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
+                    </ListItemContent>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+
+            {filteredNodes.length === 0 &&
+              !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) &&
+              !showOwnFiles && <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />}
           </List>
         )}
       </Box>
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
-        <Tooltip
-          title={
-            isDiscovering
-              ? 'Showing public data lakes. Click to return to your own lakes.'
-              : 'Browse data lakes other people have published, from across the app.'
-          }
-          size="sm"
-        >
+        <Tooltip title="Browse data lakes other people have published, from across the app." size="sm">
+          {/* Navigates to the catalog; deliberately stateless - it never reads as pressed, because
+              it is not a mode you are holding. Leaving is the nav's Back row. */}
           <Button
-            variant={isDiscovering ? 'soft' : 'outlined'}
+            variant="outlined"
             color="neutral"
             onClick={onDiscover}
-            aria-pressed={isDiscovering}
             data-testid="datalake-manager-discover-btn"
             sx={FOOTER_BTN_SX}
           >
@@ -878,43 +975,66 @@ function NavSectionHeader({
   testid,
   hoverBg,
   infoTooltip,
+  trailing,
 }: {
   label: string;
-  open: boolean;
-  onToggle: () => void;
+  open?: boolean;
+  /** Omit to render a static row: no collapse, no chevron - for a section with nothing to open. */
+  onToggle?: () => void;
   testid: string;
   hoverBg: string;
   /** Persistent help affordance next to the label, e.g. explaining RAG for the Lakes section. */
   infoTooltip?: React.ReactNode;
+  /** Right-hand content replacing the chevron, e.g. "No files" on an empty section. */
+  trailing?: React.ReactNode;
 }) {
-  return (
-    <ListItemButton
-      onClick={onToggle}
-      data-testid={testid}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        px: '8px',
-        mb: '4px',
-        height: '32px',
-        minHeight: '32px',
-        borderRadius: '8px',
-        transition: 'background 0.15s',
-        '--variant-plainHoverBg': hoverBg,
-      }}
-    >
-      <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-        {label}
-      </Typography>
-      {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
-      {infoTooltip && <Box onClick={e => e.stopPropagation()}>{infoTooltip}</Box>}
-      {open ? (
-        <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
-      ) : (
-        <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
-      )}
+  const rowSx = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    px: '8px',
+    mb: '4px',
+    height: '32px',
+    minHeight: '32px',
+    borderRadius: '8px',
+    transition: 'background 0.15s',
+    '--variant-plainHoverBg': hoverBg,
+  } as const;
+
+  const content = (
+    <>
+      {/* Label and help sit as one group, so the icon stays beside the text instead of being
+          pushed across to the chevron by a stretching label. Same pairing as the tree header. */}
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <Typography noWrap sx={{ minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
+          {label}
+        </Typography>
+        {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
+        {infoTooltip && (
+          <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+            {infoTooltip}
+          </Box>
+        )}
+      </Box>
+      {trailing ??
+        (open ? (
+          <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+        ) : (
+          <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+        ))}
+    </>
+  );
+
+  // Nothing to expand means nothing to click: render the row as a statement rather than a
+  // control, so it neither highlights on hover nor offers a chevron that would do nothing.
+  return onToggle ? (
+    <ListItemButton onClick={onToggle} data-testid={testid} sx={rowSx}>
+      {content}
     </ListItemButton>
+  ) : (
+    <Box data-testid={testid} sx={rowSx}>
+      {content}
+    </Box>
   );
 }
 
@@ -925,13 +1045,14 @@ interface LifecycleSectionLake {
 }
 
 /** Sidebar accordion for archived/deleted lakes: tree-style rows with restore/delete actions.
- *  `lakes` undefined -> loading skeleton (the query fires only once the section is expanded). */
+ *  `lakes` undefined -> still loading (header shows a chevron, body a skeleton). An empty list
+ *  collapses to a single static row stating so, since there is nothing to open. */
 function NavLifecycleSection({
   label,
   open,
   onToggle,
   testid,
-  emptyText,
+  emptyLabel,
   lakes,
   hoverBg,
   renderActions,
@@ -940,11 +1061,29 @@ function NavLifecycleSection({
   open: boolean;
   onToggle: () => void;
   testid: string;
-  emptyText: string;
+  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files". */
+  emptyLabel: string;
   lakes: LifecycleSectionLake[] | undefined;
   hoverBg: string;
   renderActions: (lake: LifecycleSectionLake) => React.ReactNode;
 }) {
+  if (lakes?.length === 0) {
+    return (
+      <Box data-testid={testid} sx={{ mt: '8px' }}>
+        <NavSectionHeader
+          label={label}
+          testid={`${testid}-toggle`}
+          hoverBg={hoverBg}
+          trailing={
+            <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary', flexShrink: 0 }}>
+              {emptyLabel}
+            </Typography>
+          }
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box data-testid={testid} sx={{ mt: '8px' }}>
       <NavSectionHeader label={label} open={open} onToggle={onToggle} testid={`${testid}-toggle`} hoverBg={hoverBg} />
@@ -953,10 +1092,6 @@ function NavLifecycleSection({
           <Box sx={{ px: '8px', pb: 1 }}>
             <Skeleton variant="rectangular" height={28} sx={{ borderRadius: 'sm' }} />
           </Box>
-        ) : lakes.length === 0 ? (
-          <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pb: 1 }}>
-            {emptyText}
-          </Typography>
         ) : (
           <List size="sm" sx={TREE_LIST_SX}>
             {lakes.map(lake => (
@@ -967,7 +1102,6 @@ function NavLifecycleSection({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
-                    px: '8px',
                     minHeight: '28px',
                     width: '100%',
                   }}
@@ -979,7 +1113,11 @@ function NavLifecycleSection({
                   >
                     {lake.name}
                   </Typography>
-                  {renderActions(lake)}
+                  {/* Folded behind one trigger, sharing the tree's row-menu recipe, so a lifecycle
+                      row reads the same as a file row instead of exposing two coloured buttons. */}
+                  <RowActionsMenu testId={`${testid}-menu-btn-${lake.id}`} ariaLabel={`${label} lake actions`}>
+                    {renderActions(lake)}
+                  </RowActionsMenu>
                 </Box>
               </ListItem>
             ))}
@@ -991,29 +1129,118 @@ function NavLifecycleSection({
 
 // Right pane: selected lake's details + management actions
 
+/**
+ * Purge-time warning that the lake still has a Drive folder attached. Renders nothing when there is
+ * no connection (or it is not visible to this caller - the endpoint 404s on a personal lake and
+ * 403s for a non-manager).
+ *
+ * It deliberately does NOT promise that purging releases the connection, because today it does not:
+ * the row survives its lake and its globally-unique driveFolderId then blocks re-claiming that
+ * folder app-wide, with no UI or API path back (#1807). So the copy tells the user to disconnect
+ * FIRST. When #1807 lands and teardown releases the connection itself, this wording must change
+ * with it - it describes a defect, not a design.
+ */
+function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
+  // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
+  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
+  // populate would trade one wasted request for silently withholding the warning on a lake that
+  // does have a connection. A rare 404 on a purge dialog is the cheaper failure.
+  const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
+
+  // A FAILED read is not "no connection". Collapsing it into the silent case would borrow the
+  // benign default's meaning for an unknown, and the cost lands on the one action that cannot be
+  // undone: the user purges, the row survives, and its globally-unique driveFolderId blocks
+  // re-claiming that folder app-wide with no path back (#1807). A 404 (personal lake / no
+  // connection) resolves to `connection: null` and is NOT an error, so this only fires on a real
+  // failure - it does not nag on every ordinary purge.
+  if (isError) {
+    return (
+      <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. If one is, purging leaves the
+        connection behind and that folder cannot be connected to another lake afterwards - restore the lake and
+        disconnect Drive first to be safe.
+      </Typography>
+    );
+  }
+  if (isLoading || !connection) return null;
+
+  const folder = connection.folderName || connection.driveFolderId;
+  return (
+    <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
+      This lake still syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging leaves that connection behind, and
+      the folder cannot be connected to another lake afterwards. Restore the lake and disconnect Drive first.
+    </Typography>
+  );
+}
+
 function LakeInfoPanel({
   lake,
   fileCount,
   taxonomyBatch,
   onOpenSettings,
+  onOpenAccess,
   onReviewTaxonomy,
   onArchived,
+  onDeleted,
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
+  /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */
+  onOpenAccess: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
   /** Called after the active lake is archived, so the panel exits to root instead of the
    *  derived activeLake re-binding to a lake that just left the list (and a later restore
    *  teleporting back in). */
   onArchived: () => void;
+  /** Same exit-to-root need as onArchived: a direct delete also removes the lake from the
+   *  active list, skipping the archive step entirely (the lifecycle 'delete' action has no
+   *  archived-status precondition). */
+  onDeleted: () => void;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
-  const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
+  const deleteLake = usePermanentDeleteDataLake();
+  const startChatWithLake = useStartChatWithLake();
+  const [startingChat, setStartingChat] = useState(false);
+  const visibility = lakeVisibilityLabel(lake);
+  // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
+  // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
+  // surfaced when the lake actually has legacy oversized-chunk files to repair (the count
+  // self-polls down as a rebuild wave drains).
+  // !!: useUnderChunkedCount's `enabled` param defaults to true, which fires on `undefined`
+  // specifically - an absent canRebuild (e.g. a rolling-deploy skew window against an older
+  // server) would otherwise ENABLE the query rather than disable it. Coerce so absent reads as
+  // false, matching every other truthiness check on this flag.
+  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
+  const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
+  const failedCount = rebuildStatus?.failedCount ?? 0;
+  const rechunk = useRechunkDataLake(lake.id);
+
+  // Convergence toward the lake's OWN declared chunk policy (#1681). Distinct from "Rebuild
+  // passages", which repairs a fixed legacy defect (oversized whole-document blobs) against a
+  // universal threshold: this repairs drift from a policy THIS lake declares, so it only exists for
+  // a lake with an explicit one. Same `canRebuild` gate as the sibling action - the server enforces
+  // it again (assertLakeRebuildAccess) and the plan read is safe for any reader.
+  const { data: convergencePlan } = useLakeConvergencePlan(lake.id, !!lake.canRebuild);
+  const converge = useConvergeDataLake(lake.id);
+  // Confirm dialog state: the bulk-change guard's whole point is that the share is SEEN before it
+  // is accepted, so `confirm: true` is only ever sent from this dialog.
+  const [convergeConfirmOpen, setConvergeConfirmOpen] = useState(false);
+  // waveSize, NOT convergeableCount: the latter counts whole-lake drift before the cross-lake check,
+  // so a lake whose entire remaining drift belongs to a lake requiring a different target would show
+  // an action count that repairs nothing on every click, forever. Verified live on a preview.
+  const convergeWaveSize = convergencePlan?.waveSize ?? 0;
+  const convergeBlockedCount = convergencePlan?.crossLakeConflictCount ?? 0;
+  const canConverge = !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize > 0;
+  // Nothing to repair from here, but the lake is NOT converged - surfaced as its own advisory so the
+  // absence of a button is explained rather than read as "healthy".
+  const showConvergeBlocked =
+    !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize === 0 && convergeBlockedCount > 0;
 
   return (
     <Box
@@ -1026,6 +1253,32 @@ function LakeInfoPanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {lake.name}
           </Typography>
+          {/* Start chat is available to ANY user who can reach the lake (not manage-gated): it
+              opens a session scoped to this lake, applying the lake's preferred prompt server-side.
+              Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
+          <Button
+            size="sm"
+            variant="soft"
+            color="primary"
+            startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            data-testid={`datalake-startchat-btn-${lake.id}`}
+            loading={startingChat}
+            onClick={async () => {
+              setStartingChat(true);
+              try {
+                await startChatWithLake(lake.id);
+              } catch {
+                toast.error('Could not start a chat with this lake');
+              } finally {
+                // Reset in finally, not only on error: a success that does not unmount this panel
+                // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
+                setStartingChat(false);
+              }
+            }}
+            sx={{ flexShrink: 0, fontSize: '13px' }}
+          >
+            Start chat
+          </Button>
           {/* Add files / Settings / Archive are owner-or-admin only (the backend enforces the
               same rule). The nav surfaces other users' read-only public lakes too. */}
           {lake.canManage && (
@@ -1061,6 +1314,19 @@ function LakeInfoPanel({
               >
                 Settings
               </Button>
+              <Tooltip title="See who can access this lake, and who has read it" size="sm">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  startDecorator={<PeopleOutlineIcon sx={{ fontSize: 16 }} />}
+                  data-testid={`datalake-access-btn-${lake.id}`}
+                  onClick={onOpenAccess}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Access
+                </Button>
+              </Tooltip>
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -1077,8 +1343,148 @@ function LakeInfoPanel({
               </Tooltip>
             </>
           )}
+          {/* Rebuild passages is gated on canRebuild, a NARROWER flag than canManage: a fallback
+              (built-in) lake has no document (canManage is always false for it) but can still be
+              rebuilt by an admin. Deliberately its own condition, not folded into the canManage
+              fragment above - that fragment's other affordances (rename/delete/visibility/file
+              removal) would still 400 on a fallback lake. */}
+          {lake.canRebuild && underChunkedCount > 0 && (
+            <Tooltip
+              title="Re-chunk files stored as oversized passages into retrieval-sized ones. Runs in bounded waves; safe to repeat until zero."
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-rebuild-passages-btn-${lake.id}`}
+                loading={rechunk.isPending}
+                onClick={() => rechunk.mutate(undefined)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Rebuild passages
+              </Button>
+            </Tooltip>
+          )}
+          {/* Converge to policy (#1681). Only shown for a lake with an EXPLICIT chunk policy and
+              something measurably off it - an `inherited` lake is measured and reported by health
+              but never repaired (epic decision 5), so there is nothing to offer. */}
+          {canConverge && (
+            <Tooltip
+              title={
+                `Re-chunk ${convergeWaveSize} file(s) to this lake's declared passage target of ` +
+                `${convergencePlan?.policy.requiredTarget} tokens. They are unsearchable until re-indexing ` +
+                'completes. Runs in bounded waves; safe to repeat.'
+              }
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-converge-policy-btn-${lake.id}`}
+                loading={converge.isPending}
+                onClick={() =>
+                  convergencePlan?.requiresConfirmation ? setConvergeConfirmOpen(true) : converge.mutate({})
+                }
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Converge to policy ({convergeWaveSize})
+              </Button>
+            </Tooltip>
+          )}
+          {showConvergeBlocked && (
+            <Tooltip
+              title={
+                `${convergeBlockedCount} file(s) in this lake do not satisfy its passage target and cannot be ` +
+                'repaired here: another data lake requires a different target for them, so re-chunking would make ' +
+                'the two lakes take turns rewriting them. Align the two lakes, or remove the files from one.'
+              }
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                data-testid={`datalake-converge-blocked-chip-${lake.id}`}
+                sx={{ flexShrink: 0 }}
+              >
+                {convergeBlockedCount} blocked by another lake
+              </Chip>
+            </Tooltip>
+          )}
+          {/* Bulk-change guard (#1681 constraint 4). A mass rewrite is the signature of a
+              MISCONFIGURED policy, and every individual change inside one looks locally reasonable -
+              the share is the only place the mistake is visible, so it is stated before the button
+              that accepts it, and `confirm: true` is sent from nowhere else. */}
+          <Modal open={convergeConfirmOpen} onClose={() => setConvergeConfirmOpen(false)}>
+            <ModalDialog data-testid="datalake-converge-confirm" role="alertdialog">
+              {/* The share and the file count describe DIFFERENT populations and must both say which:
+                  `changeShare` is whole-lake drift (every candidate, pre-wave-bound and pre-conflict)
+                  and is what the guard fired on, while `convergeWaveSize` is what this click actually
+                  rewrites. Stating one as a headline over the other reads as "40% == 25 files" and has
+                  the owner accept a number they were never shown. */}
+              <DialogTitle>
+                {Math.round((convergencePlan?.changeShare ?? 0) * 100)}% of this lake is off-policy - re-chunk now?
+              </DialogTitle>
+              <DialogContent>
+                <Typography level="body-sm">
+                  {convergencePlan?.convergeableCount ?? 0} of {convergencePlan?.membersConsidered ?? 0} files do not
+                  match this lake{"'"}s passage target of {convergencePlan?.policy.requiredTarget} tokens. Rewriting
+                  this much of a lake at once usually means the policy itself is wrong - check the target before
+                  continuing.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 1 }}>
+                  This run repairs the first {convergeWaveSize}; re-run it to continue through the rest.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 1 }}>
+                  Each file stops being findable by search from the moment it is rewritten until its re-indexing
+                  finishes. Its old passages are deleted first, so there is nothing to serve in the meantime.
+                </Typography>
+                {(convergencePlan?.crossLakeConflictCount ?? 0) > 0 && (
+                  <Typography level="body-sm" sx={{ mt: 1 }}>
+                    {convergencePlan?.crossLakeConflictCount} file(s) are excluded because another data lake requires a
+                    different passage target for them; repairing those would make the two lakes take turns rewriting
+                    them.
+                  </Typography>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button
+                  variant="solid"
+                  color="warning"
+                  data-testid="datalake-converge-confirm-btn"
+                  loading={converge.isPending}
+                  onClick={() => converge.mutate({ confirm: true }, { onSuccess: () => setConvergeConfirmOpen(false) })}
+                >
+                  Re-chunk anyway
+                </Button>
+                <Button variant="plain" color="neutral" onClick={() => setConvergeConfirmOpen(false)}>
+                  Cancel
+                </Button>
+              </DialogActions>
+            </ModalDialog>
+          </Modal>
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+          {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones
+              they own (org lakes, others' public lakes, and - for an admin - every tenant's, even
+              private). Flagged here, next to Add files / Settings / Archive, so someone else's
+              lake can't be mistaken for your own and managed by accident. */}
+          {lake.isOwn === false && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              startDecorator={<PersonOutlineIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-owner-chip-${lake.id}`}
+            >
+              {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
+            </Chip>
+          )}
           <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
             {lake.fileTagPrefix}
           </Chip>
@@ -1094,6 +1500,54 @@ function LakeInfoPanel({
             <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
             </Chip>
+          )}
+          {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
+              and it previously gave no sign a Drive folder was feeding it (#1645). */}
+          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
+              Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
+          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
+          {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
+              Gated on canRebuild (not canManage), matching the button above - the count self-polls
+              down as the Rebuild passages wave drains. */}
+          {lake.canRebuild && underChunkedCount > 0 && (
+            <Tooltip
+              title="These files are stored as oversized passages; use Rebuild passages to re-chunk them."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
+              >
+                {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
+          )}
+          {/* A rebuild badge reaching zero doesn't mean success if some files failed to process -
+              those won't retry on their own, so surface them distinctly. Gated on canRebuild OR
+              canManage (not canManage alone): failedCount now comes from the canRebuild-gated
+              rebuild-status query, so a fallback-lake admin who can rebuild but not manage must
+              still see it, or "0 failed" is invisible to the only actor who can act on it. */}
+          {(lake.canRebuild || lake.canManage) && failedCount > 0 && (
+            <Tooltip
+              title="These files failed to process (e.g. a corrupt or unparseable file) and won't retry automatically. Includes files that failed at upload, not only rebuild attempts - Rebuild passages cannot clear them. Open the file and Re-process, or re-upload it."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="danger"
+                startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-failed-chip-${lake.id}`}
+              >
+                {failedCount} failed
+              </Chip>
+            </Tooltip>
           )}
           {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
               can appear well after the lake's files are already fully uploaded/searchable. */}
@@ -1138,6 +1592,24 @@ function LakeInfoPanel({
             </Chip>
           )}
         </Box>
+        {lake.canManage && (
+          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+            <Tooltip title="Delete (recoverable - restore from the Deleted section)" size="sm">
+              <Button
+                variant="outlined"
+                color="danger"
+                size="sm"
+                startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-delete-active-btn-${lake.id}`}
+                loading={deleteLake.isPending}
+                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Delete
+              </Button>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
       <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (

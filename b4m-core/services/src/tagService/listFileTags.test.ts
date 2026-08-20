@@ -42,6 +42,23 @@ describe('tagService - listFileTags', () => {
     expect(result[0].fileCount).toBe(2);
   });
 
+  // A wiring-level pin, not a behavior test: this route's fileCount must keep agreeing with
+  // GET /api/files/search's file list, which still includes a personally-shared file. Passing
+  // excludePersonalShares here (as GET /api/files/tags/counts does) would silently narrow it -
+  // exactly the regression a human review caught when the exclusion was hardcoded inside the
+  // repository method instead of being an explicit per-caller opt-in.
+  it('does not opt into excludePersonalShares', async () => {
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([]);
+    (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([]);
+
+    await listFileTags(userId, params, adapters);
+
+    expect(mockFabFileRepo.countFilesByTagForUser).toHaveBeenCalledWith(userId, {
+      userGroups: params.userGroups,
+      dataLakeTags: params.dataLakeTags,
+    });
+  });
+
   // toggleTags lowercases what it writes onto files, tagService/create keeps the casing the user
   // typed, so the common shape is a capitalised document over lowercase file tags.
   it('matches case-insensitively when no document claims the bucket exactly', async () => {

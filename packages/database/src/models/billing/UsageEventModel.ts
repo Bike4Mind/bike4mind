@@ -4,6 +4,7 @@ import {
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
+  ILakeUsageSummary,
   IModelDayMargin,
   IOwnerSpendDay,
   IOwnerSpendFeature,
@@ -18,6 +19,10 @@ import {
   ISessionQuestUsage,
   ISessionUsageSummary,
   ISettlementBreakdown,
+  ISpendAccountBucket,
+  ISpendCostDay,
+  ISpendSummary,
+  ISpendSummaryFilters,
   IUsageEvent,
   IUsageEventInput,
   IUsageEventRepository,
@@ -29,6 +34,15 @@ import {
 } from '@bike4mind/common';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
+
+// The Spend "by account" table shows top spenders, not every holder; the
+// activeAccounts count carries the true distinct total. Bounds the payload when
+// spend spans many accounts.
+const SPEND_ACCOUNT_LIMIT = 50;
+
+// Same payload guard for the "by model" list: a catalog with many provider/model
+// variants would otherwise ship every one. Comfortably above a realistic catalog.
+const SPEND_MODEL_LIMIT = 100;
 
 /**
  * One row per provider API call: provider-side quantities and
@@ -42,6 +56,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     ownerId: { type: String, required: true },
     ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] as CreditHolderType[] },
     sessionId: { type: String, required: false },
+    dataLakeId: { type: String, required: false },
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
     model: { type: String, required: true },
@@ -89,6 +104,15 @@ UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 UsageEventSchema.index({ source: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
+// Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
+// partialFilterExpression (not sparse): dataLakeId is only ever set on ingestion-embed
+// rows, a small slice of this collection, unlike sessionId/apiKeyId below which are
+// populated on most rows via their own request paths. Same pattern as
+// SreErrorTrackingModel's fixVerdict.value index.
+UsageEventSchema.index(
+  { dataLakeId: 1, createdAt: -1 },
+  { partialFilterExpression: { dataLakeId: { $exists: true } } }
+);
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
@@ -195,6 +219,116 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
       { $sort: { month: -1, provider: 1 } },
     ]);
+  }
+
+  // Requires MongoDB 7.0+ for the $percentile accumulator (latency facet) and uses
+  // $facet like the sibling summaries here - both unsupported under DocumentDB
+  // (USE_DOCUMENTDB_COMPATIBILITY), which those methods already assume against.
+  async spendSummary(filters: ISpendSummaryFilters = {}): Promise<ISpendSummary> {
+    const { from, to, userId, model } = filters;
+
+    const match: Record<string, unknown> = {};
+    if (from || to) {
+      // Half-open window [from, to): the upper bound is exclusive so adjacent
+      // windows (current vs the equal-length prior window, whose `to` is the
+      // current window's `from`) don't both count an event at the shared instant.
+      const createdAt: Record<string, Date> = {};
+      if (from) createdAt.$gte = from;
+      if (to) createdAt.$lt = to;
+      match.createdAt = createdAt;
+    }
+    if (userId) match.userId = userId;
+    if (model) match.model = model;
+
+    const spendSums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+    } as const;
+    const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
+
+    // One $match, fan out with $facet so every cut reconciles against the same
+    // event set in a single index scan.
+    const [result] = await this.model.aggregate<{
+      totals: IUsageSpendBucket[];
+      activeAccounts: Array<{ count: number }>;
+      latency: Array<{ values: number[] }>;
+      status: Array<{ _id: string; count: number }>;
+      byModel: IOwnerSpendModel[];
+      byAccount: ISpendAccountBucket[];
+      dailyCost: ISpendCostDay[];
+    }>([
+      { $match: match },
+      {
+        $facet: {
+          totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
+          activeAccounts: [{ $group: { _id: '$ownerId' } }, { $count: 'count' }],
+          latency: [
+            { $match: { latencyMs: { $ne: null } } },
+            {
+              $group: {
+                _id: null,
+                // $percentile (Mongo 7.0+) keeps this memory-bounded vs pushing every latency into
+                // one doc. any: the operator postdates mongoose's typed AccumulatorOperator.
+                values: { $percentile: { input: '$latencyMs', p: [0.5, 0.95], method: 'approximate' } } as any,
+              },
+            },
+          ],
+          status: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          // Both spend facets rank by cogsUsd, not creditsCharged like the sibling
+          // usage summaries below: this is a cost dashboard, and cost with zero
+          // credits is a normal path (embeds with enforcement off, abort
+          // settlements, media), so a credit sort would truncate away real top cost
+          // drivers. Secondary keys make the cap deterministic across equal-cost ties.
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
+            { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
+            { $limit: SPEND_MODEL_LIMIT },
+          ],
+          byAccount: [
+            { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
+            { $project: { _id: 0, ownerId: '$_id.ownerId', ownerType: '$_id.ownerType', ...spendFields } },
+            { $sort: { cogsUsd: -1, ownerId: 1 } },
+            { $limit: SPEND_ACCOUNT_LIMIT },
+          ],
+          // Uncapped by design: one row per UTC day in the window feeds the line
+          // chart, which needs every point. Bounded by the window length (days),
+          // not by event volume, so it stays small even for wide ranges.
+          dailyCost: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                cogsUsd: { $sum: '$costUsd' },
+              },
+            },
+            { $project: { _id: 0, day: '$_id', cogsUsd: 1 } },
+            { $sort: { day: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
+    const statusRows = result?.status ?? [];
+    const countFor = (s: string) => statusRows.find(r => r._id === s)?.count ?? 0;
+    // $percentile emits [p50, p95] in the requested order; empty window => no group => [].
+    const latencyValues = result?.latency?.[0]?.values ?? [];
+
+    return {
+      totals: result?.totals?.[0] ?? emptyTotals,
+      activeAccounts: result?.activeAccounts?.[0]?.count ?? 0,
+      latency: { p50: Math.round(latencyValues[0] ?? 0), p95: Math.round(latencyValues[1] ?? 0) },
+      status: {
+        total: statusRows.reduce((sum, r) => sum + r.count, 0),
+        errors: countFor('error'),
+        timeouts: countFor('timeout'),
+        refusals: countFor('refusal'),
+      },
+      byModel: result?.byModel ?? [],
+      byAccount: result?.byAccount ?? [],
+      dailyCost: result?.dailyCost ?? [],
+    };
   }
 
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
@@ -452,6 +586,62 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     // the session's events (ownerId/ownerType are then matched in memory).
     const doc = await this.model.exists({ sessionId, ownerId, ownerType });
     return doc !== null;
+  }
+
+  async lakeUsageSummary(dataLakeId: string, days: number = 30): Promise<ILakeUsageSummary> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const spendSums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+    } as const;
+    const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
+
+    // Same $facet shape as ownerUsageSummary minus byMember - a lake is just a different
+    // $match key over the same event set (only ingestion embeds carry dataLakeId), but the
+    // owner-facing spend view has no use for raw per-uploader userIds.
+    const [result] = await this.model.aggregate<{
+      overTime: IOwnerSpendDay[];
+      byModel: IOwnerSpendModel[];
+      byFeature: IOwnerSpendFeature[];
+      totals: IUsageSpendBucket[];
+    }>([
+      { $match: { dataLakeId, createdAt: { $gte: from } } },
+      {
+        $facet: {
+          overTime: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                ...spendSums,
+              },
+            },
+            { $project: { _id: 0, day: '$_id', ...spendFields } },
+            { $sort: { day: 1 } },
+          ],
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
+            { $sort: { cogsUsd: -1 } },
+          ],
+          byFeature: [
+            { $group: { _id: '$feature', ...spendSums } },
+            { $project: { _id: 0, feature: '$_id', ...spendFields } },
+            { $sort: { cogsUsd: -1 } },
+          ],
+          totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
+    return {
+      overTime: result?.overTime ?? [],
+      byModel: result?.byModel ?? [],
+      byFeature: result?.byFeature ?? [],
+      totals: result?.totals?.[0] ?? emptyTotals,
+    };
   }
 }
 

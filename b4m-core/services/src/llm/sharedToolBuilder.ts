@@ -43,6 +43,10 @@ export interface ToolBuilderDeps {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
   kbScope?: ToolContext['kbScope'];
+  /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
+  inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
+  fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -115,6 +119,15 @@ export interface ToolBuilderDeps {
    * `dagDispatcher` is provided.
    */
   getCurrentExecutionId?: () => string;
+
+  /**
+   * Returns true when the calling user is at or over their organization's
+   * per-member credit cap. Forwarded to `delegate_to_agent` and
+   * `coordinate_task`'s in-process orchestrators. Omit for callers with no
+   * organization context, or that already gate the whole request upstream
+   * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
+   */
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -268,6 +281,8 @@ export function buildSharedTools(
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -277,7 +292,7 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope },
+    { db, retrievalFilter, kbScope, inlinedAttachmentIds, fullyInlinedAttachmentIds },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,
@@ -409,6 +424,7 @@ export function buildSharedTools(
     handoffSignal: deps.handoffSignal,
     depth: deps.depth,
     optInTools: deps.optInTools,
+    checkMemberCreditCap: deps.checkMemberCreditCap,
   });
   tools.push(delegateTool);
 
@@ -436,6 +452,7 @@ export function buildSharedTools(
       getParentExecutionId: deps.getCurrentExecutionId,
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
+      checkMemberCreditCap: deps.checkMemberCreditCap,
     });
     tools.push(coordinateTool);
   }

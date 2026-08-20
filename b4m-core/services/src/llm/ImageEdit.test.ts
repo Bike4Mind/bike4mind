@@ -216,3 +216,44 @@ describe('ImageEditService.process model dispatch', () => {
     expect(quest.reply).toContain('does not support image editing');
   });
 });
+
+describe('ImageEditService.validateUserCredits (per-member cap)', () => {
+  beforeEach(() => {
+    vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel]);
+  });
+
+  const validateWithOrg = (organization: unknown) => {
+    const service = new ImageEditService({ db: {} } as never);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (service as any).validateUserCredits(
+      richUser,
+      ImageModels.FLUX_KONTEXT_PRO,
+      1,
+      {},
+      silentLogger,
+      organization
+    );
+  };
+
+  it('throws when the member is over the org per-member cap even though the pool is funded', async () => {
+    await expect(
+      validateWithOrg({
+        id: 'org1',
+        currentCredits: 1_000_000,
+        maxCreditsPerMember: 5,
+        userDetails: [{ id: 'user1', usedCredits: 1000 }],
+      })
+    ).rejects.toThrow(/member credit limit/i);
+  });
+
+  it('allows a member who is still under the cap', async () => {
+    await expect(
+      validateWithOrg({
+        id: 'org1',
+        currentCredits: 1_000_000,
+        maxCreditsPerMember: 1_000_000,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      })
+    ).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
+  });
+});

@@ -1,17 +1,24 @@
 import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
+import { sessionUpdateContract } from './sessionUpdate.contract';
+import { executeToolContract } from './tools.contract';
+import { createCompletionContract } from './completions.contract';
+import { synthesizeSpeechContract } from './tts.contract';
+import { generateMusicContract } from './music.contract';
+import { generateSoundEffectContract } from './soundEffects.contract';
 
 /**
- * Every endpoint migrated to the contract abstraction. The OpenAPI generator
- * registers each of these (openapi/registerContract.ts); adding a contract here
- * is all it takes for it to appear in the spec + docs. Hand-registered legacy
- * operations (createCompletion, executeTool) still live in openapi/operations.ts
- * during migration - the two coexist.
+ * Every public endpoint, as a contract. The OpenAPI generator registers each of
+ * these (openapi/registerContract.ts); adding a contract here is all it takes for
+ * it to appear in the spec + docs. This is the single source of truth for the
+ * published API surface - the entire `/v1` docs are generated from this array.
  */
-export const CONTRACTS: readonly EndpointContract[] = [chatContract];
-
-// Duplicate-operation detection (operationId / method+path collisions, including
-// against the hand-registered ops) runs at spec-generation time via
-// assertUniqueOperations in openapi/operations.ts - NOT here at import time, so a
-// mistake fails the spec build/tests rather than crashing every module that imports
-// the @bike4mind/common barrel.
+export const CONTRACTS: readonly EndpointContract[] = [
+  chatContract,
+  sessionUpdateContract,
+  executeToolContract,
+  createCompletionContract,
+  synthesizeSpeechContract,
+  generateMusicContract,
+  generateSoundEffectContract,
+];

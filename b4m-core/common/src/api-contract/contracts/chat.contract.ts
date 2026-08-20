@@ -5,7 +5,8 @@ import { SimplifiedChatRequestSchema, ChatAckSchema, ApiErrorSchema } from '../.
 /**
  * Contract for POST /api/chat. Single source of truth: the Next.js handler
  * (apps/client/pages/api/chat.ts) derives its auth + validation from this, and
- * the OpenAPI spec derives the operation from this.
+ * the OpenAPI spec derives the operation from this. The same object could back a
+ * Lambda handler unchanged (see server/cli/defineLambdaRoute.ts).
  */
 export const chatContract = defineEndpoint({
   method: 'post',
@@ -22,6 +23,9 @@ export const chatContract = defineEndpoint({
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
   request: SimplifiedChatRequestSchema,
   requestExample: { message: 'How do I reset my password?', toolMode: 'smart' },
+  // Served by baseApi, so the apiKeyRateLimit middleware sets the windowed
+  // X-RateLimit-* headers on every API-key-authenticated response.
+  emitsRateLimitHeaders: true,
   responses: {
     200: {
       description:

@@ -26,6 +26,8 @@ export * from './alarms';
 export * from './dashboard';
 export * from './modelSunsetDashboard';
 export * from './dlqAlarms';
+// serviceHealthAlarms must come after subscriberFanout + chatCompletion (it alarms on both)
+export * from './serviceHealthAlarms';
 export * from './emailMarketing';
 export * from './wafPolicy';
 export * from './waf';
