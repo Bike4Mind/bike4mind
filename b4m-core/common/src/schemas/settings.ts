@@ -3311,19 +3311,19 @@ export const settingsMap = {
     max: 10,
     description:
       'Passages the search_knowledge_base tool returns when a model call omits max_results, ' +
-      'which is most calls. If kbSearchResultTokenBudget is unset (0), this is the primary bound; ' +
-      'once a token budget is set, this instead becomes a safety rail (a floor of at least one ' +
-      'passage, a ceiling this setting no longer needs to reach since the ceiling opens toward the ' +
-      "tool's own hard maximum of 10). Does NOT raise that hard maximum - a model that reads " +
-      "max_results up to 10 from its own tool schema won't ask for more than that regardless of " +
-      'this setting.',
+      'which is most calls. This is the exact bound while kbSearchResultTokenBudget is unset (0). ' +
+      'Once a token budget is set, it takes over as the primary bound for search results (this ' +
+      "setting's own value is then unused there, though it still governs the keyword-search " +
+      'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
+      "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
+      "from its own tool schema won't ask for more than that regardless of this setting.",
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 5,
     // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
-    // caller's own/shared files (see the comment on datalakeTagsFrom in knowledgeBaseSearch/
-    // index.ts), so there is no single lake for a Lake rung to key on - unlike
-    // dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
+    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchResultTokenBudget: makeNumberSetting({

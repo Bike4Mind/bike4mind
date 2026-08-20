@@ -2277,6 +2277,9 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       expect(passageCount(out)).toBe(3);
       expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(KB_SEARCH_MAX_RESULTS);
       expect(out).toContain('further relevant passage(s) matched but were not included');
+      // Same discipline as the truncated/partial notices: our own framing must sit OUTSIDE the
+      // untrusted content block, or defangRetrievedContent would indent it as if it were a passage.
+      expect(out.indexOf('further relevant passage(s)')).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
     });
 
     it('an explicit max_results still narrows the served count even with a budget configured', async () => {
