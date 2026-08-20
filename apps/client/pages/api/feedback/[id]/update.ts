@@ -56,6 +56,10 @@ const handler = baseApi().put(
     // cleanupOrphanedSibling only guards `true`, since a clear's own deleteOne either succeeds
     // (nothing left to orphan) or throws and aborts the request before any $set is attempted.
     let contentStoredChange: boolean | undefined;
+    // True only for the legacy-shape clear below: a pre-migration document that still carries
+    // its content directly on the permanent doc has contentStored:false, so the branch above
+    // can't signal "unset it" through contentStoredChange without also claiming a sibling changed.
+    let unsetLegacyContent = false;
     if (content !== undefined) {
       if (content.trim().length === 0) {
         // Empty content means "clear the text", mirroring the create handler's treatment of an
@@ -66,6 +70,11 @@ const handler = baseApi().put(
         if (feedback.contentStored) {
           await FeedbackTextModel.deleteOne({ _id: id });
           contentStoredChange = false;
+        } else {
+          // Legacy shape: content lives on the permanent doc itself. Clearing it here must also
+          // unset that field, or hydrateFeedbackText's legacy fallback reads it right back in and
+          // the clear silently does nothing from the caller's perspective.
+          unsetLegacyContent = true;
         }
       } else {
         const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
@@ -118,8 +127,9 @@ const handler = baseApi().put(
           },
           // Originating a fresh sibling can happen on a pre-migration document that still carries
           // its content directly on the permanent doc - unset it there too, or it survives
-          // forever on a field the 90-day TTL can never reach.
-          ...(contentStoredChange === true ? { $unset: { content: '' } } : {}),
+          // forever on a field the 90-day TTL can never reach. Same reason applies when clearing
+          // that legacy content outright (unsetLegacyContent).
+          ...(contentStoredChange === true || unsetLegacyContent ? { $unset: { content: '' } } : {}),
         },
         { new: true }
       );

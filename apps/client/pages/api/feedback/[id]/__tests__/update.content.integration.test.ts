@@ -89,6 +89,30 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
     expect(sibling?.content).toBe('edited content');
   });
 
+  it('unsets a legacy content field on the permanent doc when clearing it with an empty string', async () => {
+    // Same pre-migration shape as the fresh-sibling test above, but this time the caller is
+    // clearing the text outright rather than replacing it.
+    const doc = await FeedbackModel.create({
+      userId: 'owner1',
+      username: 'owner',
+      status: 'New',
+      content: 'legacy content still on the main document',
+    });
+
+    const { req, res } = mockRequest(doc.id, {
+      userId: 'owner1',
+      content: '',
+      username: 'owner',
+      status: 'InProgress',
+    });
+    await mockRefs.putHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+
+    const updated = await FeedbackModel.findById(doc.id).lean();
+    expect(updated?.content).toBeUndefined();
+    expect(updated?.contentStored).toBe(false);
+  });
+
   it('updates the existing sibling in place when the document already has stored content', async () => {
     const doc = await FeedbackModel.create({
       userId: 'owner1',

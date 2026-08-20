@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { FEEDBACK_CONTENT_MAX_CHARS } from '@bike4mind/common';
 
 /**
  * Each of the four independent delivery gates (EnableFeedBackToSlack, EnableFeedBackToEmail +
@@ -146,6 +147,39 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(mockPostFeedbackToSlack).toHaveBeenCalledTimes(1);
     const body = res._getJSONData();
     expect(body.delivery.channels.slack).toEqual({ outcome: 'skipped', reason: 'unconfigured_webhook' });
+  });
+
+  it('sends the truncated content to Slack and email, not the raw over-cap submission', async () => {
+    mockSettings.EnableFeedBackToSlack = true;
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'team@example.com';
+    mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'delivered' });
+    mockEmailPublish.mockResolvedValue(undefined);
+
+    const overLong = 'x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 500);
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: 'user-1',
+        content: overLong,
+        tags: [],
+        username: 'reporter',
+        userEmail: 'reporter@example.com',
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
+    await mockRefs.postHandler!(req, res);
+
+    const slackContentArg = mockPostFeedbackToSlack.mock.calls[0][5];
+    expect(slackContentArg).toHaveLength(FEEDBACK_CONTENT_MAX_CHARS);
+    expect(slackContentArg).not.toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 1));
+
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS));
+    expect(emailBody).not.toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 1));
+
+    const body = res._getJSONData();
+    expect(body.contentTruncated).toBe(true);
   });
 
   it('reports delivered:true via Slack alone when it is the only channel that actually fires', async () => {

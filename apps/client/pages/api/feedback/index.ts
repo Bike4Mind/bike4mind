@@ -242,7 +242,7 @@ const handler = baseApi()
         newFeedback.username,
         newFeedback.userEmail ?? '',
         newFeedback.userId,
-        content,
+        truncatedContent,
         promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
       );
     } else {
@@ -263,7 +263,7 @@ const handler = baseApi()
       const feedbackEmails = emailRoute.recipients;
       console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
       console.log('Sending feedback to email is enabled');
-      const sanitizedContent = sanitizeHtml(content);
+      const sanitizedContent = sanitizeHtml(truncatedContent);
       const sanitizedUsername = sanitizeHtml(newFeedback.username);
       const sanitizedUserEmail = sanitizeHtml(newFeedback.userEmail ?? '');
       const sanitizedType = type ? sanitizeHtml(type) : '';
