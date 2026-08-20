@@ -72,8 +72,9 @@ export default function SourceSelectionStep() {
             (lake.organizationId || undefined) === scopeOrgId && normalizeName(lake.name) === normalizeName(config.name)
         );
 
-  // Client mirror of the server's slug.min(2) rule so a name that slugifies to empty/too-short
-  // is caught before the user commits files, instead of failing at the final upload step.
+  // Gates on the same MIN_DATA_LAKE_SLUG_LENGTH the create schema validates against, so a name
+  // that slugifies to empty/too-short is caught before the user commits files instead of failing
+  // at the final upload step.
   const slug = slugifyDataLakeName(config.name);
   const slugTooShort = config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
 
