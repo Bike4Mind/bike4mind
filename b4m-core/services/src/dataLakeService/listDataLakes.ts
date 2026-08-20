@@ -12,7 +12,7 @@ import type {
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
-import { resolveEnforceReadGrants } from './resolveLakeReadAccess';
+import { resolveEnforceReadGrants, type LakeAccessLogger } from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
@@ -118,11 +118,18 @@ interface ListDataLakesAdapters {
     settings?: SettingsLookup;
     /**
      * Optional overlay lookup for a static (registry) lake's admin-settable session defaults
-     * (currently `groundingMode` only - see IFallbackLakeSetting). Absent -> a fallback lake lists
-     * with no overlay merge, matching resolveFallbackLake's own graceful degrade.
+     * (`groundingMode`, `preferredSystemPromptId`, `systemPrompt` - see IFallbackLakeSetting).
+     * Absent -> a fallback lake lists with no overlay merge, matching resolveFallbackLake's own
+     * graceful degrade.
      */
     fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
   };
+  /**
+   * Optional, and only `listAllDataLakes` reads it: the fallback-overlay batch degrades silently on
+   * a transient failure, and without a logger that degrade is indistinguishable from "no overlay
+   * set" - see resolveFallbackSettings for why silence there is not harmless.
+   */
+  logger?: LakeAccessLogger;
 }
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
@@ -163,13 +170,18 @@ type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSy
 const resolveFallbackSettings = async (
   lakeIds: string[],
   fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>,
-  logger?: { warn?: (msg: string, meta?: unknown) => void }
+  logger?: LakeAccessLogger
 ): Promise<Map<string, FallbackOverlay>> => {
   const byLakeId = new Map<string, FallbackOverlay>();
   if (!fallbackLakeSettings || lakeIds.length === 0) return byLakeId;
   // Guarded like the dynamic-lake read above: these are editor SEED values, so a transient overlay
   // failure must degrade the fallback lakes' settings display, never 500 the whole admin lake list
   // (DB lakes included) - which is what an unguarded await here did.
+  //
+  // But it degrades to values indistinguishable from "nothing set", and the editor SAVES what it was
+  // seeded with (FallbackLakeSettingsModal sends groundingMode and systemPrompt unconditionally), so
+  // a failure here that nobody logged can be clobbered into the store by the next admin save. Hence
+  // the logger: this branch must never be silent.
   let rows: Awaited<ReturnType<typeof fallbackLakeSettings.findByLakeIds>>;
   try {
     rows = await fallbackLakeSettings.findByLakeIds(lakeIds);
@@ -354,7 +366,7 @@ export const listDataLakes = async (
  */
 export const listAllDataLakes = async (
   ctx: AccessContext,
-  { db }: ListDataLakesAdapters
+  { db, logger }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
@@ -377,7 +389,8 @@ export const listAllDataLakes = async (
   // would never use it.
   const fallbackSettingsByLakeId = await resolveFallbackSettings(
     hardcodedFallbacks.map(dl => dl.id),
-    db.fallbackLakeSettings
+    db.fallbackLakeSettings,
+    logger
   );
   const fallbacks = hardcodedFallbacks.map(dl => toFallbackConfig(dl, ctx, fallbackSettingsByLakeId.get(dl.id)));
 

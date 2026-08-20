@@ -22,10 +22,10 @@ interface UpdateFallbackLakeSettingsAdapters {
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     /**
      * `findByLakeId` is REQUIRED here, unlike everywhere else this repo is consumed, and it is the
-     * audit that makes it so: `assertLakeAccess` merges the CURRENT overlay onto the synthetic lake
-     * only when it is wired, and that merged lake is the `before` side of the config diff below.
-     * Wired optionally, every field would read as unset -> value on every write and the history
-     * would record a first-time set each time an admin edited the same prompt.
+     * audit that makes it so: the `before` side of the config diff below is read from the overlay
+     * row DIRECTLY (see the comment at that read), not from the synthetic lake. Wired optionally,
+     * that read would be unavailable and every field would diff as unset -> value on every write,
+     * so the history would record a first-time set each time an admin re-saved the same prompt.
      */
     fallbackLakeSettings: Pick<IFallbackLakeSettingsRepository, 'setFields' | 'findByLakeId'>;
   } & LakeConfigAuditAdapters['db'];
@@ -57,7 +57,7 @@ export const updateFallbackLakeSettings = async (
   { db, logger }: UpdateFallbackLakeSettingsAdapters
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, UpdateFallbackLakeSettingsRequestInput);
-  const lake = await assertFallbackLakeSettingsWriteAccess(lakeIdOrSlug, ctx, { db });
+  const lake = await assertFallbackLakeSettingsWriteAccess(lakeIdOrSlug, ctx, { db, logger });
 
   // The audit's BEFORE side is read here, from the overlay row itself - deliberately NOT taken from
   // `lake`. `resolveFallbackLake` merges only the fields that are safe to expose on a synthetic

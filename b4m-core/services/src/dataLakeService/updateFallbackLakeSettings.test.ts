@@ -377,6 +377,41 @@ describe('updateFallbackLakeSettings - config-change audit', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
+  // The payload FallbackLakeSettingsModal actually sends: groundingMode and systemPrompt are BOTH
+  // unconditional on every save (preferredSystemPromptId only when it changed), so "admin opens the
+  // modal and saves without editing anything" arrives as a two-field write of unchanged values.
+  // Pairing that client shape with the service contract is what produced the original forged-audit
+  // bug, so it is pinned at the real shape rather than one field at a time.
+  it('records nothing for the real client payload when the admin edits nothing', async () => {
+    const { record, db: audit } = auditDb();
+    const setFields = vi.fn().mockResolvedValue({});
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: {
+        setFields,
+        findByLakeId: vi
+          .fn()
+          .mockResolvedValue({ lakeId: 'opti-knowledge', groundingMode: 'inline', systemPrompt: 'Live prompt.' }),
+      },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { groundingMode: 'inline', systemPrompt: 'Live prompt.' },
+      { db }
+    );
+
+    // The write still happens (it is idempotent); what must not happen is an audit event claiming
+    // an admin moved values they never touched.
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', {
+      groundingMode: 'inline',
+      systemPrompt: 'Live prompt.',
+    });
+    expect(record).not.toHaveBeenCalled();
+  });
+
   // The cases the test above USED to claim in its title while only ever exercising groundingMode.
   // systemPrompt is the sole FINGERPRINTED field, so its before-side comes from a different place -
   // these are the two failures that produced when `before` was taken from the synthetic lake.
@@ -439,6 +474,12 @@ describe('updateFallbackLakeSettings - config-change audit', () => {
     expect(change.beforeFingerprint.present).toBe(true);
     expect(change.afterFingerprint.present).toBe(true);
     expect(change.beforeFingerprint.hash).not.toBe(change.afterFingerprint.hash);
+    // BOTH texts stay out of the row. The dedicated non-containment test above can only ever prove
+    // this for the after value - its before-side is null - so the before half is pinned here, the
+    // one case that has a stored prompt to leak.
+    const row = JSON.stringify(record.mock.calls[0][0]);
+    expect(row).not.toContain('Old guidance.');
+    expect(row).not.toContain('New guidance.');
   });
 
   it('never records for a write the gate refused', async () => {

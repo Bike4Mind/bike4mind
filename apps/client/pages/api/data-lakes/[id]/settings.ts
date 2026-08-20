@@ -18,9 +18,9 @@ import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePr
  * must keep going through the ordinary update path so the two routes can never both claim to own
  * a lake's settings.
  *
- * Spreads `lakeConfigAuditDb` like every other lake config-write route: this is the fifth such
- * route, and the helper exists precisely so a new one cannot land wired for the write but not the
- * audit - which would be silent, since the service treats both audit repos as optional.
+ * Spreads `lakeConfigAuditDb` like every other lake config-write route. The helper exists precisely
+ * so a new one cannot land wired for the write but not the audit - which would be silent, since the
+ * service treats both audit repos as optional.
  */
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))

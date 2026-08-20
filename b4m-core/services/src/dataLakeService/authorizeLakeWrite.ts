@@ -9,6 +9,7 @@ import type {
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
+import { type LakeAccessLogger } from './resolveLakeReadAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 
@@ -104,6 +105,7 @@ export const assertFallbackLakeSettingsWriteAccess = async (
   ctx: AccessContext,
   {
     db,
+    logger,
   }: {
     db: {
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
@@ -116,9 +118,12 @@ export const assertFallbackLakeSettingsWriteAccess = async (
        */
       fallbackLakeSettings: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>;
     };
+    // Forwarded so resolveFallbackLake's overlay-read failure is logged on the WRITE path too;
+    // without it that catch is reachable here but permanently silent.
+    logger?: LakeAccessLogger;
   }
 ): Promise<IDataLakeDocument> => {
-  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db, logger });
   if (!isFallbackLake(lake)) {
     throw new BadRequestError('This data lake has its own settings editor; use the standard update endpoint');
   }
