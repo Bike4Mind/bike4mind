@@ -1,7 +1,7 @@
 import axios from 'axios';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { classifyStage, isPlaceholderValue } from '@bike4mind/common';
 import type {
   FeedbackDeliveryStageClass,
   FeedbackDeliverySkipReason,
@@ -53,7 +53,7 @@ type FeedbackSlackRoute =
 
 /**
  * Decides where feedback-to-Slack posts go for a given deploy stage, via the shared
- * classifyStage() (@server/utils/config) - the single source of truth for the
+ * classifyStage() (@bike4mind/common) - the single source of truth for the
  * production/non-production split, so a future stage rename touches one file.
  *
  * Non-production stages deliberately do NOT fall through resolveSlackWebhookUrl's chain: doing so
