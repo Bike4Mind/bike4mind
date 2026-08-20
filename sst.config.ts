@@ -7,11 +7,24 @@ export default $config({
     const permanent = ['production', 'shared-dev'].includes(input?.stage);
     // Purge is narrower than `permanent` on purpose. It runs SST's Purge() on a
     // successful `sst remove`, which deletes the stage's secrets AND its encryption
-    // passphrase — unrecoverable (sst/sst#6593). `dev` is the shared STAGING box
-    // (see isStagingStage / PRODUCTION_STAGES in infra/constants.ts), so it is
-    // excluded even though `sst remove` is not blocked there. Only genuinely
-    // ephemeral stages — personal stages and pr#### previews — are purgeable.
-    const purgeable = !permanent && input?.stage !== 'dev';
+    // passphrase — unrecoverable (sst/sst#6593).
+    //
+    // This is an ALLOWLIST of stages that are genuinely disposable, not a
+    // denylist of the ones we remembered to protect. Only `pr####` previews
+    // qualify: CI creates and destroys those per pull request. Written as a
+    // denylist, every stage was purgeable unless somebody thought to exclude it,
+    // so the blast radius grew silently as stages were added — a future `qa` or
+    // `demo`, a second staging box, or a typo like `--stage de` would each have
+    // destroyed secrets on `sst remove`.
+    //
+    // Deliberately NOT purgeable: the permanent stages, the shared STAGING box
+    // `dev` (see isStagingStage / PRODUCTION_STAGES in infra/constants.ts), the
+    // long-dormant `bike4mind` stage, and every personal stage. Personal stages
+    // WERE purgeable under the denylist; that is an intentional change, and it
+    // means removing one now leaves its secrets and passphrase in SSM rather
+    // than destroying them. Narrowing that back to a maintained roster of
+    // developer stage names is a separate decision.
+    const purgeable = /^pr\d+$/.test(input?.stage ?? '');
     return {
       name: process.env.SEED_APP_NAME || 'bike4mind',
       removal: permanent ? 'retain' : 'remove',
