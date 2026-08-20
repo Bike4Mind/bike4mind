@@ -52,6 +52,31 @@ const ConnectedAppsSection = () => {
   const connectGoogleDrive = useConnectGoogleDrive();
   const disconnectGoogleDrive = useDisconnectGoogleDrive();
 
+  const handleDisconnectGoogleDrive = () => {
+    disconnectGoogleDrive.mutate(undefined, {
+      onSuccess: affectedOrgConnections => {
+        // The card's connected state reads from the zustand `currentUser`, which only a /api/identify
+        // round-trip rewrites - a React Query invalidation leaves it saying "Unlink" forever (same
+        // reason the Okta and Atlassian handlers below refresh).
+        void refreshUser();
+        // Disconnecting revokes the grant at Google, which also kills any organization Drive folder
+        // sync that was authorized with this account. Say so - otherwise the org's next ingest just
+        // starts failing with no visible cause.
+        if (affectedOrgConnections > 0) {
+          toast.warning(
+            `Google Drive disconnected. ${affectedOrgConnections} organization Drive folder ${
+              affectedOrgConnections === 1 ? 'sync' : 'syncs'
+            } used this account and now need reconnecting.`,
+            { duration: 8000 }
+          );
+          return;
+        }
+        toast.success('Google Drive disconnected.');
+      },
+      onError: () => toast.error('Could not disconnect Google Drive. Please try again.'),
+    });
+  };
+
   // Atlassian connection
   const connectAtlassian = useConnectAtlassian();
   const disconnectAtlassian = useDisconnectAtlassian();
@@ -198,7 +223,7 @@ const ConnectedAppsSection = () => {
           isConnected={isGoogleDriveConnected}
           loading={connectGoogleDrive.isPending || disconnectGoogleDrive.isPending}
           onConnect={() => connectGoogleDrive.mutate()}
-          onDisconnect={() => disconnectGoogleDrive.mutate()}
+          onDisconnect={handleDisconnectGoogleDrive}
           logo={<SiGoogledrive color={SiGoogledriveHex} />}
         />
         <AppContainer

@@ -175,6 +175,35 @@ describe('OrgGoogleDriveConnectionModel - accessors', () => {
     expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-2')).toBeFalsy();
   });
 
+  it("findByConnectedBy returns the credential owner's connections across orgs", async () => {
+    await OrgGoogleDriveConnection.create(base);
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      organizationId: 'org-2',
+      driveFolderId: 'folder-2',
+      targetDataLakeId: 'lake-2',
+    });
+    // A connection whose credential belongs to someone else must NOT be swept up.
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'folder-3',
+      targetDataLakeId: 'lake-3',
+      connectedBy: 'user-2',
+    });
+
+    // Cross-org on purpose: revoking user-1's Google grant breaks their connections in EVERY org, so
+    // an org-scoped read here would leave the others silently broken.
+    const mine = await orgGoogleDriveConnectionRepository.findByConnectedBy('user-1');
+    expect(mine.map(c => c.driveFolderId).sort()).toEqual(['folder-1', 'folder-2']);
+    expect(await orgGoogleDriveConnectionRepository.findByConnectedBy('user-3')).toHaveLength(0);
+  });
+
+  it('findByConnectedBy excludes the credential from the returned documents', async () => {
+    await OrgGoogleDriveConnection.create({ ...base, oauthRefreshToken: 'enc-token' });
+    const [found] = await orgGoogleDriveConnectionRepository.findByConnectedBy('user-1');
+    expect(found.oauthRefreshToken).toBeUndefined();
+  });
+
   it('findByDataLakeId excludes a disabled connection', async () => {
     await OrgGoogleDriveConnection.create({ ...base, enabled: false });
     // BaseRepository.findOne resolves to undefined (not null) on no match - matches the sibling repos.
