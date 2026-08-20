@@ -463,7 +463,11 @@ const handler = baseApi()
     // newFeedback.toJSON() (not a spread of the hydrated doc) - the schema sets
     // toJSON: { virtuals: true }, which is what produces `id`; spreading the doc directly
     // yields Mongoose's internal _doc/$__ fields instead.
-    return res.status(201).json({ ...newFeedback.toJSON(), delivery });
+    // `content` is echoed back explicitly: it no longer lives on the document (#1864), so
+    // toJSON() alone would return a record without it and any caller reading the response - e.g.
+    // HelpModal's analytics metadata - would silently record an undefined body. Echoing the value
+    // the caller just sent keeps the response contract unchanged at no storage cost.
+    return res.status(201).json({ ...newFeedback.toJSON(), content, delivery });
   });
 
 export const config = {
