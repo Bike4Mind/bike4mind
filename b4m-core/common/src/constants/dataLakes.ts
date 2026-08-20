@@ -175,6 +175,23 @@ export const MIN_TAG_PREFIX_LENGTH = 2;
 export const MAX_TAG_PREFIX_LENGTH = 30;
 
 /**
+ * Length bounds and shape for a lake `slug`, owned here rather than by the create schema because
+ * the client PRODUCES the value it then sends: the wizard slugifies a lake name, truncates to the
+ * max, and gates Start Upload on the min, all before the schema ever sees the result. A produced
+ * value whose bound lives only in the schema is how the `fileTagPrefix` derive above came to hand
+ * users a prefix the server refused, so keep the schema, `slugifyDataLakeName`,
+ * `isValidDataLakeSlug`, the wizard's "name too short" copy and the 422 translator all reading
+ * these.
+ *
+ * The regex is shared for the same reason in the other direction: `slugifyDataLakeName` satisfies
+ * it BY CONSTRUCTION (it trims the edge hyphens truncation can expose), and the only thing that
+ * keeps that true is a test asserting against this exact pattern.
+ */
+export const MIN_DATA_LAKE_SLUG_LENGTH = 2;
+export const MAX_DATA_LAKE_SLUG_LENGTH = 60;
+export const DATA_LAKE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+
+/**
  * A typed prefix as the create request will actually carry it: trimmed, and closed with the
  * trailing ":" the wizard appends before POSTing.
  *
