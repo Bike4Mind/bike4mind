@@ -41,9 +41,9 @@ const QuerySchema = z.object({
  * before req.user is set, so a key issued for a narrow integration can't read
  * session spend just because its owner is an admin. JWT/browser callers (admin or
  * org owner/manager) skip that check and still go through the access logic above.
- * A non-admin org owner/manager calling via API key now also needs the ADMIN
- * scope - there's no narrower "org-scoped" key scope to grant self-service access
- * without it.
+ * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
+ * rejected server-side), so this closes the API-key path entirely for a
+ * non-admin org owner/manager - only a JWT/browser session still works for them.
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user) {
