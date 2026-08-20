@@ -1,5 +1,6 @@
 import {
   type AccessContext,
+  type IAdminSettingsRepository,
   type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
@@ -50,6 +51,13 @@ export interface LakeAuthzDeps {
    * this module exists at all.
    */
   dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  /**
+   * Settings stores the meta-tag write gate needs for the admission contract (#1680). This module
+   * names no admission members - the Slack file does not exist yet and `createFabFile` runs the
+   * contract for real once it does - so these are wired for the gate's signature, not to duplicate
+   * the check here.
+   */
+  adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
   /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
   /** Authoritative org membership set for the actor, mirroring `toAccessContext` (#1674). */
@@ -177,7 +185,7 @@ export async function authorizeLakeForWrite(
   // that change. A lake soft-deleted between this gate and the one above lands here too.
   try {
     await dataLakeService.assertCanWriteDataLakeTags({ userId: ctx.userId, isAdmin: ctx.isAdmin }, [datalakeTag], {
-      db: { dataLakes: deps.dataLakes },
+      db: { dataLakes: deps.dataLakes, adminSettings: deps.adminSettings },
     });
   } catch (err) {
     // Same class-based split as the gate above: only a refusal is reported as one, and anything

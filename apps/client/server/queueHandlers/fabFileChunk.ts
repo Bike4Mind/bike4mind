@@ -461,11 +461,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
       );
 
-      // Lake admission decision (#1679), report-only: a member whose chunks cannot honor a lake it
-      // belongs to is quarantined - admitted content that will never be retrievable. We record the
-      // conflict (above) but do not yet block it; the hard gate is #1680, which reads the same
-      // signal. Log the verdict with the DOOR the member came through, which the policy recompute
-      // cannot see - so a smoke test can tell a quarantined member from one that was never checked.
+      // Lake admission decision (#1679), report-only and permanently so: a member whose chunks
+      // cannot honor a lake it belongs to is quarantined - admitted content that will never be
+      // retrievable. Blocking HERE would be eviction, not admission: the file is already a member
+      // by the time it chunks. The hard gate (#1680) reads this same signal at the membership
+      // write instead - see dataLakeService/lakeAdmissionGate.ts - so a file that reaches this
+      // point under an enforcing lake is one that was admitted before the lever was turned on, or
+      // whose owner chunk policy changed afterwards. Both are convergence cases (#1681), not
+      // admission ones. Log the verdict with the DOOR the member came through, which the policy
+      // recompute cannot see, so a smoke test can tell a quarantined member from an unchecked one.
       const admissionStatus = dataLakeService.deriveAdmissionStatus(conflict);
       if (conflict) {
         logger.warn(

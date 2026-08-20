@@ -4,6 +4,7 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  scopedSettingsRepository,
   FabFile,
   User,
   withTransaction,
@@ -48,7 +49,16 @@ const handler = baseApi()
         ctx,
         (params.tags ?? []).map(t => t.name),
         {
-          db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
+          },
+          // This request creates the file, so the caller is its owner-to-be and the admission
+          // contract (#1680) predicts against their chunk policy.
+          members: [{ userId: ctx.userId }],
+          logger: req.logger,
         }
       );
 

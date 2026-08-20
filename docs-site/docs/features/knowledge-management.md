@@ -169,6 +169,46 @@ re-ingested content is measured automatically. If a lake stays unmeasured, re-ru
 administrator to run the char-length backfill) to populate it.
 :::
 
+### The admission contract (enforcement)
+
+Health describes a lake that already has its content. The **admission contract** is the same
+retrievability rule applied one step earlier - when a file is about to *join* a lake. If the file's
+chunks cannot meet the passage size that lake requires, the content would sit in the lake
+permanently unfindable, so the contract can refuse the membership instead of accepting it.
+
+It is **off by default**. Out of the box the contract only reports: a file that fails it still joins
+the lake exactly as before, and the mismatch shows up as a chunk-policy conflict and in the lake's
+health. An administrator turns enforcement on with **Data Lakes: Enforce the admission contract**,
+which can be set for the whole platform, one organization, one owner, or a single lake - so one lake
+can enforce while the rest stay in reporting mode. Check the health report first to see how many
+members a lake would have refused.
+
+One exception to that per-lake independence: a single action that adds a file to *several* lakes at
+once is refused as a whole if **any** of those lakes is enforcing and would reject it. The file joins
+none of them, so a retry after fixing the passage sizes leaves nothing half-applied. The error names
+only the lake that caused the refusal.
+
+Turning it on is not instantaneous. The settings cache is per-instance, so the change applies at once
+on the instance that served it and within about five minutes everywhere else. An upload that still
+succeeds immediately after you enable enforcement is a stale cache, not a broken setting.
+
+Two limits are deliberate:
+
+- **Admission only, never eviction.** Enforcement refuses *new* members. Files already in a lake keep
+  their membership and are never removed by it.
+- **It never blocks a search.** Lake health stays advisory; a degraded lake still answers queries.
+
+When enforcement is on and a file is refused, the error names the lake, the passage size it requires,
+and the size the content actually chunks at.
+
+:::tip Refused when adding files to a lake?
+The message means the lake's **required passage size** and the file owner's **Default Chunk Size** do
+not agree - not that anything is broken. Either lower or raise the lake's required passage size to
+match how the content is chunked, or change the owner's default chunk size and re-index the files.
+Once the two agree, the add succeeds. An administrator can also switch that lake back to reporting
+mode by turning off **Data Lakes: Enforce the admission contract** for it.
+:::
+
 ## Organization Features
 
 ### Collections

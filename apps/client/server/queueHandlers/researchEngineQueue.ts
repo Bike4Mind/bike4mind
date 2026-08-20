@@ -6,6 +6,7 @@ import {
   organizationRepository,
   researchTaskRepository,
   researchDataRepository,
+  scopedSettingsRepository,
   withTransaction,
   apiKeyRepository,
   userRepository,
@@ -92,6 +93,7 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
             researchDatas: researchDataRepository,
             fabFiles: fabFileRepository,
             adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
             taskSchedules: taskScheduleRepository,
             apiKeys: apiKeyRepository,
             dataLakes: dataLakeRepository,
@@ -232,6 +234,7 @@ const downloadRelevantLinks = async (parameters: { id: string; userId: string },
         fabFiles: fabFileRepository,
         researchDatas: researchDataRepository,
         adminSettings: adminSettingsRepository as unknown as IAdminSettingsRepository,
+        scopedSettings: scopedSettingsRepository,
         users: {
           findById: async (id: string) => {
             const result = await User.findById(id);

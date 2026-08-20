@@ -20,7 +20,9 @@ export type MembershipActor = ManageActor;
  */
 export type MembershipLake = Pick<
   IDataLakeDocument,
-  'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'
+  // `name` and `requiredPassageTokenTarget` are carried for the admission contract (#1680), which
+  // the join path consults before a file becomes a member - not used by the writes themselves.
+  'id' | 'name' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
 >;
 
 interface RemoveMembershipAdapters {

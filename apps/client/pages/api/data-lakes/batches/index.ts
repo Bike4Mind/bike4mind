@@ -5,6 +5,8 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
+  adminSettingsRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput } from '@bike4mind/common';
@@ -90,6 +92,15 @@ const handler = baseApi()
     if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
       return res.status(400).json({ error: `Cannot create a batch for a data lake in '${dataLake.status}' status` });
     }
+
+    // Admission contract (#1680) at the earliest point the intent is known: refusing the BATCH is
+    // what makes the refusal legible in the upload UI, rather than letting the user pick files and
+    // fail at presign. The files do not exist yet, so the subject is the uploader as owner-to-be.
+    // Report-only unless this lake's EnforceLakeAdmission lever is on.
+    await dataLakeService.assertLakeAdmission([dataLake], [{ userId }], {
+      db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+      logger: req.logger,
+    });
 
     const batch = await dataLakeBatchRepository.create({
       dataLakeId: dataLake.id,

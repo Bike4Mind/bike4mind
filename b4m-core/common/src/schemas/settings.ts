@@ -199,6 +199,7 @@ export const SettingKeySchema = z.enum([
   'LakeConvergenceBulkChangeSharePct',
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
+  'EnforceLakeAdmission',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -2002,6 +2003,32 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 95,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnforceLakeAdmission: makeBooleanSetting({
+    key: 'EnforceLakeAdmission',
+    name: 'Data Lakes: Enforce the admission contract',
+    defaultValue: false,
+    description:
+      'Retrievability contract at admission (#1680). OFF by default = report-only: a file whose chunks ' +
+      'cannot honor the chunk policy a lake REQUIRES is logged as quarantined ([admission] lines) but ' +
+      'still joins the lake, exactly as today. ON refuses the membership write instead, so unretrievable ' +
+      'content never becomes a member and no embedding spend is incurred for it; the caller gets an error ' +
+      'naming the required and actual passage targets. Enforcement applies to NEW memberships only - ' +
+      'files already in a lake are never evicted, and no query is ever blocked on lake health, which is ' +
+      'advisory permanently. Turn this on only after the lake health report shows how many members would ' +
+      'be refused. The lake rung is the one that matters (a lake enforces its own contract); the org and ' +
+      'owner rungs enforce across every lake in that scope at once. A flip is not instantaneous: the ' +
+      'settings cache is per-instance, so it applies immediately on the instance that served the change ' +
+      'and within ~5 min (one cache TTL) everywhere else - an upload that still succeeds right after ' +
+      'turning this on is stale cache, not a broken lever.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakes',
+    // Resolved through scopeForLake, so the rungs mirror PauseLakeConvergence: the contract is the
+    // LAKE's ("the policy I require"), which is why Lake is settable here even though the chunk
+    // policy it grades against is owner-altitude and deliberately is not (see DefaultChunkSize).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',

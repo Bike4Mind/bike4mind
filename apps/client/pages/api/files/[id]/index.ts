@@ -7,6 +7,7 @@ import {
   fabFileRepository,
   fileTagRepository,
   adminSettingsRepository,
+  scopedSettingsRepository,
   sessionRepository,
   userRepository,
   withTransaction,
@@ -122,8 +123,18 @@ const handler = baseApi()
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
+    // No `members` here: this is a whole-array write, so the payload cannot distinguish a join
+    // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
+    // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the
+    // file already in hand. Naming members here would re-read the file to check a strict subset.
     await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
+        scopedSettings: scopedSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const updatedFabFile = await withTransaction(async () => {
@@ -151,7 +162,10 @@ const handler = baseApi()
               fabFiles: fabFileRepository,
               dataLakes: dataLakeRepository,
               dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              // `lakeConfigAuditDb` carries `adminSettings`, which is also what the admission
+              // contract's lever resolves from; only `scopedSettings` is additional here.
               ...lakeConfigAuditDb,
+              scopedSettings: scopedSettingsRepository,
             },
             logger: req.logger,
             storage: {
