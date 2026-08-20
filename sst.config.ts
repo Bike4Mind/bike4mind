@@ -7,13 +7,13 @@ export default $config({
     const permanent = ['production', 'shared-dev'].includes(input?.stage);
     // Purge is narrower than `permanent` on purpose. It runs SST's Purge() on a
     // successful `sst remove`, which deletes the stage's secrets AND its encryption
-    // passphrase — unrecoverable (sst/sst#6593).
+    // passphrase - unrecoverable (sst/sst#6593).
     //
     // This is an ALLOWLIST of stages that are genuinely disposable, not a
     // denylist of the ones we remembered to protect. Only `pr####` previews
     // qualify: CI creates and destroys those per pull request. Written as a
     // denylist, every stage was purgeable unless somebody thought to exclude it,
-    // so the blast radius grew silently as stages were added — a future `qa` or
+    // so the blast radius grew silently as stages were added - a future `qa` or
     // `demo`, a second staging box, or a typo like `--stage de` would each have
     // destroyed secrets on `sst remove`.
     //
