@@ -692,6 +692,76 @@ describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
       dataLakeTags: [],
     });
   });
+
+  it('records outcome:failed when the fabfiles repository is not available at all (#1971 second review)', async () => {
+    const ctx = makeContext({ db: {} as never });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('not available at this time');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when the fabfilechunks paged text reader is not wired (#1971 second review)', async () => {
+    const ctx = makeContext({
+      db: { fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() }, fabfilechunks: {} } as never,
+    });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('chunk reader unavailable');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when an out-of-scope file_id is rejected before any DB lookup (#1971 second review)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: ['some-other-file'] } });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when Path A (direct file_id) resolves to nothing after owned/shared checks run (#1971 second review)', async () => {
+    // Distinct from the out-of-scope case above: this is the UNSCOPED owned/shared branch
+    // running to completion (both lookups execute) and legitimately finding no accessible file.
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
 });
 
 /**

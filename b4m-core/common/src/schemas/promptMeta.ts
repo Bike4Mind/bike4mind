@@ -346,11 +346,13 @@ export const RetrievalSummarySchema = z.object({
    * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
    * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
    * 'failed' - threw; recall did not complete.
-   * On multiple retrieval calls within one turn, merge priority is failed > no_lakes > ok (see
-   * retrievalSummaryMerge.ts's mergeRetrievalSummary), so a single failure is never masked by a later success.
+   * On multiple retrieval calls within one turn, merge priority is failed > ok > no_lakes (see
+   * retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never masked by a later
+   * success or abstain, and a real success on one surface is never masked by another surface's
+   * "no lakes in scope" abstain in the same turn.
    */
   outcome: z.enum(['ok', 'no_lakes', 'failed']),
-  /** Which retrieval-capable surface(s) ran this turn, e.g. 'forced-retrieval', 'knowledgeBaseSearch'. */
+  /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
