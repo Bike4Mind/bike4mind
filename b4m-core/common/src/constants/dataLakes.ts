@@ -286,6 +286,16 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   systemPrompt?: string;
   /**
+   * The passage size (TOKENS) this lake requires of its members, when it declares one. Editor-only,
+   * same gate as the fields above, and surfaced so the settings form can seed the current value.
+   *
+   * ABSENT means the lake declares no target and inherits the platform default - which is not a
+   * cosmetic difference: an explicit target is the sole trigger for convergence (epic decision 5),
+   * so it is the difference between a lake that can be repaired toward its policy and one that is
+   * only ever measured. Absent for a non-editor too, who never renders the field.
+   */
+  requiredPassageTokenTarget?: number;
+  /**
    * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI

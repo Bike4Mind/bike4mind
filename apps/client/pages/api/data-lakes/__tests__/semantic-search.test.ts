@@ -76,6 +76,13 @@ vi.mock('@bike4mind/services', async () => ({
     describeEmbeddingMismatch: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).describeEmbeddingMismatch,
+    // Same rule as the mismatch helpers above - real, because the wording and the partial_results
+    // mapping are exactly what these tests check.
+    describeSearchLimitations: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
+    ).describeSearchLimitations,
+    isPartialSearch: (await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable'))
+      .isPartialSearch,
     emptyEmbeddingMismatchReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
@@ -113,6 +120,7 @@ import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
 import { recordOperationalUsage } from '@bike4mind/services';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
+import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
 
 const mockRecordOperationalUsage = recordOperationalUsage as ReturnType<typeof vi.fn>;
 
@@ -141,6 +149,7 @@ const EMPTY_RESULT = {
   chunksScored: 0,
   embeddingModel: 'text-embedding-ada-002',
   embeddingMismatch: emptyEmbeddingMismatchReport(),
+  retrievalUnavailable: emptyRetrievalUnavailableReport(),
   scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
 };
 
@@ -388,6 +397,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       totalChunksSearched: 12,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -431,6 +441,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       totalChunksSearched: 12,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -452,6 +463,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       totalChunksSearched: 100000,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 2314,
       embeddingModel: 'text-embedding-ada-002',
       scan: {
@@ -765,6 +777,7 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
     totalChunksSearched: 12,
     chunksScored: 12,
     embeddingMismatch: emptyEmbeddingMismatchReport(),
+    retrievalUnavailable: emptyRetrievalUnavailableReport(),
     filesInScope: 3,
     embeddingModel: 'text-embedding-ada-002',
     scan: FULL_SCAN,

@@ -14,6 +14,11 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   reasonsWithinOutputBudget: vi.fn(() => false),
+  // Honor-explicit-else-fallback is all these suites need; the model-aware sizing this
+  // stands in for is covered against the real implementation in cliCompletions.maxTokens.test.ts.
+  resolveOutputMaxTokens: vi.fn(
+    ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
+  ),
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',

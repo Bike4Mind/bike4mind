@@ -25,10 +25,8 @@ import {
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
-import {
-  describeEmbeddingMismatch,
-  PARTIAL_RESULTS_STATUS_SUFFIX,
-} from '../../../../dataLakeService/embeddingMismatch';
+import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
+import { describeSearchLimitations } from '../../../../dataLakeService/retrievalUnavailable';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -427,7 +425,7 @@ async function trySemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    const skipNotice = describeSearchLimitations(search);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
     if (search.results.length === 0)
       return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
@@ -511,7 +509,7 @@ async function tryScopedSemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    const skipNotice = describeSearchLimitations(search);
     if (search.results.length === 0)
       return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 

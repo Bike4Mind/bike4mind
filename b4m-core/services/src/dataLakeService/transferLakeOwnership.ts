@@ -5,9 +5,14 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
-import { isEffectiveOwner, resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
+import { resolveEffectiveOwnerIds } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
+import {
+  isOrgOwnershipCandidate,
+  resolveLakeTransferAuthority,
+  type LakeTransferActor,
+} from './lakeOwnershipCandidates';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { ownershipChange } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
@@ -55,11 +60,30 @@ export interface TransferLakeOwnershipResult {
  * owner exposing their own lake. A platform admin is unconstrained (global superuser by definition).
  *
  * Refused for a fallback (hardcoded registry) lake, which has no backing document to hang a grant on
- * (`assertLakeGrantable`). For an org-scoped lake the new owner must belong to that org - membership
- * never crosses organizations (epic decision 12).
+ * (`assertLakeGrantable`). For an org-scoped lake BOTH parties must belong to that org - the new
+ * owner by the candidate predicate below, the actor by `resolveLakeTransferAuthority`'s membership
+ * requirement (a grant outlives the membership that motivated it) - membership never crosses
+ * organizations (epic decision 12).
+ *
+ * The lake's own content gate (`requiredUserTag` / `requiredEntitlement`) is deliberately NOT applied
+ * to the recipient: ownership bypasses it (`classifyLakeAccess` returns on the owner arm), so a
+ * transfer can hand gated content to a member who does not satisfy the gate. That is allowed because
+ * refusing it would leave a gated lake with no succession path at all, but it is disclosed rather
+ * than silent - the candidate list carries the gate and the confirmation names it, so the owner makes
+ * the call knowingly. Contrast `setLakeVisibility`, which hard-refuses publishing a gated lake:
+ * exposing it app-wide has no named recipient to hold accountable, a handover does.
+ *
+ * NOT ATOMIC: the recipient's grant, each demotion, the actor stamp and the audit row are separate
+ * writes with no session. A session IS available in this layer (db-core's `withTransaction`, whose
+ * AsyncLocalStorage enrolls repo writes automatically), but it is not taken here because this service
+ * is adapter-injected and connection-free by design; wrapping belongs at the route seam if we want
+ * it. The consequence is a failure mid-loop leaving the lake with two effective owners and no
+ * transfer row to explain it in the very view this feature exists to make trustworthy. Mitigated,
+ * not solved, by every write being idempotent (retrying the same transfer converges) and by the
+ * ordering: the audit is written LAST so it can never claim a transfer that failed partway.
  */
 export const transferLakeOwnership = async (
-  actor: ManageActor,
+  actor: LakeTransferActor,
   dataLakeId: string,
   newOwnerUserId: string,
   { db, logger }: TransferLakeOwnershipAdapters
@@ -73,15 +97,16 @@ export const transferLakeOwnership = async (
 
   const grants = await loadActiveLakeGrants(lake, { db });
   const lakeOrg = normalizeId(lake.organizationId);
-  const isOwner = isEffectiveOwner(lake, actor, grants);
-  const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
-  if (!(actor.isAdmin || isOwner || isOrgAdminOfLake)) {
+  // Shared with the candidate listing behind the transfer picker, so the option set a manager is
+  // offered and the gate this write applies can never drift apart.
+  const authority = resolveLakeTransferAuthority(lake, actor, grants);
+  if (!authority.allowed) {
     throw new BadRequestError('You do not have permission to transfer ownership of this data lake');
   }
   // Consent guard (see doc above): an org admin acting purely by the org-admin rung may reassign the
   // lake to another member, but may not grab ownership for themselves and then expose it around the
   // owner-only expose gate. A platform admin or the current owner is exempt.
-  if (!actor.isAdmin && !isOwner && newOwnerUserId === actor.userId) {
+  if (authority.viaOrgAdminOnly && newOwnerUserId === actor.userId) {
     throw new BadRequestError('An organization admin cannot transfer a data lake to themselves; name another member.');
   }
 
@@ -95,12 +120,9 @@ export const transferLakeOwnership = async (
   // is refused rather than silently granted.
   if (lakeOrg) {
     const org = await db.organizations.findById(lakeOrg);
-    const isMember =
-      !!org &&
-      (org.userId === newOwnerUserId ||
-        (org.adminUserIds ?? []).includes(newOwnerUserId) ||
-        (org.users ?? []).some(member => member.userId === newOwnerUserId));
-    if (!isMember) {
+    // Same predicate the picker enumerates from (`listOrgOwnershipCandidateIds`), so this can never
+    // reject a teammate the UI offered.
+    if (!org || !isOrgOwnershipCandidate(org, newOwnerUserId)) {
       throw new BadRequestError('The new owner must belong to the organization that owns this data lake');
     }
   }
@@ -187,10 +209,11 @@ export const transferLakeOwnership = async (
   // `grant-curator` - naming an authority this function explicitly forbids from transferring. That
   // is reachable through this very function: a prior transfer DEMOTES each former owner to curator,
   // so a creator who is also an org admin ends up holding exactly that grant. `manageRung` is an
-  // authorization fact, so it must come from the branch that actually authorized the call.
+  // authorization fact, so it must come from the branch that actually authorized the call - which is
+  // `resolveLakeTransferAuthority` above, the one rule this gate and the transfer picker share.
   const manageRung = actor.isAdmin
     ? 'platform-admin'
-    : isOwner
+    : authority.isOwner
       ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
         ? 'grant-owner'
         : 'creator'
