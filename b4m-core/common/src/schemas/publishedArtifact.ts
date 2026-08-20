@@ -351,11 +351,17 @@ export function normalizePublishTags(raw: readonly string[]): string[] {
 }
 
 /**
- * A tag list as it arrives from a caller. Deliberately NOT a `.transform()` - the API-contract
- * conventions forbid those in a public request schema - so callers validate here and normalize
- * explicitly with normalizePublishTags at the write site.
+ * A tag list as it arrives from a caller, BEFORE normalization. Deliberately not a `.transform()` -
+ * the API-contract conventions forbid those in a public request schema - so callers validate here
+ * and normalize explicitly with normalizePublishTags at the write site.
+ *
+ * The raw bound is deliberately looser than the stored one. normalizePublishTag trims and collapses
+ * whitespace first, so a 40-character tag pasted with a trailing space is 41 raw and would 400 on a
+ * value that stores perfectly in range. Letting the normalizer be the single authority on shape
+ * means the schema only has to reject the absurd; it drops anything still over the real limit.
  */
-export const PublishTagsSchema = z.array(z.string().min(1).max(PUBLISH_TAG_MAX_LENGTH)).max(PUBLISH_TAGS_MAX);
+const RAW_TAG_SLACK = 20;
+export const PublishTagsSchema = z.array(z.string().max(PUBLISH_TAG_MAX_LENGTH + RAW_TAG_SLACK)).max(PUBLISH_TAGS_MAX);
 
 export const PublishedArtifactSchema = z.object({
   /** Short opaque id for short URLs (`/p/r/{publicId}`, `/p/f/{publicId}`) and lookups. */

@@ -31,9 +31,12 @@ vi.mock('@client/app/utils/publishApi', () => ({
   listMyPublishedArtifacts: (...a: unknown[]) => mockList(...a),
   deletePublishedArtifact: vi.fn(),
   updatePublishedVisibility: vi.fn(),
-  updatePublishedCommentPolicy: vi.fn(),
+  updatePublishedCommentPolicy: vi.fn().mockResolvedValue(undefined),
   updatePublishedTags: (...a: unknown[]) => mockUpdateTags(...a),
-  fetchMyTagVocabulary: () => Promise.resolve(mockVocabulary),
+  fetchMyTagVocabulary: () => {
+    mockVocabCalls.push(1);
+    return Promise.resolve(mockVocabulary);
+  },
   restorePreviousVersion: vi.fn(),
   toArtifactSharePath: (_t: string, s: string, slug: string) => `/p/u/${s}/${slug}`,
   fetchPublishedExport: (...a: unknown[]) => mockExport(...a),
@@ -86,6 +89,8 @@ const replyRow = { ...bundleRow, publicId: 'pub-2', title: 'My Reply', source: {
 /** listMyPublishedArtifacts returns a page envelope, not a bare array. */
 /** Tag suggestions the autocomplete offers; freeform, so this only shapes suggestions. */
 let mockVocabulary: Array<{ tag: string; count: number }> = [];
+/** One entry per vocabulary fetch, so a test can assert it is NOT refetched. */
+const mockVocabCalls: number[] = [];
 
 const page = (rows: unknown[], over: Record<string, unknown> = {}) => ({
   artifacts: rows,
@@ -114,6 +119,7 @@ beforeEach(() => {
   mockPrint.mockReset();
   mockUpdateTags.mockReset().mockResolvedValue(undefined);
   mockVocabulary = [];
+  mockVocabCalls.length = 0;
 });
 
 describe('PublishedArtifactsTabContent - manage toggle', () => {
@@ -597,5 +603,66 @@ describe('PublishedArtifactsTabContent - review regressions', () => {
     // The facet query asks for a single row - it wants the counts, not the page.
     expect(facetCalls).toHaveLength(1);
     expect(facetCalls[0].limit).toBe(1);
+  });
+});
+
+/** Review findings on the tag work (#1965). */
+describe('PublishedArtifactsTabContent - tag review fixes', () => {
+  const lastQuery = () => {
+    const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
+    return listCalls[listCalls.length - 1];
+  };
+
+  it('says so when a tag is REJECTED rather than rewritten', async () => {
+    // A rewrite (IonQ -> ionq) is self-explanatory. A drop - over-long, or past the cap - left the
+    // equality check seeing no change, so there was no write, no toast, and the chip the person just
+    // typed vanished on the next render. That reads as the field being broken.
+    mockList.mockResolvedValue(page([{ ...bundleRow, tags: [] }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const input = screen.getByTestId('published-artifact-tag-input-pub-1');
+    fireEvent.change(input, { target: { value: 'x'.repeat(60) } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+    expect(String(mockToastError.mock.calls[0][0])).toMatch(/at most/i);
+    expect(mockUpdateTags).not.toHaveBeenCalled();
+  });
+
+  it('offers a chip for a tag selected from a row even when the facet list omits it', async () => {
+    // Facet counts are capped at the top 24, but a ROW chip can select any tag the artifact has.
+    // Without merging it in there is no per-facet control to switch that selection back off.
+    mockList.mockResolvedValue(
+      page([{ ...bundleRow, tags: ['long-tail'] }], {
+        facets: { kind: {}, visibility: {}, gate: {}, comments: 0, tag: { popular: 9 } },
+      })
+    );
+    renderTab();
+    await screen.findByTestId('published-artifact-tag-pub-1-long-tail');
+
+    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-1-long-tail'));
+
+    await waitFor(() => expect(lastQuery().tag).toBe('long-tail'));
+    // The control to turn it off exists, rather than only the global Clear.
+    expect(screen.getByTestId('published-artifacts-facet-tag-long-tail')).not.toBeNull();
+  });
+
+  it('keeps the tag vocabulary out of the list invalidation prefix', async () => {
+    // It is backed by a scan of another collection, so a visibility toggle or a delete must not
+    // refetch it - only a tag edit can change it.
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    const before = mockVocabCalls.length;
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Artifact deleted'));
+
+    // Delete invalidates the list prefix; the vocabulary must not ride along on it.
+    expect(mockVocabCalls.length).toBe(before);
+    confirm.mockRestore();
   });
 });

@@ -30,10 +30,41 @@ function hash32(input: string): number {
   return h >>> 0;
 }
 
-/** Hues are picked off a fixed wheel rather than the full 360 so every cover keeps the app's
- *  register - no acid yellows or muddy olives - while still being clearly distinct. */
-const HUE_STEPS = 12;
+/**
+ * The output space has to be big enough that a library does not visibly repeat itself, which is the
+ * whole point of a per-artifact cover - and this is easy to get wrong by reasoning about the hash
+ * instead of the space. FNV-1a distributes well, and that is irrelevant if it is distributing into
+ * too few buckets: at 12 hues x 8 angles = 96 combinations, forty artifacts collide on roughly eight
+ * pairs (birthday), so the eye finds the wrong row.
+ *
+ * 24 hues x 3 saturations x 3 lightnesses x 8 angles = 1,728 gives about 0.45 expected collisions at
+ * forty and stays under one pair into the low hundreds. Hues still come off a fixed wheel, and the
+ * saturation/lightness steps are narrow, so covers remain a set rather than a colour test card.
+ */
+const HUE_STEPS = 24;
 const HUE_OFFSET = 205; // start at the app's blue and walk around from there
+const SATURATIONS = [34, 42, 50];
+const LIGHTNESSES = [28, 34, 40];
+
+/**
+ * The cover's gradient for an artifact id. Exported and pure because the property that matters -
+ * that two artifacts rarely look alike - is arithmetic over this string, and testing it through a
+ * rendered element instead means testing jsdom's CSS parsing: Joy compiles `sx` to an emotion class,
+ * so the node carries no inline background at all.
+ */
+export function coverGradient(publicId: string): string {
+  const h = hash32(publicId);
+  // Independent bit ranges per axis, so two ids in the same hue bucket are still unlikely to share
+  // saturation, lightness and angle as well.
+  const hue = (HUE_OFFSET + (h % HUE_STEPS) * (360 / HUE_STEPS)) % 360;
+  const sat = SATURATIONS[(h >> 5) % SATURATIONS.length];
+  const light = LIGHTNESSES[(h >> 11) % LIGHTNESSES.length];
+  // Second hue is a near-neighbour, so the gradient reads as one considered swatch rather than two
+  // unrelated colours meeting in the middle.
+  const hue2 = (hue + 24) % 360;
+  const angle = 20 + ((h >> 17) % 8) * 20;
+  return `linear-gradient(${angle}deg, hsl(${hue} ${sat}% ${light}%), hsl(${hue2} ${sat - 4}% ${light - 12}%))`;
+}
 
 export interface ArtifactCoverProps {
   /** Immutable artifact id. Title is deliberately NOT used - renaming must not change the cover. */
@@ -46,13 +77,6 @@ export interface ArtifactCoverProps {
 }
 
 export function ArtifactCover({ publicId, size = 28, title, ...rest }: ArtifactCoverProps) {
-  const h = hash32(publicId);
-  const hue = (HUE_OFFSET + (h % HUE_STEPS) * (360 / HUE_STEPS)) % 360;
-  // Second hue is a near-neighbour, so the gradient reads as one considered swatch rather than
-  // two unrelated colours meeting in the middle.
-  const hue2 = (hue + 24) % 360;
-  // Angle varies too, so two artifacts that happen to share a hue bucket still differ.
-  const angle = 20 + ((h >> 8) % 8) * 20;
   const initial = title?.trim()?.[0]?.toUpperCase() ?? '';
 
   return (
@@ -67,9 +91,7 @@ export function ArtifactCover({ publicId, size = 28, title, ...rest }: ArtifactC
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        // Saturation and lightness are fixed; only hue and angle vary. That is what keeps a
-        // library of covers looking like a set rather than a colour test card.
-        background: `linear-gradient(${angle}deg, hsl(${hue} 42% 34%), hsl(${hue2} 38% 22%))`,
+        background: coverGradient(publicId),
         border: '1px solid',
         borderColor: 'divider',
         color: 'rgba(255,255,255,0.82)',

@@ -52,7 +52,7 @@ import {
   fetchMyTagVocabulary,
 } from '@client/app/utils/publishApi';
 import { ArtifactCover } from '@client/app/components/common/ArtifactCover';
-import { normalizePublishTags, PUBLISH_TAGS_MAX } from '@bike4mind/common';
+import { normalizePublishTags, PUBLISH_TAGS_MAX, PUBLISH_TAG_MAX_LENGTH } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
 import { downloadData } from '@client/app/utils/download';
@@ -185,11 +185,15 @@ export default function PublishedArtifactsTabContent() {
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
 
-  // The caller's own tag vocabulary, for autocomplete. Loaded once and refreshed whenever tags
-  // change, since editing tags is exactly what grows it.
+  // The caller's own tag vocabulary, for autocomplete. Deliberately OUTSIDE the
+  // ['published-artifacts','mine'] prefix: under it, every visibility toggle, comment switch and
+  // delete refetched it too, and it is the one query backed by a scan of another collection. Only a
+  // tag edit can change it, so only the tag mutation invalidates it - and a staleTime keeps
+  // reopening the tab from re-running it.
   const { data: tagVocabulary = [] } = useQuery({
-    queryKey: ['published-artifacts', 'mine', 'tag-vocabulary'],
+    queryKey: ['publish-tag-vocabulary'] as const,
     queryFn: fetchMyTagVocabulary,
+    staleTime: 5 * 60_000,
   });
 
   const visibilityMut = useMutation({
@@ -231,6 +235,8 @@ export default function PublishedArtifactsTabContent() {
     onSuccess: () => {
       toast.success('Tags updated');
       invalidate();
+      // The only mutation that can grow or shrink the vocabulary, so the only one that refreshes it.
+      void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to update tags')),
   });
@@ -389,7 +395,13 @@ export default function PublishedArtifactsTabContent() {
           {/* Facet chips. Counts come from the whole library, not the filtered page, so a chip
               still tells you how many there are after you have clicked it. */}
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-            {Object.entries(facets.tag).map(([tag, n]) => (
+            {/* The active tag is merged in when the facet response does not carry it: the counts are
+                capped at the top 24, but a row chip can select ANY tag the artifact has - and
+                without this there is no per-facet control to turn that selection back off, only the
+                global Clear. */}
+            {Object.entries(
+              filters.tag && facets.tag[filters.tag] === undefined ? { [filters.tag]: 0, ...facets.tag } : facets.tag
+            ).map(([tag, n]) => (
               <Chip
                 key={`tag-${tag}`}
                 size="sm"
@@ -399,7 +411,8 @@ export default function PublishedArtifactsTabContent() {
                 onClick={() => toggleFilter('tag', tag)}
                 slotProps={{ action: { 'data-testid': `published-artifacts-facet-tag-${tag}` } }}
               >
-                {tag} {n}
+                {tag}
+                {n > 0 ? ` ${n}` : ''}
               </Chip>
             ))}
             {Object.entries(facets.kind).map(([kind, n]) => (
@@ -640,7 +653,19 @@ export default function PublishedArtifactsTabContent() {
                       onChange={(_e, next) => {
                         // Normalize with the SAME helper the server uses, so the chips the owner
                         // sees are what gets stored - no surprise re-spelling on reload.
-                        const tags = normalizePublishTags(next as string[]);
+                        const entered = next as string[];
+                        const tags = normalizePublishTags(entered);
+                        // A REJECTED tag (over-long, or past the cap) is dropped rather than
+                        // rewritten, which made the equality check below see no change: no write, no
+                        // toast, and the chip just disappeared on the next render. Rewrites are
+                        // self-explanatory; drops have to be said out loud or the field reads broken.
+                        if (tags.length < entered.length) {
+                          toast.error(
+                            entered.length > PUBLISH_TAGS_MAX
+                              ? `Up to ${PUBLISH_TAGS_MAX} tags per artifact`
+                              : `Tags can be at most ${PUBLISH_TAG_MAX_LENGTH} characters`
+                          );
+                        }
                         const current = a.tags ?? [];
                         if (tags.length === current.length && tags.every((t, i) => t === current[i])) return;
                         tagsMut.mutate({ publicId: a.publicId, tags });
