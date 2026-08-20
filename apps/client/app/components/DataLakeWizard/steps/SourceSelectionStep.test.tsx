@@ -116,7 +116,7 @@ describe('SourceSelectionStep - lake name', () => {
     renderStep();
 
     // Asserts the TEXT, not just the element: the minimum is interpolated into this copy from
-    // MIN_DATA_LAKE_SLUG_LENGTH, which the client re-exports from @bike4mind/common. If that
+    // MIN_DATA_LAKE_SLUG_LENGTH, which the component imports from @bike4mind/common. If that
     // ever resolved to undefined the sentence would read "at least  letters" and a presence-only
     // check would still pass, which is the one way this shared bound can break a user-facing string.
     expect(screen.getByTestId(SLUG_ERROR)).toHaveTextContent('This name needs at least 2 letters or numbers');
