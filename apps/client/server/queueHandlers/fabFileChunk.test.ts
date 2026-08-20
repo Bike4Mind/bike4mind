@@ -40,7 +40,7 @@ const h = vi.hoisted(() => {
     prepareFabFileChunks: vi.fn(async (...args: unknown[]) => ({ args })),
     commitFabFileChunks: vi.fn(async (prepared: unknown) =>
       chunkFabfile(...((prepared as PreparedStub | undefined)?.args ?? []))
-    ),
+      ),
     findAccessibleById: vi.fn(),
     markFailedIfNotAlready: vi.fn(),
     updateFileStatus: vi.fn(),

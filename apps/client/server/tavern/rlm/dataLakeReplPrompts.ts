@@ -24,7 +24,7 @@ export const DATA_LAKE_REPL_TOOLS: ReplToolDescriptor[] = [
       '(retrieval_unavailable.indexing_files); or a paused re-process left it with no searchable passages ' +
       'and it is not coming back on its own (retrieval_unavailable.paused_files). `warning` states which and ' +
       'names the files. Say so instead of presenting the result as complete. The remedies differ: re-indexing ' +
-      "files just need the search re-run later, whereas paused ones need the lake's passages rebuilt or the " +
+      'files just need the search re-run later, whereas paused ones need the lake\'s passages rebuilt or the ' +
       'files reprocessed - do NOT tell the reader to wait, and do not assume the kill switch is still on, ' +
       'because the marker outlives the pause that caused it. ' +
       'If scan.truncated is true the search covered only part of the lake, so widen with ' +

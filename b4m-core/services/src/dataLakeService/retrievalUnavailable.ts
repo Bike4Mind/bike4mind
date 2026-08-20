@@ -187,7 +187,7 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     sentences.push(
       `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: re-processing ` +
         'them was paused partway, so they were withheld. Unlike re-indexing files these do NOT return on ' +
-        'their own - use the lake\'s "Rebuild passages" action, or reprocess the files individually, to ' +
+        "their own - use the lake's \"Rebuild passages\" action, or reprocess the files individually, to " +
         'restore them. If background lake work is still paused, an administrator has to resume it first.'
     );
   }

@@ -43,7 +43,7 @@ const makeAdapters = (
       findByDatalakeTag: vi.fn(async (tag: string) =>
         tag === 'datalake:lake-one'
           ? { id: 'lake-1', name: 'Lake One', datalakeTag: tag, requiredPassageTokenTarget: 512 }
-          : ((opts.otherLakes ?? []).find(l => l.datalakeTag === tag) ?? null)
+          : (opts.otherLakes ?? []).find(l => l.datalakeTag === tag) ?? null
       ),
       find: vi.fn().mockResolvedValue([]),
     },

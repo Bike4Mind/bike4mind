@@ -794,9 +794,10 @@ export interface SyncDelta {
 }
 
 /**
- * The evidence a permanent deletion leaves behind. Every field is READ BACK after the writes, not
- * inferred from them: the point of this receipt is that a deletion which silently did nothing and
- * one that destroyed everything must not look the same to the caller.
+ * The evidence a permanent deletion leaves behind: a deletion which silently did nothing and one
+ * that destroyed everything must not look the same to the caller. `chunksRemaining` and
+ * `documentDeleted` are READ BACK after the writes and are what `verified` is made of;
+ * `retrievalIndexPurged` is not read back, and `verified` makes no claim about the index.
  */
 export interface DataLakeDocumentPurgeReceipt {
   dataLakeId: string;

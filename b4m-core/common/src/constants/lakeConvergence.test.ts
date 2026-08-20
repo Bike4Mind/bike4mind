@@ -83,9 +83,8 @@ describe('decideMemberConvergence', () => {
   // The same overshoot IS a violation while the stamp disagrees: that rewrite is the one that both
   // repairs the target and writes the stamp deciding it next time.
   it('still converges an overshooting member whose stamped target has not reached the policy yet', () => {
-    expect(
-      decideMemberConvergence(member({ chunkedPassageTokenTarget: 2100, maxChunkCharLength: 5000 }), policy)
-    ).toMatchObject({ converge: true });
+    expect(decideMemberConvergence(member({ chunkedPassageTokenTarget: 2100, maxChunkCharLength: 5000 }), policy))
+      .toMatchObject({ converge: true });
   });
 
   // Two configured targets that both exceed the model window clamp to the same effective limit, and
@@ -116,9 +115,8 @@ describe('decideMemberConvergence', () => {
   });
 
   it('waits for a member whose vectorization has not settled', () => {
-    expect(
-      decideMemberConvergence(member({ vectorizedChunkCount: 3, chunkedPassageTokenTarget: 2100 }), policy)
-    ).toMatchObject({ converge: false, reason: 'indexingInFlight' });
+    expect(decideMemberConvergence(member({ vectorizedChunkCount: 3, chunkedPassageTokenTarget: 2100 }), policy))
+      .toMatchObject({ converge: false, reason: 'indexingInFlight' });
   });
 
   // The kill switch abandons a vectorize by writing this note and clearing isVectorizing; it never
@@ -134,9 +132,8 @@ describe('decideMemberConvergence', () => {
   });
 
   it('treats a null vector rollup (predating the field) as settled', () => {
-    expect(
-      decideMemberConvergence(member({ vectorizedChunkCount: null, chunkedPassageTokenTarget: 2100 }), policy)
-    ).toMatchObject({ converge: true });
+    expect(decideMemberConvergence(member({ vectorizedChunkCount: null, chunkedPassageTokenTarget: 2100 }), policy))
+      .toMatchObject({ converge: true });
   });
 
   // The state QA reached by pausing mid-wave: the producer had already deleted this member's
@@ -146,12 +143,7 @@ describe('decideMemberConvergence', () => {
   it('converges a member whose passages a halted wave removed, rather than reading it as conformant', () => {
     expect(
       decideMemberConvergence(
-        member({
-          chunkCount: 0,
-          vectorizedChunkCount: 0,
-          maxChunkCharLength: null,
-          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
-        }),
+        member({ chunkCount: 0, vectorizedChunkCount: 0, maxChunkCharLength: null, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
         policy
       )
     ).toMatchObject({ converge: true, passagesRemoved: true });
@@ -217,12 +209,7 @@ describe('planLakeConvergence', () => {
     const overshooting = (fabFileId: string, maxChunkCharLength: number) =>
       member({ fabFileId, maxChunkCharLength, chunkedPassageTokenTarget: null });
     const plan = planLakeConvergence(
-      [
-        overshooting('small', 4000),
-        overshooting('huge', 40000),
-        overshooting('b-tie', 9000),
-        overshooting('a-tie', 9000),
-      ],
+      [overshooting('small', 4000), overshooting('huge', 40000), overshooting('b-tie', 9000), overshooting('a-tie', 9000)],
       policy
     );
 
