@@ -146,7 +146,7 @@ export interface NotebookImportOptions {
   // How to handle conflicts
   conflictResolution: 'skip' | 'overwrite' | 'rename' | 'merge';
 
-  // Whether to preserve IDs (for same-platform imports)
+  /** Applies to chat messages and artifacts only; everything else takes a store-assigned id. */
   preserveIds: boolean;
 
   // Whether to import attachments
