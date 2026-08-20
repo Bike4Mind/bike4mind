@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { KnowledgeType } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { DataLakeModel, dataLakeRepository, FabFile, fabFileRepository, fileTagRepository } from '@bike4mind/database';
 import { tagService } from '@bike4mind/services';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * End-to-end guard that renaming a tag - INTO a name the user already has, with duplicates, a
@@ -35,11 +39,11 @@ const TagModel = () => mongoose.model('Tag');
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 afterEach(async () => {
   await Promise.all([FabFile.deleteMany({}), TagModel().deleteMany({}), DataLakeModel.deleteMany({})]);
 });
@@ -137,7 +141,7 @@ describe('tagService.update keeps tag documents, file tags and the count aggrega
     expect(await rawTagsOf(duplicated)).toEqual(['Receipts']);
     expect(await rawTagsOf(alreadyHasTarget)).toEqual(['Receipts']);
     expect(await countOf('Receipts')).toBe(4);
-  }, 30000);
+  });
 });
 
 // Against REAL Mongo, not a mock: proves the recompute reads the aggregate AFTER the rename has
@@ -160,7 +164,7 @@ describe('tagService.update recomputes a lake whose prefix-arm signal the rename
 
     const persisted = await DataLakeModel.findById(lake.id);
     expect(persisted?.fileCount).toBe(1);
-  }, 30000);
+  });
 
   it('drops fileCount when the rename moves the file to no longer carry a prefix tag', async () => {
     const lake = await DataLakeModel.create({
@@ -179,5 +183,5 @@ describe('tagService.update recomputes a lake whose prefix-arm signal the rename
 
     const persisted = await DataLakeModel.findById(lake.id);
     expect(persisted?.fileCount).toBe(0);
-  }, 30000);
+  });
 });
