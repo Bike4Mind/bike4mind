@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
 import mime from 'mime-types';
-import { validateUrlForFetch } from './ssrfProtection';
+import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
 
 // Centralized URL regex - handles ports, query params, fragments
 export const URL_REGEX =
@@ -66,6 +66,28 @@ function isPdfUrl(url: string): boolean {
 }
 
 /**
+ * True when the body opens with the PDF signature.
+ *
+ * Closes the door `isPdfUrl` cannot reach: a download endpoint with no `.pdf` in its path, served as
+ * `application/octet-stream`, produced neither a Content-Type signal nor an extension signal and was
+ * decoded as text - the same `toString('utf8')` corruption the Content-Type fallback exists to
+ * prevent, arriving through the one remaining door. `/download?id=123` and `Content-Disposition`
+ * attachment links are exactly this shape.
+ *
+ * Checked at offset 0 only. The PDF spec tolerates leading bytes before the header and readers scan
+ * ahead for it, but scanning here would mean sniffing arbitrary attacker-supplied content to
+ * RE-CLASSIFY it, and a false positive sends a real text document into the PDF parser. The strict
+ * check costs nothing on well-formed files, which is every file this has been observed to affect.
+ *
+ * Deliberately consulted ONLY on the generic-binary branch, never to override a server that stated a
+ * type. A server declaring `text/html` while sending PDF bytes is a different (and unobserved) bug,
+ * and overriding an explicit Content-Type is a wider behaviour change than this fix needs.
+ */
+function hasPdfMagicBytes(body: Buffer): boolean {
+  return body.subarray(0, 5).toString('latin1') === '%PDF-';
+}
+
+/**
  * Strip embedded credentials before a URL is written to a log.
  *
  * `https://user:pass@host/doc` is a legitimate paste, and this function is reached from the Slack
@@ -108,11 +130,31 @@ function lastPathSegment(url: string): string {
  * so any public host could answer `302 Location: http://169.254.169.254/latest/meta-data/` and the
  * guard would never see the address actually fetched.
  *
+ * SECURITY: the agents are the OTHER half, and the two guard different attacks. Per-hop
+ * `validateUrlForFetch` judges each address the chain names; the agents' `ssrfSafeLookup` judges the
+ * IP each socket actually dials. Without the agents a hostname that passes validation and then
+ * re-resolves to a private address on connect - DNS rebinding - reaches the internal destination with
+ * every URL-level check having passed. Both are needed: the pre-flight sees the scheme and the typed
+ * literal, the lookup sees the truth at connect time.
+ *
  * `timeoutMs` is the budget REMAINING for the whole operation, not a fresh per-hop allowance - see
  * the deadline in `fetchAndParseURL`.
  */
 async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   return axios.get(url, {
+    // BOTH agents, because the scheme is not fixed across a chain: an https URL can 302 to http, and
+    // axios picks the agent per request from the scheme it is currently on.
+    httpAgent: ssrfSafeHttpAgent,
+    httpsAgent: ssrfSafeHttpsAgent,
+    // MUST accompany the agents, or they silently stop protecting anything. axios reads
+    // `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` from the environment by default: for an https target its
+    // `setProxy` installs a CONNECT-tunnelling agent and assigns `options.agent` BEFORE the fallback
+    // that would have used ours, and for an http target the forward-proxy branch rewrites host and
+    // port so our lookup would validate the PROXY's address rather than the target's. Either way the
+    // connect-time pin is gone while every URL-level check still passes - i.e. the exact bypass the
+    // pin exists to prevent, reintroduced by an env var. No proxy is configured in the server runtime
+    // today; this makes the guarantee unconditional rather than environment-dependent.
+    proxy: false,
     // ALWAYS bytes. The response type cannot be chosen from the caller's URL, because a redirect can
     // land on a different content type entirely - a `.pdf` URL that 302s to an HTML gateway page, or
     // an extensionless URL that 302s to a PDF. Fetching bytes and deciding how to parse AFTERWARDS,
@@ -180,9 +222,18 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       throw new Error('URL fetch produced no response');
     }
 
+    // Read the bytes BEFORE deciding the type. The order is deliberate and was the other way round:
+    // the body is itself the most reliable format signal, so the type decision below cannot be made
+    // until it is available.
+    //
+    // `responseType: 'arraybuffer'` gives a Buffer in Node; be tolerant of a string so a caller (or
+    // a test) handing back already-decoded data still works.
+    const body: Buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data as never);
+
     // Type decided from what we ACTUALLY received, not from the URL the caller passed: the server's
-    // Content-Type when it states one, otherwise the FINAL url's extension. `currentUrl` is the
-    // post-redirect address, so a chain that changes content type is classified correctly.
+    // Content-Type when it states one, otherwise the bytes, otherwise the FINAL url's extension.
+    // `currentUrl` is the post-redirect address, so a chain that changes content type is classified
+    // correctly.
     const contentType = String(response.headers?.['content-type'] ?? '').toLowerCase();
     // Generic-binary content types carry no format signal, so fall back to the URL extension the
     // same way an absent Content-Type does - otherwise a .pdf served as application/octet-stream
@@ -192,13 +243,9 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     const isGenericBinary =
       !contentType || contentType.includes('application/octet-stream') || contentType.includes('binary/octet-stream');
     const urlMimeType =
-      contentType.includes('application/pdf') || (isGenericBinary && isPdfUrl(currentUrl))
+      contentType.includes('application/pdf') || (isGenericBinary && (isPdfUrl(currentUrl) || hasPdfMagicBytes(body)))
         ? 'application/pdf'
         : 'text/plain';
-
-    // `responseType: 'arraybuffer'` gives a Buffer in Node; be tolerant of a string so a caller (or
-    // a test) handing back already-decoded data still works.
-    const body: Buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data as never);
 
     let title: string;
     let urlContent: Buffer | string;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -33,7 +33,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload, useBatchProgressListener } from './dataLakeWizard';
+import { useBatchUpload, useBatchProgressListener, useCreateLakeFromDrive } from './dataLakeWizard';
 import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
@@ -217,6 +217,47 @@ describe('useBatchUpload onError', () => {
     expect(progress.errorMessage).toBe(
       'The tag prefix has a blank ":" segment. Give every segment a visible character (e.g. "legal:" or "legal:contracts:").'
     );
+  });
+
+  it('translates a 422 for an over-long prefix into the specific field message', async () => {
+    // Defence in depth for #1817: the wizard no longer lets this value reach the server, so a
+    // 422 that still names the prefix must not degrade to the neutral "settings were rejected".
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'triage-router-dry-run-test-ken-delete-after:' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('validation');
+    expect(progress.errorMessage).toBe(
+      'The tag prefix is too long. Use 30 characters or fewer, including the trailing ":".'
+    );
+  });
+
+  // The classifier is the third mirror of the same rules and has to judge the same submitted
+  // form: reading the raw field turns " legal:  " into " legal:  :" and blames a blank
+  // segment on the one surface whose entire job is naming the real culprit.
+  it('does not blame a blank segment for a prefix that is merely whitespace-padded', async () => {
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: '  legal:  ' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorMessage).not.toMatch(/blank/i);
+    expect(progress.errorMessage).toBe('Your data lake settings were rejected. Review them and try again.');
   });
 
   it('classifies a 5xx as a server error', async () => {
@@ -625,6 +666,273 @@ describe('useBatchUpload rollback (#816)', () => {
   });
 });
 
+/**
+ * The fileless commit (#1916): a lake whose only source is a Google Drive folder. Before this the
+ * wizard could not produce one at all - the commit path was an upload pipeline that threw on an
+ * empty file set - so these cover the create + connect ordering and, above all, that a commit which
+ * cannot be completed leaves nothing behind.
+ */
+describe('useCreateLakeFromDrive (#1916)', () => {
+  const seedDriveOnly = (folder: { driveFolderId: string; folderName?: string } = { driveFolderId: 'FOLDER1' }) =>
+    useDataLakeWizardStore.setState({
+      targetLake: null,
+      allFiles: [],
+      pendingDriveFolder: folder,
+      config: {
+        name: 'Drive Only Lake',
+        description: '',
+        tagPrefix: 'drive:',
+        requiredUserTag: '',
+        requiredEntitlement: '',
+        conflictResolution: 'skip',
+      },
+    });
+
+  const mountDriveCommit = () => mountHook(useCreateLakeFromDrive);
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    toastMock.error.mockClear();
+    toastMock.success.mockClear();
+    installApiPostRouter();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('creates the lake and binds the folder, with no batch or upload in between', async () => {
+    seedDriveOnly({ driveFolderId: 'FOLDER1', folderName: 'Contracts' });
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes')?.[1]).toMatchObject({ name: 'Drive Only Lake', fileTagPrefix: 'drive:' });
+    expect(postCall('/api/data-lakes/drive-sync')?.[1]).toEqual({
+      dataLakeId: 'lake1',
+      driveFolderId: 'FOLDER1',
+      folderName: 'Contracts',
+    });
+    // No files, so nothing that belongs to the upload pipeline should have run.
+    expect(postCall('/api/data-lakes/batches')).toBeUndefined();
+    expect(uploadFileToUrlMock).not.toHaveBeenCalled();
+  });
+
+  it('lands the wizard on the upload step with a fileless progress record', async () => {
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const { step, uploadProgress } = useDataLakeWizardStore.getState();
+    expect(step).toBe('upload');
+    expect(uploadProgress.status).toBe('complete');
+    // UploadStep tells the Drive commit apart by this zero, so it must stay zero.
+    expect(uploadProgress.totalFiles).toBe(0);
+  });
+
+  it('rolls the lake it just created back when the connect is refused, leaving no visible orphan', async () => {
+    // The acceptance criterion the whole deferral exists for: an attempt that cannot finish must
+    // leave the user with neither a lake nor a connection row. The route archives rather than hard
+    // deletes, which is what keeps it out of every list (verified live on local self-host).
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/drive-sync') {
+        return Promise.reject(
+          Object.assign(new Error('Request failed'), {
+            isAxiosError: true,
+            response: { status: 403, data: { error: 'You do not have permission to read that Google Drive folder.' } },
+          })
+        );
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
+    expect(toastMock.success).not.toHaveBeenCalled();
+    // The server's specific refusal reaches the user, not a generic string.
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(
+      'You do not have permission to read that Google Drive folder.'
+    );
+    // Archive succeeded, so the Failed screen is cleared to say the lake is gone.
+    expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBe('archived');
+  });
+
+  it('still reports the refusal when the rollback archive also fails', async () => {
+    // Cleanup is best-effort; it must never mask the error the user needs to read.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/drive-sync') {
+        return Promise.reject(
+          Object.assign(new Error('Request failed'), {
+            isAxiosError: true,
+            response: { status: 409, data: { error: 'This Drive folder is already connected to another data lake' } },
+          })
+        );
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    apiDelete.mockRejectedValue(new Error('delete failed'));
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(
+      'This Drive folder is already connected to another data lake'
+    );
+    // ...and the screen must not claim a rollback that did not happen: the lake is still live.
+    expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBe('failed');
+  });
+
+  it('creates nothing at all when the lake create itself is refused', async () => {
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') {
+        return Promise.reject(
+          Object.assign(new Error('Request failed'), { isAxiosError: true, response: { status: 422, data: {} } })
+        );
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(postCall('/api/data-lakes/drive-sync')).toBeUndefined();
+    expect(apiDelete).not.toHaveBeenCalled();
+    // No rollback was attempted because no lake exists - the screen claims nothing either way.
+    expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBeUndefined();
+  });
+
+  it('fails fast without ever calling the API when offline', async () => {
+    const onLineSpy = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorKind).toBe('network');
+    onLineSpy.mockRestore();
+  });
+
+  it('refuses to run with no folder picked, before creating a lake it could not connect', async () => {
+    useDataLakeWizardStore.setState({ targetLake: null, allFiles: [], pendingDriveFolder: null });
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Files AND a Drive folder picked in the same create: the batch owns the lake's creation, and the
+ * Drive folder is bound afterwards - late enough that the total-failure rollback can't strand it.
+ */
+describe('useBatchUpload with a pending Drive folder (#1916)', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    toastMock.error.mockClear();
+    toastMock.success.mockClear();
+    installApiPostRouter();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('connects the folder to the lake the batch created', async () => {
+    seedWizard({ names: ['a.txt'] });
+    useDataLakeWizardStore.setState({ pendingDriveFolder: { driveFolderId: 'FOLDER1', folderName: 'Contracts' } });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes/drive-sync')?.[1]).toMatchObject({ dataLakeId: 'lake1' });
+  });
+
+  it('does not connect when every upload failed, since that rolls the lake back', async () => {
+    // Connecting before the outcome was known would leave a connection row pointing at a deleted
+    // lake - the stranding #1807 describes.
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+    useDataLakeWizardStore.setState({ pendingDriveFolder: { driveFolderId: 'FOLDER1' } });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(postCall('/api/data-lakes/drive-sync')).toBeUndefined();
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
+  });
+
+  it('keeps the batch a success when only the Drive connect fails, and says which half failed', async () => {
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes/drive-sync') {
+        return Promise.reject(
+          Object.assign(new Error('Request failed'), {
+            isAxiosError: true,
+            response: { status: 403, data: { error: 'You do not have permission to read that Google Drive folder.' } },
+          })
+        );
+      }
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: `key-${f.fileName}`,
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+    useDataLakeWizardStore.setState({ pendingDriveFolder: { driveFolderId: 'FOLDER1' } });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // The files landed, so the lake stays and the batch is a success...
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(false);
+    expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete');
+    // ...but the user is told the Drive half did not, why, and where to retry - this mutation
+    // offers no retry of its own once the files have landed.
+    expect(toastMock.error).toHaveBeenCalledWith(
+      expect.stringContaining('You do not have permission to read that Google Drive folder.'),
+      expect.anything()
+    );
+    expect(toastMock.error.mock.calls[0]?.[0]).toContain("connect it from the data lake's header");
+  });
+
+  it('never connects in append mode, where the lake already has its own Drive control', async () => {
+    seedWizard({ names: ['a.txt'], targetLake: { id: 'existing', slug: 'existing-slug' } });
+    useDataLakeWizardStore.setState({ pendingDriveFolder: { driveFolderId: 'FOLDER1' } });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes/drive-sync')).toBeUndefined();
+  });
+});
+
 describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
   beforeEach(() => {
     subscribeToAction.mockClear();
@@ -673,5 +981,77 @@ describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
     });
 
     expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(0);
+  });
+});
+
+/**
+ * `fileCount` is a cached rollup on the lake DOCUMENT. The server recomputes it in
+ * `finalizeBatchIfComplete` BEFORE emitting the completion message, so by the time this listener
+ * fires the DB is already correct and only the client cache is stale. The upload doors invalidate
+ * the lake list at SUBMIT time - too early, since ingestion has not run - so completion is the only
+ * moment that can refresh it. Without this the count sits stale until a hard refresh.
+ */
+describe('useBatchProgressListener - refreshes the lake list on completion', () => {
+  const seedActiveBatch = () =>
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 1,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
+    });
+
+  // Spy on the prototype rather than reshaping mountHook, which owns its QueryClient internally.
+  // Restored in afterEach, NOT at the end of each test body: this file sets no `restoreMocks` in
+  // its vitest config, so a thrown assertion would otherwise leave invalidateQueries mocked for
+  // every test that runs after it.
+  let spy: ReturnType<typeof vi.spyOn>;
+
+  const invalidatedKeys = () =>
+    spy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    seedActiveBatch();
+    spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
+  });
+
+  it.each(['completed', 'completed_with_errors'] as const)(
+    'invalidates the lake list when the batch reports %s',
+    status => {
+      mountHook(useBatchProgressListener);
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+      act(() => {
+        onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
+      });
+
+      // `['data-lakes']` is dataLakeKeys.list - asserted as a literal so a rename of the key's VALUE
+      // (not just its name) still fails here rather than silently agreeing with itself.
+      expect(invalidatedKeys()).toContain(JSON.stringify(['data-lakes']));
+    }
+  );
+
+  it('does NOT invalidate the lake list on an ordinary progress tick', () => {
+    // The guard against "just invalidate on every message": mid-ingest the server rollup has not
+    // run yet, so refetching then would re-cache the stale count and cost a request per tick.
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
+    });
+
+    expect(invalidatedKeys()).not.toContain(JSON.stringify(['data-lakes']));
   });
 });

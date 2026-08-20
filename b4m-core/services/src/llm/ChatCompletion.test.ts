@@ -1917,6 +1917,9 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // The local basis never bills cache creation, so recording a count here would
+      // imply a charge that was not made.
+      expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
     });
 
     // Partial provider usage (cache read reported without input/output counts) also
@@ -2098,6 +2101,10 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.creditsUsed).toBe(132);
       // Provider-reported cache read recorded as billed (no local cap on this basis).
       expect(tokenUsage.cacheReadInputTokens).toBe(3000);
+      // The write is the dominant component of this charge ($0.0625 of $0.06594), so it
+      // has to be recorded too - otherwise the row shows a 132-credit charge explained by
+      // 2 input tokens, and the cache-write rate can only be guessed at from read being absent.
+      expect(tokenUsage.cacheCreationInputTokens).toBe(5000);
     });
 
     // A cold turn (provider reports the full prompt as fresh input) and a warm
@@ -2164,6 +2171,16 @@ describe('ChatCompletionProcess', () => {
       expect(warm.estimatedCost).toBeCloseTo(0.0051, 6);
       expect(warm.creditsUsed).toBe(11);
       expect(warm.creditsUsed).toBeLessThan(cold.creditsUsed);
+
+      // Fully-cached turn: every prompt token came from cache, so the provider's
+      // uncached input is legitimately 0. That must still read as "provider reported
+      // usage" - treating a zero uncached tail as "no report" would drop the row onto
+      // the local estimate and throw away the very discount that produced the zero.
+      //   0 * 10/1M + 10 * 30/1M + 3000 * 10/1M * 0.1 = $0.0003 + $0.0030 = $0.0033.
+      const fullyCached = await runWithProviderUsage(0, 3000);
+      expect(fullyCached.settledBasis).toBe('provider');
+      expect(fullyCached.estimatedCost).toBeCloseTo(0.0033, 6);
+      expect(fullyCached.cacheReadInputTokens).toBe(3000);
     });
   });
 
@@ -2442,6 +2459,7 @@ describe('ChatCompletionProcess', () => {
       message: string;
       sessionAgentIds?: string[];
       allowedAgents?: string[];
+      priorToolNames?: string[];
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -2474,7 +2492,7 @@ describe('ChatCompletionProcess', () => {
         messages: [{ role: 'user', content: params.message }],
         messageTruncation: null,
       });
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, { priorToolNames: params.priorToolNames ?? [] }]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
       const body = {
@@ -2520,6 +2538,29 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: ['researcher'],
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // An @mention is only a delegation signal when it names an agent the store can actually run.
+    // "Any @mention at all" attached the tool (and the tool prompt's agent directory) to ordinary
+    // prose that happened to contain a handle, which is both wasted tokens and a live
+    // self-delegation side-channel on a turn the user never asked to delegate on.
+    it('does NOT expose delegate_to_agent for an @mention that names no delegatable agent', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'can you loop in @dave and compare the smartphones',
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    // No prior-turn rescue here, deliberately, unlike the blog/skill gates: an earlier delegation
+    // must not re-arm autonomous subagent spawning for the rest of the conversation. A real
+    // multi-turn workflow rides session.agentIds, which AgentDetectionFeature persists for any
+    // summon that resolved to a real agent.
+    it('does NOT re-expose delegate_to_agent on a follow-up turn just because an earlier turn delegated', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'now check battery life too',
+        priorToolNames: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
     });
 
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {
@@ -2758,6 +2799,161 @@ describe('ChatCompletionProcess', () => {
         expect(typeof options.systemMessagePriority).toBe('function');
         expect(options.systemMessagePriority!({ role: 'system', content: 'not from this assembly' })).toBeUndefined();
       });
+    });
+  });
+
+  describe('overflow-recovery reserves tool-schema budget', () => {
+    // Small-context model (see safeInputWindow in @bike4mind/utils' contextBudget) so a realistic
+    // MCP tool-schema block is a meaningful fraction of the safe input window.
+    const smallContextModel = {
+      id: ChatModels.GPT4,
+      type: 'text',
+      name: 'small-context-model',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 512,
+      contextWindow: 8000,
+      can_stream: false,
+      pricing: { 8000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+
+    const manyMcpTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `mcp_tool_${i}`,
+        description: 'a schema-heavy MCP tool',
+        parameters: { type: 'object', properties: { arg: { type: 'string' } } },
+      },
+    }));
+
+    // Three prior turns give dropOldestHistoryTurn (needs >= 2 user-turn boundaries) room to shed.
+    const priorHistory: IMessage[] = [
+      { role: 'user', content: 'turn one' },
+      { role: 'assistant', content: 'reply one' },
+      { role: 'user', content: 'turn two' },
+      { role: 'assistant', content: 'reply two' },
+      { role: 'user', content: 'turn three' },
+      { role: 'assistant', content: 'reply three' },
+    ];
+
+    const TOOL_SCHEMA_TOKENS = 3000;
+
+    const runRecoveryScenario = async (opts: {
+      recoveryTokenCounts: number[];
+      toolSchemaTokens?: number;
+      // Simulates buildAndSortMessages' own system-prompt cap admitting none of the system candidates
+      // once the reserved recovery budget lands too small - the first build still carries a system
+      // message, every rebuild after it does not.
+      dropSystemMessagesOnRebuild?: boolean;
+    }): Promise<any> => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+      const toolSchemaTokens = opts.toolSchemaTokens ?? TOOL_SCHEMA_TOKENS;
+
+      mockedCalculateTotalTokenLength.mockReset();
+      // Initial totals: a huge messages total forces the recovery loop to trigger regardless of the
+      // exact small-context budget; mementos/fab/url/userPrompt are irrelevant to this scenario.
+      for (const n of [100_000, 0, 0, 0, 90_000, 10]) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+      // Queued per recovery-loop iteration as [effectiveTotalTokens, effectiveHistoryTokens] pairs.
+      for (const n of opts.recoveryTokenCounts) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+
+      mockTokenizer.countTokens
+        .mockReset()
+        .mockImplementation(async (text: any) => (typeof text === 'string' ? toolSchemaTokens : 7));
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
+      const userOnlyBuild = { messages: [{ role: 'user', content: 'Hello' }], messageTruncation: null };
+      if (opts.dropSystemMessagesOnRebuild) {
+        mockedBuildAndSortMessages
+          .mockResolvedValueOnce({
+            messages: [
+              { role: 'system', content: 'system prompt' },
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+          } as any)
+          .mockResolvedValue(userOnlyBuild as any);
+      } else {
+        mockedBuildAndSortMessages.mockResolvedValue(userOnlyBuild as any);
+      }
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([priorHistory, priorHistory.length, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+
+      const updateCall = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      return { updateCall, buildCalls: mockedBuildAndSortMessages.mock.calls };
+    };
+
+    it('reserves toolSchemaTokens before rebuilding, so a rebuild that reports "fits" actually fits', async () => {
+      // One shed turn is enough: effectiveTotalTokens(100) + toolSchemaTokens(3000) = 3100, comfortably
+      // under the small-context budget, so the loop exits after exactly one iteration.
+      const { updateCall, buildCalls } = await runRecoveryScenario({ recoveryTokenCounts: [100, 50] });
+
+      expect(buildCalls.length).toBeGreaterThanOrEqual(2);
+      const firstBuildBudget = buildCalls[0][3];
+      const recoveryBuildBudget = buildCalls[1][3];
+      // The regression: unpatched code passes the SAME raw maxSafeInputTokens to both calls.
+      expect(recoveryBuildBudget).toBe(firstBuildBudget - TOOL_SCHEMA_TOKENS);
+      expect(updateCall?.type).not.toBe('error');
+    });
+
+    it('still fails with the existing clear message when tool schemas alone exceed the budget', async () => {
+      // No queued total ever lets effectiveTotalTokens + toolSchemaTokens fit, and history is short
+      // enough that dropOldestHistoryTurn eventually returns null, so the loop breaks and the
+      // pre-existing hard-overflow check fires -- a clear failure, not a silent overrun.
+      const { updateCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [50_000, 40_000, 50_000, 40_000],
+      });
+
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('never attempts a rebuild once tool schemas alone already exceed the safe budget', async () => {
+      // When toolSchemaTokens >= maxSafeInputTokens, the reserved budget (maxSafeInputTokens -
+      // toolSchemaTokens) is <= 0, so a rebuild attempt would call buildAndSortMessages with an
+      // invalid budget and log at error severity for an outcome that is already known unrecoverable.
+      // The loop skips the attempt entirely instead: buildCalls stays at 1 (the initial firstBuild),
+      // and no recovery iteration (no dropOldestHistoryTurn, no rebuild) ever runs.
+      const HUGE_TOOL_SCHEMA_TOKENS = 100_000;
+      const { updateCall, buildCalls } = await runRecoveryScenario({
+        recoveryTokenCounts: [],
+        toolSchemaTokens: HUGE_TOOL_SCHEMA_TOKENS,
+      });
+
+      expect(buildCalls.length).toBe(1);
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('rejects a rebuild that silently dropped every system message instead of accepting it as recovered (#1795)', async () => {
+      // The first build carries a system message; every rebuild after it does not (simulating
+      // buildAndSortMessages' own system-prompt cap admitting none of the system candidates once the
+      // reserved recovery budget - maxSafeInputTokens - toolSchemaTokens - lands too small). Without the
+      // fix, the loop would accept the rebuilt user-only messages as a successful recovery once
+      // recoveryTokenCounts let inputTokens fit; instead it must break and fall through to the existing
+      // clear overflow message rather than completing a turn with no system-role content.
+      const { updateCall, buildCalls } = await runRecoveryScenario({
+        recoveryTokenCounts: [100, 50],
+        dropSystemMessagesOnRebuild: true,
+      });
+
+      expect(buildCalls.length).toBe(2);
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
     });
   });
 

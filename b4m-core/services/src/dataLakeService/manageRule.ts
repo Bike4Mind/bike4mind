@@ -1,4 +1,10 @@
-import type { AccessContext, IDataLakeAccessGrant, IDataLakeDocument } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IDataLakeAccessGrant,
+  IDataLakeDocument,
+  LakeAuditPrincipal,
+  LakeManageRung,
+} from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils';
 
 /**
@@ -7,7 +13,22 @@ import { normalizeId } from '@bike4mind/utils';
  * (see AccessContext.administeredOrgIds); it powers the org-manageable rung. Optional so a caller
  * that has not threaded it yet still compiles - the org rung simply does not fire (back-compat).
  */
-export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin' | 'administeredOrgIds'>;
+export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin' | 'administeredOrgIds'> & {
+  /**
+   * Who to ATTRIBUTE an audited write to, when that is not simply `userId`. Set by a route that
+   * accepts API-key auth: `baseApi()` admits either a session or a `b4m_live_` key, so `userId`
+   * alone conflates a human editing in the app with a key acting on their behalf, and an audit row
+   * that named the human for a key-driven change would be wrong in the one field it exists to get
+   * right. Derived at the route from `resolveAuditPrincipal` - the SAME helper the read side uses,
+   * so the two halves of the trail describe a principal identically.
+   *
+   * Optional and additive: absent, `recordLakeConfigChange` falls back to deriving the principal
+   * from `userId`, which is correct for a session write and for a script with no principal at all.
+   * It rides on the actor rather than on each service's params so no config-write service signature
+   * has to change - they already forward `actor` to the audit call.
+   */
+  auditPrincipal?: LakeAuditPrincipal;
+};
 
 /**
  * The slice of a lake's access grant a manage decision needs. The caller pre-fetches the lake's
@@ -106,4 +127,51 @@ export function canManageLake(
       (g.role === 'owner' || g.role === 'curator') &&
       administeredOrgIds.includes(g.principalId)
   );
+}
+
+/**
+ * WHICH rung of `canManageLake` authorized this actor, for the config-change audit trail. Returns
+ * `null` for an actor who cannot manage the lake at all, so it is exactly `canManageLake` with the
+ * winning rung named instead of collapsed to `true`.
+ *
+ * Reports the FIRST rung that grants, in `canManageLake`'s own short-circuit order, so several
+ * applicable rungs report the most privileged one - which is the honest answer to "what let them
+ * do this": a platform admin who also happens to own the lake could have done it either way, and
+ * the admin rung is the one worth surfacing.
+ *
+ * MUST stay in sync with `canManageLake` above; a test pins agreement across both directions
+ * (a rung implies manage, and no-rung implies no-manage), so a new rung added there without one
+ * here fails rather than silently recording every write under an older rung.
+ */
+export function resolveLakeManageRung(
+  lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
+  actor: ManageActor,
+  grants: readonly LakeGrant[] = []
+): LakeManageRung | null {
+  if (actor.isAdmin) return 'platform-admin';
+  if (!actor.userId) return null;
+
+  // Split where isEffectiveOwner does not: an `owner` USER grant supersedes the creator, so the two
+  // arms answer different questions after a transfer (who it was moved to vs. the original author
+  // acting on a lake that has never been transferred).
+  if (grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')) {
+    return 'grant-owner';
+  }
+  if (isEffectiveOwner(lake, actor, grants)) return 'creator';
+
+  if (grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'curator')) {
+    return 'grant-curator';
+  }
+
+  const administeredOrgIds = actor.administeredOrgIds ?? [];
+  const lakeOrg = normalizeId(lake.organizationId);
+  if (lakeOrg && administeredOrgIds.includes(lakeOrg)) return 'org-admin';
+
+  const hasOrgGrant = grants.some(
+    g =>
+      g.principalType === 'organization' &&
+      (g.role === 'owner' || g.role === 'curator') &&
+      administeredOrgIds.includes(g.principalId)
+  );
+  return hasOrgGrant ? 'org-grant' : null;
 }

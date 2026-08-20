@@ -11,6 +11,7 @@ import {
   IFabFileRepository,
   IMessage,
   isAudioMimeType,
+  isGeminiModelId,
   isImageAttachment,
   isImageServeable,
   ISessionDocument,
@@ -336,13 +337,16 @@ const estimateMessagesTokens = (messages: IMessage[]): number =>
  * staying synchronous (no N async tokenizer calls over a long history). Mirrors
  * the fields the conversion below actually emits into the prompt.
  */
-function estimateQuestTokenLength(item: {
-  prompt?: string;
-  replies?: string[];
-  structuredReplies?: unknown[];
-  toolResults?: unknown[];
-  promptMeta?: { functionCalls?: RecordedFunctionCall[] };
-}): number {
+function estimateQuestTokenLength(
+  item: {
+    prompt?: string;
+    replies?: string[];
+    structuredReplies?: unknown[];
+    toolResults?: unknown[];
+    promptMeta?: { functionCalls?: RecordedFunctionCall[] };
+  },
+  disableToolReplay = false
+): number {
   const parts: string[] = [item.prompt ?? ''];
   if (item.structuredReplies?.length) {
     parts.push(JSON.stringify(item.structuredReplies));
@@ -353,8 +357,10 @@ function estimateQuestTokenLength(item: {
     parts.push(JSON.stringify(item.toolResults));
   }
   // Priority 2 replays these as tool_use/tool_result blocks, and the serialized parameters can
-  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins).
-  if (!item.structuredReplies?.length) {
+  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins,
+  // and a backend with replay disabled - Gemini - never takes this branch either, so its window
+  // shouldn't shrink to make room for a payload it will never receive).
+  if (!item.structuredReplies?.length && !disableToolReplay) {
     const toolCalls = replayableToolCalls(item.promptMeta?.functionCalls);
     if (toolCalls.length) parts.push(JSON.stringify(toolCalls));
   }
@@ -491,6 +497,7 @@ export async function fetchAndProcessPreviousMessages(
   {
     db,
     verbatimTokenBudget,
+    model,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
@@ -502,6 +509,20 @@ export async function fetchAndProcessPreviousMessages(
      * contextSummary. Omit to keep the legacy count-only behavior.
      */
     verbatimTokenBudget?: number;
+    /**
+     * The model this history is being fetched for. Used to decide whether Priority 2
+     * tool-pairing reconstruction is safe for the TARGET backend - currently, Gemini is
+     * excluded (falls through to the Priority 3 text-only reply) because
+     * PromptMetaFunctionCallSchema never persists thought_signature, so every replayed
+     * tool_use call reaches Gemini without one, which its own formatter warns "may cause
+     * a 400 error with Gemini 3 Pro". Revisit once thought_signature is persisted.
+     *
+     * Deliberately taken as the model id rather than a caller-computed boolean: the prior
+     * design made this an opt-out flag, and a second caller (QuestMasterFeature) went
+     * live without ever setting it. Pass the model here and this stays correct
+     * automatically for every caller instead of depending on each one remembering to opt in.
+     */
+    model?: string;
   }
 ): Promise<
   [
@@ -518,12 +539,12 @@ export async function fetchAndProcessPreviousMessages(
       recentGeneratedImages?: { key: string; prompt: string }[];
       /**
        * Names of tools actually invoked across the returned window, read straight off each
-       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history: neither
-       * of `convertedMessages`' two tool_use-replay paths fires in production today (Priority 1
-       * needs `structuredReplies`, which nothing writes; Priority 2 needs a recorded
-       * `returnValue`, which nothing writes either - see replayableToolCalls), so a caller that
-       * scanned `convertedMessages` for a prior tool call would never find one. This reads the
-       * raw field instead, at no extra DB cost since chatHistoryItems is already in hand.
+       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history. Priority
+       * 1 (`structuredReplies`) still never fires (nothing writes that field); Priority 2 now does
+       * fire once a backend records `returnValue` - but a Gemini `model` still skips it (see the
+       * `model` param below), so scanning `convertedMessages` would still miss a prior tool call
+       * for Gemini. This reads the raw field instead, at no extra DB cost since chatHistoryItems is
+       * already in hand.
        */
       priorToolNames?: string[];
     },
@@ -535,6 +556,7 @@ export async function fetchAndProcessPreviousMessages(
   }
 
   const limit = resolveHistoryFetchLimit(historyCount);
+  const disableToolReplay = !!model && isGeminiModelId(model);
 
   // Query with descending timestamp, to get the <limit> most-recent messages
   // Add 1 to the limit to account for the current prompt
@@ -578,7 +600,7 @@ export async function fetchAndProcessPreviousMessages(
     let usedTokens = 0;
     let keepFromIndex = 0;
     for (let i = chatHistoryItems.length - 1; i >= 0; i--) {
-      usedTokens += estimateQuestTokenLength(chatHistoryItems[i]);
+      usedTokens += estimateQuestTokenLength(chatHistoryItems[i], disableToolReplay);
       // Never drop the most recent turn (i === length-1), even if oversized.
       if (usedTokens > verbatimTokenBudget && i < chatHistoryItems.length - 1) {
         keepFromIndex = i + 1;
@@ -626,7 +648,7 @@ export async function fetchAndProcessPreviousMessages(
     // information the model can use, and replaying it would cost the turn its real text reply:
     // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
-    else if (toolCalls.length > 0) {
+    else if (toolCalls.length > 0 && !disableToolReplay) {
       // Get text reply (excluding thinking blocks)
       const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
 

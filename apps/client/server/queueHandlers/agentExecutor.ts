@@ -38,6 +38,7 @@ import {
   skillRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   mcpServerRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
@@ -84,11 +85,17 @@ import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4m
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
-import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
+import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
-import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
+import {
+  buildDagResumeReport,
+  clampMaxIterationsForOverCapAggregationWake,
+  isDagAggregationWake,
+  makeDagDispatcher,
+  onDagNodeTerminal,
+} from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -288,7 +295,7 @@ const POLL_MAX_MS = 30_000;
  * has a bounded latency. Setting too low is wasteful (DB reads); too high
  * widens the window where an aborted child keeps running.
  */
-const SUBAGENT_ABORT_POLL_MS = 5_000;
+export const SUBAGENT_ABORT_POLL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // Subagent handoff helpers
@@ -585,6 +592,36 @@ async function loadMcpToolsForSession(
   return loadMcpToolsSafe(userId, logger);
 }
 
+/**
+ * Builds a `checkMemberCreditCap` hook that re-fetches the organization fresh on
+ * every call rather than closing over the snapshot fetched once at the top of the
+ * calling invocation - reusing that snapshot would make the hook unconditionally
+ * false wherever an identical entry-gate check already refused whenever it would
+ * have been true. What the fresh read actually buys differs by caller:
+ * - The top-level execution's own iteration loop deducts to the org wallet per
+ *   iteration (see `deductCreditsWithOrgSupport`), so here the re-fetch catches a
+ *   member who crosses the cap mid-invocation, before ever reaching a delegate/
+ *   coordinate call.
+ * - A dispatched subagent does NOT deduct its own iterations to the org wallet yet
+ *   (Phase 1 known gap - it only bumps its own audit counter via
+ *   `incrementCreditsUsed`), so here the re-fetch cannot see this subagent's own
+ *   spend; it only picks up billing from the parent or a concurrent execution for
+ *   the same member since the entry-gate snapshot.
+ * Extracted as a standalone function so this behavior is directly unit testable
+ * without spinning up either handler.
+ */
+export function buildInProcessCreditCapCheck(
+  organizations: Pick<typeof organizationRepository, 'findById'>,
+  organizationId: string | undefined,
+  userId: string
+): () => Promise<boolean> {
+  return async () => {
+    if (!organizationId) return false;
+    const freshOrg = await organizations.findById(organizationId);
+    return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, userId));
+  };
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -634,6 +671,14 @@ async function processExecution(
     // Phase 4a - accept `awaiting_dag_children -> running` so the continuation
     // Lambda woken by the last-child completion hook can resume the parent.
     const isDagResume = !isNewExecution && execution.status === 'awaiting_dag_children';
+    // Computed once and reused by both the credit-cap gate (skip) and the DAG
+    // resume-trigger below (fire) so the two can never disagree about whether
+    // this wake is aggregation-only.
+    const isAggregationOnlyWake = isDagAggregationWake({
+      isDagResume,
+      dagSpec: execution.dagSpec,
+      waitingOnDagChildren: execution.waitingOnDagChildren,
+    });
     const expectedStatuses = isNewExecution
       ? (['pending'] as const)
       : isSubagentResume
@@ -775,13 +820,23 @@ async function processExecution(
     // so it re-runs on every continuation/subagent-resume/DAG-wake: a run that crosses the
     // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
     // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
-    if (organization && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
+    //
+    // Exception: skip the gate for a genuine aggregation-only wake (`isAggregationOnlyWake`)
+    // so it doesn't strand already-paid-for child work. See `isDagAggregationWake` and
+    // `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts` for the full
+    // rationale and the bound on what this exception actually grants.
+    //
+    // Scope note: an `awaiting_subagent` resume splices in an already-billed child result the
+    // same way (see the `isSubagentResume` branch below) but is NOT exempted here - that wake
+    // continues with a full iteration budget rather than a single wrap-up step, so it is not a
+    // pure aggregation and the same one-iteration bound would not apply cleanly.
+    if (organization && !isAggregationOnlyWake && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
       logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
         used: creditService.getMemberUsedCredits(organization, execution.userId),
         cap: organization.maxCreditsPerMember,
       });
       await agentExecutionRepository.markFailed(executionId, {
-        message: 'Organization member credit limit reached',
+        message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
@@ -1250,6 +1305,7 @@ async function processExecution(
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -1268,6 +1324,17 @@ async function processExecution(
       dagHandoffSignal,
       dagDispatcher,
       getCurrentExecutionId: () => executionId,
+      // In-process delegate_to_agent/coordinate_task have no pre-flight reservation of
+      // their own (unlike ChatCompletionProcess), so without this a member who crosses
+      // the cap mid-invocation - after the entry gate above already passed for this
+      // wake - could still delegate a subagent's full iteration budget in-process for
+      // free. See `buildInProcessCreditCapCheck` for why this re-fetches rather than
+      // reusing the `organization` snapshot captured at the top of this invocation.
+      checkMemberCreditCap: buildInProcessCreditCapCheck(
+        organizationRepository,
+        execution.organizationId,
+        execution.userId
+      ),
     };
 
     // Accumulate filenames of images generated by tools during the run. Unlike the
@@ -1621,9 +1688,14 @@ async function processExecution(
     // when the payload doesn't pin one - agentless dispatches (Agent-mode
     // toggle path) land on the profile's `defaultThoroughness` ceiling rather
     // than the legacy 25-iteration fallback.
-    const maxIterations = orchestrationProfile
+    let maxIterations = orchestrationProfile
       ? pickEffectiveMaxIterations(startPayload?.maxIterations, orchestrationProfile)
       : (startPayload?.maxIterations ?? 25);
+    // Preserved before the aggregation-wake clamp below can shrink `maxIterations` for
+    // this invocation - the truncation message must report the run's real configured
+    // ceiling, not the one-iteration grace grant, or the number and the "send a
+    // follow-up" advice are both wrong (a follow-up hits the same cap gate again).
+    const configuredMaxIterations = maxIterations;
 
     // Track cumulative usage for delta-based billing.
     // Token counts in iterationBilling are stored as per-iteration deltas, so
@@ -1804,11 +1876,18 @@ async function processExecution(
       }
     }
 
+    // Fallback reply if the grace iteration below (a capped-out member's one-iteration
+    // aggregation grant) hits its own ceiling without producing a final_answer step -
+    // `extractFinalAnswer` would then find nothing, silently dropping the very
+    // already-paid-for child work this PR exists to return. See its use at
+    // `displayAnswer` below.
+    let dagAggregationFallbackSummary: string | undefined;
+
     // Phase 4a - resume from `awaiting_dag_children`. The completion hook for
     // the last terminal DAG child enqueued this continuation; load all child
     // results, build the aggregated markdown via shared `buildPipelineResult`,
     // and surgically replace the `coordinate_task` placeholder observation.
-    if (isDagResume && execution.dagSpec && execution.waitingOnDagChildren) {
+    if (isAggregationOnlyWake && execution.dagSpec && execution.waitingOnDagChildren) {
       // NOTE (merge): combined with main's first-iteration CASL scope below -
       // these are independent additions in the same spot; both are kept.
       const children = await agentExecutionRepository.findDagChildrenLean(executionId);
@@ -1816,6 +1895,7 @@ async function processExecution(
         dagSpec: execution.dagSpec,
         children,
       });
+      dagAggregationFallbackSummary = summary;
       try {
         agent.replaceLastToolResultObservation(execution.waitingOnDagChildren.toolUseId, summary);
       } catch (err) {
@@ -1865,6 +1945,19 @@ async function processExecution(
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
+
+    // Captured once and reused below at `displayAnswer` - the truncation message needs to know
+    // whether a later `reachedMaxIterations` was caused by THIS clamp specifically (where a
+    // "send a follow-up" suggestion is a dead end) rather than the run's own real ceiling.
+    const isOverCapForAggregationClamp = Boolean(
+      organization && creditService.isMemberAtOrOverCap(organization, execution.userId)
+    );
+    maxIterations = clampMaxIterationsForOverCapAggregationWake({
+      isAggregationOnlyWake,
+      isOverCap: isOverCapForAggregationClamp,
+      maxIterations,
+      iterationIndex,
+    });
 
     // Confidence-gate plumbing. The agent calls this callback after
     // tool execution with the iteration's average tool-result confidence;
@@ -2337,8 +2430,19 @@ async function processExecution(
     // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
     // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
     // honest "partial, hit the limit" reply instead of a trailed-off thought. See #674.
+    // See `resolveDisplayAnswer` for the capped-out-member grace-iteration case this
+    // must also handle: `finalAnswer` can be undefined entirely, and falling back to
+    // `dagAggregationFallbackSummary` there is what keeps the aggregated child report
+    // from being silently dropped on exactly the path this PR exists to protect.
     const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
-    const displayAnswer = reachedMaxIterations ? buildTruncatedRunReply(maxIterations, finalAnswer) : finalAnswer;
+    const displayAnswer = resolveDisplayAnswer({
+      reachedMaxIterations,
+      ranAnyIteration: iterationResult !== undefined,
+      finalAnswer,
+      dagAggregationFallbackSummary,
+      configuredMaxIterations,
+      isOverCapGraceIteration: isAggregationOnlyWake && isOverCapForAggregationClamp,
+    });
 
     await agentExecutionRepository.markComplete(executionId, {
       answer: displayAnswer,
@@ -2444,6 +2548,72 @@ async function processExecution(
 // ---------------------------------------------------------------------------
 
 /**
+ * Fires the DAG completion hook for a dispatched child on every terminal outcome
+ * (success, refusal, failure, or abort), guarded on `dagNodeId` (a no-op for a
+ * plain delegated subagent, which has no siblings to unblock). `onDagNodeTerminal`
+ * is the ONLY thing that unblocks siblings or wakes a DAG parent - every terminal
+ * exit in `processSubagentDispatch` that skips it can wedge the parent in
+ * `awaiting_dag_children` forever (`cleanupStaleActive` deliberately excludes that
+ * status, so there is no reaper), and the wake only needs the LAST sibling to reach
+ * a terminal state to take a hook-less exit, not every sibling. If the hook itself
+ * throws, mark the parent failed so the session unwedges instead of hanging.
+ *
+ * Deliberately NOT called from the `!claimed` CAS-loss exit: that means another
+ * Lambda already owns this child and will complete it (and fire this hook) through
+ * its own normal path. Firing here too would not double-unblock anything - the hook
+ * is idempotent - but it would report a false terminal status for a child that may
+ * still succeed: a CAS loss means someone else has it, not that it failed. `status`
+ * itself is not load-bearing for `onDagNodeTerminal` (it re-reads every sibling
+ * fresh from the DB), only for logging.
+ *
+ * Narrow gap this does NOT close: if `agentExecutionRepository.findById` throws or
+ * returns null, or `child.subagentConfig` is missing, the function throws before
+ * `dagNodeId`/`dagParentExecutionId` are ever assigned, so the outer catch's call to
+ * this helper no-ops (both hoisted vars stay `undefined`). Not cheaply fixable - the
+ * dispatch message carries `dagNodeId` but not `parentExecutionId`
+ * (`agentExecutorDag.ts` `DagNodeDispatchSchema`), and `onDagNodeTerminal` requires
+ * both. A genuinely rare window (the dispatcher always sets `subagentConfig`; this
+ * needs a `findById` read blip immediately after create).
+ */
+async function fireDagNodeTerminalOnRefusal(args: {
+  dagNodeId: string | undefined;
+  parentExecutionId: string | undefined;
+  childExecutionId: string;
+  connectionId: string;
+  logger: Logger;
+  sendWs: ReturnType<typeof createWsSender>;
+  status?: 'completed' | 'failed' | 'aborted';
+}): Promise<void> {
+  const { dagNodeId, parentExecutionId, childExecutionId, connectionId, logger, sendWs, status = 'failed' } = args;
+  if (!dagNodeId) return;
+  try {
+    await onDagNodeTerminal({
+      child: { id: childExecutionId, parentExecutionId, dagNodeId, status },
+      connectionId,
+      logger,
+    });
+  } catch (hookErr) {
+    const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
+    logger.error('[DAG] onDagNodeTerminal failed - marking parent failed', {
+      parentId: parentExecutionId,
+      childExecutionId,
+      error: msg,
+    });
+    if (parentExecutionId) {
+      await agentExecutionRepository
+        .markFailed(parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
+        .catch(markErr => {
+          logger.error('[DAG] markFailed on parent also failed', {
+            parentId: parentExecutionId,
+            error: markErr instanceof Error ? markErr.message : String(markErr),
+          });
+        });
+      await sendWs('failed', { executionId: parentExecutionId, reason: 'dag_hook_error' });
+    }
+  }
+}
+
+/**
  * Runs a subagent that was dispatched to its own Lambda (either via `background: true`
  * or via the parent's mid-poll handoff when running out of time). The child doc
  * already has `subagentConfig` populated by the orchestrator; we resolve the agent
@@ -2484,6 +2654,10 @@ async function processSubagentDispatch(
 
   let parentId: string | undefined;
   let agentName: string | undefined;
+  // Hoisted so the outer catch (which has no access to `child`) can still fire the
+  // DAG completion hook on a fatal error - see `fireDagNodeTerminalOnRefusal`.
+  let dagNodeId: string | undefined;
+  let dagParentExecutionId: string | undefined;
 
   try {
     const child = await agentExecutionRepository.findById(childExecutionId);
@@ -2494,6 +2668,8 @@ async function processSubagentDispatch(
 
     parentId = child.parentExecutionId ?? child.spawnedByExecutionId ?? childExecutionId;
     agentName = child.subagentConfig.agentName;
+    dagNodeId = child.dagNodeId;
+    dagParentExecutionId = child.parentExecutionId;
 
     // Check abort flag before claiming.
     if (child.abortedAt) {
@@ -2505,10 +2681,23 @@ async function processSubagentDispatch(
         error: 'Subagent was aborted before start',
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: 'aborted',
+      });
       return;
     }
 
-    // Atomic CAS: only the first dispatched Lambda claims the child.
+    // Atomic CAS: only the first dispatched Lambda claims the child. Deliberately
+    // does NOT fire the DAG completion hook on a lost race: the winning Lambda owns
+    // this child and will complete it (success or failure) through its own normal
+    // path, firing the hook itself then. Firing it here too would report a false
+    // terminal status for a child that may still succeed.
     const claimed = await agentExecutionRepository.claimExecution(childExecutionId, ['pending'], 'running');
     if (!claimed) {
       logger.warn('[CAS] Another Lambda already claimed this subagent, exiting gracefully', {
@@ -2532,6 +2721,14 @@ async function processSubagentDispatch(
         error: 'unauthorized',
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
       return;
     }
     const organization = child.organizationId ? await organizationRepository.findById(child.organizationId) : null;
@@ -2550,6 +2747,46 @@ async function processSubagentDispatch(
         agentName,
         error: 'insufficient_credits',
         isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
+
+    // Org-billed per-member cap, mirroring the parent gate in processExecution. Every
+    // DAG node and every delegated subagent lands here as a fresh execution (never an
+    // aggregation-only wake, since only the top-level parent can be resumed from
+    // `awaiting_dag_children`), so this always applies - no exemption needed. Without
+    // it, a capped-out member could dispatch unlimited child work through the
+    // org-pool-only check above, which does not see the per-member limit at all.
+    if (organization && creditService.isMemberAtOrOverCap(organization, child.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start subagent', {
+        used: creditService.getMemberUsedCredits(organization, child.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(childExecutionId, {
+        message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
+      });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'insufficient_credits',
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
       });
       return;
     }
@@ -2615,6 +2852,14 @@ async function processSubagentDispatch(
         error: `Unknown agent: ${agentName}`,
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
       return;
     }
 
@@ -2646,6 +2891,7 @@ async function processSubagentDispatch(
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
@@ -2659,6 +2905,11 @@ async function processSubagentDispatch(
       // Propagate delegation depth so the dispatched orchestrator's delegate_to_agent
       // tool starts at the right level and the depth cap fires correctly.
       depth,
+      // This dispatched subagent's own in-process delegation needs the same gate as the
+      // top-level path - a grandchild delegated in-process here is otherwise unchecked.
+      // See `buildInProcessCreditCapCheck` for why this re-fetches rather than reusing
+      // the `organization` snapshot captured above.
+      checkMemberCreditCap: buildInProcessCreditCapCheck(organizationRepository, child.organizationId, child.userId),
     };
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {
@@ -2909,6 +3160,18 @@ async function processSubagentDispatch(
             partialAnswer: result.finalAnswer,
           });
         }
+        // Terminal exit: this branch returns before the success-path and catch-path
+        // hook fires below, so fire it here - every terminal exit must reach
+        // `onDagNodeTerminal` or the parent wedges.
+        await fireDagNodeTerminalOnRefusal({
+          dagNodeId,
+          parentExecutionId: dagParentExecutionId,
+          childExecutionId,
+          connectionId,
+          logger,
+          sendWs,
+          status: userAborted ? 'aborted' : 'failed',
+        });
         return;
       }
 
@@ -2948,47 +3211,15 @@ async function processSubagentDispatch(
       // Phase 4a - if this child was a DAG node, fire the completion hook
       // so any newly-unblocked siblings get dispatched, or the parent gets
       // woken if the whole DAG is done.
-      //
-      // Recovery: if the hook itself throws (SQS error, mongo error during
-      // sibling scan) the parent would otherwise sit in `awaiting_dag_children`
-      // forever - `cleanupStaleActive` deliberately excludes that status.
-      // Catch here, mark the parent failed, and surface a WS event so the
-      // session unwedges instead of hanging.
-      if (child.dagNodeId) {
-        try {
-          await onDagNodeTerminal({
-            child: {
-              id: childExecutionId,
-              parentExecutionId: child.parentExecutionId,
-              dagNodeId: child.dagNodeId,
-              status: 'completed',
-            },
-            connectionId,
-            logger,
-          });
-        } catch (hookErr) {
-          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
-          logger.error('[DAG] onDagNodeTerminal failed — marking parent failed', {
-            parentId: child.parentExecutionId,
-            childExecutionId,
-            error: msg,
-          });
-          if (child.parentExecutionId) {
-            await agentExecutionRepository
-              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
-              .catch(markErr => {
-                logger.error('[DAG] markFailed on parent also failed', {
-                  parentId: child.parentExecutionId,
-                  error: markErr instanceof Error ? markErr.message : String(markErr),
-                });
-              });
-            await sendWs('failed', {
-              executionId: child.parentExecutionId,
-              reason: 'dag_hook_error',
-            });
-          }
-        }
-      }
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId: child.dagNodeId,
+        parentExecutionId: child.parentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: 'completed',
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
@@ -3036,45 +3267,15 @@ async function processSubagentDispatch(
       // Phase 4a - DAG node terminal even on failure/abort. Same hook fires;
       // it'll detect the failed dep and dispatch only nodes that don't
       // depend on this one (or none if everything cascades).
-      //
-      // Recovery: same gap as the success path - if the hook throws, the
-      // parent would otherwise sit in `awaiting_dag_children` indefinitely.
-      // Catch and mark the parent failed so the session unwedges.
-      if (child.dagNodeId) {
-        try {
-          await onDagNodeTerminal({
-            child: {
-              id: childExecutionId,
-              parentExecutionId: child.parentExecutionId,
-              dagNodeId: child.dagNodeId,
-              status: wasAborted ? 'aborted' : 'failed',
-            },
-            connectionId,
-            logger,
-          });
-        } catch (hookErr) {
-          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
-          logger.error('[DAG] onDagNodeTerminal failed — marking parent failed', {
-            parentId: child.parentExecutionId,
-            childExecutionId,
-            error: msg,
-          });
-          if (child.parentExecutionId) {
-            await agentExecutionRepository
-              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
-              .catch(markErr => {
-                logger.error('[DAG] markFailed on parent also failed', {
-                  parentId: child.parentExecutionId,
-                  error: markErr instanceof Error ? markErr.message : String(markErr),
-                });
-              });
-            await sendWs('failed', {
-              executionId: child.parentExecutionId,
-              reason: 'dag_hook_error',
-            });
-          }
-        }
-      }
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId: child.dagNodeId,
+        parentExecutionId: child.parentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: wasAborted ? 'aborted' : 'failed',
+      });
     } finally {
       clearInterval(abortPoller);
     }
@@ -3097,6 +3298,14 @@ async function processSubagentDispatch(
         agentName,
         error: 'Subagent dispatch failed',
         isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
       });
     } catch (cleanupErr) {
       logger.error('[SubagentDispatch] Cleanup also failed', {

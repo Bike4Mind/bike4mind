@@ -12,6 +12,7 @@ import {
   organizationRepository,
   usageEventRepository,
   userRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -23,9 +24,10 @@ import {
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
@@ -224,7 +226,7 @@ const handler = baseApi()
       const isAborted = () => clientAborted;
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
@@ -316,6 +318,38 @@ const handler = baseApi()
         }
       );
 
+      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
+      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
+      // the lake arms), so a hit with no recoverable tag may be the caller's own private file -
+      // this must NOT fall back to the full scope, and is skipped entirely when nothing returned
+      // is actually attributable to a lake (not merely when nothing was returned at all).
+      // Awaited (never rethrows - see recordLakeAccessEvent's doc comment): a per-request
+      // serverless route must not race a post-response freeze of the execution environment.
+      // Recorded here, right as the search results come back - NOT after the later isAborted()
+      // check - because the read already happened at this point regardless of whether the client
+      // is still there for the response.
+      const resolvedLakeIds = dataLakeService.attributeAccessedLakeIds(
+        search.results.map(r => r.fileTags),
+        lakes,
+        { allowFullScopeFallback: false }
+      );
+      if (resolvedLakeIds.length > 0) {
+        await dataLakeService.recordLakeAccessEvent(
+          lakeAccessEventRepository,
+          {
+            ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+            organizationId: normalizeId(req.user.organizationId),
+            resolvedLakeIds,
+            chunkIds: search.results.map(r => r.chunkId),
+            fileIds: [...new Set(search.results.map(r => r.fileId))],
+            surface: 'data-lake-semantic-search',
+            queryText: query,
+          },
+          req.logger,
+          adminSettingsRepository
+        );
+      }
+
       // Record the query-embedding spend for the primary model plus every alternate model the
       // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
       // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
@@ -376,7 +410,10 @@ const handler = baseApi()
 
       if (isAborted()) return res.end();
 
-      const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+      // One seam for every reason a search returned less than the whole corpus (embedding-space
+      // mismatch, and content withheld because it is mid-(re)index), so a third reason added later
+      // reaches this response without another edit here.
+      const warning = dataLakeService.describeSearchLimitations(search);
 
       return res.json({
         results: search.results.map(r => ({
@@ -392,10 +429,21 @@ const handler = baseApi()
         embedding_model: search.embeddingModel,
         latency_ms: Date.now() - t0,
         chunks_scored: search.chunksScored,
-        // The single flag a caller branches on to know the answer is incomplete for EMBEDDING
-        // reasons; scan.truncated is the separate "did we reach everything" signal.
-        partial_results: search.embeddingMismatch.partial,
+        // The single flag a caller branches on to know the answer is incomplete because content was
+        // WITHHELD - either because it could not be compared (embedding space) or because it could
+        // not be served (mid-re-index, #1681). scan.truncated is the separate "did we reach
+        // everything" signal.
+        partial_results: dataLakeService.isPartialSearch(search),
         embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
+        // Flat counts rather than the whole report: a caller needs to know how much is temporarily
+        // unsearchable, and the file names are already in `warning`.
+        retrieval_unavailable: {
+          indexing_files: search.retrievalUnavailable.indexing.count,
+          // Counted apart from `indexing_files` because waiting does not fix these - see the report
+          // type. A caller that adds them together would tell the user to retry and be wrong.
+          paused_files: search.retrievalUnavailable.paused.count,
+          partial: search.retrievalUnavailable.partial,
+        },
         // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
         // healthy search instead of present-and-undefined.
         ...(warning ? { warning } : {}),

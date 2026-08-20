@@ -1,16 +1,40 @@
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
+import type { ILakeUsageSummary } from './UsageEventTypes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
- * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
+ * states (archiving/restoring/deleting/purging) that exist to drive UI and make a crashed
  * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
  * holds its first member file (see `activateIfDraft` below), and unconditionally when an
  * archived or deleted lake is restored, which is how an empty lake can end up active.
+ *
+ * `purging` is the one transitional state that is NOT recoverable by retrying the same action:
+ * it is claimed the moment a phase-2 hard delete is ACCEPTED (#1744), before the background
+ * sweep runs, so that `listDeletedDataLakes` stops offering Restore on a lake whose
+ * destruction is already irreversible. Everything else that reads `status` must treat it as
+ * "going away", never as a lake to act on.
  */
-export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
+export const DATA_LAKE_STATUSES = [
+  'draft',
+  'active',
+  'archiving',
+  'archived',
+  'restoring',
+  'deleting',
+  'deleted',
+  'purging',
+] as const;
+
+/**
+ * Derived from the constant above, NOT a parallel union: the mongoose enum imports that same
+ * constant, so a status added here reaches the schema by construction. A hand-maintained second
+ * list would type-check either way (an annotation proves each entry is valid, never that all are
+ * present) and then reject the write at runtime.
+ */
+export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
@@ -37,9 +61,11 @@ export interface AccessContext {
    * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
    * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
-   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
-   * singular `organizationId` above, which is the caller's selected-org display preference, never an
-   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from
+   * `organizationIds` above: that set is MEMBERSHIP (which orgs the caller may READ), this one is
+   * admin RIGHTS (which orgs the caller may MANAGE) - a member is not an admin. Neither is
+   * `user.organizationId`, the selected-org display preference, which is never an authorization
+   * input (#1674). Optional - absent -> no org-admin rung (back-compat).
    */
   administeredOrgIds?: string[];
   /**
@@ -157,7 +183,8 @@ export interface IDataLake {
    * membership (addFileToLake/removeFileFromDataLake) changes the lake's CONTENT rather than its
    * configuration and is attributed per file; recomputeLakeStats is UNATTRIBUTED BY DESIGN rather
    * than operator-free (a tag edit, a file toggle or a batch completion drives it, and it can flip
-   * status via activateIfDraft - it simply has no actor parameter to stamp with); the lake-memory
+   * status via activateIfDraft - it takes an optional actor only to attribute the config-change
+   * event that flip emits, and deliberately never writes this stamp); the lake-memory
    * lease is genuine headless bookkeeping; and resetEmbeddingSpend moves a cost meter, not an
    * answering behavior. So this reads as "who last changed how this lake is configured", never
    * "who last touched this lake in any way".
@@ -343,6 +370,17 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
   /**
+   * Metered twin of tryAddEmbeddingSpend: identical atomic reserve-first contract, but returns
+   * the post-increment lifetime total instead of a boolean, so a caller can compute %-of-budget
+   * without a second, racy read. `spendMicroUsd` is `null` on denial and on the amount<=0
+   * no-op-success branch (no document read happened) - never treat `null` as zero spend.
+   */
+  tryAddEmbeddingSpendMetered(
+    id: string,
+    amountMicroUsd: number,
+    limitMicroUsd: number
+  ): Promise<{ granted: boolean; spendMicroUsd: number | null }>;
+  /**
    * Return a reservation that never became a provider call (the call failed). Exact-inverse of
    * ONE tryAddEmbeddingSpend grant, guarded so it cannot drive the meter negative; false means
    * the meter was already below the amount (e.g. an admin reset raced it) and nothing changed.
@@ -372,6 +410,35 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
   /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
   claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
+  /**
+   * Claim `deleted -> purging` at the moment a phase-2 hard delete is ACCEPTED (#1744). Returns
+   * whether THIS caller won; a loser must refuse the purge and must NOT enqueue a sweep.
+   *
+   * The status test lives in the FILTER for the same reason as `activateIfDraft`, and here it is
+   * load-bearing rather than defensive: every write in this area is read-then-write (the route
+   * pre-checks a lake it fetched, `restoreDeletedDataLake` reads then writes), so a plain `$set`
+   * would let a restore that read `deleted` before this claim write its terminal `active` after
+   * it. The sweep would then fail its guard and be swallowed as permanently-invalid - the exact
+   * abandonment #1744 exists to remove, just through a narrower window.
+   */
+  claimPurging(id: string): Promise<boolean>;
+  /**
+   * Enter `restoring` from a soft-deleted lake, claimed rather than set so it cannot overwrite a
+   * `purging` accepted between the caller's status read and this write - the mirror of the race
+   * `claimPurging` closes from the other side. Re-entrant from `restoring` itself, so a crashed
+   * prior attempt can still be retried. Returns whether this caller may proceed.
+   */
+  claimRestoring(id: string): Promise<boolean>;
+  /**
+   * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
+   * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
+   * on `purging` so it can never resurrect a lake that some other transition has since moved.
+   *
+   * ONLY safe for a sweep that failed BEFORE destroying anything. `cleanupDeletedDataLake` throws
+   * `BadRequestError` exclusively from its two entry guards, which is what makes the consumer's
+   * use of this correct; a partially-swept lake must stay `purging` and be recovered by DLQ replay.
+   */
+  releasePurgingToDeleted(id: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
@@ -724,4 +791,37 @@ export interface SyncDelta {
   changedFiles: SyncDeltaChangedFile[];
   removedFiles: SyncDeltaRemovedFile[];
   unchangedFiles: { fileId: string; fileName: string }[];
+}
+
+/**
+ * Wire shape of GET /api/data-lakes/:id/spend. `embeddingSpendMicroUsd` is the lake's
+ * lifetime RESERVATION-TIME meter (reserve-first, admin-reset/release-compensated);
+ * `ledger` is the ATTRIBUTED cost rolled up from UsageEvent rows (ingestion embeds only).
+ * Neither is a provider-reported figure - both derive from the same pre-call, Math.ceil'd
+ * estimate over locally-counted tokens (fabFileVectorize writes the ledger's `costUsd`
+ * from `estimatedMicroUsd`, the exact value the meter reserved). They diverge only via an
+ * admin reset or a release-after-failure, not because one is "actual" and the other isn't -
+ * the client must label them distinctly (lifetime meter vs. attributed/ledgered cost)
+ * without implying either is a true provider-billed number. Budgets mirror
+ * `resolveSpendLevers()`'s live values so the view never has to re-derive them - resolved at the
+ * lake's OWN cost tier, so they are the same ceilings the ingestion gate enforces on it.
+ */
+export interface IDataLakeSpendResponse {
+  dataLakeId: string;
+  /** Trailing window the ledger rollup covers. */
+  days: number;
+  /** Lifetime reservation-time meter (see doc comment above); null when unset (pre-existing lake). */
+  embeddingSpendMicroUsd: number | null;
+  spendEnabled: boolean;
+  perRunBudgetMicroUsd: number;
+  perLakeBudgetMicroUsd: number;
+  perPeriodBudgetMicroUsd: number;
+  periodHours: number;
+  /**
+   * Cost-tier factor the two per-resource budgets above were scaled by, from the lake's ownership
+   * (individual vs organization). Returned so the view can explain a ceiling rather than just state it.
+   */
+  tierMultiplier: number;
+  /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
+  ledger: ILakeUsageSummary;
 }

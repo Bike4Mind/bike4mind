@@ -1,13 +1,17 @@
 import {
+  ChunkClaimLostError,
   countCodePoints,
   IFabFileChunkDocument,
   IFabFileRepository,
+  isConvergencePausedNote,
   IUserDocument,
   SupportedEmbeddingModelSchema,
 } from '@bike4mind/common';
+import { effectiveChunkTokenLimit } from '@bike4mind/fab-pipeline';
 import { Logger } from '@bike4mind/observability';
-import { NotFoundError, secureParameters, SmartChunker } from '@bike4mind/utils';
+import { NotFoundError, secureParameters, SmartChunker, type Chunk } from '@bike4mind/utils';
 import { z } from 'zod';
+import { computeServerTextHash } from '../dataLakeService/admissionContract';
 
 const chunkFileSchema = z.object({
   fabFileId: z.string(),
@@ -23,6 +27,13 @@ const chunkFileSchema = z.object({
   // Soft chunk-size cap in tokens (see DEFAULT_PASSAGE_TOKEN_TARGET). Optional: the
   // chunker's passage-granularity default applies when omitted.
   passageTokenTarget: z.number().int().positive().optional(),
+  // The worker's claim stamp (#1802 Phase 2): the exact `chunkClaimedAt` its CAS acquired with.
+  // Optional - so a caller written before this existed (or any hypothetical caller with no claim
+  // to hold) is unaffected; the guarded ownership check below only runs when a stamp is actually
+  // supplied. The sole production caller (fabFileChunk.ts) always has one by the time it calls
+  // this, so the check is live on every real run - omitting it is a compatibility no-op, never a
+  // way to bypass the check on a path that genuinely holds a claim.
+  chunkClaimedAt: z.date().optional(),
 });
 
 /**
@@ -63,12 +74,57 @@ interface ChunkFileAdapters {
   searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
-export const chunkFabfile = async (
+/**
+ * Everything `commitFabFileChunks` needs, produced by `prepareFabFileChunks` with no writes of its
+ * own. Opaque to callers: build it with `prepareFabFileChunks`, hand it back unmodified.
+ */
+export interface PreparedFabFileChunks {
+  fabFileId: string;
+  embeddingModel: string;
+  chunkClaimedAt?: Date;
+  chunks: Chunk[];
+  chunkCharLengths: number[];
+  /**
+   * The post-clamp token target these chunks were actually built at (#1662). Carried through the
+   * prepare/commit split so the commit can persist it in the SAME transaction as the chunks it
+   * describes - see the `chunkedPassageTokenTarget` write in `commitFabFileChunks`.
+   */
+  effectivePassageTokenTarget: number;
+  /** Distinct embedding models the OLD chunks carried; only populated when a searchIndex is wired. */
+  previousChunkEmbeddingModels: string[];
+  /** `null` (not `undefined`) when the file has no extractable text - see the write below. */
+  serverTextHash: string | null;
+  /**
+   * True when the file carried a convergence kill-switch marker in `notes` at prepare time, so the
+   * commit can clear exactly that marker and nothing else - see the `notes` write in
+   * `commitFabFileChunks`. A boolean rather than the raw `notes` string so the commit cannot be
+   * tempted to write any other note back.
+   */
+  clearsConvergencePausedNote: boolean;
+}
+
+/**
+ * Phase 1 of chunking: read the file, fetch it from storage, tokenize it, and compute every value
+ * the write needs. Performs NO writes, so it MUST run OUTSIDE the caller's Mongo transaction.
+ *
+ * The split exists because this phase is the slow one - an S3 download plus full tokenization of a
+ * document that can run to tens of thousands of chunks - and running it inside `withTransaction`
+ * put it under the transaction lifetime: a member too large to finish aborts with a code
+ * `isTransientTransactionError` classifies as retryable, so the whole download-and-tokenize is
+ * redone up to `maxRetries` more times before failing deterministically. That was rare while
+ * re-chunking was a user-triggered one-file-at-a-time operation; owner-triggered convergence
+ * (#1681) turns it into a sweep that targets the LARGEST documents first, which is exactly the
+ * population that hits it. With the split, a transient write conflict retries the write alone.
+ */
+export const prepareFabFileChunks = async (
   user: IUserDocument,
   parameters: ChunkFileParameters,
   { db, storage, logger, searchIndex }: ChunkFileAdapters
-) => {
-  const { fabFileId, embeddingModel, passageTokenTarget } = secureParameters(parameters, chunkFileSchema);
+): Promise<PreparedFabFileChunks> => {
+  const { fabFileId, embeddingModel, passageTokenTarget, chunkClaimedAt } = secureParameters(
+    parameters,
+    chunkFileSchema
+  );
 
   const fabFile = await db.fabFiles.shareable.findAccessibleById(user, fabFileId);
   if (!fabFile) throw new NotFoundError('FabFile not found');
@@ -76,14 +132,18 @@ export const chunkFabfile = async (
   logger.updateMetadata({ mimeType: fabFile.mimeType });
 
   const chunker = new SmartChunker(embeddingModel, storage, logger, { passageTokenTarget });
+  // The same clamp the chunker just applied to itself, from the same shared helper and with the
+  // same (default) buffer - so the value persisted below is what these chunks were genuinely built
+  // at, never a second derivation that could drift from it.
+  const effectivePassageTokenTarget = effectiveChunkTokenLimit({ model: embeddingModel, passageTokenTarget });
   const chunks = await chunker.chunkFile(fabFile);
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);
 
   const chunkCharLengths = chunks.map(chunk => countCodePoints(chunk.text));
 
-  // Resolved before the old chunks are deleted below - their per-chunk embeddingModel is the
-  // only place this survives once they're gone. Chunks can span more than one model if this
+  // Resolved before the old chunks are deleted in the commit phase - their per-chunk embeddingModel
+  // is the only place this survives once they're gone. Chunks can span more than one model if this
   // file was already re-embedded once before (see IFabFileChunk.embeddingModel), so
   // fabFile.embeddingModel alone - the CURRENT model only - would miss an earlier OpenSearch
   // index left behind by that prior re-embed.
@@ -91,42 +151,168 @@ export const chunkFabfile = async (
     ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([fabFileId])
     : [];
 
-  fabFile.isChunking = false;
-  fabFile.chunked = chunks.length > 0;
-  fabFile.chunkCount = chunks.length;
-  fabFile.chunkedCharCount = chunkCharLengths.reduce((sum, len) => sum + len, 0);
+  // Lake admission contract (#1679): fingerprint the CANONICAL EXTRACTED TEXT (chunker.getExtractedText()),
+  // NOT the chunk output - whose boundaries, envelopes, and redaction move with chunk policy, so two
+  // byte-identical files under different owner policies would fingerprint differently. computeServerTextHash
+  // returns undefined for a file with no extractable text (nothing to dedup on) rather than hashing the
+  // empty string, which would collide across every such file; persist that as an explicit null so the
+  // field is ALWAYS written in the payload below. Skipping the write on a text-less re-chunk (e.g. a
+  // reprocess dropping N chunks to 0) would leave the prior chunking's stale hash in place and let the
+  // fingerprint outlive its text. See dataLakeService/admissionContract.ts for why this is the
+  // trustworthy dedup input, not contentHash.
+  const serverTextHash = computeServerTextHash(chunker.getExtractedText()) ?? null;
 
-  fabFile.isVectorizing = false;
-  fabFile.vectorized = chunks.length > 0;
-  fabFile.vectorizedChunkCount = 0;
+  return {
+    fabFileId: fabFile.id,
+    embeddingModel,
+    chunkClaimedAt,
+    clearsConvergencePausedNote: isConvergencePausedNote(fabFile.notes),
+    chunks,
+    chunkCharLengths,
+    effectivePassageTokenTarget,
+    previousChunkEmbeddingModels,
+    serverTextHash,
+  };
+};
 
-  fabFile.embeddingModel = embeddingModel;
-  // The old chunks (and their embeddingModel stamps) are about to be deleted below - a stale
-  // readiness timestamp would make the Atlas cutover read path treat this file as ANN-ready
-  // before the new chunks are re-stamped, silently returning zero results (see
-  // vectorSearchEligibility.ts).
-  fabFile.chunkEmbeddingModelStampedAt = null;
+/**
+ * Phase 2 of chunking: every write, and nothing else. Intended to run INSIDE the caller's
+ * transaction, so the rollup update, the delete and the reinsert commit together. Cheap to retry -
+ * that is the point of the split (see `prepareFabFileChunks`).
+ */
+export const commitFabFileChunks = async (
+  prepared: PreparedFabFileChunks,
+  { db, logger, searchIndex }: Pick<ChunkFileAdapters, 'db' | 'logger' | 'searchIndex'>
+): Promise<IFabFileChunkDocument[]> => {
+  const { fabFileId, embeddingModel, chunkClaimedAt, chunks, chunkCharLengths, previousChunkEmbeddingModels } =
+    prepared;
 
-  await db.fabFiles.update(fabFile);
+  // Guarded-write ownership check (#1802 Phase 2), BEFORE any write this run makes - not just
+  // before the destructive delete below. A superseded run that skipped this and still wrote its
+  // rollup fields (chunked, chunkCount, embeddingModel, ...) would leave the FabFile document
+  // describing chunks that were never actually deleted/replaced, an inconsistent state even
+  // without reaching the destructive section. A WRITE, not a read: a read's correctness would
+  // depend on isolation semantics `withTransaction` never configures (no read concern is set -
+  // db-core/src/utils/mongo.ts), while the competing CAS that could have taken this claim over
+  // commits OUTSIDE any transaction. A matched write engages write-conflict detection instead -
+  // verified sound on both engines, though by different mechanisms: MongoDB's WiredTiger raises a
+  // transient WriteConflict (code 112) if the takeover landed inside this run's own snapshot window,
+  // which `withTransaction` retries and the guard then correctly fails on; DocumentDB instead uses
+  // real document-level write LOCKS (1-minute max hold, non-configurable), so a competing writer
+  // blocks rather than racing and this write only ever sees fully-committed state. Either way, this
+  // filter never matches against stale data - PROVIDED the write is genuinely a write. A bare
+  // self-valued $set (writing chunkClaimedAt back to itself) was verified, against a real replica
+  // set, to be silently elidable: MongoDB can treat it as a no-op and let the match succeed against
+  // a stale snapshot with no conflict ever raised. confirmChunkClaim's write also stamps
+  // chunkClaimConfirmedAt for exactly this reason - see its doc comment - so this guarantee does not
+  // quietly depend on FabFile's schema happening to have `timestamps: true`. A retried WriteConflict
+  // here re-runs THIS function only: the S3 download and tokenization happened in
+  // `prepareFabFileChunks`, outside the transaction, and are not repeated. Skipped entirely when no
+  // stamp was supplied (see chunkFileSchema) - never the case for the real production caller, logged
+  // below if it ever is.
+  if (chunkClaimedAt === undefined) {
+    logger.warn(`chunkFabfile called for ${fabFileId} with no claim stamp - guarded-write ownership check skipped`);
+  } else if (!(await db.fabFiles.confirmChunkClaim(fabFileId, chunkClaimedAt))) {
+    throw new ChunkClaimLostError(fabFileId);
+  }
+
+  const chunked = chunks.length > 0;
+
+  // Explicit payload naming only the fields this function owns (#1802): `isChunking` and
+  // `chunkClaimedAt` are the WORKER's claim, acquired by its CAS and released in its `finally`
+  // (fabFileChunk.ts). Passing the whole loaded `fabFile` through `update()` - a `$set` of every
+  // key - would rewrite both mid-run, which is the entire mechanism #1802 reports. Naming the
+  // fields here means a future field added to FabFile is excluded by default, not by omission.
+  await db.fabFiles.update({
+    id: fabFileId,
+    chunked,
+    chunkCount: chunks.length,
+    chunkedCharCount: chunkCharLengths.reduce((sum, len) => sum + len, 0),
+    // Lake-health P1 rollup (#1666): the largest chunk, so health checks "no chunk exceeds the
+    // policy size" without rescanning the chunk collection. 0 for a file that produced no chunks.
+    // `reduce`, not `Math.max(...spread)`: a file can carry tens of thousands of chunks and the
+    // spread would risk a call-stack RangeError - and it matches the sum just above.
+    maxChunkCharLength: chunkCharLengths.reduce((max, len) => (len > max ? len : max), 0),
+
+    // The effective chunk target these rows were built at (#1662). Written HERE, transactionally
+    // with the chunks it describes, because convergence (#1681) TERMINATES on it: a member whose
+    // stamp is stale is re-selected, re-reset and re-embedded on the next wave for nothing, and a
+    // member whose overshoot is irreducible is only distinguishable from genuine drift by this
+    // value (see decideMemberConvergence). `setChunkPolicyConflict` also writes it, but that runs
+    // best-effort AFTER the transaction and can be skipped by a lakes-read failure or a Lambda
+    // death that SQS then redelivers into the `chunked` early-return - so it cannot be the only
+    // writer of a field termination depends on. The two agree by construction: both persist the
+    // same `effectiveChunkTokenLimit` of the same requested target.
+    chunkedPassageTokenTarget: prepared.effectivePassageTokenTarget,
+
+    isVectorizing: false,
+    vectorized: chunked,
+    // Re-chunking replaces every chunk, so the vector-bearing rollups from the OLD chunks are now
+    // stale. Zero them here; the vectorize pass that follows re-stamps them from the new chunks.
+    // Left in place, they would grade P3 / reachability against chunks that no longer exist.
+    vectorizedChunkCount: 0,
+    embeddedChunkCount: 0,
+    embeddedCharCount: 0,
+
+    embeddingModel,
+    // The old chunks (and their embeddingModel stamps) are about to be deleted below - a stale
+    // readiness timestamp would make the Atlas cutover read path treat this file as ANN-ready
+    // before the new chunks are re-stamped, silently returning zero results (see
+    // vectorSearchEligibility.ts).
+    chunkEmbeddingModelStampedAt: null,
+
+    // Always written - null when there is no extractable text - so a text-less re-chunk clears any
+    // stale fingerprint rather than letting it outlive its text. See the computeServerTextHash note
+    // in prepareFabFileChunks.
+    serverTextHash: prepared.serverTextHash,
+
+    // Clear the convergence kill-switch marker, because this run is the repair it was waiting for.
+    // Nothing else on the success path used to clear it, and the RESCUE SWEEP enqueues without a
+    // reset (resetChunkStateByIds is the only other writer of `notes: ''`), so a fully re-chunked and
+    // re-vectorized file kept its marker and every reader keying on the note went on treating it as
+    // broken - retrieval withheld it permanently and reported the whole lake partial forever.
+    //
+    // Conditional and spread, not written unconditionally: this payload is a `$set` of named fields,
+    // so a bare `notes: ''` would also erase an unrelated note the file legitimately carries (e.g.
+    // NO_EXTRACTABLE_TEXT_NOTE_PREFIX) on every ordinary re-chunk. `prepared` decides, because it
+    // read the file; the commit only writes.
+    //
+    // This is the root-cause half of the fix. The readers keep their own guards (see
+    // partitionByIndexAvailability and lakeHealth's abandonedByKillSwitch) so a lost marker-clear
+    // degrades to a stale note rather than to a permanently unsearchable file.
+    ...(prepared.clearsConvergencePausedNote ? { notes: '' } : {}),
+  });
 
   await db.fabFileChunks.deleteManyByFabFileId(fabFileId);
   if (searchIndex) {
     await Promise.all(previousChunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(fabFileId, model)));
   }
 
-  const fabFileChunks = await Promise.all(
-    chunks.map(async (chunk, i) => {
-      return {
-        ...chunk,
-        charLength: chunkCharLengths[i],
-        fabFileId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-    })
-  );
+  const fabFileChunks = chunks.map((chunk, i) => ({
+    ...chunk,
+    charLength: chunkCharLengths[i],
+    fabFileId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }));
 
-  const result = await db.fabFileChunks.bulkInsert(fabFileChunks);
+  return db.fabFileChunks.bulkInsert(fabFileChunks);
+};
 
-  return result;
+/**
+ * Re-chunk a file: tokenize it at the requested passage target, then replace its chunk rows and
+ * rollups wholesale.
+ *
+ * Kept as the published single-call entry point (`@bike4mind/services`), but note it runs BOTH
+ * phases in the caller's context. A caller that wraps this in a Mongo transaction puts the S3 fetch
+ * and tokenization inside it; prefer `prepareFabFileChunks` + `commitFabFileChunks` and wrap only
+ * the commit, which is what the production chunk worker does.
+ */
+export const chunkFabfile = async (
+  user: IUserDocument,
+  parameters: ChunkFileParameters,
+  adapters: ChunkFileAdapters
+): Promise<IFabFileChunkDocument[]> => {
+  const prepared = await prepareFabFileChunks(user, parameters, adapters);
+  return commitFabFileChunks(prepared, adapters);
 };

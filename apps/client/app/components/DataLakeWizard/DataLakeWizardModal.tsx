@@ -3,9 +3,15 @@ import { useTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore, type OptionalSteps } from '@client/app/stores/useDataLakeWizardStore';
 import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
-import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
+import { useBatchUpload, useCreateLakeFromDrive, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
-import { hasBlankTagPrefixSegment, isReservedTagPrefix } from '@bike4mind/common';
+import {
+  hasBlankTagPrefixSegment,
+  isReservedTagPrefix,
+  submittedTagPrefix,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
+} from '@bike4mind/common';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -40,11 +46,25 @@ export default function DataLakeWizardModal() {
   const config = useDataLakeWizardStore(s => s.config);
   const deriveTagPrefixFromName = useDataLakeWizardStore(s => s.deriveTagPrefixFromName);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
+  const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
 
   const batchUpload = useBatchUpload();
+  const createLakeFromDrive = useCreateLakeFromDrive();
+
+  // A Drive folder picked during create is a source in its own right, so it satisfies every gate
+  // that used to demand local files - that gate is what made a Drive-only lake impossible (#1916).
+  const hasIncludedFiles = allFiles.some(f => !f.excluded);
+  const hasSource = hasIncludedFiles || !!pendingDriveFolder;
+  // Nothing to upload, so the commit is the create + Drive connect, not the upload pipeline.
+  const isDriveOnlyCommit = !hasIncludedFiles && !!pendingDriveFolder;
+  const commit = isDriveOnlyCommit ? createLakeFromDrive : batchUpload;
 
   const STEP_ORDER = stepOrderFor({ optionalSteps });
-  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  // What the create request will carry, which is what every rule below judges - see
+  // submittedTagPrefix. The overlap lookup gets it too, or a colon-less entry silently
+  // matches no lake (normalizeTagPrefix drops it) and the collision goes unreported.
+  const effectivePrefix = submittedTagPrefix(config.tagPrefix);
+  const duplicatePrefixLake = useDuplicatePrefixLake(effectivePrefix, !!targetLake);
   const currentIndex = STEP_ORDER.indexOf(step);
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
@@ -55,25 +75,35 @@ export default function DataLakeWizardModal() {
         // Counts INCLUDED files, not raw ones: auto-exclusion can empty a selection on its own
         // (e.g. only junk files picked), and Preview - which used to be the mandatory home of
         // this check - is now skippable, so nothing else would stop the user reaching Start
-        // Upload with zero files to send. Identity is gated here too, by the same slug.min(2)
-        // rule the server enforces; append mode reuses the lake's own slug.
-        return allFiles.some(f => !f.excluded) && (!!targetLake || isValidDataLakeSlug(config.name));
+        // Upload with zero files to send. A pending Drive folder is the other way to satisfy it.
+        // Identity is gated here too, by the same slug.min(2) rule the server enforces; append
+        // mode reuses the lake's own slug.
+        return hasSource && (!!targetLake || isValidDataLakeSlug(config.name));
       case 'preview':
-        return allFiles.some(f => !f.excluded);
+        return hasSource;
       case 'config':
-        // Append mode reuses the target lake's (already valid) slug; create mode must
-        // produce a slug the server will accept (slug.min(2)) before Start Upload enables.
-        // The prefix has to clear the server's reserved-namespace rule here too, or the whole
-        // upload fails at the final step.
-        // An overlapping prefix is refused by the server, so block here rather than failing the
-        // whole upload at the last step. Same for a blank ":" segment (schema refine) - but only
-        // in create mode: append inherits a stored prefix the user cannot edit here, and a
-        // legacy lake predating the blank-segment rule must not be locked out of uploads.
+        // Source is re-checked, not assumed from having got here: the commit throws without one,
+        // and the button must never be the thing that discovers that.
+        //
+        // Every rule the create endpoint enforces on identity is mirrored here, so a value it
+        // will refuse cannot reach Start Upload and fail the whole upload at the last step:
+        // slug.min(2), the prefix bounds, the reserved namespace, a blank ":" segment, and an
+        // overlap with another lake. Append mode reuses the target lake's (already valid) slug.
+        //
+        // The create-only rules are guarded with !targetLake: append inherits a STORED prefix
+        // the user cannot edit here, and a legacy lake predating a rule must not be locked out
+        // of its own uploads over a value this form cannot fix.
+        //
+        // Judged on the SUBMITTED prefix, not the field: useBatchUpload closes the value with
+        // ":" before POSTing, so 30 colon-less characters are 31 on arrival (refused) and a
+        // bare "a" is the legal "a:" (accepted). Sizing the field got both of those wrong.
         return (
+          hasSource &&
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
-          config.tagPrefix.trim().length >= 2 &&
-          !isReservedTagPrefix(config.tagPrefix) &&
-          (!!targetLake || !hasBlankTagPrefixSegment(config.tagPrefix)) &&
+          effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
+          !isReservedTagPrefix(effectivePrefix) &&
+          (!!targetLake ||
+            (effectivePrefix.length <= MAX_TAG_PREFIX_LENGTH && !hasBlankTagPrefixSegment(effectivePrefix))) &&
           !duplicatePrefixLake
         );
       case 'upload':
@@ -102,9 +132,10 @@ export default function DataLakeWizardModal() {
   };
 
   const handleClose = () => {
-    // Files can now be gathered without leaving the source step, so having files - not being
-    // past source - is what marks unsaved progress worth confirming away.
-    if (allFiles.length > 0) {
+    // Files can now be gathered without leaving the source step, so having a source - not being
+    // past source - is what marks unsaved progress worth confirming away. A picked Drive folder
+    // counts: nothing has been created yet, so closing really does discard it (#1916).
+    if (allFiles.length > 0 || pendingDriveFolder) {
       if (!window.confirm('You have unsaved progress. Are you sure you want to close the wizard?')) {
         return;
       }
@@ -112,14 +143,14 @@ export default function DataLakeWizardModal() {
     resetWizard();
   };
 
-  const handleStartUpload = () => {
-    // Belt-and-suspenders with the same check inside useBatchUpload's mutationFn:
+  const handleCommit = () => {
+    // Belt-and-suspenders with the same check inside each commit mutation's mutationFn:
     // checking here means the button never even flips into its loading state for
     // the common "already offline" case, instead of depending on the mutation
     // lifecycle to notice and unwind.
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       const message = OFFLINE_MESSAGE;
-      // Mirror useBatchUpload's onError so uploadProgress reflects this failure
+      // Mirror the mutation's onError so uploadProgress reflects this failure
       // the same way regardless of which of the two entry points caught it, and
       // reuse its toast id so a repeated offline click/retry replaces the same
       // toast instead of stacking a new one.
@@ -127,11 +158,11 @@ export default function DataLakeWizardModal() {
       toast.error(message, {
         id: 'data-lake-batch-upload-error',
         duration: 8000,
-        action: { label: 'Retry', onClick: handleStartUpload },
+        action: { label: 'Retry', onClick: handleCommit },
       });
       return;
     }
-    batchUpload.mutate();
+    commit.mutate();
   };
 
   const renderStep = () => {
@@ -200,14 +231,17 @@ export default function DataLakeWizardModal() {
             )}
             {step === 'config' ? (
               <Button
+                // One commit button, two labels: the testid is deliberately unchanged so every
+                // existing selector still finds the wizard's primary action.
                 data-testid="wizard-start-upload-btn"
                 variant="solid"
                 color="success"
-                disabled={!canGoNext || batchUpload.isPending}
-                loading={batchUpload.isPending}
-                onClick={handleStartUpload}
+                disabled={!canGoNext || commit.isPending}
+                loading={commit.isPending}
+                onClick={handleCommit}
               >
-                Start Upload
+                {/* Nothing is uploaded on the Drive-only path, so don't call it an upload. */}
+                {isDriveOnlyCommit ? 'Create and sync' : 'Start Upload'}
               </Button>
             ) : step !== 'upload' ? (
               <Button

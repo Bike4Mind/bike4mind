@@ -6,12 +6,21 @@ import {
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
+  adminSettingsRepository,
 } from '@bike4mind/database';
 import { UpdateDataLakeRequestInput } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+
+// The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
+// call is wired with the settings repo + a logger, so a persisted reader grant that WOULD change
+// access is emitted as a [lakeReadGrantCutover] diff line (report-only until EnforceLakeReadGrants).
+const readGateLogger = new Logger({ metadata: { handler: 'dataLakeReadGate' } });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -22,7 +31,12 @@ const handler = baseApi()
     // Single shared gate: resolves the lake and asserts owner/org/tag access,
     // denying with a not-found-style error so existence isn't disclosed.
     const dataLake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+      logger: readGateLogger,
     });
     // Read access is wider than manage (org members, gate holders, and anyone at all for a
     // published lake), so strip the editor-only fields before serializing the raw document. Load
@@ -55,8 +69,15 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
-    const updated = await dataLakeService.updateDataLake(ctx, lake.id, params, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    // An API-key PUT is attributed to the KEY, with its owner kept findable in the audit row.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+    const updated = await dataLakeService.updateDataLake(actor, lake.id, params, {
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        ...lakeConfigAuditDb,
+      },
+      logger: req.logger,
     });
 
     return res.json(updated);
@@ -70,13 +91,16 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
-    const archived = await dataLakeService.archiveDataLake(ctx, lake.id, {
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+    const archived = await dataLakeService.archiveDataLake(actor, lake.id, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
+        ...lakeConfigAuditDb,
       },
+      logger: req.logger,
     });
 
     return res.json(archived);

@@ -429,9 +429,28 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async findByIds(ids: string[]) {
+    // Drop ids that are not ObjectId-shaped BEFORE convertIds - an unguarded `new ObjectId(id)` throws
+    // on anything not 24-hex, which would 500 any caller that passes a non-user id (e.g. a Slack or
+    // agent principal id from the lake access trail). A malformed id can never match a real _id anyway.
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
     return this.model
-      .find({ _id: { $in: convertIds(ids) } })
+      .find({ _id: { $in: convertIds(validIds) } })
       .select('name email username lastActiveAt isOnline photoUrl');
+  }
+
+  /**
+   * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
+   * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
+   * resolver never mails an emailless account.
+   */
+  async findActiveEmailsByIds(ids: string[]): Promise<Array<{ id: string; email: string }>> {
+    if (ids.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(ids) }, deletedAt: { $exists: false }, email: { $nin: [null, ''] } })
+      .select('email')
+      .lean({ virtuals: true });
+    return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
   }
 
   async searchCollections(

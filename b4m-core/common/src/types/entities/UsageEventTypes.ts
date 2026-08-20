@@ -50,6 +50,12 @@ export const UsageEvent = z.object({
   ownerId: z.string(),
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
+  /**
+   * Data lake this call is 1:1 attributable to (ingestion embeds only - a query
+   * embedding can span multiple lakes and is never attributed here). Unset for
+   * every other feature/call.
+   */
+  dataLakeId: z.string().optional(),
   feature: z.enum(USAGE_EVENT_FEATURES),
   /** Provider/backend, e.g. 'bedrock', 'openai', 'gemini'. */
   provider: z.string(),
@@ -197,6 +203,13 @@ export interface IOwnerUsageSummary {
   byFeature: IOwnerSpendFeature[];
   totals: IUsageSpendBucket;
 }
+
+/**
+ * Same rollup as IOwnerUsageSummary minus byMember: the data-lake spend view has no UI that
+ * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
+ * to any owner/curator/org-admin who can view a lake's spend.
+ */
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
 
 /** A member spend bucket with the user id resolved to a display name by the API. */
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
@@ -591,4 +604,14 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * to an org they can access (session-usage detail authorization).
    */
   sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean>;
+
+  /**
+   * One data lake's ledgered spend (ingestion embeds only, see `dataLakeId` on
+   * UsageEvent) rolled up by day, model, and feature, over the trailing N days
+   * (default 30). Same $facet shape as `ownerUsageSummary` minus byMember - a lake
+   * is just a different $match key over the same event set, but the owner-facing
+   * spend view has no use for raw per-uploader userIds. Powers the owner-facing
+   * data-lake spend view.
+   */
+  lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
 }

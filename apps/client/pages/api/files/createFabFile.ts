@@ -1,9 +1,10 @@
-import { CreateFabFileRequestInputType, FileEvents, Permission } from '@bike4mind/common';
+import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  scopedSettingsRepository,
   FabFile,
   User,
   withTransaction,
@@ -48,7 +49,16 @@ const handler = baseApi()
         ctx,
         (params.tags ?? []).map(t => t.name),
         {
-          db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
+          },
+          // This request creates the file, so the caller is its owner-to-be and the admission
+          // contract (#1680) predicts against their chunk policy.
+          members: [{ userId: ctx.userId }],
+          logger: req.logger,
         }
       );
 
@@ -91,6 +101,10 @@ const handler = baseApi()
                   expiresIn: expireInSeconds,
                 }),
             },
+            // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
+            // server-side `provenance` adapter, never from the request body, so the origin cannot be
+            // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
+            provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
           }
         );
       });

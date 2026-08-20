@@ -22,18 +22,9 @@ import {
   TAXONOMY_ATTENTION_STATUSES,
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
+  DATA_LAKE_STATUSES,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
-
-const DATA_LAKE_STATUSES: DataLakeStatus[] = [
-  'draft',
-  'active',
-  'archiving',
-  'archived',
-  'restoring',
-  'deleting',
-  'deleted',
-];
 
 // --- Data Lake Schema ---
 
@@ -95,7 +86,7 @@ const DataLakeSchema = new mongoose.Schema(
     // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
     // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
     auditQueryTextEnabled: { type: Boolean, default: false },
-    status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
+    status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
@@ -206,6 +197,38 @@ async function tryAddSpendWithinLimit(
     { $inc: { embeddingSpendMicroUsd: amountMicroUsd } }
   );
   return res.modifiedCount === 1;
+}
+
+/**
+ * Metered twin of tryAddSpendWithinLimit: same atomic reserve-first contract (identical filter
+ * and update - the atomicity argument is unchanged), but returns the post-increment total via
+ * `findOneAndUpdate({new: true})` instead of a modified-count boolean, so a caller can compute
+ * "what % of budget is this lake at now" without a second, racy read. `spendMicroUsd` is `null`
+ * for the amount<=0 no-op-success branch (no document read happened) and for a denial - callers
+ * must skip any %-of-budget check on `null` rather than treat it as zero spend.
+ */
+async function tryAddSpendWithinLimitMetered(
+  model: mongoose.Model<IDataLakeDocument>,
+  id: string,
+  amountMicroUsd: number,
+  limitMicroUsd: number
+): Promise<{ granted: boolean; spendMicroUsd: number | null }> {
+  if (limitMicroUsd <= 0) return { granted: false, spendMicroUsd: null };
+  if (amountMicroUsd <= 0) return { granted: true, spendMicroUsd: null };
+  if (amountMicroUsd > limitMicroUsd) return { granted: false, spendMicroUsd: null };
+  const doc = await model.findOneAndUpdate(
+    {
+      _id: id,
+      $or: [
+        { embeddingSpendMicroUsd: { $exists: false } },
+        { embeddingSpendMicroUsd: { $lte: limitMicroUsd - amountMicroUsd } },
+      ],
+    },
+    { $inc: { embeddingSpendMicroUsd: amountMicroUsd } },
+    { new: true }
+  );
+  if (!doc) return { granted: false, spendMicroUsd: null };
+  return { granted: true, spendMicroUsd: doc.embeddingSpendMicroUsd ?? null };
 }
 
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
@@ -494,6 +517,37 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return holder?.filesDeletedAt ?? null;
   }
 
+  async claimPurging(id: string): Promise<boolean> {
+    // Conditional on 'deleted' in the FILTER, never on a status the caller read earlier: the
+    // lifecycle route pre-checks a lake document it fetched before this call, so a restore landing
+    // in that gap must make this claim LOSE rather than be overwritten by it. A plain $set here
+    // would reintroduce #1744 - the restore's terminal 'active' write would clobber 'purging', the
+    // sweep would fail its guard, and the consumer would swallow the purge with a WARN.
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'deleted' }, { $set: { status: 'purging' } });
+    return res.modifiedCount === 1;
+  }
+
+  async claimRestoring(id: string): Promise<boolean> {
+    // 'restoring' is admitted alongside 'deleted' so a crashed prior restore can re-enter, matching
+    // the guard in restoreDeletedDataLake. What the filter EXCLUDES is the point: a lake that went
+    // 'purging' after the caller read it is no longer restorable, and this is where that is
+    // enforced atomically rather than against a stale copy of the document.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['deleted', 'restoring'] } },
+      { $set: { status: 'restoring' } }
+    );
+    // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
+    // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
+    return res.matchedCount === 1;
+  }
+
+  async releasePurgingToDeleted(id: string): Promise<boolean> {
+    // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
+    // 'purging' may be released, so this can never resurrect one another transition has moved on.
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'purging' }, { $set: { status: 'deleted' } });
+    return res.modifiedCount === 1;
+  }
+
   async claimFilesArchivedAt(id: string, at: Date): Promise<Date | null> {
     // Same set-if-unset contract as claimFilesDeletedAt (see its comment above).
     const claimed = await this.dataLakeModel.findOneAndUpdate(
@@ -526,7 +580,19 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   async tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
-    return tryAddSpendWithinLimit(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
+    // Thin wrapper over the metered twin (no production caller needs the lake-level boolean
+    // form anymore - the gate only calls tryAddEmbeddingSpendMetered), so there is exactly one
+    // atomic-write code path for this meter instead of two, while keeping the boolean form and
+    // its existing test coverage intact for any future non-metered caller.
+    return (await this.tryAddEmbeddingSpendMetered(id, amountMicroUsd, limitMicroUsd)).granted;
+  }
+
+  async tryAddEmbeddingSpendMetered(
+    id: string,
+    amountMicroUsd: number,
+    limitMicroUsd: number
+  ): Promise<{ granted: boolean; spendMicroUsd: number | null }> {
+    return tryAddSpendWithinLimitMetered(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
   }
 
   async releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean> {

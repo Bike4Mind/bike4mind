@@ -13,11 +13,13 @@ import type { ManageActor } from './manageRule';
  * lost" rather than "not attributed". Omitting the key also leaves any prior stamp intact, which is
  * the honest outcome - an unattributable write should not erase the last write that WAS attributed.
  *
- * Attributes the WRITE, not a proven change: a caller whose payload sets every field to the value
- * it already held still moves the stamp. Each call site decides whether that write happens at all
- * (setLakeVisibility returns early on a no-op; updateDataLake does not diff its params), so a
- * same-value PUT does record its author here. Distinguishing a real change from a re-write needs a
- * before/after comparison, which is the config-change event's job, not this stamp's.
+ * Attributes the WRITE, not a proven change. Each call site decides whether that write happens at
+ * all, and both of the metadata paths now return early on a no-op: setLakeVisibility always has,
+ * and updateDataLake compares the values the caller supplied against the stored ones. So a
+ * genuinely same-value PUT reaches neither the stamp nor the audit event. A write that DOES land is
+ * attributed even when only one field of many moved, and even when the value that moved is one the
+ * config-change event does not audit - distinguishing those needs a before/after comparison, which
+ * is that event's job, not this stamp's.
  */
 export function lakeConfigWriteStamp(actor: Pick<ManageActor, 'userId'>): { lastUpdatedByUserId?: string } {
   return actor.userId ? { lastUpdatedByUserId: actor.userId } : {};

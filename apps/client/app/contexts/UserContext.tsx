@@ -360,6 +360,24 @@ export function resolveIdentifyEffect(params: {
   return 'setUser';
 }
 
+/**
+ * Whether identify's access token may be written into the token store.
+ *
+ * Only when we hold none. /api/identify echoes back whatever token the request carried and mints
+ * a fresh one ONLY when there was none, so for a browser this value is almost always a copy of
+ * what we already have - and `identity.data` is a CACHED react-query payload that can be several
+ * rotations old.
+ *
+ * The identify effect re-runs on every accessToken change, so writing unconditionally means each
+ * freshly rotated token is immediately overwritten by the older one captured in the cache. The
+ * store lands back on an expired credential, the next request 401s on a session that just
+ * refreshed successfully, and the 401 interceptor reads that as "the freshly minted token was
+ * rejected" and signs the user out - the "logged out every ~30 minutes despite activity" report.
+ *
+ * Rotations have exactly one writer: refreshCoordinator. This is the guard that keeps it that way.
+ */
+export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): boolean => !heldToken;
+
 /** Provides user data and operations to children via the zustand store. */
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   const [userId, setCurrentUser] = useUser(useShallow(s => [s.currentUser?.id, s.setCurrentUser, s.refreshUser]));
@@ -472,7 +490,11 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       case 'setUser':
         if (identity.data) {
           setCurrentUser(identity.data.user);
-          setAccessToken(identity.data.accessToken);
+          // Never let a cached identify payload downgrade a live credential - see
+          // shouldAdoptIdentifyToken for why this guard exists.
+          if (shouldAdoptIdentifyToken(accessToken)) {
+            setAccessToken(identity.data.accessToken);
+          }
         }
         break;
       case 'clearUser':

@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { google, drive_v3 } from 'googleapis';
 
 export type DriveFile = {
@@ -105,14 +106,24 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
     });
 
     for (const f of res.data.files ?? []) {
-      // Skip anything missing an id/name/mimeType - it isn't a usable ingest candidate.
-      if (f.id && f.name && f.mimeType) {
-        const file: DriveFile = { id: f.id, name: f.name, mimeType: f.mimeType };
-        if (f.modifiedTime) file.modifiedTime = f.modifiedTime;
-        if (f.md5Checksum) file.md5Checksum = f.md5Checksum;
-        if (f.size != null) file.size = Number(f.size);
-        files.push(file);
+      // Skip anything missing an id/name/mimeType - it isn't a usable ingest candidate. Logged
+      // rather than dropped quietly: all three are in the requested `fields`, so this should never
+      // fire, and under the re-sync reconcile a silent drop reads as "gone from the folder" and
+      // unpicks a live file from its lake. If it ever does fire, that has to be visible.
+      if (!f.id || !f.name || !f.mimeType) {
+        Logger.globalInstance.warn('[listFolderChildren] dropping Drive child missing id/name/mimeType', {
+          folderId,
+          driveFileId: f.id ?? null,
+          hasName: !!f.name,
+          hasMimeType: !!f.mimeType,
+        });
+        continue;
       }
+      const file: DriveFile = { id: f.id, name: f.name, mimeType: f.mimeType };
+      if (f.modifiedTime) file.modifiedTime = f.modifiedTime;
+      if (f.md5Checksum) file.md5Checksum = f.md5Checksum;
+      if (f.size != null) file.size = Number(f.size);
+      files.push(file);
     }
 
     pageToken = res.data.nextPageToken ?? undefined;

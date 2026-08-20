@@ -1,5 +1,11 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
-import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type {
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
+  IFabFileRepository,
+  IScopedSettingsRepository,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import {
@@ -14,9 +20,11 @@ import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTa
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import { assertLakeAdmission } from '../dataLakeService/lakeAdmissionGate';
 
-interface ReconcileLakeTagsAdapters {
-  db: {
+interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
     // Grant-aware manage gates: consult a lake's active grants so a curator / org-admin /
@@ -24,6 +32,11 @@ interface ReconcileLakeTagsAdapters {
     // to createdByUserId + org rung (grant supersession not honored on this door then). Batched via
     // makeLakeGrantResolver so the many per-lake gates below cost one query.
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+    // caller cannot quietly opt this door out of the contract; `scopedSettings` is optional and its
+    // absence just resolves the lever at its platform value.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -34,6 +47,13 @@ interface ReconcileLakeTagsAdapters {
    * lose the check.
    */
   fileOwnerUserId?: string;
+  /**
+   * The effective target the file's EXISTING chunks were built with, for the admission contract.
+   * Supplied by a caller that already holds the file (as `fileOwnerUserId` is); omitted, it falls
+   * back to the document this function fetches, and absent entirely the contract PREDICTS from the
+   * owner's chunk policy instead.
+   */
+  fileChunkedPassageTokenTarget?: number | null;
 }
 
 export interface LakeTagReconciliation {
@@ -116,7 +136,7 @@ export const reconcileLakeTags = async (
   fabFileId: string,
   currentTagNames: string[],
   desiredTags: { name: string; strength: number }[],
-  { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
+  { db, logger, fileOwnerUserId, fileChunkedPassageTokenTarget }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
   // `primaryTag` (a separate string field on the route, gated there against `datalake:*` meta-tags
   // alongside `tags`) is deliberately absent from `ordinaryTags`: no lake read arm consults
@@ -256,6 +276,36 @@ export const reconcileLakeTags = async (
     else statsOnlyJoins.push(j.lake);
   }
 
+  // The admission contract (#1680) over EVERY lake this write joins - meta-tag and prefix-arm,
+  // managed and unmanaged alike. All four are real membership, so grading only some of them would
+  // leave a door through which unretrievable content still lands in a lake. Runs before `commit()`,
+  // so a refusal happens before any join is applied. Leaves and preserved memberships are
+  // deliberately absent: the contract governs admission, never eviction.
+  //
+  // An unresolvable owner is the one case this cannot grade - the chunk policy it predicts against
+  // is owner-altitude, so there is no scope to resolve. That is a FAILED READ, not a clean pass, so
+  // it is logged rather than waved through silently: unreachable from `updateFabFile` and the PUT
+  // route (both always supply an owner signal), and a future caller that trips it should see why
+  // its contract never fired instead of concluding the content was admissible.
+  if (owner === undefined) {
+    logger?.warn?.(
+      'reconcileLakeTags: could not resolve file owner; admission contract NOT evaluated for this write',
+      fabFileId
+    );
+  } else {
+    await assertLakeAdmission(
+      [...joins, ...statsOnlyJoins],
+      [
+        {
+          id: fabFileId,
+          userId: owner,
+          chunkedPassageTokenTarget: fileChunkedPassageTokenTarget ?? cachedFile?.chunkedPassageTokenTarget,
+        },
+      ],
+      { db, logger }
+    );
+  }
+
   // A DYNAMIC lake this actor cannot manage, reachable ONLY via a prefix content tag (no
   // meta-tag), is invisible to the loop above and to `prefixArmLeaves` unless the write empties
   // every one of its signal tags at once - a sibling tag surviving hides a partial drop from both.
@@ -328,12 +378,12 @@ export const reconcileLakeTags = async (
       // gate (where one applies) ran above, before that write. They still need stats.
       const recomputed = new Set<string>();
       for (const lake of joins) {
-        await recomputeLakeStats(lake, { db });
+        await recomputeLakeStats(lake, { db, logger }, { actor });
         recomputed.add(lake.id);
       }
       // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
       for (const lake of statsOnlyJoins) {
-        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
+        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
       }
     },
   };

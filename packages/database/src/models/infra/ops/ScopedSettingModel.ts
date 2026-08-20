@@ -1,5 +1,12 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IScopedSetting, IScopedSettingsRepository, ScopeRef, SettingKey, SettingScopeLevel } from '@bike4mind/common';
+import {
+  IScopedSetting,
+  IScopedSettingsRepository,
+  ScopedOverrideWrite,
+  ScopeRef,
+  SettingKey,
+  SettingScopeLevel,
+} from '@bike4mind/common';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -73,6 +80,25 @@ class ScopedSettingsRepository extends BaseRepository<IScopedSetting> implements
       settingName: { $in: settingNames },
     });
     return result.map(r => r.toJSON());
+  }
+
+  async upsertOverride(write: ScopedOverrideWrite): Promise<IScopedSetting> {
+    // findOneAndUpdate is not covered by softDeletePlugin's find/findOne pre-hooks, so the
+    // `deletedAt: null` filter is explicit here: it excludes a prior tombstone at this address from
+    // matching (the partial unique index already excludes it from the collision check), so upsert
+    // inserts a fresh row instead of colliding with it, exactly the case
+    // ScopedSettingModel.integration.test.ts guards for the raw model.
+    const doc = await this.model.findOneAndUpdate(
+      { scopeLevel: write.scopeLevel, scopeId: write.scopeId, settingName: write.settingName, deletedAt: null },
+      { $set: { settingValue: write.settingValue, ownerType: write.ownerType } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return doc.toJSON();
+  }
+
+  async clearOverride(ref: ScopeRef & { settingName: SettingKey }): Promise<void> {
+    // deleteOne is the plugin-overridden static (soft delete via `deletedAt`); a missing row is a no-op.
+    await this.model.deleteOne({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, settingName: ref.settingName });
   }
 }
 

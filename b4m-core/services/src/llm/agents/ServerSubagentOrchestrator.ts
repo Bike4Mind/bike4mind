@@ -4,6 +4,7 @@ import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
+import { MemberCreditCapError } from '../../creditService';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -276,6 +277,18 @@ export interface ServerOrchestratorDeps {
    * child's tool list to enforce the UI depth cap. Defaults to 1.
    */
   depth?: number;
+  /**
+   * Returns true when the delegating user is at or over their organization's
+   * per-member credit cap. Checked before any in-process delegation starts -
+   * unlike the Lambda-dispatched path (`processSubagentDispatch`), an in-process
+   * run has no separate pre-flight gate of its own. Omitted (no-op) by callers
+   * with no organization context (Slack, voice API, embed) or that already gate
+   * the whole request upstream (ChatCompletionProcess's credit reservation).
+   * May return a Promise: a caller whose only fresh usage figure lives in the
+   * database (rather than an in-memory snapshot already known not to be stale)
+   * needs to read it at call time, not just close over one fetched earlier.
+   */
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -396,6 +409,13 @@ export class ServerSubagentOrchestrator {
 
   async delegateToAgent(options: ServerSpawnOptions): Promise<ServerAgentExecutionResult> {
     const { task, agentDef, thoroughness, variables, attachedFiles } = options;
+
+    if (await this.deps.checkMemberCreditCap?.()) {
+      this.deps.logger.warn('[Credits] Member credit cap reached; refusing in-process delegation', {
+        agent: agentDef.name,
+      });
+      throw new MemberCreditCapError();
+    }
 
     // Resolved BEFORE the dispatch decision below: the Lambda paths persist
     // `effectiveModel` on the child doc, and the child re-resolves its backend

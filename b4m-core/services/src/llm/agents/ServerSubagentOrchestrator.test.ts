@@ -169,6 +169,67 @@ describe('ServerSubagentOrchestrator', () => {
     });
   });
 
+  describe('delegateToAgent \u2014 per-member credit cap gate', () => {
+    it('throws before any tracker/LLM work when checkMemberCreditCap returns true', async () => {
+      const llm = makeLlm();
+      const tracker = makeTracker();
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm,
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        checkMemberCreditCap: () => true,
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef(),
+        })
+      ).rejects.toThrow(/credit limit reached/);
+
+      // The refusal must cost nothing: no LLM call and no tracker lifecycle event.
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(tracker.onStart).not.toHaveBeenCalled();
+    });
+
+    it('proceeds through Lambda dispatch as normal when checkMemberCreditCap returns false', async () => {
+      vi.useFakeTimers();
+      const remainingTimeMs = 2 * 60 * 1000; // forces dispatch-and-poll, same as the test below
+      const tracker = makeTracker({
+        onStart: vi.fn().mockResolvedValue('child-not-capped-id'),
+        pollChildStatus: vi.fn().mockResolvedValue({
+          status: 'completed',
+          result: { answer: 'Done', iterations: 1, totalCredits: 5 },
+        } satisfies ChildExecutionStatus),
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(),
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        getRemainingTimeMs: () => remainingTimeMs,
+        checkMemberCreditCap: () => false,
+      });
+
+      const result = await runWithFakeTimers(
+        orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef(),
+          thoroughness: 'medium',
+        }),
+        { advanceByMs: 35_000 }
+      );
+
+      expect(result.finalAnswer).toBe('Done');
+      expect(tracker.onStart).toHaveBeenCalled();
+    }, 30_000);
+  });
+
   describe('delegateToAgent — Lambda dispatch when parent time is short', () => {
     // Poll loop uses real setTimeout (POLL_INITIAL_MS=2000, exp backoff to 30s).
     // Fake timers + helper let us skip those waits without changing the orchestrator.

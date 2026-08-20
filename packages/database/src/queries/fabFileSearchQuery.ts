@@ -1,4 +1,9 @@
-import { CODE_FILE_MIME_TYPES, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  CODE_FILE_MIME_TYPES,
+  CONVERGENCE_PAUSED_NOTES,
+  normalizeTagPrefix,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
@@ -192,7 +197,9 @@ export function buildOwnershipConditions(
      * someone else - the write paths can't fix those either. Group/data-lake access stays IN as
      * a deliberate product choice (they are the user's own persistent, subscribed-to workspaces,
      * not an incidental share), not because it is more reconcilable. The group/data-lake orphan
-     * case this does not cover is a known, accepted gap - see issue #1353's own options 1-3.
+     * case this does not cover is a known, accepted gap. If revisited, the two options are
+     * extending this same narrowing to the group/data-lake arms, or leaving it as accepted
+     * behavior (the choice made here).
      */
     excludePersonalShares?: boolean;
   }
@@ -487,7 +494,13 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   // baseFilter.fileName for the plain-search path). Both are no-ops when unset - an empty
   // marker set yields a null regex (buildFilenameMarkerRegex), so today's queries are unchanged.
   if (options?.vectorizedOnly) {
-    andConditions.push({ vectorized: true });
+    // Same exemption, same reason, as `isRetrievalExcluded`'s in-memory arm - and it has to be here
+    // too, or the file is dropped by the DB before the authoritative post-filter can spare it. A
+    // member the convergence kill switch stalled is unvectorized because its content was taken away;
+    // it must reach `partitionByIndexAvailability` to be withheld and REPORTED rather than silently
+    // absent. `$in` over CONVERGENCE_PAUSED_NOTES so this covers EITHER arm and cannot drift from
+    // `isConvergencePausedNote`, which the in-memory arm now calls. Keep the two in sync.
+    andConditions.push({ $or: [{ vectorized: true }, { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } }] });
   }
   // Matched against the pre-lowered, indexed `fileNameLower` (no $options:'i' - index-safe).
   const markerRegex = buildFilenameMarkerRegex(options?.excludeFilenameMarkers);

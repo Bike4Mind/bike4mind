@@ -4,8 +4,11 @@ import {
   hasBlankTagPrefixSegment,
   isReservedTagPrefix,
   DATA_LAKE_GROUNDING_MODES,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
 } from '../constants/dataLakes';
-import { MAX_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
 // Slug validation
 
@@ -28,8 +31,10 @@ export const CreateDataLakeRequestInput = z.object({
     // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
     // and " acme:" stored raw would desynchronize them.
     .trim()
-    .min(2)
-    .max(30)
+    // Bounds shared with the wizard (tagPrefixIssue, the Start Upload gate, and the prefix it
+    // derives from a lake name) so a value the form offers is never one this rejects.
+    .min(MIN_TAG_PREFIX_LENGTH)
+    .max(MAX_TAG_PREFIX_LENGTH)
     .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
     // A prefix with a blank segment ("::", "a::", ":a:", "a: :", or zero-width characters)
     // gives every derived tag a blank tree segment, which the tag-tree UIs can only paper
@@ -98,7 +103,7 @@ export const UpdateDataLakeRequestInput = z.object({
   // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
   // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
   // member file whose effective target differs is reported as a conflict, not re-chunked. Bounded
-  // to the same [MIN, MAX] the scoped DefaultChunkSize setting uses. `null` is the explicit clear
+  // to the same range the scoped DefaultChunkSize setting uses. `null` is the explicit clear
   // sentinel (remove the requirement); omitting the field leaves it unchanged ($set strips
   // undefined). Setting it does NOT re-chunk existing files - it only changes what future conflict
   // checks compare against.
@@ -106,7 +111,11 @@ export const UpdateDataLakeRequestInput = z.object({
     .number()
     .int()
     .min(MIN_PASSAGE_TOKEN_TARGET)
-    .max(MAX_PASSAGE_TOKEN_TARGET)
+    // Same ceiling as the scoped DefaultChunkSize setting, which is what the comment above promises.
+    // A lake requiring a target above the detection threshold is the other route into #1804: its
+    // members re-chunk to a compliant size that still trips detection, so its rebuild badge never
+    // reaches zero. Bounding only the setting would leave this route open.
+    .max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
     .nullable()
     .optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
@@ -116,6 +125,22 @@ export const UpdateDataLakeRequestInput = z.object({
 });
 export type UpdateDataLakeRequestInputType = z.infer<typeof UpdateDataLakeRequestInput>;
 
+/**
+ * COMPILE-TIME PIN: every field this endpoint can write must be audited by the config-change event.
+ * Unused at runtime - its only job is to fail the build if the two drift, because a settable field
+ * missing from LAKE_CONFIG_DOCUMENT_FIELDS would have its edits land silently and never appear in
+ * the owner-facing history. Adding a field above without classifying it in LAKE_CONFIG_FIELD_AUDIT
+ * breaks here, which is the moment to make that decision rather than discover it later.
+ */
+export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdatableField<
+  keyof UpdateDataLakeRequestInputType
+>;
+
+/**
+ * `purging` is deliberately absent from `status`. It is transitional and past the point of no
+ * return, so a lake in it is on its way out and is never something a caller should filter for.
+ * Keep it out if this schema is ever wired to a route. Full set: `DataLakeStatus`.
+ */
 export const DataLakeListRequestInput = z.object({
   organizationId: z.string().optional(),
   status: z.enum(['draft', 'active', 'archived', 'deleted']).optional(),

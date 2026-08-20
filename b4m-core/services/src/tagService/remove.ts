@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { isDataLakeTagName } from './tagName';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
 const tagRemoveSchema = z.object({
   id: z.string(),
@@ -16,7 +17,20 @@ interface TagRemoveAdapters {
     tags: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
     fabFiles: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
+    // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
+    // prefix-arm rename or delete can flip a draft lake to active, and without these that
+    // transition records nothing at all. Optional because this service has many callers and the
+    // recorder degrades to a no-op when they are absent - see LakeConfigAuditAdapters.
+    lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
+    adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
   };
+  /**
+   * Forwarded to recomputeLakeStats so a best-effort audit failure on the draft -> active flip is
+   * reported through the caller's structured logger instead of falling to `console.warn`, where
+   * log-based alerting cannot see it. Optional, matching the audit repos above: this service has
+   * many callers, and an absent logger degrades to the console fallback rather than failing.
+   */
+  logger?: LakeConfigAuditAdapters['logger'];
 }
 
 /**
@@ -37,7 +51,7 @@ interface TagRemoveAdapters {
  * the bulk strip below does NOT do on its own is recompute the affected lakes' stats.
  */
 export const remove = async (userId: string, params: TagRemoveParams, adapters: TagRemoveAdapters) => {
-  const { db } = adapters;
+  const { db, logger } = adapters;
   const { id } = secureParameters(params, tagRemoveSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -66,7 +80,12 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
     // (the aggregate re-derives the true count either way), and cheaper than re-deriving per file
     // which of these lakes actually lost a member. Independent per-lake recomputes, so run them
     // concurrently rather than one at a time.
-    await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db })));
+    // `actor` is the tag's owner: a rename/delete here is a user action, so an auto-activate it
+    // causes should not read as `system`. `isAdmin` is immaterial on this path - recomputeLakeStats
+    // forces the rung to `system` because activateIfDraft authorizes nothing.
+    await Promise.all(
+      affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false } }))
+    );
   }
 
   return { id: tag.id, name: tag.name, filesUpdated };

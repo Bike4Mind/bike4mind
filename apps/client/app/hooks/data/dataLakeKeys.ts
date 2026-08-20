@@ -19,6 +19,15 @@ import type { DataLakeArticlesParams, DataLakeBrowseSource } from '@client/app/h
 export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
+  /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
+  access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,
+  /**
+   * Who one lake's ownership may be transferred to (GET /api/data-lakes/:id/transfer-ownership).
+   * Deliberately NOT nested under `access`: a completed transfer invalidates both, but the picker's
+   * option set is fetched only while the transfer dialog is open and must not ride along on every
+   * access-view refresh.
+   */
+  ownershipCandidates: (dataLakeId: string) => ['data-lakes', 'ownership-candidates', dataLakeId] as const,
   /** One page-set of the public-lake discovery catalog, per search term. */
   public: (search: string) => ['data-lakes', 'public', { search }] as const,
   archived: ['data-lakes', 'archived'] as const,
@@ -32,9 +41,40 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
+  /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
+  health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
+  /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
+   *  is the moment a pending "indexing" badge should become measured (the message carries no lake id). */
+  healthRoot: ['dataLakeHealth'] as const,
+  /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
+   *  passages" badge, polled while a rebuild drains. */
+  rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,
+  /** One lake's convergence plan (GET /api/data-lakes/:id/converge), #1681 - the preview an owner
+   *  reads before confirming a wave. */
+  convergencePlan: (dataLakeId: string) => ['dataLakeConvergencePlan', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>
     ['dataLakeArticles', source, params] as const,
   articlesRoot: ['dataLakeArticles'] as const,
+  /**
+   * One lake's spend view (GET /api/data-lakes/:id/spend). Deliberately NOT nested under
+   * `list` - `list` is a shared invalidation prefix for renames/visibility changes, and keying
+   * spend under it would refetch spend on every unrelated lake mutation.
+   */
+  spend: (dataLakeId: string | null, days: number) => ['dataLakeSpend', dataLakeId, { days }] as const,
+  /**
+   * One lake's config-change history (GET /api/data-lakes/:id/config-history), #1769. Outside the
+   * `list` prefix for the same reason as `spend`: `list` is the invalidation prefix for renames and
+   * visibility changes, and those are exactly the writes that ADD a history row - so keying history
+   * under it would refetch the history of every lake on any lake edit. The one lake whose history a
+   * config write does invalidate is invalidated explicitly, by this key.
+   */
+  configHistory: (dataLakeId: string | null, limit?: number) =>
+    ['dataLakeConfigHistory', dataLakeId, { limit }] as const,
+  /** Invalidation prefix covering every `limit` variant of ONE lake's history - what a config write
+   *  invalidates, since a write adds a row to exactly one lake's history. */
+  configHistoryOf: (dataLakeId: string) => ['dataLakeConfigHistory', dataLakeId] as const,
+  /** Invalidation prefix covering every lake's config history. */
+  configHistoryRoot: ['dataLakeConfigHistory'] as const,
 };

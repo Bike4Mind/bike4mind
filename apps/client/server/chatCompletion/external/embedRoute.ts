@@ -45,6 +45,7 @@ import {
   fabFileRepository,
   fabFileChunkRepository,
   dataLakeRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
@@ -260,6 +261,7 @@ async function buildEmbedServerTools(args: {
       dataLakes: dataLakeRepository,
       organizations: organizationRepository,
       usageEvents: usageEventRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     entitlementKeys: [],
     kbScope: { fileIds: kbFileIds },

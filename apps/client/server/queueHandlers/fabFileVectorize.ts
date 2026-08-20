@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import { SupportedEmbeddingModelSchema, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -9,7 +9,9 @@ import {
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  organizationRepository,
   scopedSettingsRepository,
+  usageEventRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
@@ -25,7 +27,13 @@ import {
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { apiKeyService, dataLakeService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import {
+  apiKeyService,
+  dataLakeService,
+  embeddingCacheService,
+  fabFilesService,
+  recordOperationalUsage,
+} from '@bike4mind/services';
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
@@ -33,8 +41,9 @@ import {
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -60,8 +69,9 @@ const VectorizePayload = z.object({
  * `POST /api/files/reprocess` clears it as part of its `notes` reset. Distinct from
  * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which excludes a file from the chunk-rescue sweep; this does not.
  */
-export const CONVERGENCE_PAUSED_NOTE =
-  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
+// Re-exported, not defined here: the lake-health evaluator in b4m-core reads this marker to tell a
+// permanently-stalled file from one still indexing, and b4m-core cannot import from apps/client.
+export { CONVERGENCE_PAUSED_NOTE };
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -132,9 +142,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
-    await fabFileRepository
-      .update({ id: fabFileId, notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
-      .catch(err => logger.error(`Failed to flag convergence-paused fabFile ${fabFileId}: ${err}`));
+    // Retried in-process, then FAILED to SQS rather than acked - the same trade the chunk handler
+    // makes, for the same reason and with the same bound. This marker is the only thing that makes an
+    // abandoned chunked-but-unvectorized file ENUMERABLE (the rebuild door selects on it), so acking a
+    // lost write leaves a file that reports as "still indexing" forever with no repair offered.
+    // fabFileVectorizeQueue sets `dlq: { retry: 3 }` with a 6-minute visibility timeout, and its DLQ
+    // is in DLQ_DESCRIPTORS and dlqRegistry, so a persistent failure alarms and is replayable instead
+    // of vanishing. Nothing destructive has run in this branch, so a redelivery is idempotent - and
+    // the already-vectorized guard above means a resumed file is never re-embedded.
+    for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
+      try {
+        await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false });
+        break;
+      } catch (err) {
+        if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
+          logger.error(
+            `Failed to flag convergence-paused fabFile ${fabFileId} after ${MARK_PAUSED_MAX_ATTEMPTS} ` +
+              `attempts; failing the delivery so SQS retries rather than stranding it unenumerable: ${err}`
+          );
+          throw err;
+        }
+        await new Promise(resolve => setTimeout(resolve, MARK_PAUSED_RETRY_DELAY_MS * attempt));
+      }
+    }
     logger.log(
       `[convergenceKillSwitch] Paused background vectorize work for fabFileId ${fabFileId}` +
         (payload.lakeId ? ` (lake ${payload.lakeId})` : '') +
@@ -242,6 +272,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Ceil, never round: a spend meter may overcount a fraction of a micro-USD, not under.
         const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
         const batch = await dataLakeBatchRepository.findById(existingFabFile.batchId);
+        // The gate resolves the lake's cost tier itself (#1675) - it needs the lake's ownership,
+        // which only `dataLakeId` can reach, so passing the id is what enables the tier here.
         await dataLakeService.enforceEmbeddingSpendGate({
           estimatedMicroUsd,
           batchId: existingFabFile.batchId,
@@ -253,6 +285,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             dataLakeBatches: dataLakeBatchRepository,
           },
           logger,
+          notify: makeDataLakeSpendNotifier(logger),
         });
         grantedReservation = { estimatedMicroUsd, batchId: existingFabFile.batchId, dataLakeId: batch?.dataLakeId };
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
@@ -305,6 +338,45 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           }
         }
         throw providerErr;
+      }
+
+      // Ledger the ingestion spend (cost attribution). Only for lake-scoped work - a
+      // cache-hit-only run never reaches this block, so cache hits already never produce
+      // a row. dataLakeId can still be undefined here (batch?.dataLakeId), which just
+      // writes an unattributed row - harmless, since dataLakeId is optional on UsageEvent.
+      // bypassCreditBilling: true because this spend is already governed by the dedicated
+      // spend-lever/gate above; debiting credits on top of it would double-charge.
+      if (grantedReservation) {
+        // Best-effort like the ledger write below it - by this point the embeddings are
+        // already paid for and the reservation committed, with no release path from here (that
+        // is scoped strictly to the provider try/catch above). An unguarded rejection here would
+        // throw the whole run to failed/redelivered over a org lookup, double-charging the lake
+        // meter and writing a second ledger row for work that already succeeded.
+        const organization = user.organizationId
+          ? await organizationRepository.findById(user.organizationId).catch(() => null)
+          : null;
+        // SQS redelivery can double-write this row if the embedding-cache write above has not
+        // landed before the container freezes - the same double-count the lake meter already
+        // accepts above, so the ledger and meter at least drift together.
+        await recordOperationalUsage(
+          {
+            requestId: grantedReservation.batchId,
+            user,
+            organization,
+            dataLakeId: grantedReservation.dataLakeId,
+            feature: 'embedding',
+            provider: requiredProvider,
+            model: embeddingModel,
+            inputTokens: missTokenCounts.reduce((sum, n) => sum + n, 0),
+            costUsd: grantedReservation.estimatedMicroUsd / 1_000_000,
+            source: 'system',
+            bypassCreditBilling: true,
+          },
+          {
+            db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository },
+            logger,
+          }
+        ).catch(err => logger.warn(`[recordOperationalUsage] ingestion spend record failed: ${err}`));
       }
 
       await Promise.all(
@@ -373,11 +445,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
     }
 
-    // Recompute vectorizedChunkCount from SOURCE (terminal = has-vector OR oversized)
-    // rather than `+= validChunks.length`. With multiple vectorize messages per file,
-    // an SQS redelivery of an already-processed message would otherwise double-count
-    // and prematurely cross chunkCount. Recompute is idempotent.
-    const vectorizedChunkCount = await fabFileChunkRepository.countTerminalChunks(fabFileId, contextWindow);
+    // Recompute vectorizedChunkCount (terminal = has-vector OR oversized) AND the lake-health rollups
+    // (#1666, only truly vector-bearing chunks - P3) from SOURCE in ONE pass rather than `+=`. With
+    // multiple vectorize messages per file, an SQS redelivery of an already-processed message would
+    // otherwise double-count and prematurely cross chunkCount; recompute-from-source is idempotent.
+    // One aggregate, not two, because `vector` is in no index so each pass fetches every chunk row.
+    const {
+      terminalChunkCount: vectorizedChunkCount,
+      embeddedChunkCount,
+      embeddedCharCount,
+    } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId, contextWindow);
     const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
     if (!fabFile) throw new NotFoundError(`FabFile ${fabFileId} not found`);
 
@@ -395,7 +472,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFileId,
         embeddingModel,
         { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
-        { vectorized: true, vectorizedChunkCount, isVectorizing: false }
+        { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
       );
     } else {
       await fabFileRepository.update({
@@ -403,9 +480,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         vectorized: true,
         vectorizedChunkCount,
         isVectorizing: true,
+        embeddedChunkCount,
+        embeddedCharCount,
       });
     }
     fabFile.vectorizedChunkCount = vectorizedChunkCount;
+    fabFile.embeddedChunkCount = embeddedChunkCount;
+    fabFile.embeddedCharCount = embeddedCharCount;
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {

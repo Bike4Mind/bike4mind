@@ -34,12 +34,28 @@ export const MIN_PASSAGE_TOKEN_TARGET = 64;
 /**
  * Model-INDEPENDENT sanity ceiling for a configured passage target, in tokens. A passage larger
  * than a full typical embedding context window (~8K) defeats retrieval granularity - one vector
- * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET). This bounds the scoped
- * `DefaultChunkSize` setting (#1662) where the specific embedding model is NOT known (the resolver
- * clamp is pure); the EXACT per-model embedding-window cap is enforced downstream by the chunker
- * (`effectiveChunkTokenLimit` in fab-pipeline), which knows the model and reduces further if needed.
+ * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET).
+ *
+ * CURRENTLY UNREFERENCED. It bounded the scoped `DefaultChunkSize` setting until #1804 lowered that
+ * ceiling to OVERSIZED_PASSAGE_TOKEN_THRESHOLD - a configured target above the detection threshold
+ * makes "Rebuild passages" non-convergent, which is a tighter constraint than this one. Deliberately
+ * kept rather than deleted: it states a real invariant (a passage should not approach a whole
+ * embedding window) that a future non-lake caller may need, and deleting an exported symbol from
+ * `common` is the shape that passes public CI and breaks an overlay at deploy time.
+ *
+ * NOT enforced downstream in this value: `effectiveChunkTokenLimit` (fab-pipeline) clamps to the
+ * EMBEDDING MODEL's window, which is a different and model-dependent bound. Nothing enforces 8192.
  */
 export const MAX_PASSAGE_TOKEN_TARGET = 8192;
+
+/**
+ * A chunk larger than this (in tokens) marks a file whose chunking predates the passage-target
+ * fix: a whole-document / whole-section blob rather than a ~512-token passage. Used to detect the
+ * files a lake "Rebuild passages" pass should re-chunk. Deliberately well above
+ * DEFAULT_PASSAGE_TOKEN_TARGET (512) so a correctly-chunked passage never trips it, and below the
+ * ~6.5K model-window packing the old chunker produced, so every legacy blob does.
+ */
+export const OVERSIZED_PASSAGE_TOKEN_THRESHOLD = 1500;
 
 /**
  * Characters per token used to turn a chunk's TOKEN target into the SERVE path's CHARACTER budget.
@@ -104,3 +120,51 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
     ceilingBound: derived > SERVE_CHUNK_CHARS_CEILING,
   };
 }
+
+/**
+ * `FabFile.notes` marker written when the data-lake convergence kill switch abandons a vectorize
+ * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed, and
+ * it does NOT auto-resume.
+ *
+ * Lives here rather than beside its writer (apps/client fabFileVectorize) because it is a
+ * cross-layer contract: the queue handler writes it and the lake-health evaluator
+ * (constants/lakeHealth.ts) reads it to tell a permanently-stalled file from one still in flight.
+ * b4m-core cannot import from apps/client, so a copy there would have to drift silently.
+ */
+export const CONVERGENCE_PAUSED_NOTE =
+  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
+
+/**
+ * `FabFile.notes` marker for the OTHER half of the same kill switch: a re-chunk dropped before it
+ * ran (#1676/#1681). Distinct from `CONVERGENCE_PAUSED_NOTE` because the damage is worse and the
+ * wording has to say so - the producer resets a wave's chunk state BEFORE the messages are handled,
+ * so a file halted here has NO chunks at all rather than chunks without vectors.
+ *
+ * Without a marker this state is invisible to every surface at once, which is the failure it exists
+ * to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health
+ * drops it from the denominator, convergence grades it `conformant` (its stale stamp still matches),
+ * search does not withhold it because it is not "in flight", and the rescue sweep's own filter
+ * passes over it. The file's passages are simply gone and nothing reports it.
+ *
+ * Same cross-layer reason as the constant above for living here: the queue handler writes it and
+ * b4m-core's evaluators read it, and b4m-core cannot import from apps/client.
+ */
+export const CONVERGENCE_PAUSED_CHUNK_NOTE =
+  'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
+  'rebuilt when convergence resumes.';
+
+/**
+ * Whether a file's `notes` marks it as stalled by the convergence kill switch, by either arm.
+ * THE predicate every reader uses, so adding a third stall marker reaches health, convergence and
+ * retrieval without three separate string comparisons drifting apart.
+ */
+export function isConvergencePausedNote(notes?: string | null): boolean {
+  return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
+}
+
+/**
+ * Datastore mirror of `isConvergencePausedNote`, for a Mongo `notes: { $in: [...] }`. Exported so a
+ * query and the in-memory predicate cannot drift: adding a third stall marker to this array reaches
+ * both. Declared after the two constants it names so the function above can close over it.
+ */
+export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;

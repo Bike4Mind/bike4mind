@@ -24,6 +24,14 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { toggleTags: h.toggleTags },
 }));
 vi.mock('@bike4mind/database', () => ({
+  // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
+  // rather than omitted because this mock REPLACES the whole module: a missing export is an
+  // import-time failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeRepository: { name: 'dataLakes' },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
@@ -37,6 +45,10 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { name: 'fabFiles' },
   fileTagRepository: { name: 'fileTags' },
   userRepository: { name: 'users' },
+  // Backing stores for the admission contract's enforcement lever (#1680), which the service
+  // resolves at the join branch.
+  adminSettingsRepository: { name: 'adminSettings' },
+  scopedSettingsRepository: { name: 'scopedSettings' },
 }));
 
 import handler from '../toggle';
@@ -63,9 +75,42 @@ describe('POST /api/files/tags/toggle', () => {
 
     // Without this adapter the service cannot resolve a meta-tag to its lake, and the toggle
     // falls back to writing the tag as if it were an ordinary one.
-    expect(h.toggleTags).toHaveBeenCalledWith('u1', { ids: ['f1'], tags: ['datalake:lake'] }, expect.anything());
+    expect(h.toggleTags).toHaveBeenCalledWith(
+      'u1',
+      { ids: ['f1'], tags: ['datalake:lake'] },
+      expect.objectContaining({
+        // Named explicitly rather than expect.anything(): a toggle can flip a draft lake active,
+        // so dropping either audit adapter here would leave that transition unrecorded and still
+        // compile - `adminSettings` is optional, and the event repo degrades to writing nothing.
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      })
+    );
     expect(h.toggleTags.mock.calls[0][2].db.dataLakes).toEqual({ name: 'dataLakes' });
     expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
+  });
+
+  it('gives the service the settings stores the admission contract resolves its lever from', async () => {
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }), res);
+
+    // Without these the join branch cannot read EnforceLakeAdmission, and the contract silently
+    // degrades to report-only no matter what an operator set - the no-op lever #1658 forbids.
+    expect(h.toggleTags.mock.calls[0][2].db.adminSettings).toEqual({ name: 'adminSettings' });
+    expect(h.toggleTags.mock.calls[0][2].db.scopedSettings).toEqual({ name: 'scopedSettings' });
+  });
+
+  it('names no admission members, so a lake tag being toggled OFF is never refused by the contract', async () => {
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }), res);
+
+    // This route sees a tag payload, not a direction. Passing members here would make the gate
+    // grade a REMOVAL against the lake it is leaving; the real check runs at toggleTags' join branch.
+    expect(h.assertCanWriteDataLakeTags.mock.calls[0][2].members).toBeUndefined();
   });
 
   it('rejects an unauthenticated caller before any write', async () => {

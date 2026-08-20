@@ -161,20 +161,63 @@ export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
 };
 
 /**
+ * Length bounds for a `fileTagPrefix`, measured on the TRIMMED value INCLUDING its trailing ":" -
+ * the same string `CreateDataLakeRequestInput` sizes after its own `.trim()`, so a value that is
+ * exactly at the limit is judged identically on both sides.
+ *
+ * Exported so every surface that produces or judges a prefix bounds it by the same number: the
+ * create schema, the wizard's form-level mirror (`tagPrefixIssue`), the Start Upload gate, the
+ * prefix the wizard DERIVES from a lake name, and the 422 translator. The derive step is why the
+ * max has to be shared rather than left to the schema: it builds the prefix out of a lake SLUG,
+ * whose own max is twice this, so a long name used to hand the user a prefix the server refuses.
+ */
+export const MIN_TAG_PREFIX_LENGTH = 2;
+export const MAX_TAG_PREFIX_LENGTH = 30;
+
+/**
+ * A typed prefix as the create request will actually carry it: trimmed, and closed with the
+ * trailing ":" the wizard appends before POSTing.
+ *
+ * Every rule has to judge THIS value rather than the raw field, because the server judges the
+ * submitted string: 30 characters with no colon arrive as 31 and are refused, while a bare "a"
+ * arrives as the perfectly legal "a:". Sizing the field instead produced both errors at once -
+ * a gate that passed a value the server rejects, and one that blocked a value it accepts.
+ *
+ * Empty in, empty out: an untouched field has nothing to report, and returning ":" for it would
+ * manufacture a blank-segment complaint before the user has typed anything.
+ */
+export const submittedTagPrefix = (prefix: string | undefined | null): string => {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  if (!trimmed) return '';
+  return trimmed.endsWith(':') ? trimmed : `${trimmed}:`;
+};
+
+/**
  * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
  * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
- * rejects all three cases at create.
+ * rejects all four cases at create.
+ *
+ * There is deliberately no MIN-length branch: the value judged here is the SUBMITTED one, and
+ * appending ":" makes any positive-length entry at least 2 characters, so MIN cannot fail from
+ * something the user typed. A bare ":" trips the blank-segment rule instead, and an empty field
+ * stays silent so an untouched form reports nothing.
  */
 export const tagPrefixIssue = (
   prefix: string | undefined | null,
   overlapping?: { name: string; fileTagPrefix: string } | null
 ): string | null => {
-  // Blank-segment before reserved, matching the schema's refine order, so both surfaces
-  // name the same culprit for an input like "datalake::".
-  if (prefix && hasBlankTagPrefixSegment(prefix)) {
+  // Length first, then blank-segment, then reserved - the schema's own order, since its
+  // .min/.max run BEFORE its refines. So both surfaces name the same culprit for an input
+  // that trips two rules (an over-long prefix ending "::" reads as too long on either side).
+  // All of them judge the SUBMITTED form (see submittedTagPrefix), never the raw field.
+  const submitted = submittedTagPrefix(prefix);
+  if (submitted.length > MAX_TAG_PREFIX_LENGTH) {
+    return `Tag prefix must be ${MAX_TAG_PREFIX_LENGTH} characters or fewer (this one is ${submitted.length}). Shorten it - every tag in the lake carries it.`;
+  }
+  if (submitted && hasBlankTagPrefixSegment(submitted)) {
     return 'Every ":" segment of the prefix needs a visible character (e.g. legal: or legal:contracts:).';
   }
-  if (isReservedTagPrefix(prefix)) {
+  if (isReservedTagPrefix(submitted)) {
     return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
   }
   if (overlapping) {
@@ -243,6 +286,16 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   systemPrompt?: string;
   /**
+   * The passage size (TOKENS) this lake requires of its members, when it declares one. Editor-only,
+   * same gate as the fields above, and surfaced so the settings form can seed the current value.
+   *
+   * ABSENT means the lake declares no target and inherits the platform default - which is not a
+   * cosmetic difference: an explicit target is the sole trigger for convergence (epic decision 5),
+   * so it is the difference between a lake that can be repaired toward its policy and one that is
+   * only ever measured. Absent for a non-editor too, who never renders the field.
+   */
+  requiredPassageTokenTarget?: number;
+  /**
    * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
@@ -278,6 +331,36 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * its EFFECT via the create-time resolver, never the setting itself).
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
+   * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
+   * (defaulted to 0, never omitted) when the caller can manage this lake, even with zero spend -
+   * unlike the other editor-only fields above, its mere presence vs. absence is itself the
+   * client's signal to show the spend view, so a manageable-but-unspent lake must not look
+   * identical to a non-manageable one. `GET /api/data-lakes/:id/spend` independently re-checks
+   * manage access as the real security boundary; this field only decides whether to show the tab.
+   */
+  embeddingSpendMicroUsd?: number;
+  /**
+   * Whether the requesting caller may REBUILD this lake's passages (re-chunk files already in
+   * it). Narrower than `canManage` on purpose: a fallback (built-in) lake has no document to
+   * mutate, so `canManage` is always false for it, but rebuild attaches nothing and mutates no
+   * lake document - see `assertLakeRebuildAccess`. For a DB lake the two are identical
+   * (`canRebuild === canManage`); for a fallback lake `canRebuild` is `ctx.isAdmin` while
+   * `canManage` stays `false`. Kept as a SEPARATE flag rather than folded into `canManage` so the
+   * client can gate the Rebuild affordance without also lighting up rename/delete/visibility/
+   * file-removal, which would still fail server-side on a fallback lake.
+   *
+   * REQUIRED, not optional - same reasoning as `isOwn`: both producers (toManageableConfig,
+   * toFallbackConfig) set it unconditionally, so an absent field is a compile error rather than a
+   * silently-reintroduced gap FOR EVERY IN-REPO CALLER. That guarantee has two known exceptions
+   * that TypeScript cannot see: a test fixture built via an `as ManageableDataLakeConfig` cast
+   * (e.g. resolveManageableLake.test.ts), and the actual HTTP response at the wire boundary
+   * (hooks/data/dataLakes.ts's `api.get<{ data: ManageableDataLakeConfig[] }>(...)`), which is
+   * trusted with no runtime validation. Both fail CLOSED (an absent field reads as falsy, hiding
+   * the affordance rather than exposing it), so this is a precision note, not a safety concern.
+   */
+  canRebuild: boolean;
 }
 
 /**
@@ -346,8 +429,46 @@ export const DATA_LAKES: DataLakeConfig[] = [
     datalakeTag: 'datalake:opti-knowledge',
   },
   // Overlay-contributed customer lakes (e.g. the sales-intelligence lake) - absent in the fork.
+  // ASSUMPTION, unenforced at load time: no two entries here (including this one) may have
+  // overlapping fileTagPrefix values (e.g. 'opti:' and 'opti:legal:'). openLakeTagPrefix's callers
+  // (grantingLakes, attributeAccessedLakeIds) each independently reverse a prefix match back to
+  // ONE lake with no exclusivity check between lakes - an overlap would let a single file's
+  // content-tag satisfy two lakes' prefixes at once, over-attributing/over-granting to both. A
+  // dynamic (DB) lake is checked against this list at creation time (collidesWithRegistryPrefix in
+  // createDataLake.ts); nothing checks entries within this list against each other.
   ...PREMIUM_DATA_LAKES,
 ];
+
+/** Static-registry lake ids - see `openLakeTagPrefix`'s doc comment for what this set decides. */
+export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
+
+/**
+ * A lake's normalized file-tag prefix, but ONLY if the lake is in the static registry
+ * (`STATIC_LAKE_IDS`) - `undefined` for a dynamic (user-created) lake's prefix, which is
+ * user-controlled and can collide across tenants, so it is never usable as a standalone grant or
+ * attribution signal on its own; or for a static lake with no usable prefix at all.
+ *
+ * The shared place "is this lake's prefix an OPEN one" is decided BY ID MEMBERSHIP in the static
+ * registry, so every consumer that reverses a content-tag-prefix match back to a specific lake -
+ * `grantingLakes`/`isFileInAccessibleLake` (`apps/client/server/dataLakes/grantingLakes.ts`,
+ * naming the grantor of a single already-authorized file), `splitTagPrefixes` (same file's
+ * barrel, scoping a browse/search query), and `attributeAccessedLakeIds`
+ * (`b4m-core/services/src/dataLakeService/attributeAccessedLakes.ts`, naming the lake a retrieved
+ * file's content actually came from) - agrees on the same answer. Two independently-normalized
+ * copies of this predicate have drifted before (a padded prefix passed create validation but
+ * mismatched between the ownership arm and the tag counter); one shared computation is what keeps
+ * that class of bug from recurring in THOSE consumers.
+ *
+ * NOT the right predicate everywhere open/dynamic provenance matters, though: id-membership
+ * answers "is this id in the hardcoded list", not "did this lake come from the DB". A DB row can
+ * shadow a registry id, and there the two answers diverge - see `getDynamicDataLakeTags.ts`'s
+ * `dynamicIds`, which classifies by source for exactly that reason and must not be replaced with
+ * this function.
+ */
+export function openLakeTagPrefix(lake: { id: string; fileTagPrefix?: string | null }): string | undefined {
+  if (!STATIC_LAKE_IDS.has(lake.id)) return undefined;
+  return normalizeTagPrefix(lake.fileTagPrefix) ?? undefined;
+}
 
 /**
  * Canonical normalization for entitlement keys + `requiredEntitlement` values - the ONE

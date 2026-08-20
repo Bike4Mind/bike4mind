@@ -10,6 +10,7 @@ const {
   mockGetSettingsValue,
   mockResolveSearchBudgets,
   mockGetProviderFromModel,
+  mockRecordLakeAccessEvent,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockGetSettingsValue: vi.fn(),
   mockResolveSearchBudgets: vi.fn(),
   mockGetProviderFromModel: vi.fn(),
+  mockRecordLakeAccessEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -45,6 +47,7 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: vi.fn(async () => 3) }),
   getSettingsByNames: vi.fn(),
+  normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
@@ -55,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: vi.fn() },
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
+  lakeAccessEventRepository: { record: mockRecordLakeAccessEvent },
 }));
 // The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
 // check, so a reimplementation here would prove nothing. Imported from source because the module
@@ -72,9 +76,24 @@ vi.mock('@bike4mind/services', async () => ({
     describeEmbeddingMismatch: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).describeEmbeddingMismatch,
+    // Same rule as the mismatch helpers above - real, because the wording and the partial_results
+    // mapping are exactly what these tests check.
+    describeSearchLimitations: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
+    ).describeSearchLimitations,
+    isPartialSearch: (await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable'))
+      .isPartialSearch,
     emptyEmbeddingMismatchReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
+    // Real implementations (pure, already unit-tested on their own) so this suite can assert on
+    // the actual lakeAccessEventRepository.record call args rather than a reimplementation.
+    attributeAccessedLakeIds: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/attributeAccessedLakes')
+    ).attributeAccessedLakeIds,
+    recordLakeAccessEvent: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
     resolveSearchBudgets: mockResolveSearchBudgets,
     // A distinct, identifiable value (not a real adapter) so a test can assert reference
     // equality without depending on openSearchChunkAdapter's own implementation.
@@ -101,6 +120,7 @@ import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
 import { recordOperationalUsage } from '@bike4mind/services';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
+import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
 
 const mockRecordOperationalUsage = recordOperationalUsage as ReturnType<typeof vi.fn>;
 
@@ -108,6 +128,7 @@ const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
   dataLakeTagPrefixes: ['opti:'],
   scopedTagPrefixes: ['acme:'],
+  lakes: [{ id: 'lake-acme', name: 'Acme Handbook', slug: 'acme-handbook', datalakeTag: 'datalake:acme-handbook' }],
 };
 
 const FULL_SCAN = {
@@ -128,12 +149,16 @@ const EMPTY_RESULT = {
   chunksScored: 0,
   embeddingModel: 'text-embedding-ada-002',
   embeddingMismatch: emptyEmbeddingMismatchReport(),
+  retrievalUnavailable: emptyRetrievalUnavailableReport(),
   scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
 };
 
 // req.on is required by the client-disconnect listener; the logger by the usage-recording catch.
-const makeReq = (body: unknown, user: Record<string, unknown> = { id: 'u1', tags: [] }) =>
-  ({ user, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn() } }) as never;
+const makeReq = (
+  body: unknown,
+  user: Record<string, unknown> = { id: 'u1', tags: [] },
+  apiKeyInfo?: Record<string, unknown>
+) => ({ user, apiKeyInfo, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
 
 const makeRes = () => {
   const res: Record<string, unknown> = { writableEnded: false };
@@ -295,6 +320,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       dataLakeTags: ['datalake:acme-handbook'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: ['acme:'],
+      lakes: DYNAMIC_SCOPE.lakes,
     });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
@@ -371,6 +397,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       totalChunksSearched: 12,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -414,6 +441,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       totalChunksSearched: 12,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -435,6 +463,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       totalChunksSearched: 100000,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 2314,
       embeddingModel: 'text-embedding-ada-002',
       scan: {
@@ -720,5 +749,142 @@ describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () =>
     const body = res.json.mock.calls[0][0];
     expect(body.scan.ann_models_queried).toBe(0);
     expect(body.embedding_mismatch.alternate_model_served).toEqual({ files: 0, models: [] });
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search access-event audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsValue.mockResolvedValue(undefined);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockFindUserById.mockResolvedValue(null); // billing resolution is not under test here
+  });
+
+  const RESULT_WITH_LAKE_TAG = {
+    results: [
+      {
+        chunkId: 'c1',
+        fileId: 'f1',
+        fileName: 'handbook.md',
+        fileTags: ['datalake:acme-handbook'],
+        chunkText: 'pto policy',
+        score: 0.82,
+      },
+    ],
+    totalChunksSearched: 12,
+    chunksScored: 12,
+    embeddingMismatch: emptyEmbeddingMismatchReport(),
+    retrievalUnavailable: emptyRetrievalUnavailableReport(),
+    filesInScope: 3,
+    embeddingModel: 'text-embedding-ada-002',
+    scan: FULL_SCAN,
+  };
+
+  it('records an event attributed to the tag-matched lake, with chunk/file ids and the query text', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+
+    await handler(makeReq({ query: 'pto policy' }, { id: 'u1', tags: [] }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake-acme'],
+        chunkIds: ['c1'],
+        fileIds: ['f1'],
+        surface: 'data-lake-semantic-search',
+        queryText: 'pto policy',
+      })
+    );
+  });
+
+  // baseApi() accepts both a session and a b4m_live_ API key on this route - the audit row must
+  // name the KEY as principal (not the human owner it authenticates), or an API-key-driven read
+  // is permanently indistinguishable from an in-app human one in this immutable, floor-retained
+  // trail. Confirms the route actually wires req.apiKeyInfo through, not just the pure helper.
+  it('records the API key as principal, with the human owner preserved separately, when authenticated by key', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+
+    await handler(makeReq({ query: 'pto policy' }, { id: 'u1', tags: [] }, { keyId: 'key-abc' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'apiKey',
+        principalId: 'key-abc',
+        onBehalfOfUserId: 'u1',
+      })
+    );
+  });
+
+  // semanticDataLakeSearch's own file search is a MIXED corpus (includeShared: true, no
+  // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside the
+  // lake arms), despite ranking by a lake-scoped embedding query - a hit with no recoverable tag
+  // may be the caller's own private file, so this must NOT fall back to the full authorized scope.
+  it('does not record when no result carries a recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      ...RESULT_WITH_LAKE_TAG,
+      results: [{ ...RESULT_WITH_LAKE_TAG.results[0], fileTags: ['opti:policy'] }],
+    });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event on the empty-scope short-circuit (nothing was read)', async () => {
+    mockResolveScope.mockResolvedValue({ dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [], lakes: [] });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when the caller has accessible lakes but the search finds nothing', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...RESULT_WITH_LAKE_TAG, results: [] });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('still returns the search response when the audit write rejects', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+    mockRecordLakeAccessEvent.mockRejectedValueOnce(new Error('mongo blip'));
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'pto policy' }), res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
+  });
+
+  it('still records the event when the client disconnects right after the search resolves', async () => {
+    // The audit write happens as soon as search results are in hand, not after the later
+    // isAborted() gate - the read already happened server-side by then regardless of whether the
+    // client is still around to receive the response.
+    let closeCallback: (() => void) | undefined;
+    const req = {
+      user: { id: 'u1', tags: [] },
+      body: { query: 'pto policy' },
+      on: vi.fn((event: string, cb: () => void) => {
+        if (event === 'close') closeCallback = cb;
+      }),
+      logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+    } as never;
+    mockSemanticSearch.mockImplementation(async () => {
+      // Simulate the client going away between the search resolving and the response being sent.
+      closeCallback?.();
+      return RESULT_WITH_LAKE_TAG;
+    });
+    const res = makeRes() as unknown as { json: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+
+    await handler(req, res as never);
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake-acme'] }));
+    // The abort still short-circuits the actual response, confirming the abort really fired.
+    expect(res.json).not.toHaveBeenCalled();
+    expect(res.end).toHaveBeenCalled();
   });
 });

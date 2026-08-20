@@ -384,6 +384,23 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(results[0].resolvedLakeIds).toContain('lake-x');
     });
 
+    it('listByLake returns newest first, so a limited read is the most recent window', async () => {
+      // Pinned because assembleLakeAccessView reads `windowStartsAt` off the LAST element of a
+      // truncated fetch: a sort change here would silently publish the wrong window start on a
+      // compliance export, with nothing else to catch it.
+      await repo.record(baseInput({ resolvedLakeIds: ['lake-o'], principalId: 'oldest' }));
+      vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+      await repo.record(baseInput({ resolvedLakeIds: ['lake-o'], principalId: 'middle' }));
+      vi.setSystemTime(new Date(NOW.getTime() + 120_000));
+      await repo.record(baseInput({ resolvedLakeIds: ['lake-o'], principalId: 'newest' }));
+
+      const results = await repo.listByLake('lake-o');
+      expect(results.map(r => r.principalId)).toEqual(['newest', 'middle', 'oldest']);
+      // With a limit it must drop the OLDEST, and the last row is then the window's start.
+      const limited = await repo.listByLake('lake-o', { limit: 2 });
+      expect(limited.map(r => r.principalId)).toEqual(['newest', 'middle']);
+    });
+
     it('two identical record() calls produce two rows - no dedupe, by design', async () => {
       await repo.record(baseInput({ principalId: 'dup-test' }));
       await repo.record(baseInput({ principalId: 'dup-test' }));

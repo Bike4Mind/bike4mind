@@ -710,7 +710,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   // Deterministic @datalake command. Intercepted BEFORE notebook creation and the LLM path
   // so it NEVER routes through selectAgent. The interception is unconditional (keeping
   // @datalake off the LLM); the EnableDataLakeSlackAdd flag gates only the work - when off
-  // (PR 1 default) the command is silently consumed and no ingest occurs.
+  // the command is silently consumed and no ingest occurs. That flag now defaults ON, so the
+  // effective gate is the parent EnableDataLakes, which still defaults off; see the header on
+  // runDataLakeSlackCommand in server/slack/handleDataLakeCommand.ts.
   if (isDataLakeCommand(commandHandler.parsedCommand)) {
     await runDataLakeSlackCommand({
       command: commandHandler.parsedCommand.command,

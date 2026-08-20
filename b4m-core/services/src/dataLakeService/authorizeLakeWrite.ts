@@ -7,9 +7,12 @@ import type {
 } from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
+import { Logger } from '@bike4mind/observability';
+import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
+import { type ScopedSettingsDb } from '../settings/resolveScopedSetting';
 
 export { canManageLake, type ManageActor } from './manageRule';
 
@@ -19,6 +22,10 @@ export { canManageLake, type ManageActor } from './manageRule';
  * existence leak); a reader who isn't the creator/admin gets a manage-denied error mirroring the
  * remove path. Returns the lake on grant. Used by the batch upload doors, which already hold the
  * lake's id/slug.
+ *
+ * Fallback lakes are read-only for EVERYONE (even admins, who pass canManageLake): there is no
+ * document to attach files to. `assertLakeRebuildAccess` below is the one file-level operation
+ * that does not go through this gate - see its comment for why.
  */
 export const assertLakeWriteAccess = async (
   lakeIdOrSlug: string,
@@ -33,11 +40,49 @@ export const assertLakeWriteAccess = async (
   }
 ): Promise<IDataLakeDocument> => {
   const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
-  // Fallback lakes are read-only for EVERYONE (even admins, who pass canManageLake):
-  // there is no document to attach files to.
   assertLakeWritable(lake);
   if (!(await resolveCanManageLake(lake, ctx, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
+  }
+  return lake;
+};
+
+/**
+ * Resolve a lake by id-or-slug and assert the caller may REBUILD its passages (re-chunk files
+ * already in the lake). Deliberately does NOT call `assertLakeWritable`: rebuild re-chunks
+ * FabFiles carrying the lake's meta-tag, attaching nothing and mutating no lake document, so the
+ * "there is no document to mutate" rationale that guards rename/delete/visibility/file-removal
+ * does not apply here. Must stay in sync with `assertCanWriteStaticRegistryTags` /
+ * `assertCanWriteDataLakeTags` below, which enforce the same "static registry lake -> admin only"
+ * rule for the sibling operations of changing which files belong to a static lake.
+ *
+ * Fallback (static registry) lakes gate on `ctx.isAdmin` DIRECTLY, not `resolveCanManageLake`:
+ * `resolveFallbackLake` spreads the lake's config onto its synthetic document, so an org-scoped
+ * overlay lake would carry `organizationId` and let a customer-side org admin (not a platform
+ * admin) pass `canManageLake`'s org-admin rung. Gating on `ctx.isAdmin` directly keeps this
+ * predicate identical to the `canRebuild` flag computed in `listDataLakes.ts` for what each
+ * decides. They are not identical in every path to that decision, though: `resolveFallbackLake`
+ * (this gate's read step) applies the lake's org prerequisite before its `ctx.isAdmin` bypass, so
+ * an admin outside an org-scoped lake's org is refused here even though `listAllDataLakes` (which
+ * computes `canRebuild`) applies no such org filter to fallback lakes. That is a fail-CLOSED
+ * mismatch (a lit-up button that 404s), not an exposure - narrower is always the safe direction.
+ */
+export const assertLakeRebuildAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  {
+    db,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
+  }
+): Promise<IDataLakeDocument> => {
+  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  const allowed = isFallbackLake(lake) ? ctx.isAdmin : await resolveCanManageLake(lake, ctx, { db });
+  if (!allowed) {
+    throw new BadRequestError("You do not have permission to rebuild this data lake's passages");
   }
   return lake;
 };
@@ -99,6 +144,8 @@ export const assertCanWriteDataLakeTags = async (
   tagNames: readonly unknown[],
   {
     db,
+    members,
+    logger,
   }: {
     db: {
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
@@ -106,10 +153,25 @@ export const assertCanWriteDataLakeTags = async (
       // The file-create fan-in (email/url/generated/research) applies only its own/hardcoded tags,
       // so it need not wire the grant repo; user-facing tag doors that do, get full grant-awareness.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    };
+    } & ScopedSettingsDb;
+    /**
+     * The files this write ADMITS into the named lakes, for the admission contract (#1680). Pass
+     * resolved files (with `chunkedPassageTokenTarget`) where they are known, so an already-chunked
+     * file is graded on what its chunks ARE rather than on what policy predicts they would be; at a
+     * pre-upload door, where no FabFile exists yet, pass `[{ userId: <owner-to-be> }]` so the gate
+     * predicts against the right owner's chunk policy.
+     *
+     * OMITTED means "nothing is being admitted" and the contract is skipped. That is the correct
+     * default for this direction-NEUTRAL gate: it also sees tag REMOVALS, and a removal must never
+     * be refused for a contract the file is leaving. A door that admits files opts IN by naming
+     * them - never inferred from the actor, which would refuse removals at every toggle door.
+     */
+    members?: readonly AdmissionMember[];
+    logger?: Logger;
   }
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
+  const targetLakes: IDataLakeDocument[] = [];
   for (const tag of metaTags) {
     if (STATIC_REGISTRY_DATALAKE_TAGS.has(tag)) {
       if (!actor.isAdmin) {
@@ -124,6 +186,22 @@ export const assertCanWriteDataLakeTags = async (
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("You do not have permission to change this data lake's files");
     }
+    targetLakes.push(lake);
+  }
+
+  // Authorization answered "may you write here"; the admission contract answers "will this content
+  // be findable once it is here" (#1680). Same chokepoint on purpose: every door that writes a
+  // CLIENT-SUPPLIED meta-tag already passes through here, so those cannot skip the contract.
+  //
+  // It is NOT a chokepoint for the whole contract. A door that resolves its lake server-side and
+  // stamps the meta-tag itself has no client meta-tag for this function to see, so it must call
+  // `assertLakeAdmission` explicitly - `generate-presigned-urls-batch`, `data-lakes/batches` and the
+  // Drive folder sync (`driveLakeIngest`) each do. A new door of that shape needs its own call.
+  //
+  // The gate itself short-circuits (no settings read) when nothing is being admitted or no target
+  // lake declares a passage policy - the common case - so this costs nothing on the ordinary path.
+  if (members?.length) {
+    await assertLakeAdmission(targetLakes, members, { db, logger });
   }
 };
 

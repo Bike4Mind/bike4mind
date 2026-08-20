@@ -7,8 +7,11 @@ import {
   dataLakeAccessGrantRepository,
   fabFileRepository,
   userRepository,
+  adminSettingsRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -28,11 +31,19 @@ const handler = baseApi().post(
     const toggledTags: string[] = Array.isArray((req.body as { tags?: unknown })?.tags)
       ? (req.body as { tags: unknown[] }).tags.filter((t): t is string => typeof t === 'string')
       : [];
+    const settingsStores = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
+    // No `members` here on purpose: a toggle is direction-neutral, so this route cannot tell a join
+    // from a leave and would refuse removals. The admission contract (#1680) runs inside
+    // `toggleTags`, at the exact branch that makes a file a member.
     await dataLakeService.assertCanWriteDataLakeTags(
       { userId: req.user.id, isAdmin: !!req.user.isAdmin },
       toggledTags,
       {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...settingsStores,
+        },
       }
     );
 
@@ -43,6 +54,8 @@ const handler = baseApi().post(
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
+        ...lakeConfigAuditDb,
+        ...settingsStores,
       },
       logger: req.logger,
     });

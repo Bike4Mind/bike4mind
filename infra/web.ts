@@ -419,6 +419,21 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.REDDIT_PIXEL_ID
         ? { NEXT_PUBLIC_REDDIT_PIXEL_ID: process.env.REDDIT_PIXEL_ID }
         : {}),
+      // Apex the GA cookie is pinned to, so the marketing site and this app resolve
+      // to ONE visitor across the subdomain hop. Env-only with no brand fallback
+      // (the account-tied-id policy). Not production-gated - it only shapes a cookie
+      // and is inert wherever GA is not injected.
+      //
+      // SET THIS CAREFULLY: the failure is asymmetric, not "unset vs slightly
+      // better". `cookie_domain: 'auto'` self-heals - gtag walks up from the current
+      // host and picks the broadest domain the browser will accept. An explicit pin
+      // does not. Any value that is not a registrable suffix of the host serving the
+      // app makes the browser reject the Set-Cookie outright: `_ga` never persists,
+      // every hit becomes a new user, and measurement degrades FURTHER than the
+      // 'auto' behaviour this replaces - silently, and in the direction nobody
+      // checks. A typo or a stale value after a domain change costs more than
+      // leaving it unset. Verify `_ga` is present on the serving host after setting.
+      ...(process.env.GA_COOKIE_DOMAIN ? { NEXT_PUBLIC_GA_COOKIE_DOMAIN: process.env.GA_COOKIE_DOMAIN } : {}),
     },
     // warm pings invoke the handler, keeping the lazy OpenNext bundle resident — the lever for
     // the #8985 cold-open tail (provisioned concurrency only pre-runs the ~165ms init, not the

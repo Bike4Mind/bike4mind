@@ -144,7 +144,10 @@ const handler = baseApi()
 
     // After every delete transaction has committed, so the aggregation sees each `deletedAt`.
     if (deletedFileTagNames.length > 0) {
-      await recomputeStatsForLakeTags(deletedFileTagNames, { logger: req.logger });
+      await recomputeStatsForLakeTags(deletedFileTagNames, {
+        logger: req.logger,
+        actor: { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+      });
     }
 
     const parts: string[] = [];

@@ -10,6 +10,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
   mementoRepository,
@@ -174,6 +175,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

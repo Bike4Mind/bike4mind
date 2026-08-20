@@ -1383,6 +1383,86 @@ describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
   });
 });
 
+describe('DataLakeRepository purge-accept claims (#1744)', () => {
+  setupMongoTest();
+
+  it('claims deleted -> purging exactly once', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-once', status: 'deleted' }));
+
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
+    // A second accept (another tab, a duplicate request) must lose rather than re-accept.
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+  });
+
+  it.each(['active', 'archived', 'restoring', 'draft'] as const)(
+    'refuses to claim a lake in %s status',
+    async status => {
+      const created = await dataLakeRepository.create(baseLake({ slug: `purge-from-${status}`, status }));
+      expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  );
+
+  it('LOSES to a restore that got there first, which is the race #1744 turns on', async () => {
+    // The ordering the bug needed: the caller read 'deleted', a restore moved the lake, and the
+    // accept lands afterwards. With a plain status write this would overwrite the restore and the
+    // sweep would later be abandoned; the filter is what turns it into a refusal.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-loses', status: 'deleted' }));
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+  });
+
+  it('claimRestoring loses to a purge that got there first', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'restore-loses', status: 'deleted' }));
+    expect(await dataLakeRepository.claimPurging(created.id)).toBe(true);
+
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('purging');
+  });
+
+  it('claimRestoring is re-entrant from restoring, so a crashed attempt can retry', async () => {
+    // matchedCount, not modifiedCount: the second call changes nothing and must still be allowed,
+    // or a retry of a crashed restore would be refused as if a purge had won.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'restore-reentrant', status: 'deleted' }));
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+  });
+
+  it('releases purging -> deleted so a refused sweep leaves a visible, retryable lake', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release', status: 'deleted' }));
+    await dataLakeRepository.claimPurging(created.id);
+
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleted');
+  });
+
+  it('releases nothing when the lake is not purging, so it can never resurrect another transition', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'release-noop', status: 'active' }));
+    expect(await dataLakeRepository.releasePurgingToDeleted(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('active');
+  });
+
+  it('drops a purging lake out of the deleted-lakes query, which is the behaviour #1744 turns on', async () => {
+    // The one invariant the whole fix rests on, and the one nothing else covers: the deleted list
+    // asks for statuses ['deleted'], so claiming 'purging' is what removes the lake from it. That
+    // query needed no change, which is exactly why it has no test - every service-level case mocks
+    // findAccessible outright. Widening it to ['deleted', 'purging'] (a plausible "let users watch
+    // the purge" change) reintroduces the original bug with every other test still green.
+    const owner = { userId: 'alice', isAdmin: false, userTags: [], organizationIds: [] } as AccessContext;
+    await dataLakeRepository.create(baseLake({ slug: 'still-deleted', status: 'deleted', createdByUserId: 'alice' }));
+    const purging = await dataLakeRepository.create(
+      baseLake({ slug: 'accepted-purge', status: 'deleted', createdByUserId: 'alice' })
+    );
+    await dataLakeRepository.claimPurging(purging.id);
+
+    const listed = await dataLakeRepository.findAccessible(owner, { statuses: ['deleted'], includePublic: false });
+    expect(listed.map(l => l.slug)).toEqual(['still-deleted']);
+  });
+});
+
 describe('DataLakeRepository.activateIfDraft', () => {
   setupMongoTest();
 
@@ -1640,6 +1720,51 @@ describe('tryAddEmbeddingSpend (lake and batch spend meters)', () => {
 
     const after = await dataLakeBatchRepository.findById(batch.id);
     expect(after?.embeddingSpendMicroUsd).toBe(80);
+  });
+});
+
+describe('tryAddEmbeddingSpendMetered (returns the post-reservation total)', () => {
+  setupMongoTest();
+
+  it('grants and returns the post-increment total', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-lake' }));
+
+    const first = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 30, 100);
+    expect(first).toEqual({ granted: true, spendMicroUsd: 30 });
+
+    const second = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 40, 100);
+    expect(second).toEqual({ granted: true, spendMicroUsd: 70 });
+  });
+
+  it('never jointly breaches the budget under concurrent reservations, same as the boolean form', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-race-lake' }));
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 30, 100))
+    );
+    expect(results.filter(r => r.granted).length).toBe(3);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(90);
+  });
+
+  it('returns spendMicroUsd: null on denial (limit exhausted)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-denied-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 100, 100);
+
+    const denied = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 1, 100);
+    expect(denied).toEqual({ granted: false, spendMicroUsd: null });
+  });
+
+  it('returns spendMicroUsd: null for the amount<=0 no-op-success branch (fully-cached run)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-cached-lake' }));
+    const result = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 0, 100);
+    expect(result).toEqual({ granted: true, spendMicroUsd: null });
+  });
+
+  it('denies on limit 0 with spendMicroUsd: null, even for a zero-cost call', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-stopped-lake' }));
+    expect(await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 0, 0)).toEqual({
+      granted: false,
+      spendMicroUsd: null,
+    });
   });
 });
 

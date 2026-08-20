@@ -7,6 +7,7 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
+  lakes: [],
 });
 vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
   getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
@@ -34,7 +35,8 @@ vi.mock('../../../../apiKeyService', () => ({
 
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
-import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS, KB_SEARCH_DEFAULT_RESULTS } from './index';
+import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS } from './index';
+import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '@bike4mind/common';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
@@ -387,6 +389,7 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -594,6 +597,7 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -702,6 +706,7 @@ describe('search_knowledge_base embedding-mismatch disclosure', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -846,6 +851,7 @@ describe('search_knowledge_base alternate-model billing', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -987,6 +993,7 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -1203,6 +1210,7 @@ describe('search_knowledge_base serve budget agrees with the chunk policy (#1661
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
     invalidateSettingsCache();
   });
@@ -1360,6 +1368,7 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
     invalidateSettingsCache();
   });
@@ -1402,6 +1411,345 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
     expect(out).toContain('SENTINEL-INSIDE-BUDGET');
     // And the defense is still applied to what survived: no forged separator at column 0.
     expect(out).not.toMatch(/^--- f$/m);
+  });
+});
+
+describe('search_knowledge_base access-event audit', () => {
+  const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
+  // the call lands one microtask after the tool itself returns - flush before asserting on it.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
+
+  beforeEach(() => record.mockClear());
+
+  it('records a chat-kb-search event for the keyword arm, attributed to the tag-matched lake', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+    // The write now resolves platform retention (an async settings read) before calling
+    // record(), so the call lands one microtask after the tool itself returns.
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        organizationId: 'org1',
+        resolvedLakeIds: ['lake-x'],
+        fileIds: ['f1'],
+        surface: 'chat-kb-search',
+        queryText: 'retired notes',
+      })
+    );
+  });
+
+  // The keyword arm's corpus is mixed (owned + shared + org-shared + data lake, since the search
+  // never sets restrictToDataLake) - a hit with no recoverable tag may be the caller's own private
+  // file, so this must NOT fall back to the full authorized scope, and must not record at all.
+  it('does not record when a keyword-arm hit carries no recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'MyOwnFile.pdf', tags: [] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when the keyword arm finds nothing', async () => {
+    const ctx = makeContext({
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+      } as never,
+    });
+
+    await run(ctx);
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('records a chat-kb-search event for the semantic arm, attributed via fileTags', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        {
+          chunkId: 'c1',
+          fileId: 'f1',
+          fileName: 'Handbook.pdf',
+          fileTags: ['datalake:x'],
+          chunkText: 'pto accrues monthly',
+          score: 0.81,
+        },
+      ],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      chunksScored: 9,
+      embeddingModel: ADA,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
+      alternateModelsEmbedded: [],
+      scan: {
+        truncated: false,
+        fileBudgetHit: false,
+        chunkBudgetHit: false,
+        filesMatching: 3,
+        filesScoped: 3,
+        filesScanned: 3,
+        chunksScanned: 9,
+        chunksSkippedDimensionMismatch: 0,
+        annFilesQueried: 0,
+        annHits: 0,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const ctx = makeContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org1',
+        resolvedLakeIds: ['lake-x'],
+        chunkIds: ['c1'],
+        fileIds: ['f1'],
+        surface: 'chat-kb-search',
+      })
+    );
+  });
+
+  // semanticDataLakeSearch's `results` are chunk-level (one entry per ranked passage) - two
+  // chunks from the same file must count as one file read, not two, in the audit's fileIds.
+  it('dedupes fileIds when multiple ranked chunks come from the same file', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        {
+          chunkId: 'c1',
+          fileId: 'f1',
+          fileName: 'Handbook.pdf',
+          fileTags: ['datalake:x'],
+          chunkText: 'pto accrues monthly',
+          score: 0.81,
+        },
+        {
+          chunkId: 'c2',
+          fileId: 'f1',
+          fileName: 'Handbook.pdf',
+          fileTags: ['datalake:x'],
+          chunkText: 'sick leave is separate',
+          score: 0.79,
+        },
+      ],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      chunksScored: 9,
+      embeddingModel: ADA,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
+      alternateModelsEmbedded: [],
+      scan: {
+        truncated: false,
+        fileBudgetHit: false,
+        chunkBudgetHit: false,
+        filesMatching: 3,
+        filesScoped: 3,
+        filesScanned: 3,
+        chunksScanned: 9,
+        chunksSkippedDimensionMismatch: 0,
+        annFilesQueried: 0,
+        annHits: 0,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const ctx = makeContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chunkIds: ['c1', 'c2'],
+        fileIds: ['f1'],
+      })
+    );
+  });
+
+  // semanticDataLakeSearch's own file search is a MIXED corpus too (includeShared: true, no
+  // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside the
+  // lake arms), despite ranking by a lake-scoped embedding query - a hit with no recoverable tag
+  // may be the caller's own private file, so this must NOT fall back to the full scope.
+  it('does not record when a semantic-arm hit carries no recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        {
+          chunkId: 'c1',
+          fileId: 'f1',
+          fileName: 'MyOwnFile.pdf',
+          fileTags: [],
+          chunkText: 'a private note',
+          score: 0.81,
+        },
+      ],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      chunksScored: 9,
+      embeddingModel: ADA,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
+      alternateModelsEmbedded: [],
+      scan: {
+        truncated: false,
+        fileBudgetHit: false,
+        chunkBudgetHit: false,
+        filesMatching: 3,
+        filesScoped: 3,
+        filesScanned: 3,
+        chunksScanned: 9,
+        chunksSkippedDimensionMismatch: 0,
+        annFilesQueried: 0,
+        annHits: 0,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('records under chat-kb-search-scoped, with no lake attribution, for an agent-scoped call', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      kbScope: { fileIds: ['f1'] },
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: [{ id: 'f1', fileName: 'Scoped.pdf', tags: [] }], total: 1 }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedLakeIds: [],
+        fileIds: ['f1'],
+        surface: 'chat-kb-search-scoped',
+      })
+    );
+  });
+
+  it('never throws the tool call when the audit write rejects', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    record.mockRejectedValueOnce(new Error('mongo blip'));
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    const out = await run(ctx);
+    await flushAsync();
+
+    expect(out).toContain('Clean.pdf');
+    expect(record).toHaveBeenCalled();
   });
 });
 
@@ -1473,6 +1821,11 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      // trySemanticKbSearch destructures `lakes` to attribute an access-audit event - omitting it
+      // (undefined) throws inside attributeAccessedLakeIds, which the semantic arm's try/catch
+      // swallows as a fallback to the keyword arm, which itself finds nothing here, so every clamp
+      // assertion below would silently see 0 passages instead of exercising the clamp at all.
+      lakes: [],
     });
     invalidateSettingsCache();
   });
@@ -1644,16 +1997,117 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       // Number('lots') is NaN: slice(0, NaN) is empty AND Math.max(NaN, 6) sent NaN to the engine.
       const out = await runWith({ max_results: 'lots' });
 
-      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
       expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(6);
     });
 
     it('treats null as unset rather than as zero', async () => {
-      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
     });
 
     it('keeps the documented default when the param is omitted entirely', async () => {
-      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+  });
+
+  /**
+   * kbSearchDefaultResults (#1831): the default above is now an operator lever, not a hardcoded
+   * literal. Mirrors forcedRetrievalCharBudget's own resolver contract in
+   * ChatCompletionFeatures.ts - unset/unusable/outage all fall back to the coded default, a
+   * configured value is honored, and it never overrides an explicit model-supplied max_results.
+   */
+  describe('operator-configurable default (kbSearchDefaultResults, #1831)', () => {
+    function contextWithConfiguredDefault(configured: unknown): {
+      context: ToolContext;
+      getSettingsValue: ReturnType<typeof vi.fn>;
+    } {
+      const getSettingsValue = vi.fn(async (key: string) =>
+        key === 'kbSearchDefaultResults' ? configured : 'text-embedding-ada-002'
+      );
+      const context = semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+      return { context, getSettingsValue };
+    }
+
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(100),
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+      // Otherwise an earlier test's warn call in this block satisfies a later
+      // toHaveBeenCalledWith assertion even when that later case never calls warn itself.
+      clampLogger.warn.mockClear();
+    });
+
+    it('serves the configured count when max_results is omitted', async () => {
+      const { context } = contextWithConfiguredDefault(8);
+      expect(passageCount(await runWith({}, context))).toBe(8);
+    });
+
+    it('does not override an explicit model-supplied max_results', async () => {
+      const { context } = contextWithConfiguredDefault(8);
+      expect(passageCount(await runWith({ max_results: 3 }, context))).toBe(3);
+    });
+
+    it('falls back to the coded default when the setting is unset', async () => {
+      const { context } = contextWithConfiguredDefault(undefined);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+
+    it('falls back to the coded default and warns when the stored value is unusable', async () => {
+      const { context } = contextWithConfiguredDefault('not-a-number');
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      expect(clampLogger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchDefaultResults'));
+    });
+
+    it('falls back to the coded default and warns when the settings read throws (outage)', async () => {
+      // Only kbSearchDefaultResults is unavailable - defaultEmbeddingModel still resolves, so the
+      // semantic arm runs and this isolates the outage to the setting under test.
+      const getSettingsValue = vi.fn(async (key: string) =>
+        key === 'kbSearchDefaultResults' ? Promise.reject(new Error('outage')) : 'text-embedding-ada-002'
+      );
+      const context = semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      // The resolver's own catch block warns with (message, err) - two arguments, matching
+      // resolveForcedRetrievalCharBudget's shape - unlike positiveIntOr's single-argument warn
+      // the "unusable value" test above exercises.
+      expect(clampLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('kbSearchDefaultResults'),
+        expect.anything()
+      );
+    });
+
+    it('resolves the setting once per completion, not once per search call', async () => {
+      const { context, getSettingsValue } = contextWithConfiguredDefault(7);
+      const tool = knowledgeBaseSearchTool.implementation(context, undefined);
+      await tool.toolFn({ query: 'first' });
+      await tool.toolFn({ query: 'second' });
+      const kbCalls = getSettingsValue.mock.calls.filter(([key]) => key === 'kbSearchDefaultResults');
+      expect(kbCalls.length).toBe(1);
+    });
+
+    it('clamps a stored default above the tool ceiling', async () => {
+      // A row written before the setting's own max:10 existed, or by any path other than the
+      // admin form, is not re-validated on read - clampMaxResults must not trust it verbatim.
+      const { context } = contextWithConfiguredDefault(99);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
     });
   });
 });

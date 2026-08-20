@@ -62,6 +62,8 @@ import {
   ITokenizer,
   getSettingsByNames,
   attachedContentExtractionBudget,
+  computeVerbatimTokenBudget,
+  DEFAULT_OUTPUT_MAX_TOKENS,
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
@@ -86,6 +88,8 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { settleToolCallCredits } from './settleToolCredits';
+import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
@@ -132,6 +136,7 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  markShareablePrefixBoundary,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
@@ -155,13 +160,16 @@ import {
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
+import {
+  buildAlwaysOnFloorDetails,
+  buildInjectedBlockDetails,
+  sortDetailsByDeliveryOrder,
+} from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
-import { shouldOfferBlogTools, shouldOfferSkillTool } from './autoAddedToolGating';
+import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
-  detectAgentMentions,
   sanitizeTelemetryError,
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
@@ -225,16 +233,6 @@ function assertNeverElisionSignal(signal: never): never {
 }
 
 /**
- * Output budget used when a caller supplies no max_tokens. Within supported output
- * limits for every configured non-reasoning model; models that reason inside the
- * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
- * reasoning would otherwise consume this whole budget (see reasonsWithinOutputBudget
- * for which those are). Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
- * fills in a model's *capability* when its record omits one.
- */
-const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
-
-/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
  * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise - a floor measured
@@ -280,7 +278,7 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
  * fraction of the raw window. Overridable per-deploy via the
  * ContextVerbatimWindowFraction admin setting.
  */
-const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
+export const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
 
 /**
  * Non-history input competes with the verbatim window for the same safe-input
@@ -292,7 +290,7 @@ const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
  * conservative floors used only to pick the summary boundary; the exact tokenizer
  * still enforces the real budget downstream in buildAndSortMessages.
  */
-const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
+export const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
@@ -1966,6 +1964,7 @@ export class ChatCompletionProcess {
               startParams: params,
               llm,
               model,
+              modelInfo,
               message,
               historyCount,
               fabFileIds: sessionFabFileIds,
@@ -2052,7 +2051,6 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
-      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, safeMaxTokens));
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -2074,18 +2072,24 @@ export class ChatCompletionProcess {
         enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS +
         estTokens(message) +
         estTokens(session.contextSummary);
-      const availableForVerbatim = Math.max(0, safeInputTokens - nonHistoryOverhead);
-      const verbatimTokenBudget = Math.floor(availableForVerbatim * verbatimWindowFraction);
+      const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, params.max_tokens, {
+        verbatimWindowFraction,
+        nonHistoryOverheadTokens: nonHistoryOverhead,
+      });
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
+        // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
+        // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
+        model: modelInfo.id,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
       // comment on this field for why `previousMessages` itself cannot answer "was this tool used
-      // earlier in the conversation" (neither of its tool_use-replay paths fires in production).
+      // earlier in the conversation" for every backend (Priority 1 never fires; Priority 2 is
+      // skipped for Gemini models, per the `model` param above).
       const priorToolNames = cacheInfo.priorToolNames ?? [];
 
       // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
@@ -2333,31 +2337,47 @@ export class ChatCompletionProcess {
       // this gate only affects the regular chat path, where delegate_to_agent had
       // been a silent side-channel.
       //
-      // We expose delegation only when the user actually asked for it:
-      //   - caller passed an explicit `allowedAgents` allowlist (persona surfaces
-      //     that scope the agent set), OR
-      //   - the user typed `@agent` in this turn's message, OR
-      //   - the user attached an agent to the session via the UI.
-      // Otherwise `agentStore` is undefined and both `sharedToolBuilder` and the
-      // tool-prompt builder skip injecting the delegation surface entirely.
+      // The signal set lives in `shouldOfferDelegation` (autoAddedToolGating.ts) alongside the
+      // blog/skill gates, so all three auto-added surfaces are decided by seam-testable predicates
+      // rather than an inline boolean here.
       //
-      // An explicit `allowedAgents: []` is treated as "no delegation requested"
-      // rather than "delegation requested with no allowed agents" - the latter
-      // would expose `delegate_to_agent` to the model but give it nothing to
-      // delegate to, which is strictly worse than suppressing the tool.
-      // Predicate order is cheap-first: allowedAgents/session.agentIds are O(1)
-      // property reads; detectAgentMentions runs a regex over the prompt.
+      // The @mention arm is narrowed to mentions that name an agent this store can actually run.
+      // "Any @mention at all" fired on every `@teammate` or pasted handle in ordinary prose, which
+      // both paid the ~786-token schema on chats with no delegatable target and re-opened the
+      // self-delegation side-channel above.
+      //
+      // Narrowing it costs no reachable behavior because a *persona* mention arrives here through
+      // the session arm instead: AgentDetectionFeature.beforeDataGathering runs earlier in this
+      // method (the features_before loop), resolves `@handle` against the `agents` collection by
+      // trigger word, and writes every match onto `session.agentIds` in place - so by the time this
+      // gate reads `session.agentIds`, a mention that named a real persona has already set it. The
+      // mentions this narrowing drops are exactly the ones that resolved to nothing. (Personas
+      // could not be delegation targets anyway: they are applied as a system prompt, while
+      // `delegate_to_agent`'s `agent` enum only ever lists this store's own definitions.)
+      //
+      // The hand-off needs AgentDetectionFeature registered, which takes the per-user
+      // `enableAgents` experimental feature (default OFF) plus the EnableAgents admin setting.
+      // With either off the feature never runs, so a persona mention resolves to nothing and does
+      // not apply its system prompt either - the mention was already inert, and withholding the
+      // tool on it costs no working behavior. Verified live on a preview both ways.
       const hasAllowedAgentsAllowlist = (parsedBody.allowedAgents?.length ?? 0) > 0;
-      const hasSessionAgent = (session.agentIds?.length ?? 0) > 0;
-      // A curated surface that suppresses user integrations (session.disableUserIntegrations)
-      // must never delegate to agents - force this off so `agentStore` stays undefined and
-      // `delegate_to_agent` is never injected, regardless of allowedAgents / session.agentIds /
-      // @mentions (none of which consult `enableAgents`). This makes the field honor its
-      // "no agent delegation" contract self-sufficiently; the disabledTools denylist below is
-      // the second layer of defense.
-      const userRequestedDelegation =
-        !session.disableUserIntegrations &&
-        (hasAllowedAgentsAllowlist || hasSessionAgent || detectAgentMentions(message).length > 0);
+      const userRequestedDelegation = shouldOfferDelegation({
+        // A curated surface that suppresses user integrations must never delegate to agents. This
+        // hard veto makes `session.disableUserIntegrations` honor its "no agent delegation"
+        // contract self-sufficiently; the disabledTools denylist below is the second layer.
+        disableUserIntegrations: Boolean(session.disableUserIntegrations),
+        allowedAgents: parsedBody.allowedAgents,
+        sessionAgentIds: session.agentIds,
+        message,
+        delegatableAgentNames: fullAgentStore.getAgentNames(),
+      });
+      // All three delegation surfaces (the tool schema in sharedToolBuilder, the "Agent Delegation"
+      // section of the tool prompt, and `promptMeta.offeredTools`) key off the `agentStore` below,
+      // so this one line explains all of them.
+      logger.debug(
+        `[Delegation] delegate_to_agent ${userRequestedDelegation ? 'offered' : 'withheld'} ` +
+          `(allowlist=${hasAllowedAgentsAllowlist}, sessionAgents=${session.agentIds?.length ?? 0})`
+      );
       const agentStore = !userRequestedDelegation
         ? undefined
         : hasAllowedAgentsAllowlist
@@ -2698,6 +2718,12 @@ export class ChatCompletionProcess {
         attachedFiles: fabMessages,
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the
+      // promptMode filter so the boundary lands on a block that actually ships. Unconditional
+      // by design: `IMessage.cache` only DECLARES a breakpoint - each backend decides whether
+      // to translate it (Anthropic-family does, the others ignore it per the field's contract),
+      // and the cacheStrategy built later in this method still governs the other breakpoints.
+      markShareablePrefixBoundary(admittedContextMessages);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -2868,19 +2894,38 @@ export class ChatCompletionProcess {
         // the estimate-layer boundary keeps advancing normally on subsequent turns.
         let effectiveTotalTokens = totalTokens;
         let effectiveHistoryTokens = historyTokens;
-        if (inputTokens > maxSafeInputTokens && previousMessages.length > 0) {
+        if (
+          inputTokens > maxSafeInputTokens &&
+          previousMessages.length > 0 &&
+          // If tool schemas alone already consume the whole budget, maxSafeInputTokens -
+          // toolSchemaTokens is <= 0 and no amount of history shedding can recover: skip straight to
+          // the hard-overflow check below instead of calling buildAndSortMessages with an invalid
+          // budget, which would log at error severity for an outcome this branch already knows is
+          // unrecoverable.
+          toolSchemaTokens < maxSafeInputTokens
+        ) {
           let recoveryHistory: IMessage[] = previousMessages;
           let shedTurns = 0;
+          // Baseline from the first build (the full maxSafeInputTokens budget, not the
+          // tool-schema-reserved one below) - a system message present there is content that should
+          // survive recovery. preSystemBudget/systemTokenCap derive only from the budget argument, which
+          // is fixed at maxSafeInputTokens - toolSchemaTokens for every iteration of this loop, so once
+          // that reservation is too small to admit any system message it stays too small on every
+          // iteration - shedding more history cannot free system-prompt budget.
+          const hadSystemMessages = messages.some(message => message.role === 'system');
           while (inputTokens > maxSafeInputTokens) {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
+            // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
+            // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
+            // maxSafeInputTokens would let it report "fits" and still overflow once tools are added back.
             const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
-              maxSafeInputTokens,
+              maxSafeInputTokens - toolSchemaTokens,
               defaultAdminSettings,
               historyCount,
               logger,
@@ -2888,6 +2933,12 @@ export class ChatCompletionProcess {
               buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
+            // A non-empty rebuild can still have silently dropped every system message: the reserved
+            // budget can land small enough that buildAndSortMessages' own system-prompt cap admits none
+            // of them, and messageTruncation never reports this (its removed-message tracking only
+            // covers history/content, not the system-candidate admission loop). Reject it the same way
+            // as an empty rebuild rather than accepting a completion missing its system-role content.
+            if (hadSystemMessages && rebuilt.every(message => message.role !== 'system')) break;
             messages = rebuilt;
             // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
             // identities, so the first build's injectedBlocks would misreport delivery against this
@@ -3027,6 +3078,9 @@ export class ChatCompletionProcess {
         } catch (injectedDetailsError) {
           logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
         }
+        // Sorted once, after every batch has landed, so the persisted array reads in the order the
+        // model sees the blocks rather than the order the three helpers happened to run.
+        systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       }
 
@@ -3286,6 +3340,17 @@ export class ChatCompletionProcess {
         : [];
       quest.promptMeta!.context!.projectSystemFileIds = projectFileIds;
 
+      // File-level breakdown of every system-prompt source, by bucket - see
+      // buildSystemPromptSourceFiles for why fileName is absent for project-sourced entries.
+      quest.promptMeta!.context!.systemPromptSources = buildSystemPromptSourceFiles(
+        new Map(convertedFabFiles.map(file => [file.id, file.fileName])),
+        {
+          global: globalSystemFileIds,
+          userEnabled: enabledSystemFileIds,
+          project: projectFileIds,
+        }
+      );
+
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] === CONTEXT RETRIEVAL PHASE COMPLETED in ${
           Date.now() - processStartTime
@@ -3538,7 +3603,11 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
-            let toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = [];
+            // NonNullable<CompletionInfo['toolsUsed']> (Array<RecordableToolUse>, not re-exported
+            // on its own) rather than a hand-rolled {name,arguments,id} shape - the old narrower
+            // annotation compiled fine (the extras are optional) but hid returnValue/success from
+            // TypeScript entirely, defeating toolsUsedToFunctionCalls's whole reason for existing.
+            let toolsUsed: NonNullable<CompletionInfo['toolsUsed']> = [];
 
             // Get idle timeout settings for Anthropic streaming hang detection
             const enableIdleTimeout = getSettingsValue('EnableStreamIdleTimeout', defaultAdminSettings) === true;
@@ -3636,19 +3705,16 @@ export class ChatCompletionProcess {
               async (streamedTexts, completionInfo) => {
                 toolsUsed = completionInfo?.toolsUsed || [];
                 // Include tool ID for Anthropic API tool pairing reconstruction
-                quest.promptMeta!.functionCalls = toolsUsed.map(tool => {
-                  let parameters: Record<string, unknown> = {};
-                  try {
-                    parameters = JSON.parse(tool.arguments || '{}');
-                  } catch (e) {
+                quest.promptMeta!.functionCalls = toolsUsedToFunctionCalls(
+                  toolsUsed,
+                  ({ toolName, argumentsPreview, error }) => {
                     logger.warn('[ChatCompletionProcess] Skipping malformed tool arguments in functionCalls (#9328)', {
-                      toolName: tool.name,
-                      argumentsPreview: (tool.arguments || '').substring(0, 100),
-                      error: e instanceof Error ? e.message : String(e),
+                      toolName,
+                      argumentsPreview,
+                      error,
                     });
                   }
-                  return { name: tool.name, parameters, id: tool.id };
-                });
+                );
                 // Clear the interval on first response and calculate TTFVT
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
                   // Capture TTFVT on first non-empty chunk (regardless of chunk number)
@@ -4340,31 +4406,45 @@ export class ChatCompletionProcess {
         // keeps the capped cache-read discount and never bills cache creation,
         // exactly the pre-provider-basis behavior. The bases never blend.
         //
-        // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
-        // Anthropic-family adapters - the direct Anthropic adapter and
-        // Claude-on-Bedrock (bedrockBackend/base.ts) - whose input_tokens EXCLUDE
-        // cached tokens. OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache
-        // and must not forward cache counts here without also subtracting them
-        // from input.
+        // Disjoint-fields assumption: whatever an adapter forwards as
+        // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
+        // adapters (the direct Anthropic adapter and Claude-on-Bedrock,
+        // bedrockBackend/base.ts) get this for free - their input_tokens already exclude
+        // cached tokens. Providers that report prompt tokens INCLUSIVE of cache
+        // (OpenAI, Moonshot) subtract in the adapter before forwarding, via each
+        // backend's splitCachedInput. An adapter that forwards without subtracting
+        // double-bills the cached portion here; one that forwards nothing bills every
+        // cache hit at the full input rate.
         //
         // NOTE: the provider input (uncached tail) drives getTextModelCost's
         // pricing-tier selection. Every model today publishes a single tier, so
         // this is exact; if tiered pricing lands, a heavily-cached prompt could
         // select a cheaper tier for its cache volume - revisit tier selection then.
-        const hasProviderUsage = (actualTokenUsage?.inputTokens ?? 0) > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
+        // Summed across all three input components, not just the uncached tail: on a
+        // fully-cached prompt the provider legitimately reports 0 uncached input, and
+        // reading that as "nothing reported" would drop the row onto the local estimate
+        // and discard the very discount that zeroed it.
+        const providerInputTokens =
+          (actualTokenUsage?.inputTokens ?? 0) +
+          (actualTokenUsage?.cacheReadInputTokens ?? 0) +
+          (actualTokenUsage?.cacheCreationInputTokens ?? 0);
+        const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? actualTokenUsage.inputTokens! : inputTokens;
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
           : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+        // Provider-basis only: the local fallback deliberately never bills cache creation,
+        // so recording a value there would imply a charge that was not made.
+        const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
         const estimatedCost = hasProviderUsage
           ? getTextModelCost(
               currentModel,
               settledInputTokens,
               settledOutputTokens,
               cacheReadInputTokens,
-              actualTokenUsage.cacheCreationInputTokens ?? 0
+              cacheCreationInputTokens
             )
           : getTextModelCost(
               currentModel,
@@ -4385,6 +4465,7 @@ export class ChatCompletionProcess {
           actualInputTokens: actualTokenUsage?.inputTokens,
           actualOutputTokens: actualTokenUsage?.outputTokens,
           cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
+          cacheCreationInputTokens: cacheCreationInputTokens > 0 ? cacheCreationInputTokens : undefined,
           settledBasis,
           estimatedCost,
           creditsUsed: textCreditsUsed,
@@ -5662,7 +5743,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     urlMessages: IMessage[];
     remainingUserPrompt: string;
     fabMessages: IMessage[];
-    convertedFabFiles: Array<{ fileName: string; mimeType: string; fileSize?: number }>;
+    convertedFabFiles: Array<{ id: string; fileName: string; mimeType: string; fileSize?: number }>;
     globalSystemFileIds: string[];
     enabledSystemFileIds: string[];
     allFileIdsBeforeDedup: string[];
@@ -5745,7 +5826,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const dedupedFileIds = Array.from(new Set(allFileIdsBeforeDedup));
 
     let fabMessages: IMessage[] = [];
-    let convertedFabFiles: Array<{ fileName: string; mimeType: string; fileSize?: number }> = [];
+    let convertedFabFiles: Array<{ id: string; fileName: string; mimeType: string; fileSize?: number }> = [];
     let fabResultPromise: Promise<Awaited<ReturnType<typeof this.fabFilesToMessages>> | undefined> =
       Promise.resolve(undefined);
 

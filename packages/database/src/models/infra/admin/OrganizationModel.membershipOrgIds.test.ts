@@ -77,4 +77,26 @@ describe('OrganizationRepository.search - users[] ACL membership arm', () => {
     await makeOrg('unrelated', { users: [{ userId: 'someone', permissions: ['read'] }] });
     expect(await searchByUser('u1')).toEqual([]);
   });
+
+  it('returns the SAME set as findMembershipOrgIds across every membership shape (#1648)', async () => {
+    // search() backs the account-switcher list, which is where the data-lake write paths get the
+    // org id they stamp; findMembershipOrgIds backs the read scope that decides which org lakes
+    // list. An org present in one but not the other is selectable-but-unlistable - that
+    // disagreement is what made a lake created in a switched-to org invisible in its creator's own
+    // manager (#1648). The fixture spans all four shapes so widening one predicate's arms without
+    // the other fails here rather than in the manager.
+    const owned = await makeOrg('owned', { userId: 'u1' });
+    const viaAcl = await makeOrg('via-acl', { users: [{ userId: 'u1', permissions: ['read'] }] });
+    await makeOrg('unrelated-org');
+    // Group-mediated only: absent from BOTH predicates today. The write-side validator
+    // (resolveActiveOrg -> shareable.findAccessibleById) DOES accept it, so this row is what would
+    // change shape first if that wider predicate ever became the read predicate too.
+    await makeOrg('via-group', { groups: [{ groupId: 'g1', permissions: ['read'] }] });
+
+    // Both sides sorted: searchByUser returns name-ordered rows, so comparing raw would pin
+    // incidental ordering rather than set equality, which is what the invariant is about.
+    const expected = [String(owned._id), String(viaAcl._id)].sort();
+    expect((await searchByUser('u1')).sort()).toEqual(expected);
+    expect((await organizationRepository.findMembershipOrgIds('u1')).sort()).toEqual(expected);
+  });
 });

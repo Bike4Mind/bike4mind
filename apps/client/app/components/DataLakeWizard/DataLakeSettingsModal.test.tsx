@@ -10,9 +10,33 @@ const updateMutate = vi.fn();
 const visibilityMutate = vi.fn();
 const warn = vi.fn();
 
+// Steady state for the tests that don't care about spend: no data, not loading, not forbidden.
+// The spend-tab suite below overrides this per test via useDataLakeSpendMock.
+const useDataLakeSpendMock = vi.fn(() => ({
+  data: undefined,
+  isLoading: false,
+  isFetching: false,
+  isForbidden: false,
+  error: null,
+  refetch: vi.fn(),
+}));
+
+// Steady state for the tests that don't care about the history tab. The history suite below
+// overrides it per test.
+const useLakeConfigHistoryMock = vi.fn(() => ({
+  data: undefined,
+  isLoading: false,
+  isFetching: false,
+  isForbidden: false,
+  error: null,
+  refetch: vi.fn(),
+}));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
+  useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
+  useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
 }));
 
 // The picker's options come from an async react-query hook. Mock it so the modal renders
@@ -56,6 +80,24 @@ beforeEach(() => {
   activatablePrompts = [TRIAGE_ROUTER];
   activatableLoading = false;
   activatableError = false;
+  useDataLakeSpendMock.mockClear();
+  useDataLakeSpendMock.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isForbidden: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  useLakeConfigHistoryMock.mockClear();
+  useLakeConfigHistoryMock.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isForbidden: false,
+    error: null,
+    refetch: vi.fn(),
+  });
 });
 
 const gatedLake = {
@@ -69,6 +111,7 @@ const gatedLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  requiredPassageTokenTarget: null,
   canManage: true,
 };
 
@@ -83,6 +126,7 @@ const openLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  requiredPassageTokenTarget: null,
   canManage: true,
 };
 
@@ -97,6 +141,7 @@ const entitlementGatedLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  requiredPassageTokenTarget: null,
   canManage: true,
 };
 
@@ -152,7 +197,9 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
 
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/must hold this tag/i);
     await user.clear(screen.getByPlaceholderText('e.g. Opti'));
-    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/removes the “Opti” gate/i);
+    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(
+      /removes the \u201COpti\u201D gate/i
+    );
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/follows Visibility/i);
   });
 
@@ -566,5 +613,307 @@ describe('DataLakeSettingsModal \u2014 grounding mode', () => {
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
     expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('groundingMode');
+  });
+});
+
+describe('DataLakeSettingsModal - Spend tab visibility', () => {
+  const manageableLake = { ...openLake, id: 'lake-spend-1', embeddingSpendMicroUsd: 0 };
+  const readerLake = { ...openLake, id: 'lake-spend-2', canManage: false, embeddingSpendMicroUsd: undefined };
+
+  it('shows no Spend tab when embeddingSpendMicroUsd is absent (non-manager)', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-spend')).not.toBeInTheDocument();
+  });
+
+  it('shows the Spend tab when embeddingSpendMicroUsd is present, even at 0', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-spend')).toBeInTheDocument();
+  });
+
+  it('does not fetch spend until the tab is actually clicked (lazy)', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(useDataLakeSpendMock).toHaveBeenCalledWith('lake-spend-1', 30, { enabled: false });
+
+    await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+
+    expect(useDataLakeSpendMock).toHaveBeenCalledWith('lake-spend-1', 30, { enabled: true });
+  });
+
+  it('removes the tab retroactively on a 403 and shows no error paint', () => {
+    useDataLakeSpendMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: true,
+      error: { message: 'Forbidden' },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-spend')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-spend-error')).not.toBeInTheDocument();
+  });
+
+  it('renders the spend panel content once the tab is open', async () => {
+    useDataLakeSpendMock.mockReturnValue({
+      data: {
+        dataLakeId: 'lake-spend-1',
+        days: 30,
+        embeddingSpendMicroUsd: 5_000_000,
+        spendEnabled: true,
+        perRunBudgetMicroUsd: 5_000_000,
+        perLakeBudgetMicroUsd: 100_000_000,
+        perPeriodBudgetMicroUsd: 50_000_000,
+        periodHours: 24,
+        tierMultiplier: 1,
+        ledger: {
+          overTime: [],
+          byMember: [],
+          byModel: [
+            { provider: 'openai', model: 'text-embedding-3-small', requests: 3, cogsUsd: 5, creditsCharged: 0 },
+          ],
+          byFeature: [],
+          totals: { requests: 3, cogsUsd: 5, creditsCharged: 0 },
+        },
+      },
+      isLoading: false,
+      isFetching: false,
+      isForbidden: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+
+    expect(screen.getByTestId('datalake-spend-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-spend-lifetime')).toHaveTextContent('$5.00');
+  });
+
+  it('hides the Settings form Save/Cancel actions while the Spend tab is open (nothing to save there)', async () => {
+    useDataLakeSpendMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - History tab', () => {
+  const managerLake = { ...openLake, id: 'lake-hist-1', canManage: true };
+  const readerLake = { ...openLake, id: 'lake-hist-2', canManage: false, embeddingSpendMicroUsd: undefined };
+
+  const historyView = {
+    lakeId: 'lake-hist-1',
+    lakeName: 'Open Lake',
+    truncated: false,
+    generatedAt: new Date('2026-08-18T12:00:00Z'),
+    entries: [
+      {
+        eventId: 'evt-1',
+        changedAt: new Date('2026-08-17T10:30:00Z'),
+        principalKind: 'user' as const,
+        principalId: '000000000000000000000001',
+        principalName: 'Ada Lovelace',
+        manageRung: 'grant-owner' as const,
+        action: 'update' as const,
+        changes: [{ field: 'name' as const, kind: 'literal' as const, before: 'Old', after: 'New' }],
+      },
+    ],
+  };
+
+  it('shows the History tab for a manager', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-history')).toBeInTheDocument();
+  });
+
+  it('shows NO History tab to a non-manager - the history is editor-only, like the fields it describes', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-history')).not.toBeInTheDocument();
+  });
+
+  it('does not fetch the history until the tab is actually clicked (lazy)', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(useLakeConfigHistoryMock).toHaveBeenCalledWith('lake-hist-1', false);
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+
+    expect(useLakeConfigHistoryMock).toHaveBeenCalledWith('lake-hist-1', true);
+  });
+
+  it('removes the tab retroactively on a 403 and shows no error paint', () => {
+    useLakeConfigHistoryMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: true,
+      error: { message: 'Forbidden' },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-settings-tab-history')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-config-history-error')).not.toBeInTheDocument();
+  });
+
+  it('renders the recorded changes once the tab is open', async () => {
+    const user = userEvent.setup();
+    useLakeConfigHistoryMock.mockReturnValue({
+      data: historyView,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+
+    expect(screen.getByTestId('datalake-config-history-table')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Old -> New')).toBeInTheDocument();
+  });
+
+  it('hides Save/Cancel on the read-only History tab, and restores them on Settings', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-history'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
+
+// An EXPLICIT target is the sole trigger for convergence (isConvergeablePolicy), so without a
+// control for it the whole feature is unreachable from the app - which is how it shipped to QA.
+describe('DataLakeSettingsModal - required passage size', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+    warn.mockReset();
+  });
+
+  it('adopts an explicit target, which is what makes the lake convergeable', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.type(screen.getByTestId('datalake-passage-target-input'), '512');
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-2', requiredPassageTokenTarget: 512 });
+  });
+
+  // null is the server's CLEAR sentinel, and going back to inheriting is what turns convergence off
+  // for a lake - so a blank field must send it rather than omit the key ("leave unchanged").
+  it('sends null when the field is blanked, returning the lake to the inherited default', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, requiredPassageTokenTarget: 512 }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.clear(screen.getByTestId('datalake-passage-target-input'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ requiredPassageTokenTarget: null });
+  });
+
+  // Checked against the same bounds the request schema enforces: a 400 would reject the WHOLE
+  // request, losing the name/description/gate edits sent alongside it.
+  it('refuses to save an out-of-range target rather than losing the rest of the form to a 400', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.type(screen.getByTestId('datalake-passage-target-input'), '99999');
+
+    // Save is disabled rather than allowed-then-rejected, so the correction happens before the
+    // request that would have thrown the rest of the form away.
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+    expect(screen.getByTestId('datalake-passage-target-help').textContent).toContain('between 64 and 1500');
+    expect(updateMutate).not.toHaveBeenCalled();
   });
 });

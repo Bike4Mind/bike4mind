@@ -148,6 +148,11 @@ const CompletionContentEventSchema = z.object({
   usage: CompletionUsageSchema.optional(),
   credits: z.object({ used: z.number().optional(), usdCost: z.number().optional() }).optional(),
   responseFormatMode: z.enum(['native', 'tool_use', 'best-effort']).optional(),
+  // Why generation ended, on the terminal event. Normalized vocabulary (see stopReasons.ts):
+  // 'max_tokens' means the reply was CUT OFF, not finished. Left as a plain string rather
+  // than an enum so a new or provider-specific reason reaches clients instead of failing
+  // validation at the boundary.
+  stopReason: z.string().optional(),
   // Complete assistant message incl. reasoning blocks (Anthropic extended thinking with tools).
   thinking: z.array(z.any()).optional(),
 });

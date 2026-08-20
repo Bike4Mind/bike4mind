@@ -4,6 +4,7 @@ import {
   getEmbeddingModelCost,
   IFabFileDocument,
   isSupportedEmbeddingModel,
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -14,6 +15,7 @@ import {
   type ITokenizer,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
@@ -24,18 +26,22 @@ import {
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
-import {
-  describeEmbeddingMismatch,
-  PARTIAL_RESULTS_STATUS_SUFFIX,
-} from '../../../../dataLakeService/embeddingMismatch';
+import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
+import { describeSearchLimitations } from '../../../../dataLakeService/retrievalUnavailable';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   SemanticChunkResult,
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
-import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
+import {
+  positiveIntOr,
+  resolveSearchBudgets,
+  type ResolvedSearchBudgets,
+} from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
+import { attributeAccessedLakeIds, type AttributableLake } from '../../../../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -349,10 +355,22 @@ interface SemanticArmResult {
   /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
    *  whenever `output` is null (nothing matched, or the arm never ran). */
   fileHits: Array<{ id: string; fileName: string }>;
+  /** Lake ids attributed from the matched files' tags, for the access-event audit.
+   *  Always empty for the agent-scoped arm, which never consults lake access at all. */
+  lakeIds: string[];
+  /** Chunk ids of the matched passages, for the same audit event. */
+  chunkIds: string[];
 }
 
 /** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
-const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [], fileHits: [] };
+const NO_SEMANTIC_RESULT: SemanticArmResult = {
+  output: null,
+  skipNotice: null,
+  datalakeTags: [],
+  fileHits: [],
+  lakeIds: [],
+  chunkIds: [],
+};
 
 /**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
@@ -379,7 +397,7 @@ async function trySemanticKbSearch(
     if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled } = embedCtx;
 
-    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await getDynamicDataLakeAccess(context);
     // No accessible data lake - keyword search owns the user's own files.
     if (dataLakeTags.length === 0) return NO_SEMANTIC_RESULT;
 
@@ -412,9 +430,10 @@ async function trySemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    const skipNotice = describeSearchLimitations(search);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
+    if (search.results.length === 0)
+      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 
     // Honor the max_results contract: topK fetches a wider pool (>=6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
@@ -433,6 +452,16 @@ async function trySemanticKbSearch(
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
+      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
+      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
+      // the lake arms), same as the keyword arm below - a hit with no recoverable tag may be the
+      // caller's own private file, so this must NOT fall back to the full scope.
+      lakeIds: attributeAccessedLakeIds(
+        ranked.map(r => r.fileTags),
+        lakes,
+        { allowFullScopeFallback: false }
+      ),
+      chunkIds: ranked.map(r => r.chunkId),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
@@ -485,8 +514,9 @@ async function tryScopedSemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
+    const skipNotice = describeSearchLimitations(search);
+    if (search.results.length === 0)
+      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
@@ -497,6 +527,8 @@ async function tryScopedSemanticKbSearch(
       skipNotice,
       datalakeTags: [],
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
+      lakeIds: [],
+      chunkIds: ranked.map(r => r.chunkId),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
@@ -505,12 +537,40 @@ async function tryScopedSemanticKbSearch(
 }
 
 /**
- * Bounds on `max_results`. The tool schema below and the clamp in the handler BOTH read these,
+ * Ceiling on `max_results`. The tool schema below and the clamp in the handler BOTH read this,
  * so the number advertised to the model and the number enforced on it cannot drift apart - the
  * same reason the serve budget is derived from the chunk policy rather than set beside it.
+ *
+ * Stays a coded constant rather than the `kbSearchDefaultResults` setting's sibling lever: it is
+ * also the tool schema's advertised `maximum`, and that schema is built synchronously (see
+ * `knowledgeBaseSearchTool.implementation` below), so raising it here alone would be inert - a
+ * model reading `maximum: 10` from its own tool schema won't ask for more than 10 regardless.
  */
 export const KB_SEARCH_MAX_RESULTS = 10;
-export const KB_SEARCH_DEFAULT_RESULTS = 5;
+
+/**
+ * The admin's configured `kbSearchDefaultResults`, or the coded default on anything unusable.
+ * Mirrors `resolveForcedRetrievalCharBudget` in `ChatCompletionFeatures.ts`: same try/catch
+ * shape, same loud-fallback policy, same "resolved once per turn" discipline enforced by the
+ * caller (see the closure-scoped cache in `knowledgeBaseSearchTool.implementation`).
+ */
+async function resolveKbSearchDefaultResults(context: ToolContext): Promise<number> {
+  try {
+    const configured = await context.db.adminSettings.getSettingsValue('kbSearchDefaultResults');
+    return positiveIntOr(
+      configured as string | number | null | undefined,
+      KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+      'kbSearchDefaultResults',
+      context.logger
+    );
+  } catch (err) {
+    context.logger.warn(
+      `Knowledge base search: failed to read kbSearchDefaultResults; falling back to ${KB_SEARCH_DEFAULT_RESULTS_DEFAULT}`,
+      err
+    );
+    return KB_SEARCH_DEFAULT_RESULTS_DEFAULT;
+  }
+}
 
 /**
  * Narrow a model-supplied `max_results` to the bound the schema advertises.
@@ -525,13 +585,19 @@ export const KB_SEARCH_DEFAULT_RESULTS = 5;
  * the model nothing, a negative slices off the best-ranked results, and a non-numeric poisons
  * topK as NaN. Typed `unknown` because the declared `number` is only a claim about JSON we parsed.
  *
- * Unset takes the default rather than the floor, matching positiveIntOr in resolveSearchBudgets:
- * `null` and `''` are the model declining to choose, not a request for one result.
+ * Unset takes `defaultResults` rather than the floor, matching positiveIntOr in
+ * resolveSearchBudgets: `null` and `''` are the model declining to choose, not a request for one
+ * result. `defaultResults` is the caller's already-resolved `kbSearchDefaultResults` value, not
+ * re-read here, so this stays synchronous. It is still run through the same clamp below: the
+ * setting's own schema already rejects a stored value above KB_SEARCH_MAX_RESULTS, but clamping
+ * here too keeps that ceiling a guarantee of this function, not a fact borrowed from a different
+ * package's validation.
  */
-function clampMaxResults(raw: unknown): number {
-  if (raw === undefined || raw === null || raw === '') return KB_SEARCH_DEFAULT_RESULTS;
+function clampMaxResults(raw: unknown, defaultResults: number): number {
+  const safeDefault = Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  if (raw === undefined || raw === null || raw === '') return safeDefault;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return KB_SEARCH_DEFAULT_RESULTS;
+  if (!Number.isFinite(n)) return safeDefault;
   return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
 }
 
@@ -664,14 +730,19 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
     let lastSkipNotice: string | null = null;
+    // Resolved at most once per completion, same discipline as searchCallCount above -
+    // getSettingsValue is an uncached read, so a settings read on every search_knowledge_base
+    // call would cost a real DB round-trip for no benefit.
+    let defaultResultsPromise: Promise<number> | undefined;
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
         await context.onStart?.('search_knowledge_base', params);
         const { query, tags, file_type } = params;
+        defaultResultsPromise ??= resolveKbSearchDefaultResults(context);
         // Every consumer below reads maxResults, never params.max_results: one clamp at the
         // single entry point is what keeps a later edit from reopening the hole at one of them.
-        const maxResults = clampMaxResults(params.max_results);
+        const maxResults = clampMaxResults(params.max_results, await defaultResultsPromise);
 
         searchCallCount++;
         if (searchCallCount > MAX_SEARCHES) {
@@ -727,11 +798,41 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             semantic.datalakeTags,
             injectedLakeTags
           );
+          // Best-effort audit write, only reached when semantic.output is non-null - a null output
+          // means the search was skipped or found nothing, so there is no lake read to record.
+          // resolvedLakeIds stays empty for the agent-scoped arm by design (semantic.lakeIds is
+          // always [] there) - it never consults lake access, and it is recorded regardless
+          // (membership IS the authorization). The unscoped arm's corpus is mixed, so it is
+          // skipped entirely when nothing retrieved is actually attributable to a lake.
+          if (scope || semantic.lakeIds.length > 0) {
+            recordLakeAccessEvent(
+              context.db.lakeAccessEvents,
+              {
+                // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+                principalKind: 'user',
+                principalId: context.userId,
+                organizationId: normalizeId(context.user.organizationId),
+                resolvedLakeIds: semantic.lakeIds,
+                // semantic.fileHits is chunk-level (one entry per ranked passage, per fileHits'
+                // own construction below) - deduped the same way semantic-search.ts's sibling
+                // route does, so this counts files read, not chunks matched.
+                fileIds: [...new Set(semantic.fileHits.map(f => f.id))],
+                chunkIds: semantic.chunkIds,
+                surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
+                queryText: query,
+              },
+              context.logger,
+              context.db.adminSettings
+            );
+          }
           return withLakePrompts + attachmentInlineNotice(context, semantic.fileHits);
         }
 
         try {
           let searchResults;
+          // Populated only in the unscoped arm below (mirrors the semantic arm: a scoped call
+          // never consults lake access, so its audit event carries no lake attribution either).
+          let keywordArmLakes: AttributableLake[] = [];
           if (scope) {
             // Scoped keyword arm: restrictToFileIds is the sole authority (skipOwnership -
             // curated files match even when owned by another user, mirroring the semantic
@@ -759,7 +860,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           } else {
             // Search files the user has access to (owned + shared + org-shared + data lake)
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } =
+              await getDynamicDataLakeAccess(context);
+            keywordArmLakes = lakes;
             searchResults = await context.db.fabfiles.search(
               context.userId,
               query,
@@ -901,6 +1004,40 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           }
 
+          // Best-effort audit write, only when the keyword fallback actually found
+          // something - an empty rankedResults means nothing was read. The unscoped arm's
+          // corpus is mixed (owned + shared + org-shared + data lake), so a hit with no
+          // recoverable datalake tag may just be the caller's own private file - never fall
+          // back to the full scope here (unlike the semantic arms, whose corpus is lake-scoped
+          // by construction), and skip the row entirely if nothing is actually attributable to a
+          // lake, since a read that touched zero lake content is not lake access. The scoped arm
+          // has no lake concept at all (resolvedLakeIds is always []) but is recorded regardless -
+          // see the surface's own note on why that row still matters.
+          if (rankedResults.length > 0) {
+            const resolvedLakeIds = attributeAccessedLakeIds(
+              rankedResults.map((f: IFabFileDocument) => f.tags?.map(t => t.name) ?? []),
+              keywordArmLakes,
+              { allowFullScopeFallback: false }
+            );
+            if (scope || resolvedLakeIds.length > 0) {
+              recordLakeAccessEvent(
+                context.db.lakeAccessEvents,
+                {
+                  // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+                  principalKind: 'user',
+                  principalId: context.userId,
+                  organizationId: normalizeId(context.user.organizationId),
+                  resolvedLakeIds,
+                  fileIds: rankedResults.map((f: IFabFileDocument) => f.id),
+                  surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
+                  queryText: query,
+                },
+                context.logger,
+                context.db.adminSettings
+              );
+            }
+          }
+
           return (
             formatSearchResults(rankedResults) +
             formatSkipNotice(semantic.skipNotice) +
@@ -936,7 +1073,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             },
             max_results: {
               type: 'number',
-              description: `Maximum number of results to return (default: ${KB_SEARCH_DEFAULT_RESULTS}, max: ${KB_SEARCH_MAX_RESULTS})`,
+              // This schema is built synchronously (see the comment on KB_SEARCH_MAX_RESULTS
+              // above), so it cannot read the live kbSearchDefaultResults setting. Omitting the
+              // default rather than stating the coded one avoids the model reading a stale number
+              // and passing it explicitly as max_results, which would bypass an admin's raised
+              // default on every such call.
+              description: `Maximum number of results to return (max: ${KB_SEARCH_MAX_RESULTS})`,
               minimum: 1,
               maximum: KB_SEARCH_MAX_RESULTS,
             },
