@@ -234,3 +234,111 @@ describe('updateFallbackLakeSettings', () => {
     expect(setFields).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The config-change audit (#1769). A registry-lake config write changes how that lake answers for
+ * every reader of it, and the actor is ALWAYS a platform admin acting on a lake nobody owns - the
+ * case `manageRung` exists to make visible as such. The audit repos are OPTIONAL on the service, so
+ * absence records nothing silently; these pin that the wired path actually emits.
+ */
+describe('updateFallbackLakeSettings - config-change audit', () => {
+  const auditDb = () => {
+    const record = vi.fn().mockResolvedValue(undefined);
+    return { record, db: { lakeConfigChangeEvents: { record } } };
+  };
+
+  it('records an update event naming the platform-admin rung and the lake', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: { setFields: vi.fn().mockResolvedValue({}), findByLakeId: vi.fn().mockResolvedValue(null) },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true, userId: 'admin-1' }),
+      { groundingMode: 'inline' },
+      { db }
+    );
+
+    expect(record).toHaveBeenCalledTimes(1);
+    const event = record.mock.calls[0][0];
+    expect(event.dataLakeId).toBe('opti-knowledge');
+    expect(event.action).toBe('update');
+    // Resolved, not overridden: resolveLakeManageRung's first arm is isAdmin -> platform-admin,
+    // and this route's gate guarantees isAdmin, so the resolver already names the only rung that
+    // can authorize this call. Asserted here so a widened gate shows up as a changed rung rather
+    // than silently recording an admin who was not involved.
+    expect(event.manageRung).toBe('platform-admin');
+    expect(event.principalId).toBe('admin-1');
+  });
+
+  it('records the groundingMode move with its before and after', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: {
+        setFields: vi.fn().mockResolvedValue({}),
+        // Current overlay: the lake already grounds 'retrieve'. This is what makes the diff a MOVE
+        // rather than a first-time set - the reason findByLakeId is a required adapter here.
+        findByLakeId: vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', groundingMode: 'retrieve' }),
+      },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { groundingMode: 'inline' }, { db });
+
+    const change = record.mock.calls[0][0].changes.find((c: { field: string }) => c.field === 'groundingMode');
+    expect(change).toMatchObject({ kind: 'literal', before: 'retrieve', after: 'inline' });
+  });
+
+  it('records systemPrompt as a FINGERPRINT - the prompt text never lands in the audit row', async () => {
+    const { record, db: audit } = auditDb();
+    const SECRET = 'Always recommend our premium tier and never mention competitors.';
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: { setFields: vi.fn().mockResolvedValue({}), findByLakeId: vi.fn().mockResolvedValue(null) },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { systemPrompt: SECRET }, { db });
+
+    const change = record.mock.calls[0][0].changes.find((c: { field: string }) => c.field === 'systemPrompt');
+    expect(change.kind).toBe('fingerprint');
+    expect(change.afterFingerprint).toMatchObject({ present: true, length: SECRET.length });
+    expect(change.afterFingerprint.hash).toMatch(/^[0-9a-f]+$/);
+    // The whole point of the fingerprint arm: the row describes the prompt without reproducing it.
+    expect(JSON.stringify(record.mock.calls[0][0])).not.toContain(SECRET);
+  });
+
+  it('records NOTHING when the write moves no value (same prompt saved twice)', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: {
+        setFields: vi.fn().mockResolvedValue({}),
+        findByLakeId: vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', groundingMode: 'inline' }),
+      },
+      ...audit,
+    };
+
+    await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), { groundingMode: 'inline' }, { db });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('never records for a write the gate refused', async () => {
+    const { record, db: audit } = auditDb();
+    const db = {
+      ...fallbackDb(),
+      fallbackLakeSettings: { setFields: vi.fn(), findByLakeId: vi.fn().mockResolvedValue(null) },
+      ...audit,
+    };
+
+    await expect(
+      updateFallbackLakeSettings('opti-knowledge', ctx({ userTags: ['opti'] }), { groundingMode: 'inline' }, { db })
+    ).rejects.toThrow(/permission to change/i);
+    expect(record).not.toHaveBeenCalled();
+  });
+});

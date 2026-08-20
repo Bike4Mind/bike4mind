@@ -6,16 +6,21 @@ import { UpdateFallbackLakeSettingsRequestInput } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
 
 /**
  * PUT /api/data-lakes/:id/settings - edit a STATIC (registry) lake's admin-settable overlay
- * (`groundingMode`, `preferredSystemPromptId` - see IFallbackLakeSetting). A separate route from
- * PUT /api/data-lakes/:id on purpose: that route's `assertLakeWritable` refuses fallback lakes
- * wholesale (there is no document for it to mutate), and this route's gate
+ * (`groundingMode`, `preferredSystemPromptId`, `systemPrompt` - see IFallbackLakeSetting). A
+ * separate route from PUT /api/data-lakes/:id on purpose: that route's `assertLakeWritable` refuses
+ * fallback lakes wholesale (there is no document for it to mutate), and this route's gate
  * (`assertFallbackLakeSettingsWriteAccess`) refuses the opposite direction - a persisted DB lake
  * must keep going through the ordinary update path so the two routes can never both claim to own
  * a lake's settings.
+ *
+ * Spreads `lakeConfigAuditDb` like every other lake config-write route: this is the fifth such
+ * route, and the helper exists precisely so a new one cannot land wired for the write but not the
+ * audit - which would be silent, since the service treats both audit repos as optional.
  */
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -35,7 +40,9 @@ const handler = baseApi()
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fallbackLakeSettings: fallbackLakeSettingsRepository,
+        ...lakeConfigAuditDb,
       },
+      logger: req.logger,
     });
 
     return res.json(updated);
