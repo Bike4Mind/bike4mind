@@ -43,21 +43,41 @@ jobs:
           MAX_AGE_HOURS: ${{ vars.SELFHOST_FRESHNESS_MAX_AGE_HOURS || '48' }}
         with:
           script: |
+            // Fail loud on our own misconfiguration. A set-but-non-numeric
+            // window (`48h`, `2d`, a stray space) makes maxAgeHours NaN, and
+            // `age > NaN` is always false - which would silently take this alarm
+            // offline the same way a mistyped runner label took the build
+            // offline for 29 days. Do not fall back to a default and hide it.
             const maxAgeHours = Number(process.env.MAX_AGE_HOURS);
+            if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) {
+              core.setFailed(
+                `SELFHOST_FRESHNESS_MAX_AGE_HOURS must be a positive number, got ${JSON.stringify(process.env.MAX_AGE_HOURS)}.`
+              );
+              return;
+            }
+
             const workflowFile = 'selfhost-image.yml';
             const marker = '<!-- selfhost-image-freshness -->';
             const title = 'Self-host image is stale';
 
+            // Only a same-repo push or workflow_dispatch actually moves `latest`
+            // (the merge job is gated on `event_name != 'pull_request'`). The
+            // `branch` filter matches head_branch, so a fork PR opened from a
+            // branch literally named `main` also concludes `success` while
+            // publishing nothing - filter those out by event and head repo.
             const runs = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: workflowFile,
               branch: 'main',
               status: 'success',
-              per_page: 1,
+              per_page: 30,
             });
-
-            const last = runs.data.workflow_runs[0];
+            const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
+            const last = runs.data.workflow_runs.find(
+              r => (r.event === 'push' || r.event === 'workflow_dispatch')
+                && r.head_repository?.full_name === repoFullName
+            );
             const now = Date.now();
             const ageHours = last ? (now - new Date(last.updated_at).getTime()) / 3.6e6 : Infinity;
             const stale = ageHours > maxAgeHours;
@@ -77,7 +97,10 @@ jobs:
               state: 'open',
               per_page: 100,
             });
-            const found = openIssues.find(i => i.body && i.body.includes(marker));
+            // Exclude PRs: listForRepo returns them too, and issues.update
+            // accepts a PR number - a PR quoting this marker in its body must
+            // not get its description overwritten or get closed as "recovered".
+            const found = openIssues.find(i => !i.pull_request && i.body && i.body.includes(marker));
 
             if (!stale) {
               if (found) {
