@@ -35,7 +35,8 @@ vi.mock('../../../../apiKeyService', () => ({
 
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
-import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS, KB_SEARCH_DEFAULT_RESULTS } from './index';
+import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS } from './index';
+import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '@bike4mind/common';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
@@ -1996,16 +1997,117 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       // Number('lots') is NaN: slice(0, NaN) is empty AND Math.max(NaN, 6) sent NaN to the engine.
       const out = await runWith({ max_results: 'lots' });
 
-      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
       expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(6);
     });
 
     it('treats null as unset rather than as zero', async () => {
-      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
     });
 
     it('keeps the documented default when the param is omitted entirely', async () => {
-      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+  });
+
+  /**
+   * kbSearchDefaultResults (#1831): the default above is now an operator lever, not a hardcoded
+   * literal. Mirrors forcedRetrievalCharBudget's own resolver contract in
+   * ChatCompletionFeatures.ts - unset/unusable/outage all fall back to the coded default, a
+   * configured value is honored, and it never overrides an explicit model-supplied max_results.
+   */
+  describe('operator-configurable default (kbSearchDefaultResults, #1831)', () => {
+    function contextWithConfiguredDefault(configured: unknown): {
+      context: ToolContext;
+      getSettingsValue: ReturnType<typeof vi.fn>;
+    } {
+      const getSettingsValue = vi.fn(async (key: string) =>
+        key === 'kbSearchDefaultResults' ? configured : 'text-embedding-ada-002'
+      );
+      const context = semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+      return { context, getSettingsValue };
+    }
+
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(100),
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+      // Otherwise an earlier test's warn call in this block satisfies a later
+      // toHaveBeenCalledWith assertion even when that later case never calls warn itself.
+      clampLogger.warn.mockClear();
+    });
+
+    it('serves the configured count when max_results is omitted', async () => {
+      const { context } = contextWithConfiguredDefault(8);
+      expect(passageCount(await runWith({}, context))).toBe(8);
+    });
+
+    it('does not override an explicit model-supplied max_results', async () => {
+      const { context } = contextWithConfiguredDefault(8);
+      expect(passageCount(await runWith({ max_results: 3 }, context))).toBe(3);
+    });
+
+    it('falls back to the coded default when the setting is unset', async () => {
+      const { context } = contextWithConfiguredDefault(undefined);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+
+    it('falls back to the coded default and warns when the stored value is unusable', async () => {
+      const { context } = contextWithConfiguredDefault('not-a-number');
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      expect(clampLogger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchDefaultResults'));
+    });
+
+    it('falls back to the coded default and warns when the settings read throws (outage)', async () => {
+      // Only kbSearchDefaultResults is unavailable - defaultEmbeddingModel still resolves, so the
+      // semantic arm runs and this isolates the outage to the setting under test.
+      const getSettingsValue = vi.fn(async (key: string) =>
+        key === 'kbSearchDefaultResults' ? Promise.reject(new Error('outage')) : 'text-embedding-ada-002'
+      );
+      const context = semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      // The resolver's own catch block warns with (message, err) - two arguments, matching
+      // resolveForcedRetrievalCharBudget's shape - unlike positiveIntOr's single-argument warn
+      // the "unusable value" test above exercises.
+      expect(clampLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('kbSearchDefaultResults'),
+        expect.anything()
+      );
+    });
+
+    it('resolves the setting once per completion, not once per search call', async () => {
+      const { context, getSettingsValue } = contextWithConfiguredDefault(7);
+      const tool = knowledgeBaseSearchTool.implementation(context, undefined);
+      await tool.toolFn({ query: 'first' });
+      await tool.toolFn({ query: 'second' });
+      const kbCalls = getSettingsValue.mock.calls.filter(([key]) => key === 'kbSearchDefaultResults');
+      expect(kbCalls.length).toBe(1);
+    });
+
+    it('clamps a stored default above the tool ceiling', async () => {
+      // A row written before the setting's own max:10 existed, or by any path other than the
+      // admin form, is not re-validated on read - clampMaxResults must not trust it verbatim.
+      const { context } = contextWithConfiguredDefault(99);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
     });
   });
 });

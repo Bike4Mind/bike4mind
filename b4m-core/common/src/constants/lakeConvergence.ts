@@ -125,8 +125,7 @@ export type ConvergenceCandidate = {
 };
 
 export type ConvergenceMemberDecision =
-  | ({ converge: true } & ConvergenceCandidate)
-  | { converge: false; fabFileId: string; reason: ConvergenceSkipReason };
+  ({ converge: true } & ConvergenceCandidate) | { converge: false; fabFileId: string; reason: ConvergenceSkipReason };
 
 export type LakeConvergencePlan = {
   /** Members to rewrite, worst-first. */

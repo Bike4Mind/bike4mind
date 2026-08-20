@@ -19,6 +19,7 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
@@ -302,6 +303,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
   'forcedRetrievalCharBudget',
+  'kbSearchDefaultResults',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -1402,6 +1404,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeSearchMaxFiles', order: 2 },
       { key: 'dataLakeSearchMaxChunks', order: 3 },
       { key: 'forcedRetrievalCharBudget', order: 4 },
+      { key: 'kbSearchDefaultResults', order: 5 },
     ],
   },
   DATA_LAKE_COST: {
@@ -2494,7 +2497,7 @@ export const settingsMap = {
     name: 'Non-Production Feedback Email',
     defaultValue: '',
     description:
-      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
+      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Does not apply to a self-host install, which routes through FeedbackReceiveEmail like production. Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 9.5,
@@ -2581,7 +2584,7 @@ export const settingsMap = {
     name: 'Non-Production Feedback Channel Webhook URL',
     defaultValue: '',
     description:
-      'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
+      'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Does not apply to a self-host install, which routes through SlackFeedbackWebhookUrl like production. Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 6.8,
@@ -3287,6 +3290,27 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 4,
+  }),
+  kbSearchDefaultResults: makeNumberSetting({
+    key: 'kbSearchDefaultResults',
+    name: 'Knowledge Base Search Default Results',
+    defaultValue: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+    min: 1,
+    // 10 is the tool's own hard ceiling (KB_SEARCH_MAX_RESULTS), which stays a coded constant -
+    // it is also the tool schema's advertised `maximum` to the model, and that schema is built
+    // synchronously, so it cannot read this setting live. A default above the ceiling would be
+    // meaningless (every call would clamp down to 10 anyway), so the write path rejects it here.
+    max: 10,
+    description:
+      'Passages the search_knowledge_base tool returns when a model call omits max_results, ' +
+      'which is most calls. Raising it admits more of a growing knowledge base per call, at the ' +
+      "cost of prompt tokens on every search. Does NOT raise the tool's advertised ceiling (10) - " +
+      "a model that reads max_results up to 10 from its own tool schema won't ask for more than " +
+      'that regardless of this setting. Platform-only for now: this read does not go through the ' +
+      'scoped-settings resolver, so a `settableAt` block here would be inert metadata at best.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 5,
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',

@@ -2171,6 +2171,16 @@ describe('ChatCompletionProcess', () => {
       expect(warm.estimatedCost).toBeCloseTo(0.0051, 6);
       expect(warm.creditsUsed).toBe(11);
       expect(warm.creditsUsed).toBeLessThan(cold.creditsUsed);
+
+      // Fully-cached turn: every prompt token came from cache, so the provider's
+      // uncached input is legitimately 0. That must still read as "provider reported
+      // usage" - treating a zero uncached tail as "no report" would drop the row onto
+      // the local estimate and throw away the very discount that produced the zero.
+      //   0 * 10/1M + 10 * 30/1M + 3000 * 10/1M * 0.1 = $0.0003 + $0.0030 = $0.0033.
+      const fullyCached = await runWithProviderUsage(0, 3000);
+      expect(fullyCached.settledBasis).toBe('provider');
+      expect(fullyCached.estimatedCost).toBeCloseTo(0.0033, 6);
+      expect(fullyCached.cacheReadInputTokens).toBe(3000);
     });
   });
 

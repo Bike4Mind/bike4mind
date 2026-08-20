@@ -1387,9 +1387,7 @@ function LakeInfoPanel({
                 data-testid={`datalake-converge-policy-btn-${lake.id}`}
                 loading={converge.isPending}
                 onClick={() =>
-                  convergencePlan?.requiresConfirmation
-                    ? setConvergeConfirmOpen(true)
-                    : converge.mutate({})
+                  convergencePlan?.requiresConfirmation ? setConvergeConfirmOpen(true) : converge.mutate({})
                 }
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >

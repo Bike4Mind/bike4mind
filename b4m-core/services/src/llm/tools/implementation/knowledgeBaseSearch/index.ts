@@ -4,6 +4,7 @@ import {
   getEmbeddingModelCost,
   IFabFileDocument,
   isSupportedEmbeddingModel,
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -33,7 +34,11 @@ import {
   SemanticChunkResult,
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
-import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
+import {
+  positiveIntOr,
+  resolveSearchBudgets,
+  type ResolvedSearchBudgets,
+} from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
 import { attributeAccessedLakeIds, type AttributableLake } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
@@ -532,12 +537,40 @@ async function tryScopedSemanticKbSearch(
 }
 
 /**
- * Bounds on `max_results`. The tool schema below and the clamp in the handler BOTH read these,
+ * Ceiling on `max_results`. The tool schema below and the clamp in the handler BOTH read this,
  * so the number advertised to the model and the number enforced on it cannot drift apart - the
  * same reason the serve budget is derived from the chunk policy rather than set beside it.
+ *
+ * Stays a coded constant rather than the `kbSearchDefaultResults` setting's sibling lever: it is
+ * also the tool schema's advertised `maximum`, and that schema is built synchronously (see
+ * `knowledgeBaseSearchTool.implementation` below), so raising it here alone would be inert - a
+ * model reading `maximum: 10` from its own tool schema won't ask for more than 10 regardless.
  */
 export const KB_SEARCH_MAX_RESULTS = 10;
-export const KB_SEARCH_DEFAULT_RESULTS = 5;
+
+/**
+ * The admin's configured `kbSearchDefaultResults`, or the coded default on anything unusable.
+ * Mirrors `resolveForcedRetrievalCharBudget` in `ChatCompletionFeatures.ts`: same try/catch
+ * shape, same loud-fallback policy, same "resolved once per turn" discipline enforced by the
+ * caller (see the closure-scoped cache in `knowledgeBaseSearchTool.implementation`).
+ */
+async function resolveKbSearchDefaultResults(context: ToolContext): Promise<number> {
+  try {
+    const configured = await context.db.adminSettings.getSettingsValue('kbSearchDefaultResults');
+    return positiveIntOr(
+      configured as string | number | null | undefined,
+      KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+      'kbSearchDefaultResults',
+      context.logger
+    );
+  } catch (err) {
+    context.logger.warn(
+      `Knowledge base search: failed to read kbSearchDefaultResults; falling back to ${KB_SEARCH_DEFAULT_RESULTS_DEFAULT}`,
+      err
+    );
+    return KB_SEARCH_DEFAULT_RESULTS_DEFAULT;
+  }
+}
 
 /**
  * Narrow a model-supplied `max_results` to the bound the schema advertises.
@@ -552,13 +585,19 @@ export const KB_SEARCH_DEFAULT_RESULTS = 5;
  * the model nothing, a negative slices off the best-ranked results, and a non-numeric poisons
  * topK as NaN. Typed `unknown` because the declared `number` is only a claim about JSON we parsed.
  *
- * Unset takes the default rather than the floor, matching positiveIntOr in resolveSearchBudgets:
- * `null` and `''` are the model declining to choose, not a request for one result.
+ * Unset takes `defaultResults` rather than the floor, matching positiveIntOr in
+ * resolveSearchBudgets: `null` and `''` are the model declining to choose, not a request for one
+ * result. `defaultResults` is the caller's already-resolved `kbSearchDefaultResults` value, not
+ * re-read here, so this stays synchronous. It is still run through the same clamp below: the
+ * setting's own schema already rejects a stored value above KB_SEARCH_MAX_RESULTS, but clamping
+ * here too keeps that ceiling a guarantee of this function, not a fact borrowed from a different
+ * package's validation.
  */
-function clampMaxResults(raw: unknown): number {
-  if (raw === undefined || raw === null || raw === '') return KB_SEARCH_DEFAULT_RESULTS;
+function clampMaxResults(raw: unknown, defaultResults: number): number {
+  const safeDefault = Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  if (raw === undefined || raw === null || raw === '') return safeDefault;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return KB_SEARCH_DEFAULT_RESULTS;
+  if (!Number.isFinite(n)) return safeDefault;
   return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
 }
 
@@ -691,14 +730,19 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
     let lastSkipNotice: string | null = null;
+    // Resolved at most once per completion, same discipline as searchCallCount above -
+    // getSettingsValue is an uncached read, so a settings read on every search_knowledge_base
+    // call would cost a real DB round-trip for no benefit.
+    let defaultResultsPromise: Promise<number> | undefined;
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
         await context.onStart?.('search_knowledge_base', params);
         const { query, tags, file_type } = params;
+        defaultResultsPromise ??= resolveKbSearchDefaultResults(context);
         // Every consumer below reads maxResults, never params.max_results: one clamp at the
         // single entry point is what keeps a later edit from reopening the hole at one of them.
-        const maxResults = clampMaxResults(params.max_results);
+        const maxResults = clampMaxResults(params.max_results, await defaultResultsPromise);
 
         searchCallCount++;
         if (searchCallCount > MAX_SEARCHES) {
@@ -1029,7 +1073,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             },
             max_results: {
               type: 'number',
-              description: `Maximum number of results to return (default: ${KB_SEARCH_DEFAULT_RESULTS}, max: ${KB_SEARCH_MAX_RESULTS})`,
+              // This schema is built synchronously (see the comment on KB_SEARCH_MAX_RESULTS
+              // above), so it cannot read the live kbSearchDefaultResults setting. Omitting the
+              // default rather than stating the coded one avoids the model reading a stale number
+              // and passing it explicitly as max_results, which would bypass an admin's raised
+              // default on every such call.
+              description: `Maximum number of results to return (max: ${KB_SEARCH_MAX_RESULTS})`,
               minimum: 1,
               maximum: KB_SEARCH_MAX_RESULTS,
             },
