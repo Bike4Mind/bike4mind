@@ -1,8 +1,45 @@
 import { describe, it, expect } from 'vitest';
 import { CreateDataLakeRequestInput, ApplyTaxonomyRequestInput, UpdateDataLakeRequestInput } from './dataLake';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import { MIN_DATA_LAKE_SLUG_LENGTH, MAX_DATA_LAKE_SLUG_LENGTH, DATA_LAKE_SLUG_REGEX } from '../constants/dataLakes';
 
 const input = (fileTagPrefix: string) => ({ name: 'Lake', slug: 'my-lake', fileTagPrefix });
+
+const withSlug = (slug: string) => ({ name: 'Lake', slug, fileTagPrefix: 'acme:' });
+
+// The wizard slugifies a lake NAME and gates on the result before this schema runs, so both
+// sides size by MIN/MAX_DATA_LAKE_SLUG_LENGTH. Written against the constants, not the numbers:
+// this asserts the schema still reads them, which a literal-based test could not.
+describe('CreateDataLakeRequestInput.slug', () => {
+  // Deliberately NOT phrased as "the .min() rejects this": DATA_LAKE_SLUG_REGEX needs a leading
+  // and a trailing alphanumeric in separate positions, so at these values the PATTERN is what
+  // refuses a 1-char slug and .min() is unobservable through parse. Asserting the two agree is
+  // the honest test - it fires if either the constant or the pattern's effective floor moves,
+  // whereas a "below the minimum is rejected" case passes with .min() deleted.
+  it('refuses a slug shorter than the shared minimum, and the pattern floor agrees with it', () => {
+    const tooShort = 'a'.repeat(MIN_DATA_LAKE_SLUG_LENGTH - 1);
+    expect(CreateDataLakeRequestInput.safeParse(withSlug(tooShort)).success).toBe(false);
+    expect(tooShort).not.toMatch(DATA_LAKE_SLUG_REGEX);
+    expect(CreateDataLakeRequestInput.safeParse(withSlug('a'.repeat(MIN_DATA_LAKE_SLUG_LENGTH))).success).toBe(true);
+  });
+
+  it('accepts a slug at the shared maximum and rejects one past it', () => {
+    expect(CreateDataLakeRequestInput.safeParse(withSlug('a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH))).success).toBe(true);
+    expect(CreateDataLakeRequestInput.safeParse(withSlug('a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH + 1))).success).toBe(
+      false
+    );
+  });
+
+  it('rejects a slug the shared pattern refuses, naming the rule', () => {
+    for (const bad of ['My-Lake', 'my_lake', '-my-lake', 'my-lake-']) {
+      const result = CreateDataLakeRequestInput.safeParse(withSlug(bad));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => /lowercase alphanumeric with hyphens/.test(i.message))).toBe(true);
+      }
+    }
+  });
+});
 
 describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
   it('accepts an ordinary namespaced prefix', () => {
