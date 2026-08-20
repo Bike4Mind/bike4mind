@@ -7,6 +7,9 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   findBySlug: vi.fn(),
   proposeDataLakeContent: vi.fn(),
+  // Mutable so a test can model a stage where the secret was never provisioned. A getter on the
+  // Resource mock reads it per call, which a plain literal could not.
+  sstSecret: { value: 'right-secret' } as { value: string } | undefined,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,7 +26,13 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 vi.mock('@server/utils/config', () => ({ isE2EEnabled: h.isE2EEnabled }));
-vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: { value: 'right-secret' } } }));
+vi.mock('sst', () => ({
+  Resource: {
+    get E2E_CLEANUP_SECRET() {
+      return h.sstSecret;
+    },
+  },
+}));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findById: h.findById, findBySlug: h.findBySlug },
   dataLakeProposalRepository: {},
@@ -58,6 +67,8 @@ const makeRes = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.sstSecret = { value: 'right-secret' };
+  delete process.env.E2E_CLEANUP_SECRET;
   h.isE2EEnabled.mockReturnValue(true);
   h.findById.mockResolvedValue(LAKE);
   h.findBySlug.mockResolvedValue(null);
@@ -85,6 +96,39 @@ describe('POST /api/test/propose-lake-content', () => {
     expect(missing.status).toHaveBeenCalledWith(401);
 
     expect(h.proposeDataLakeContent).not.toHaveBeenCalled();
+  });
+
+  // An unprovisioned stage must not become an open door: with no expected value configured, ANY
+  // presented secret has to be refused rather than compared against undefined (or against the
+  // 'not-configured' placeholder, which is a real value in this codebase).
+  it('refuses every request when no expected secret is configured', async () => {
+    h.sstSecret = undefined;
+    const { res, status } = makeRes();
+
+    await handler(makeReq() as never, res);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(h.proposeDataLakeContent).not.toHaveBeenCalled();
+  });
+
+  it("refuses the 'not-configured' placeholder even when presented verbatim", async () => {
+    h.sstSecret = { value: 'not-configured' };
+    const { res, status } = makeRes();
+
+    await handler(makeReq({ secret: 'not-configured' }) as never, res);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(h.proposeDataLakeContent).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the env var when no SST secret is bound (preview deploys)', async () => {
+    h.sstSecret = undefined;
+    process.env.E2E_CLEANUP_SECRET = 'env-secret';
+    const { res, status } = makeRes();
+
+    await handler(makeReq({ secret: 'env-secret' }) as never, res);
+
+    expect(status).toHaveBeenCalledWith(201);
   });
 
   it('seeds through the REAL producer seam, not a direct write', async () => {

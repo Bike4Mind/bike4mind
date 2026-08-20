@@ -12,6 +12,13 @@
  * Query parameters that identify a REFERRAL, not a resource. Stripping them is what collapses
  * campaign/share links onto the page they point at. Deliberately a fixed list rather than a
  * heuristic: a wrong guess here silently merges two distinct sources into one queue entry.
+ *
+ * WHEN IN DOUBT, LEAVE IT IN. The two error directions are not symmetric: over-keeping a parameter
+ * costs a duplicate card a human declines in one click, while over-stripping produces a source no
+ * human is ever shown. `ref`, `referrer` and `source` were removed for exactly that reason - all
+ * three are resource-identifying on real hosts (`api.github.com/.../contents/p?ref=v2.0` is a
+ * different file revision, not a different referral), so keying them out silently merged distinct
+ * sources. `ref_src` stays: it is unambiguously Twitter's.
  */
 const TRACKING_PARAM_PREFIXES = ['utm_', 'pk_', 'mc_', 'hsa_', 'vero_', 'ns_'];
 const TRACKING_PARAM_NAMES = new Set([
@@ -24,10 +31,7 @@ const TRACKING_PARAM_NAMES = new Set([
   'igshid',
   'yclid',
   'mkt_tok',
-  'ref',
   'ref_src',
-  'referrer',
-  'source',
   's_kwcid',
   '_ga',
   '_gl',

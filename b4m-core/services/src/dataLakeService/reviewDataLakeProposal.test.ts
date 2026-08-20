@@ -3,6 +3,7 @@ import type { AccessContext, IDataLakeDocument, IDataLakeProposalDocument } from
 import { FabFileSourceType } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { approveDataLakeProposal, declineDataLakeProposal } from './reviewDataLakeProposal';
+import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 
 const OWNER = 'owner-1';
 
@@ -47,6 +48,8 @@ const adapters = (
     lake?: IDataLakeDocument | null;
     claimed?: IDataLakeProposalDocument | null;
     admitSource?: ReturnType<typeof vi.fn>;
+    /** Active grants on the lake. Both production routes wire this repo, so the harness must too. */
+    grants?: Array<{ principalType: string; principalId: string; role: string }>;
   } = {}
 ) => {
   const found = over.proposal === undefined ? proposal() : over.proposal;
@@ -64,6 +67,7 @@ const adapters = (
       db: {
         dataLakeProposals: { findById, claimForReview, recordAdmission, releaseClaim },
         dataLakes: { findById: vi.fn(async () => (over.lake === undefined ? lake() : over.lake)) },
+        ...(over.grants ? { dataLakeAccessGrants: { listByLake: vi.fn(async () => over.grants as never) } } : {}),
       },
       admitSource,
     },
@@ -82,8 +86,10 @@ describe('approveDataLakeProposal', () => {
     const result = await approveDataLakeProposal('prop-1', ctx(), deps);
 
     expect(admitSource).toHaveBeenCalledTimes(1);
-    const [userId, params] = admitSource.mock.calls[0];
-    expect(userId).toBe(OWNER);
+    const [passedActor, params] = admitSource.mock.calls[0];
+    // The whole actor, not just its id: the admission door re-gates the lake tag and needs the same
+    // principal the review gate resolved, `administeredOrgIds` included.
+    expect(passedActor).toMatchObject({ userId: OWNER, administeredOrgIds: [] });
     expect(params.url).toBe('https://example.com/report');
     expect(params.tags).toEqual([{ name: 'datalake:lake-1', strength: 1 }]);
     expect(recordAdmission).toHaveBeenCalledWith('prop-1', 'file-9');
@@ -218,5 +224,85 @@ describe('declineDataLakeProposal', () => {
     await declineDataLakeProposal('prop-1', ctx(), {}, deps);
 
     expect(claimForReview).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The rest of this file mocks `admitSource` wholesale, which is exactly why it could not see that the
+ * admission door's own lake-tag gate was NARROWER than the review gate in front of it. These drive
+ * the REAL `assertCanWriteDataLakeTags` with the db the production adapter supplies, so the invariant
+ * "anything the review gate honors, admission must honor too" is pinned rather than assumed.
+ */
+describe('approveDataLakeProposal - admission runs the real lake-tag gate', () => {
+  const CURATOR = 'curator-1';
+  const ORG = 'org-1';
+  const orgLake = lake({ createdByUserId: 'someone-else', organizationId: ORG });
+
+  /** Stands in for proposalAdmissionDeps: runs the real gate with whatever db it is given. */
+  const admitVia = (db: Parameters<typeof assertCanWriteDataLakeTags>[2]['db']) =>
+    vi.fn(async (actor: AccessContext, params: { tags: Array<{ name: string }> }) => {
+      await assertCanWriteDataLakeTags(
+        // Mirrors createFabFile's actor rebuild, including the administeredOrgIds it now forwards.
+        { userId: actor.userId, isAdmin: !!actor.isAdmin, administeredOrgIds: actor.administeredOrgIds ?? [] },
+        params.tags.map(t => t.name),
+        { db }
+      );
+      return { id: 'file-9', fileName: 'Quarterly report' };
+    });
+
+  const lakeDb = { dataLakes: { findByDatalakeTag: vi.fn(async () => orgLake) } };
+  const curatorGrant = [{ principalType: 'user', principalId: CURATOR, role: 'curator' }];
+  const grantsFor = (grants: Array<{ principalType: string; principalId: string; role: string }>) => ({
+    listByLake: vi.fn(async () => grants as never),
+  });
+
+  it('lets a CURATOR complete an approval, not just clear the 403', async () => {
+    const admitSource = admitVia({
+      ...lakeDb,
+      dataLakeAccessGrants: grantsFor(curatorGrant),
+    } as never);
+    const { deps, releaseClaim } = adapters({ lake: orgLake, admitSource, grants: curatorGrant });
+
+    const result = await approveDataLakeProposal('prop-1', ctx({ userId: CURATOR }), deps);
+
+    expect(result.fabFile.id).toBe('file-9');
+    expect(releaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('lets an ORG ADMIN of the lake org complete an approval', async () => {
+    // Rung 4 needs `administeredOrgIds`, which cannot be read off a user document - so it only works
+    // because the adapter forwards the actor's set through createFabFile.
+    const admitSource = admitVia({ ...lakeDb, dataLakeAccessGrants: grantsFor([]) } as never);
+    const { deps, releaseClaim } = adapters({ lake: orgLake, admitSource });
+
+    const result = await approveDataLakeProposal(
+      'prop-1',
+      ctx({ userId: 'org-admin-1', administeredOrgIds: [ORG] }),
+      deps
+    );
+
+    expect(result.fabFile.id).toBe('file-9');
+    expect(releaseClaim).not.toHaveBeenCalled();
+  });
+
+  // The regression itself: a grant-BLIND admission db is what made approval unusable for every
+  // reviewer who was not the lake's creator. Pinned so re-introducing it fails here loudly.
+  it('would strand a curator if the admission db omitted the grant repo', async () => {
+    const admitSource = admitVia(lakeDb as never);
+    const { deps, releaseClaim } = adapters({ lake: orgLake, admitSource, grants: curatorGrant });
+
+    await expect(approveDataLakeProposal('prop-1', ctx({ userId: CURATOR }), deps)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    // The claim is rolled back, which is why the symptom was an unfixable "try again" rather than a
+    // permanently approved-but-empty row.
+    expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+  });
+
+  it('still refuses a reviewer with no manage claim at all', async () => {
+    const admitSource = admitVia({ ...lakeDb, dataLakeAccessGrants: grantsFor([]) } as never);
+    const { deps } = adapters({ lake: orgLake, admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(ForbiddenError);
   });
 });

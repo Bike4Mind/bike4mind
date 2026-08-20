@@ -45,7 +45,14 @@ export interface ReviewAdapters {
     // createdByUserId + the org-admin rung (see loadActiveLakeGrants).
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
-  admitSource(userId: string, params: AdmitSourceParams): Promise<AdmittedFile>;
+  /**
+   * Takes the whole ACTOR, not just its id. The admission door runs its own lake-tag write gate, and
+   * that gate needs the same principal the review gate above resolved - `administeredOrgIds` in
+   * particular cannot be recovered from a userId. Passing only the id made the write gate strictly
+   * narrower than the review gate, so a curator or org admin cleared the 403, had the row claimed,
+   * and was then refused the admission with nothing retryable.
+   */
+  admitSource(actor: AccessContext, params: AdmitSourceParams): Promise<AdmittedFile>;
 }
 
 type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource'>;
@@ -112,7 +119,7 @@ export async function approveDataLakeProposal(
 
   let fabFile: AdmittedFile;
   try {
-    fabFile = await admitSource(actor.userId, {
+    fabFile = await admitSource(actor, {
       url: proposal.sourceUrl,
       // The lake's meta-tag ONLY. Producer-proposed tags are advisory metadata for the reviewer and
       // are deliberately not stamped: an arbitrary producer string can collide with another lake's

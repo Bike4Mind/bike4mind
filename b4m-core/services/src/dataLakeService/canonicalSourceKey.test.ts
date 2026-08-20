@@ -20,6 +20,25 @@ describe('canonicalSourceKey', () => {
     expect(canonicalSourceKey('https://example.com/a?utm_source=x')).toBe('https://example.com/a');
   });
 
+  // `ref`, `referrer` and `source` are resource-identifying on real hosts, so they are NOT stripped.
+  // Keying them out merged genuinely distinct sources into one queue entry, and the second one was
+  // then answered duplicate_pending and never shown to a human - the silent merge this list exists
+  // to avoid. Over-keeping only ever costs a duplicate card someone declines.
+  it('keeps parameters that identify a resource rather than a referral', () => {
+    const v1 = canonicalSourceKey('https://api.github.com/repos/o/r/contents/p?ref=v1.0');
+    const v2 = canonicalSourceKey('https://api.github.com/repos/o/r/contents/p?ref=v2.0');
+
+    expect(v1).toBe('https://api.github.com/repos/o/r/contents/p?ref=v1.0');
+    expect(v1).not.toBe(v2);
+    expect(canonicalSourceKey('https://example.com/a?source=archive')).toBe('https://example.com/a?source=archive');
+    expect(canonicalSourceKey('https://example.com/a?referrer=x')).toBe('https://example.com/a?referrer=x');
+  });
+
+  // Kept stripped: unambiguously a share-referral parameter, unlike the three above.
+  it('still strips ref_src, which is unambiguously a referral', () => {
+    expect(canonicalSourceKey('https://example.com/a?ref_src=twsrc')).toBe('https://example.com/a');
+  });
+
   it('orders the surviving parameters so parameter order is not an identity difference', () => {
     expect(canonicalSourceKey('https://example.com/a?b=2&a=1')).toBe(
       canonicalSourceKey('https://example.com/a?a=1&b=2')

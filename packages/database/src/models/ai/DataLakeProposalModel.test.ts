@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { CreateDataLakeProposalInput } from '@bike4mind/common';
 import { dataLakeProposalRepository as repo, DataLakeProposalModel } from './DataLakeProposalModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -67,6 +67,37 @@ describe('DataLakeProposalRepository', () => {
       pendingProposalId: (created[0] as { proposal: { id: string } }).proposal.id,
     });
     expect(await repo.listByLake('lake-1', { status: 'pending' })).toHaveLength(1);
+  });
+
+  // The retry branch: the first insert collides, but by the time we look for the winner it has been
+  // reviewed, so the pending slot is free and this candidate is an unanswered question again. The spy
+  // only controls the INTERLEAVING - the collision and the retry both run against real Mongo.
+  it('retries the insert when the colliding winner was reviewed in between', async () => {
+    const winner = await create();
+    const findOne = vi.spyOn(DataLakeProposalModel, 'findOne').mockImplementationOnce((async () => {
+      // Stand in for "another reviewer ruled on it in that instant", which frees the partial index.
+      await repo.claimForReview(winner.id, review());
+      return null;
+    }) as never);
+
+    const retried = await repo.createProposal(input({ textHash: 'hash-b' }));
+
+    expect(findOne).toHaveBeenCalledTimes(1);
+    expect(retried.created).toBe(true);
+    // Two rows for the source now: the approved winner and the freshly inserted candidate.
+    expect(await repo.listByLake('lake-1')).toHaveLength(2);
+    findOne.mockRestore();
+  });
+
+  it('surfaces a second collision rather than looping', async () => {
+    await create();
+    // Winner still pending on both attempts, but reported absent - so the retry collides too. A third
+    // writer is a raw duplicate-key error by design, not an unbounded retry.
+    const findOne = vi.spyOn(DataLakeProposalModel, 'findOne').mockResolvedValueOnce(null as never);
+
+    await expect(repo.createProposal(input({ textHash: 'hash-b' }))).rejects.toMatchObject({ code: 11000 });
+
+    findOne.mockRestore();
   });
 
   it('still allows a re-proposal once the prior row is terminal - the tombstone does not hold the key', async () => {
@@ -176,8 +207,13 @@ describe('DataLakeProposalRepository', () => {
   });
 
   it('lists a lake queue newest first, and narrows by status', async () => {
+    // Explicit, distinct createdAt values: two back-to-back inserts can land in the same millisecond,
+    // which leaves `sort({ createdAt: -1 })` free to order them either way and the assertion below
+    // flaky rather than wrong.
     const older = await create({ canonicalSourceKey: 'https://example.com/a' });
     const newer = await create({ canonicalSourceKey: 'https://example.com/b' });
+    await DataLakeProposalModel.updateOne({ _id: older.id }, { $set: { createdAt: new Date('2026-08-01') } });
+    await DataLakeProposalModel.updateOne({ _id: newer.id }, { $set: { createdAt: new Date('2026-08-02') } });
     await repo.claimForReview(older.id, review({ status: 'declined' }));
 
     const all = await repo.listByLake('lake-1');

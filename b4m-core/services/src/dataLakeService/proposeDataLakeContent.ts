@@ -39,7 +39,12 @@ export interface ProposalCandidate {
    * The text the producer actually retrieved. Passed whole, not pre-hashed and not pre-truncated:
    * the hash must be `computeServerTextHash`'s to be comparable with `FabFile.serverTextHash`, and
    * a producer-supplied hash would be an unverifiable claim in the one place dedup depends on.
-   * Optional - a producer that could not extract text gets source-keyed dedup only.
+   * Optional, but a producer that means to stay useful over time should treat it as REQUIRED: the
+   * changed-materially rule compares two hashes and `changedMaterially` is false whenever either is
+   * absent, so a producer that never sends text can never clear a tombstone. Every later run on a
+   * declined source answers `suppressed_by_tombstone` no matter how much the page moved. That is the
+   * right default for a human "no" (we cannot tell that it changed, so we do not re-ask), but it
+   * means source-keyed dedup alone is a one-way door.
    *
    * CONTRACT A PRODUCER MUST HONOR: this should be the text the INGESTION DOOR would extract from
    * the same URL (`fetchAndParseURL` -> `SmartChunker.getExtractedText`), not the producer's own
