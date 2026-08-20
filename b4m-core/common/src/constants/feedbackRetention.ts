@@ -23,3 +23,12 @@ export const FEEDBACK_CONTENT_MAX_CHARS = 4000;
 export function feedbackContentExpiresAt(now: Date, days: number = FEEDBACK_CONTENT_RETENTION_DAYS): Date {
   return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 }
+
+/** Shared by the create and update handlers so a report's free text is capped the same way
+ * regardless of which path wrote it. */
+export function truncateFeedbackContent(content: string): { content: string; contentTruncated: boolean } {
+  if (content.length <= FEEDBACK_CONTENT_MAX_CHARS) {
+    return { content, contentTruncated: false };
+  }
+  return { content: content.slice(0, FEEDBACK_CONTENT_MAX_CHARS), contentTruncated: true };
+}

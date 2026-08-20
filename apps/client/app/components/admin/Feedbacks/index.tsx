@@ -72,7 +72,7 @@ const FeedbackTab: React.FC = () => {
       ID: feedbackItem._id,
       Status: feedbackItem.status,
       Username: feedbackItem.username,
-      Content: feedbackItem.content,
+      Content: feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : ''),
       Organization: feedbackItem.organization,
       UpdatedAt: feedbackItem.updatedAt,
     }));
@@ -386,7 +386,7 @@ const FeedbackTab: React.FC = () => {
                             scrollbarWidth: 'thin',
                           }}
                         >
-                          {feedbackItem.content}
+                          {feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : '')}
                         </Typography>
                       </Stack>
                     </Card>
@@ -498,7 +498,7 @@ const FeedbackTab: React.FC = () => {
                               scrollbarColor: 'var(--joy-palette-neutral-400) var(--joy-palette-background-level1)',
                             }}
                           >
-                            {feedbackItem.content}
+                            {feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : '')}
                           </Typography>
                         </Grid>
                         <Grid xs={2}>

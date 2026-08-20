@@ -20,7 +20,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
-import { toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config, classifyStage } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
@@ -96,7 +96,7 @@ const handler = baseApi()
       throw new NotFoundError('Feedback not found');
     }
 
-    return res.json(feedback.map(toRedactedFeedback));
+    return res.json(await hydrateFeedbackText(feedback.map(toRedactedFeedback)));
   })
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);

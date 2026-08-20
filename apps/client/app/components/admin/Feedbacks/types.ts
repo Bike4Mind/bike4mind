@@ -1,8 +1,12 @@
 import { IFeedbackDocument, FeedbackStatus } from '@bike4mind/common';
 
-// Extended feedback document with MongoDB _id field
+// Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
+// hydrateFeedbackText join - true when content was submitted but has since aged out under the
+// 90-day TTL, distinct from a report that never had content at all (both render `content` as
+// undefined, so the UI needs this flag to tell them apart).
 export interface IExtendedFeedbackDocument extends IFeedbackDocument {
   _id: string;
+  contentExpired?: boolean;
 }
 
 export interface FeedbackFilters {

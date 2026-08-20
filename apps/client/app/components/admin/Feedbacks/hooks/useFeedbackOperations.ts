@@ -71,8 +71,8 @@ export const useFeedbackOperations = (): UseFeedbackOperationsReturn => {
           prevFeedback.map(item => (item._id === feedbackItem._id ? { ...item, status: updatedStatus } : item))
         );
         const reporter = formatReporter(feedbackItem);
-        const preview =
-          feedbackItem.content.length > 50 ? feedbackItem.content.substring(0, 50) + '...' : feedbackItem.content;
+        const content = feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : 'No content');
+        const preview = content.length > 50 ? content.substring(0, 50) + '...' : content;
 
         showFeedbackToast.success(`"${preview}" feedback from ${reporter} updated to: ${updatedStatus}`);
       } else {
@@ -97,10 +97,10 @@ export const useFeedbackOperations = (): UseFeedbackOperationsReturn => {
           setFeedback(prevFeedback => prevFeedback.filter(feedback => feedback._id !== feedbackToDelete));
           const feedbackToDeleteItem = feedback.find(f => f._id === feedbackToDelete);
           const reporter = formatReporter(feedbackToDeleteItem);
-          const preview =
-            feedbackToDeleteItem?.content && feedbackToDeleteItem.content.length > 50
-              ? feedbackToDeleteItem.content.substring(0, 50) + '...'
-              : feedbackToDeleteItem?.content || 'No content';
+          const deleteContent =
+            feedbackToDeleteItem?.content ??
+            (feedbackToDeleteItem?.contentExpired ? '[content expired]' : 'No content');
+          const preview = deleteContent.length > 50 ? deleteContent.substring(0, 50) + '...' : deleteContent;
 
           showFeedbackToast.success(`"${preview}" feedback from ${reporter} deleted successfully`);
         }
