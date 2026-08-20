@@ -70,9 +70,14 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
 );
 
 LakeAccessEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-LakeAccessEventSchema.index({ principalKind: 1, principalId: 1, createdAt: -1 });
+// `_id` trails `createdAt` on both read indexes so `listByPrincipal`/`listByLake` sort on a TOTAL
+// order and stay index-served. Reads are high volume, so same-millisecond collisions are common
+// here; without the tie-break their relative order is undefined and a limited window can include
+// or exclude a different row between two identical calls. The sort key has to be in the index key
+// too, or the planner falls back to a blocking in-memory SORT.
+LakeAccessEventSchema.index({ principalKind: 1, principalId: 1, createdAt: -1, _id: -1 });
 // Multikey: "who read this lake?" - the core audit query.
-LakeAccessEventSchema.index({ resolvedLakeIds: 1, createdAt: -1 });
+LakeAccessEventSchema.index({ resolvedLakeIds: 1, createdAt: -1, _id: -1 });
 LakeAccessEventSchema.index({ organizationId: 1, createdAt: -1 });
 
 export const LakeAccessEventModel: ILakeAccessEventModel =
@@ -162,13 +167,14 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
    *   description), not content reads - a caller presenting this as "who read this lake's
    *   content" should filter or label by `surface` rather than treat every match as equivalent.
    *
-   * ORDER IS PART OF THE CONTRACT: newest first by `createdAt`. With `limit`, that makes the result
-   * the most RECENT window rather than an arbitrary one, and the last element the window's start -
-   * which `assembleLakeAccessView` publishes as `windowStartsAt` on a truncated compliance export.
+   * ORDER IS PART OF THE CONTRACT: newest first by `createdAt`, tie-broken on `_id` so the order is
+   * total and reproducible across calls. With `limit`, that makes the result the most RECENT window
+   * rather than an arbitrary one, and the last element the window's start - which
+   * `assembleLakeAccessView` publishes as `windowStartsAt` on a truncated compliance export.
    * Changing this sort silently turns that date wrong; the reads test pins it.
    */
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]> {
-    const query = this.eventModel.find({ resolvedLakeIds: lakeId }).sort({ createdAt: -1 });
+    const query = this.eventModel.find({ resolvedLakeIds: lakeId }).sort({ createdAt: -1, _id: -1 });
     if (opts?.limit) query.limit(opts.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as ILakeAccessEventDocument);
@@ -179,7 +185,7 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     principalId: string,
     opts?: { limit?: number }
   ): Promise<ILakeAccessEventDocument[]> {
-    const query = this.eventModel.find({ principalKind, principalId }).sort({ createdAt: -1 });
+    const query = this.eventModel.find({ principalKind, principalId }).sort({ createdAt: -1, _id: -1 });
     if (opts?.limit) query.limit(opts.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as ILakeAccessEventDocument);

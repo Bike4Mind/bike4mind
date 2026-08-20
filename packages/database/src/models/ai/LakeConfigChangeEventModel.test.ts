@@ -217,9 +217,9 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       expect(ttl?.expireAfterSeconds).toBe(0);
     });
 
-    it('indexes the owner-facing history query it exists to serve', async () => {
+    it('indexes the owner-facing history query it exists to serve, tie-break included', async () => {
       const indexes = await LakeConfigChangeEventModel.collection.indexes();
-      expect(indexes.some(i => i.key?.dataLakeId === 1 && i.key?.createdAt === -1)).toBe(true);
+      expect(indexes.some(i => i.key?.dataLakeId === 1 && i.key?.createdAt === -1 && i.key?._id === -1)).toBe(true);
     });
 
     it('stamps createdAt but never updatedAt - an event has no later version', async () => {
@@ -272,6 +272,42 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
 
     it('is empty for a lake with no recorded changes', async () => {
       expect(await repo.listByLake('never-touched')).toEqual([]);
+    });
+
+    // `createdAt` alone is a PARTIAL order, so same-millisecond events may come back either way
+    // round and the history list can reorder under a reader between two page loads. The instability
+    // itself is NOT assertable: nothing in a test can make the engine exercise its freedom to
+    // reorder a tie, and repeated reads against a small collection return insertion order whether
+    // or not the tie-break is there - such a test passes with the fix reverted. So the sort SPEC is
+    // what gets pinned, plus the resulting order on a real tie.
+    it('sorts on a total order, so same-createdAt events cannot come back reordered', async () => {
+      const findSpy = vi.spyOn(LakeConfigChangeEventModel, 'find');
+      const ids: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const event = await repo.record(baseInput({ changes: [nameChange('a', `v${i}`)] }));
+        ids.push(String(event.id));
+      }
+
+      const events = await repo.listByLake('lake-1');
+      expect(findSpy).toHaveBeenCalledTimes(1);
+      expect(findSpy.mock.results[0].value.getOptions().sort).toEqual({ createdAt: -1, _id: -1 });
+      findSpy.mockRestore();
+
+      // The tie is real - every event shares one createdAt - so the returned order is decided
+      // entirely by the tie-break, newest-inserted first.
+      const stored = await LakeConfigChangeEventModel.find({ dataLakeId: 'lake-1' }).lean();
+      expect(new Set(stored.map(e => e.createdAt.getTime())).size).toBe(1);
+      expect(events.map(e => String(e.id))).toEqual([...ids].reverse());
+    });
+
+    // A tie-break the index cannot serve trades an unstable order for a blocking in-memory SORT on
+    // a collection whose retention runs years, so the index has to cover the sort, not just exist.
+    it('serves the history sort from the index, with no in-memory SORT stage', async () => {
+      const plan = await LakeConfigChangeEventModel.find({ dataLakeId: 'lake-1' })
+        .sort({ createdAt: -1, _id: -1 })
+        .explain('queryPlanner');
+      expect(JSON.stringify(plan)).not.toContain('"stage":"SORT"');
+      expect(JSON.stringify(plan)).toContain('IXSCAN');
     });
   });
 });

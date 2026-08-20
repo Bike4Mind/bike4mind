@@ -313,6 +313,8 @@ export interface ILakeConfigChangeEventRepository extends Pick<
   'find' | 'findOne' | 'findById' | 'count'
 > {
   record(input: RecordLakeConfigChangeInput): Promise<ILakeConfigChangeEventDocument>;
+  /** Newest first, tie-broken on `_id`: a TOTAL order, so repeated calls agree and a `limit`
+   * window is reproducible. A history surface exists to say what happened in what sequence. */
   listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeConfigChangeEventDocument[]>;
 }
 

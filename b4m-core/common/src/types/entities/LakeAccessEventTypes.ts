@@ -139,6 +139,8 @@ export interface ILakeAccessEventRepository extends Pick<
   'find' | 'findOne' | 'findById' | 'count'
 > {
   record(input: RecordLakeAccessEventInput): Promise<ILakeAccessEventDocument>;
+  /** Both readers return newest first, tie-broken on `_id`: a TOTAL order, so repeated calls
+   * agree and a `limit` window is reproducible. */
   listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]>;
   listByPrincipal(
     principalKind: LakeAccessPrincipalKind,

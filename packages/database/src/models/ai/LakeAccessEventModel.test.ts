@@ -283,6 +283,22 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(textDoc!.expiresAt.getTime()).toBeLessThan(event.expiresAt.getTime());
     });
 
+    it('carries the _id tie-break on both read indexes, so their sorts stay index-served', async () => {
+      const indexes = await LakeAccessEventModel.collection.indexes();
+      expect(
+        indexes.some(idx => idx.key?.resolvedLakeIds === 1 && idx.key?.createdAt === -1 && idx.key?._id === -1)
+      ).toBe(true);
+      expect(
+        indexes.some(
+          idx =>
+            idx.key?.principalKind === 1 &&
+            idx.key?.principalId === 1 &&
+            idx.key?.createdAt === -1 &&
+            idx.key?._id === -1
+        )
+      ).toBe(true);
+    });
+
     it('has a TTL index (expireAfterSeconds: 0) on expiresAt for BOTH collections', async () => {
       const eventIndexes = await LakeAccessEventModel.collection.indexes();
       const ttlEvent = eventIndexes.find(idx => idx.key?.expiresAt === 1);
@@ -399,6 +415,54 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       // With a limit it must drop the OLDEST, and the last row is then the window's start.
       const limited = await repo.listByLake('lake-o', { limit: 2 });
       expect(limited.map(r => r.principalId)).toEqual(['newest', 'middle']);
+    });
+
+    // Reads are high volume, so two events landing in the same millisecond is ordinary here, not
+    // exotic. `createdAt` alone is a PARTIAL order: the engine may return a tied pair either way
+    // round, which makes a fixed-size window non-reproducible - it changes WHICH rows the window
+    // contains, so `assembleLakeAccessView` can publish a different `windowStartsAt` for the same
+    // request. Pinned as the sort SPEC on both readers, since no test can force the engine to
+    // actually exercise its freedom to reorder a tie (see the config-event sibling test).
+    it('sorts both readers on a total order, so same-createdAt events cannot come back reordered', async () => {
+      const findSpy = vi.spyOn(LakeAccessEventModel, 'find');
+      const ids: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const event = await repo.record(baseInput({ resolvedLakeIds: ['lake-tie'], principalId: 'tied' }));
+        ids.push(String(event.id));
+      }
+      const expected = [...ids].reverse();
+
+      const byLake = await repo.listByLake('lake-tie');
+      const byPrincipal = await repo.listByPrincipal('user', 'tied');
+      const windowed = await repo.listByLake('lake-tie', { limit: 3 });
+      expect(findSpy.mock.results.map(r => r.value.getOptions().sort)).toEqual([
+        { createdAt: -1, _id: -1 },
+        { createdAt: -1, _id: -1 },
+        { createdAt: -1, _id: -1 },
+      ]);
+      findSpy.mockRestore();
+
+      const stored = await LakeAccessEventModel.find({ resolvedLakeIds: 'lake-tie' }).lean();
+      expect(new Set(stored.map(e => e.createdAt.getTime())).size).toBe(1);
+      expect(byLake.map(e => String(e.id))).toEqual(expected);
+      expect(byPrincipal.map(e => String(e.id))).toEqual(expected);
+      expect(windowed.map(e => String(e.id))).toEqual(expected.slice(0, 3));
+    });
+
+    // The tie-break must be in the index key, not just the sort: otherwise it buys a stable order
+    // at the cost of a blocking in-memory SORT on the highest-volume audit collection.
+    it('serves both audit sorts from an index, with no in-memory SORT stage', async () => {
+      const byLake = await LakeAccessEventModel.find({ resolvedLakeIds: 'lake-tie' })
+        .sort({ createdAt: -1, _id: -1 })
+        .explain('queryPlanner');
+      expect(JSON.stringify(byLake)).not.toContain('"stage":"SORT"');
+      expect(JSON.stringify(byLake)).toContain('IXSCAN');
+
+      const byPrincipal = await LakeAccessEventModel.find({ principalKind: 'user', principalId: 'tied' })
+        .sort({ createdAt: -1, _id: -1 })
+        .explain('queryPlanner');
+      expect(JSON.stringify(byPrincipal)).not.toContain('"stage":"SORT"');
+      expect(JSON.stringify(byPrincipal)).toContain('IXSCAN');
     });
 
     it('two identical record() calls produce two rows - no dedupe, by design', async () => {

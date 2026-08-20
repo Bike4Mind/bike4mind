@@ -134,7 +134,11 @@ LakeConfigChangeEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 // If a by-principal index is ever wanted, lead it with `dataLakeId`: batch-completion writes a
 // `system`/`system` pair, so `principalKind + principalId` alone would pile a large share of all
 // rows into one low-selectivity slot.
-LakeConfigChangeEventSchema.index({ dataLakeId: 1, createdAt: -1 });
+// `_id` trails `createdAt` so the sort in `listByLake` is a TOTAL order and stays index-served.
+// Without it, two events written in the same millisecond have no defined relative order and the
+// history list can come back reordered between reads; with the sort key but not the index key,
+// the planner falls back to a blocking in-memory SORT.
+LakeConfigChangeEventSchema.index({ dataLakeId: 1, createdAt: -1, _id: -1 });
 
 export const LakeConfigChangeEventModel: ILakeConfigChangeEventModel =
   (mongoose.models[ModelName] as ILakeConfigChangeEventModel) ||
@@ -175,7 +179,7 @@ class LakeConfigChangeEventRepository
   }
 
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeConfigChangeEventDocument[]> {
-    const query = this.eventModel.find({ dataLakeId: lakeId }).sort({ createdAt: -1 });
+    const query = this.eventModel.find({ dataLakeId: lakeId }).sort({ createdAt: -1, _id: -1 });
     if (opts?.limit) query.limit(opts.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as ILakeConfigChangeEventDocument);
