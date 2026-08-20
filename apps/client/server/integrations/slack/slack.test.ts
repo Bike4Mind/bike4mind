@@ -173,6 +173,30 @@ describe('resolveFeedbackSlackRoute', () => {
       reason: 'nonprod_unconfigured',
     });
   });
+
+  it('a self-host stage with singleEnvironmentInstall posts via the prod webhook, not the non-prod one', () => {
+    expect(resolveFeedbackSlackRoute('selfhost', { SlackFeedbackWebhookUrl: feedbackUrl }, true)).toEqual({
+      kind: 'post',
+      webhookUrl: feedbackUrl,
+      stageClass: 'nonprod',
+    });
+  });
+
+  it('a self-host stage with singleEnvironmentInstall and no prod webhook skips unconfigured_webhook, not nonprod_unconfigured', () => {
+    expect(resolveFeedbackSlackRoute('selfhost', {}, true)).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'unconfigured_webhook',
+    });
+  });
+
+  it('singleEnvironmentInstall defaults to false, leaving hosted non-prod behavior unchanged', () => {
+    expect(resolveFeedbackSlackRoute('selfhost', { SlackFeedbackWebhookUrl: feedbackUrl })).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'nonprod_unconfigured',
+    });
+  });
 });
 
 describe('postFeedbackToSlack', () => {
@@ -221,6 +245,25 @@ describe('postFeedbackToSlack', () => {
     expect(mocks.post).not.toHaveBeenCalled();
     expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured', 'pr-1234');
     expect(result).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
+  });
+
+  it('posts via the prod webhook on a self-host install (B4M_SELF_HOST=true) even though its stage classifies nonprod', async () => {
+    const previousSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    mocks.config.STAGE = 'selfhost';
+    try {
+      mocks.getSettingsMap.mockResolvedValue({
+        SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+      });
+      const result = await postFeedbackToSlack(...args);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      const [url] = mocks.post.mock.calls[0];
+      expect(url).toBe('https://hooks.slack.com/services/feedback');
+      expect(recordFeedbackDeliverySuccess).toHaveBeenCalledWith('slack', 'nonprod');
+      expect(result).toEqual({ outcome: 'delivered' });
+    } finally {
+      process.env.B4M_SELF_HOST = previousSelfHost;
+    }
   });
 
   it('records a skip with unconfigured_webhook when production has no webhook configured', async () => {

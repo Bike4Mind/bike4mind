@@ -2497,7 +2497,7 @@ export const settingsMap = {
     name: 'Non-Production Feedback Email',
     defaultValue: '',
     description:
-      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
+      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Does not apply to a self-host install, which routes through FeedbackReceiveEmail like production. Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 9.5,
@@ -2584,7 +2584,7 @@ export const settingsMap = {
     name: 'Non-Production Feedback Channel Webhook URL',
     defaultValue: '',
     description:
-      'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
+      'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Does not apply to a self-host install, which routes through SlackFeedbackWebhookUrl like production. Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 6.8,

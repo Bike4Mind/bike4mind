@@ -61,14 +61,19 @@ type FeedbackSlackRoute =
  * stage-leak bug this resolver exists to close (a deployed Lambda's NODE_ENV commonly reads
  * 'production' independent of the actual deploy stage, since nothing in infra/ sets it per stage,
  * so the old check could not reliably separate stages).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production - one environment, its
+ * own settings store, no shared production channel to leak into - without relabeling `stageClass`
+ * itself, so metrics/logs still report the install's real (non-production) stage classification.
  */
 export function resolveFeedbackSlackRoute(
   stage: string | undefined,
-  settings: Record<string, string>
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
 ): FeedbackSlackRoute {
   const stageClass: FeedbackDeliveryStageClass = classifyStage(stage);
 
-  if (stageClass === 'production') {
+  if (stageClass === 'production' || singleEnvironmentInstall) {
     const webhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);
     return webhookUrl
       ? { kind: 'post', webhookUrl, stageClass }
@@ -117,7 +122,7 @@ export async function postFeedbackToSlack(
 ): Promise<FeedbackChannelDelivery> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const route = resolveFeedbackSlackRoute(Config.STAGE, settings);
+    const route = resolveFeedbackSlackRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
 
     if (route.kind === 'skip') {
       // 'nonprod_unconfigured' is the expected default until an operator opts a stage in - warn,
