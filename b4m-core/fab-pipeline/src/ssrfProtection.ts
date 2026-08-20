@@ -182,11 +182,29 @@ function isPrivateIPv6(ip: string): boolean {
   // without this gate `fetch.example.com` matches the fe00::/8 arm, and `ffmpeg.org` / `fdic.gov` match
   // multicast and ULA. A colon alone is not enough - `fedex.com:8080` has one - so the charset has to
   // hold too: an IPv6 literal is only hex digits, colons, and an optional dotted tail. Names whose every
-  // character happens to be hex (`face.cafe:80`) still slip past this and are refused if they share a
-  // family prefix; that is the safe direction and the reason the arms are not the place to fix it.
+  // character happens to be hex still slip past this and are refused when they share a family prefix -
+  // `fed.cafe:80` returns true, while `face.cafe:80` matches no family and returns false. That is the safe
+  // direction, and the reason the arms are not the place to fix it.
   // Callers that need name-based blocking use `isPrivateOrInternalHostname`, which does its own name
   // checks before dispatching here.
-  if (!normalized.includes(':') || !/^[0-9a-f:.]+$/.test(normalized)) return false;
+  if (!normalized.includes(':')) return false;
+
+  // A leftover `[`, `]` or `%` means the literal was spelled in a shape the strip above does not recognise
+  // - `[fe80::1]:8080:9090`, `[fe80::1]:`, `[fe80::1`, `fe80::1]`. REFUSE those rather than letting the
+  // charset gate below drop them: `fe80::1]` was refused before that gate existed, so permitting it would
+  // be a loosening, and an address-shaped string we cannot parse is exactly what this guard should not
+  // wave through. A name carrying `%` and a colon is refused too; that is the safe direction for a string
+  // that is not a hostname in any normal spelling.
+  if (/[[\]%]/.test(normalized)) return true;
+
+  if (!/^[0-9a-f:.]+$/.test(normalized)) return false;
+
+  // A dotted quad is legal ONLY as the last two hextets. Anywhere else it is not IPv6 in any spelling -
+  // `127.0.0.1::`, `169.254.169.254::`, `0:1.2.3.4::` - and `normalizeIpv6` hands those back untouched, so
+  // without this arm they fall past every family test and read as public. That included the cloud metadata
+  // endpoint and RFC1918 space. Refuse the shape instead of trying to decode it; a caller with a real
+  // address has a spelling this module already accepts.
+  if (normalized.includes('.') && !/:\d+\.\d+\.\d+\.\d+$/.test(normalized)) return true;
 
   // ::1 - Loopback, and :: - unspecified. The written-out spellings cannot match any more: a string
   // equal to one of them is well-formed, so `normalizeIpv6` compresses it to `::1` / `::` first. They
@@ -345,6 +363,14 @@ export function isPrivateIP(ip: string): boolean {
   // the form is acceptable; this only decides which family to hand it to.
   if (/^(\d+\.){3}\d+$/.test(ip)) {
     return isPrivateIPv4(ip);
+  }
+
+  // An IPv4 literal carrying a port is still IPv4. Without this it falls into the IPv6 branch, where the
+  // dotted-quad-placement arm refuses anything whose quad is not in the tail - which would over-block
+  // `8.8.8.8:443`. Judge the address and ignore the port.
+  const ipv4WithPort = ip.match(/^((?:\d+\.){3}\d+):\d+$/);
+  if (ipv4WithPort) {
+    return isPrivateIPv4(ipv4WithPort[1]);
   }
 
   // Assume IPv6
