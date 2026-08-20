@@ -161,6 +161,21 @@ export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
 };
 
 /**
+ * Storage-time bounds for one AI-inferred taxonomy category, shared by `sanitizeCategories`
+ * (utils/dataLakeTaxonomy.ts, the write path) and `ApplyTaxonomyRequestInput`'s Zod schema
+ * (schemas/dataLake.ts, the apply request's validation). These MUST agree: a category
+ * `sanitizeCategories` accepts and stores as `taxonomyStatus: 'ready'` has to be one apply's
+ * request schema will also accept, or the batch becomes permanently un-applyable - accepted at
+ * analysis time, then rejected on every apply attempt. Importing one shared source instead of
+ * two independently-hardcoded numbers is what keeps that from silently drifting.
+ */
+export const MAX_TAXONOMY_TAGS = 100;
+export const MAX_TAXONOMY_TAG_SUFFIX_LENGTH = 100;
+export const MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH = 150;
+export const MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG = 100;
+export const MAX_TAXONOMY_MATCHING_FOLDER_LENGTH = 512;
+
+/**
  * Length bounds for a `fileTagPrefix`, measured on the TRIMMED value INCLUDING its trailing ":" -
  * the same string `CreateDataLakeRequestInput` sizes after its own `.trim()`, so a value that is
  * exactly at the limit is judged identically on both sides.

@@ -39,8 +39,12 @@ const handler = baseApi().post(
       const userId = req.user.id;
       const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
 
-      // Same feature gate as the batch-presign sibling: when this upload is bound to a data
-      // lake batch, the feature must actually be on.
+      // Same effective gate as the batch-presign sibling (generate-presigned-urls-batch.ts):
+      // when this upload is bound to a data lake batch, the feature must actually be on. Same
+      // 403 + FEATURE_DISABLED code, but a different response shape - this route throws
+      // ForbiddenError (rendered by errorHandler as {code, name, error, request_id}), while the
+      // sibling still hand-rolls res.status(403).json({error, code}). Convert the sibling to
+      // throw too if exact parity is ever wanted.
       if (data.batchId) {
         const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
         if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
