@@ -75,22 +75,43 @@ const handler = baseApi().put(
       }
     }
 
-    const updatedFeedback = await FeedbackModel.findOneAndUpdate(
-      { _id: id },
-      {
-        $set: {
-          status,
-          username,
-          ...(contentStoredChange !== undefined ? { contentStored: contentStoredChange } : {}),
+    // Symmetric with the create handler's own cleanup: a freshly-originated sibling must not
+    // outlive the document update that was supposed to record it, whether that update throws or
+    // (on a delete race) just returns null.
+    const cleanupOrphanedSibling = async (context: string) => {
+      if (contentStoredChange !== true) return;
+      await FeedbackTextModel.deleteOne({ _id: id }).catch(cleanupError => {
+        req.logger.warn(`Failed to delete orphaned FeedbackText sibling after ${context}`, cleanupError);
+      });
+    };
+
+    let updatedFeedback;
+    try {
+      updatedFeedback = await FeedbackModel.findOneAndUpdate(
+        { _id: id },
+        {
+          $set: {
+            status,
+            username,
+            ...(contentStoredChange !== undefined ? { contentStored: contentStoredChange } : {}),
+          },
+          // Originating a fresh sibling can happen on a pre-migration document that still carries
+          // its content directly on the permanent doc - unset it there too, or it survives
+          // forever on a field the 90-day TTL can never reach.
+          ...(contentStoredChange === true ? { $unset: { content: '' } } : {}),
         },
-        // Originating a fresh sibling can happen on a pre-migration document that still carries
-        // its content directly on the permanent doc - unset it there too, or it survives forever
-        // on a field the 90-day TTL can never reach.
-        ...(contentStoredChange === true ? { $unset: { content: '' } } : {}),
-      },
-      { new: true }
-    );
-    if (!updatedFeedback) throw new NotFoundError('Feedback not found');
+        { new: true }
+      );
+    } catch (error) {
+      await cleanupOrphanedSibling('a failed update');
+      throw error;
+    }
+    if (!updatedFeedback) {
+      // The document was deleted between the initial findById and this update - findOneAndUpdate
+      // returns null rather than throwing in that case, but the sibling still needs cleanup.
+      await cleanupOrphanedSibling('a missing update target');
+      throw new NotFoundError('Feedback not found');
+    }
 
     // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so
     // would defeat the 90-day retention this route otherwise enforces.

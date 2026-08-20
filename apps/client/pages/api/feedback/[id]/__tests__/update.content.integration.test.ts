@@ -156,4 +156,44 @@ describe('PUT /api/feedback/[id] - content write paths (real Mongo)', () => {
     const sibling = await FeedbackTextModel.findById(doc.id);
     expect(sibling?.content).toBe('untouched content');
   });
+
+  it('deletes the freshly-originated sibling if the document update then throws', async () => {
+    const doc = await FeedbackModel.create({ userId: 'owner1', username: 'owner', status: 'New' });
+
+    const updateSpy = vi.spyOn(FeedbackModel, 'findOneAndUpdate').mockRejectedValueOnce(new Error('write failed'));
+
+    const { req, res } = mockRequest(doc.id, {
+      userId: 'owner1',
+      content: 'should not survive',
+      username: 'owner',
+      status: 'InProgress',
+    });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('write failed');
+
+    const sibling = await FeedbackTextModel.findById(doc.id);
+    expect(sibling).toBeNull();
+
+    updateSpy.mockRestore();
+  });
+
+  it('deletes the freshly-originated sibling if the document is gone by the time of the update', async () => {
+    const doc = await FeedbackModel.create({ userId: 'owner1', username: 'owner', status: 'New' });
+
+    // Simulates the delete race: the document existed for the initial findById/ability check but
+    // is gone by the time findOneAndUpdate runs, so it returns null instead of throwing.
+    const updateSpy = vi.spyOn(FeedbackModel, 'findOneAndUpdate').mockResolvedValueOnce(null);
+
+    const { req, res } = mockRequest(doc.id, {
+      userId: 'owner1',
+      content: 'should not survive either',
+      username: 'owner',
+      status: 'InProgress',
+    });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(/not found/i);
+
+    const sibling = await FeedbackTextModel.findById(doc.id);
+    expect(sibling).toBeNull();
+
+    updateSpy.mockRestore();
+  });
 });

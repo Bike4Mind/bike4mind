@@ -29,6 +29,12 @@ export function toRedactedFeedback(doc: HydratedDocument<IFeedbackDocument>) {
  * `contentStored` defaults to false on it via the schema default rather than being unset - without
  * this fallback, every pre-migration report's content would read as blank the moment this ships,
  * well before the migration ever runs.
+ *
+ * This fallback depends on `contentStored`'s schema default staying `false` (never made required
+ * with no default) and on the migration only marking `contentStored: true` for a CONFIRMED sibling
+ * copy (see the `confirmedIds` gate in the backfill migration) - if either changes, a legacy
+ * pre-migration row could report `contentExpired` incorrectly. Not enforced at runtime since both
+ * are currently guaranteed structurally; revisit this function if either guarantee moves.
  */
 export async function hydrateFeedbackText<T extends { id: string; contentStored: boolean; content?: string }>(
   items: T[]
