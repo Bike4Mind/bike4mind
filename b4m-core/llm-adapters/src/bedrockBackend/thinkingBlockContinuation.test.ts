@@ -8,8 +8,9 @@
  * a multi-round tool turn came back with no text and no tool call and tripped the
  * fail-loud EMPTY-response guard in base.ts.
  *
- * Two halves, both asserted against the real request bodies the backend sends:
+ * Asserted against the real request bodies the backend sends:
  *  - a thinking turn's blocks (with signature) lead the rebuilt assistant turn;
+ *  - a parallel round attaches them to every turn it rebuilds, not just the first;
  *  - a non-thinking turn is byte-identical to before - exactly `[tool_use]`.
  */
 
@@ -98,6 +99,41 @@ function thinkingToolRound(): unknown[] {
   ];
 }
 
+/** One reasoning block, then two tool calls - the parallel-round shape. */
+function thinkingParallelToolRound(): unknown[] {
+  return [
+    { type: 'message_start', message: { usage: { input_tokens: 110000 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: THINKING_TEXT } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: SIGNATURE } },
+    { type: 'content_block_stop', index: 0 },
+    {
+      type: 'content_block_start',
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu_weather', name: 'get_weather' },
+    },
+    {
+      type: 'content_block_delta',
+      index: 1,
+      delta: { type: 'input_json_delta', partial_json: '{"location":"Paris"}' },
+    },
+    { type: 'content_block_stop', index: 1 },
+    {
+      type: 'content_block_start',
+      index: 2,
+      content_block: { type: 'tool_use', id: 'toolu_time', name: 'get_time' },
+    },
+    {
+      type: 'content_block_delta',
+      index: 2,
+      delta: { type: 'input_json_delta', partial_json: '{"timezone":"Europe/Paris"}' },
+    },
+    { type: 'content_block_stop', index: 2 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 900 } },
+    { type: 'message_stop' },
+  ];
+}
+
 /** The same turn from a model that does not reason: no thinking block at all. */
 function plainToolRound(): unknown[] {
   return [
@@ -130,28 +166,46 @@ function synthesisRound(): unknown[] {
   ];
 }
 
-const tools: ICompletionOptionTools[] = [
-  {
-    toolFn: async () => 'sunny, 24C',
-    toolSchema: {
-      name: 'get_weather',
-      description: 'Get the current weather',
-      parameters: { type: 'object', properties: { location: { type: 'string', description: 'City' } } },
-    },
+const weatherTool: ICompletionOptionTools = {
+  toolFn: async () => 'sunny, 24C',
+  toolSchema: {
+    name: 'get_weather',
+    description: 'Get the current weather',
+    parameters: { type: 'object', properties: { location: { type: 'string', description: 'City' } } },
   },
-];
+};
+
+const timeTool: ICompletionOptionTools = {
+  toolFn: async () => '14:05',
+  toolSchema: {
+    name: 'get_time',
+    description: 'Get the current local time',
+    parameters: { type: 'object', properties: { timezone: { type: 'string', description: 'IANA zone' } } },
+  },
+};
+
+const tools: ICompletionOptionTools[] = [weatherTool];
 
 type WireBlock = { type: string; thinking?: string; signature?: string; data?: string };
 
+/** Every assistant turn the adapter rebuilt around a tool call, in order. */
+function rebuiltAssistantTurns(body: string): WireBlock[][] {
+  const { messages } = JSON.parse(body) as { messages: Array<{ role: string; content: unknown }> };
+  return messages
+    .filter(
+      m =>
+        m.role === 'assistant' &&
+        Array.isArray(m.content) &&
+        (m.content as WireBlock[]).some(b => b.type === 'tool_use')
+    )
+    .map(m => m.content as WireBlock[]);
+}
+
 /** The content of the assistant turn the adapter rebuilt around the tool call. */
 function rebuiltAssistantContent(body: string): WireBlock[] {
-  const { messages } = JSON.parse(body) as { messages: Array<{ role: string; content: unknown }> };
-  const turn = messages.find(
-    m =>
-      m.role === 'assistant' && Array.isArray(m.content) && (m.content as WireBlock[]).some(b => b.type === 'tool_use')
-  );
-  if (!turn) throw new Error('continuation payload carries no rebuilt assistant tool_use turn');
-  return turn.content as WireBlock[];
+  const [first] = rebuiltAssistantTurns(body);
+  if (!first) throw new Error('continuation payload carries no rebuilt assistant tool_use turn');
+  return first;
 }
 
 async function runToolTurn(rounds: unknown[][], options: Partial<ICompletionOptions> = {}) {
@@ -217,5 +271,23 @@ describe('Bedrock Claude tool continuation preserves signed thinking blocks', ()
 
     const continuation = JSON.parse(backend.sentBodies[1]) as { thinking?: unknown };
     expect(continuation.thinking).toEqual({ type: 'adaptive' });
+  });
+
+  // A parallel round splits one provider turn into one synthetic assistant turn per tool.
+  // The reasoning blocks are taken once for the round, so EVERY one of those turns carries
+  // them - attaching them to the first only leaves the rest as bare tool_use, which is the
+  // shape that makes the continuation come back empty.
+  it('attaches the round reasoning blocks to every turn of a parallel tool round', async () => {
+    const { backend } = await runToolTurn([thinkingParallelToolRound(), synthesisRound()], {
+      tools: [weatherTool, timeTool],
+    });
+
+    const turns = rebuiltAssistantTurns(backend.sentBodies[1]);
+    expect(turns).toHaveLength(2);
+    for (const content of turns) {
+      expect(content[0]).toEqual({ type: 'thinking', thinking: THINKING_TEXT, signature: SIGNATURE });
+      expect(content[1]).toMatchObject({ type: 'tool_use' });
+    }
+    expect(turns.map(c => (c[1] as { name?: string }).name)).toEqual(['get_weather', 'get_time']);
   });
 });

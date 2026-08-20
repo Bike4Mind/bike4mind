@@ -236,7 +236,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   /**
    * Reasoning blocks of the assistant turn currently being translated, indexed by the
    * stream's content-block index. Reset at `message_start` and consumed by
-   * `pushToolMessages` when it rebuilds that turn for a tool continuation.
+   * `takeReasoningBlocks` when that turn is rebuilt for a tool continuation.
    */
   private assistantReasoningBlocks: Array<ClaudeReasoningBlock | undefined> = [];
   /** Catalog view of the model being completed; see DispatchModel. */
@@ -253,10 +253,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
    * model thinks on every turn whether or not the request asked it to - so dropping
    * them is what makes the synthesis round of a multi-round tool turn come back empty.
    *
-   * Taken once: a parallel tool round rebuilds one assistant turn per call, and the
-   * signed blocks belong to exactly one of them.
+   * Taken once per provider turn. base.ts takes them before its tool loop and hands the
+   * same array to every assistant message it rebuilds for that round, because a parallel
+   * round splits one provider turn across several synthetic turns and each of them has to
+   * carry the reasoning.
    */
-  private takeReasoningBlocks(): ClaudeReasoningBlock[] {
+  protected override takeReasoningBlocks(): ClaudeReasoningBlock[] {
     const blocks = this.assistantReasoningBlocks.filter((b): b is ClaudeReasoningBlock => b != null);
     this.assistantReasoningBlocks = [];
     return blocks;
@@ -1192,9 +1194,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       input: JSON.parse(tool.parameters || '{}'),
     };
 
-    // Blocks the caller supplies win (the executeTools: false path knows them); otherwise
-    // replay what this turn's stream/response captured. Either way an assistant turn that
-    // reasoned must not reach the provider as a bare tool_use - see takeReasoningBlocks.
+    // Blocks the caller supplies win: base.ts's tool loop takes them once per round and
+    // passes the same array for every tool in it, and the executeTools: false path knows
+    // its own. Falling back covers a direct call with neither - an assistant turn that
+    // reasoned must not reach the provider as a bare tool_use. See takeReasoningBlocks.
     const reasoningBlocks = thinkingBlocks?.length ? thinkingBlocks : this.takeReasoningBlocks();
 
     const assistantContent: IMessage['content'] =
