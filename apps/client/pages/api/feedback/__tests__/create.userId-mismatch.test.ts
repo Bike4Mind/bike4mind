@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const mockPostFeedbackToSlack = vi.fn().mockResolvedValue(undefined);
+const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
 vi.mock('@server/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
@@ -50,13 +50,15 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     getSettingsMap: vi.fn().mockResolvedValue({}),
     // Slack and email both enabled so the identity-resolution fix in each egress block is actually
     // exercised -- with both off, neither block ran and the resolved-identity substitutions had no
-    // coverage at all.
+    // coverage at all. FeedbackReceiveEmailNonProd is also set: this suite's real Config.STAGE is
+    // 'test' (vitest.setup.ts), which classifies as non-production, and this test's own concern is
+    // identity resolution reaching the email body, not stage routing (covered separately).
     getSettingsValue: vi.fn((key: string) =>
       key === 'EnableFeedBackToSlack'
         ? true
         : key === 'EnableFeedBackToEmail'
           ? true
-          : key === 'FeedbackReceiveEmail'
+          : key === 'FeedbackReceiveEmail' || key === 'FeedbackReceiveEmailNonProd'
             ? 'ops@example.com'
             : undefined
     ),

@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
+  findOverrides: vi.fn(),
   s3ClientConfigs: [] as unknown[],
 }));
 
@@ -32,6 +34,8 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: h.findOverrides },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
@@ -152,6 +156,46 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
       /only an admin can change this data lake/i
     );
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The admission contract (#1680) at this door. It reaches it through
+ * `assertCanWriteDataLakeTags`' `members` option - the contract's ONLY opt-in signal - and the real
+ * service runs here, so deleting that option makes this refusal disappear.
+ */
+describe('POST /api/files/generate-presigned-url - admission contract', () => {
+  // Deliberately not a round number: the owner's chunk policy resolves to a coded default here, and
+  // a required target that happened to match it would satisfy the contract instead of violating it.
+  const ENFORCING_LAKE = { ...LAKE, requiredPassageTokenTarget: 4321 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+    h.findByDatalakeTag.mockResolvedValue(ENFORCING_LAKE);
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+    h.findOverrides.mockResolvedValue([
+      { scopeLevel: 'lake', scopeId: 'lake-1', settingName: 'EnforceLakeAdmission', settingValue: 'true' },
+    ]);
+  });
+
+  it('refuses the upload before any presigned URL when the lake enforces and the policy disagrees', async () => {
+    const { res } = makeRes();
+
+    await expect(run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
+      /requires passages of 4321/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('allows it when no scoped override turns the lever on - report-only is the default', async () => {
+    h.findOverrides.mockResolvedValue([]);
+    const { res } = makeRes();
+
+    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });
 

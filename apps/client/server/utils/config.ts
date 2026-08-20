@@ -99,6 +99,16 @@ const Config = {
 } as const;
 
 const isProduction = () => Resource.App.stage === 'production';
+
+/**
+ * Binary production/non-production bucket for a raw stage string - the same comparison as
+ * isProduction(), but as a pure function of an explicit stage argument (not Resource.App.stage
+ * directly) so callers that need to unit-test stage-dependent routing/dimensioning can pass an
+ * arbitrary stage without mocking Resource. Single source of truth for callers that used to each
+ * repeat `stage === 'production'` themselves.
+ */
+const classifyStage = (stage: string | undefined): 'production' | 'nonprod' =>
+  stage === 'production' ? 'production' : 'nonprod';
 // True only for local development, never in deployed environments.
 const isDevelopment = () => {
   const isLocal = process.env.IS_LOCAL === 'true';
@@ -117,4 +127,4 @@ const isE2EEnabled = () => {
   return isDevelopment();
 };
 
-export { Config, isProduction, isDevelopment, isE2EEnabled };
+export { Config, isProduction, classifyStage, isDevelopment, isE2EEnabled };

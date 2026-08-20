@@ -90,6 +90,7 @@ const gatedLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  requiredPassageTokenTarget: null,
   canManage: true,
 };
 
@@ -104,6 +105,7 @@ const openLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  requiredPassageTokenTarget: null,
   canManage: true,
 };
 
@@ -118,6 +120,7 @@ const entitlementGatedLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  requiredPassageTokenTarget: null,
   canManage: true,
 };
 
@@ -715,5 +718,63 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+  });
+});
+
+// An EXPLICIT target is the sole trigger for convergence (isConvergeablePolicy), so without a
+// control for it the whole feature is unreachable from the app - which is how it shipped to QA.
+describe('DataLakeSettingsModal - required passage size', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+    warn.mockReset();
+  });
+
+  it('adopts an explicit target, which is what makes the lake convergeable', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.type(screen.getByTestId('datalake-passage-target-input'), '512');
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-2', requiredPassageTokenTarget: 512 });
+  });
+
+  // null is the server's CLEAR sentinel, and going back to inheriting is what turns convergence off
+  // for a lake - so a blank field must send it rather than omit the key ("leave unchanged").
+  it('sends null when the field is blanked, returning the lake to the inherited default', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, requiredPassageTokenTarget: 512 }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.clear(screen.getByTestId('datalake-passage-target-input'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ requiredPassageTokenTarget: null });
+  });
+
+  // Checked against the same bounds the request schema enforces: a 400 would reject the WHOLE
+  // request, losing the name/description/gate edits sent alongside it.
+  it('refuses to save an out-of-range target rather than losing the rest of the form to a 400', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.type(screen.getByTestId('datalake-passage-target-input'), '99999');
+
+    // Save is disabled rather than allowed-then-rejected, so the correction happens before the
+    // request that would have thrown the rest of the form away.
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+    expect(screen.getByTestId('datalake-passage-target-help').textContent).toContain('between 64 and 1500');
+    expect(updateMutate).not.toHaveBeenCalled();
   });
 });

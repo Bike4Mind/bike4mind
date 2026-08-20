@@ -1,5 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { DATA_LAKES, type IDataLakeDocument } from '@bike4mind/common';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import {
+  DATA_LAKES,
+  SettingScopeLevel,
+  type IDataLakeDocument,
+  type IScopedSetting,
+  type ScopeRef,
+} from '@bike4mind/common';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { reconcileLakeTags } from './reconcileLakeTags';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -536,5 +543,123 @@ describe('reconcileLakeTags - static-registry prefix (e.g. opti:), no owning lak
     const result = await run(adapters, [`${prefix}legacy`], []);
 
     expect(result.tagsToPersist).toEqual([tag(`${prefix}legacy`, 1)]);
+  });
+});
+
+/**
+ * The admission contract at this door (#1680). Every test above uses a lake that declares no
+ * `requiredPassageTokenTarget`, so the gate short-circuits and their behavior is unchanged - which
+ * is itself the report-only default. These exercise the enforcing path.
+ */
+describe('reconcileLakeTags - admission contract', () => {
+  const MODEL = 'text-embedding-3-small';
+
+  const settingsDb = (platform: Record<string, string>, overrides: Array<Partial<IScopedSetting>> = []) => ({
+    adminSettings: {
+      findBySettingNames: vi.fn(async (names: string[]) =>
+        names.filter(n => platform[n] != null).map(n => ({ settingName: n, settingValue: platform[n] }))
+      ),
+      findAll: vi.fn(async () =>
+        Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+      ),
+    },
+    scopedSettings: {
+      findOverrides: vi.fn(
+        async (scopes: ScopeRef[], names: string[]) =>
+          overrides.filter(
+            o =>
+              names.includes(o.settingName as string) &&
+              scopes.some(s => s.scopeLevel === o.scopeLevel && s.scopeId === o.scopeId)
+          ) as IScopedSetting[]
+      ),
+    },
+  });
+
+  const enforcingLake = (lakeId: string): Partial<IScopedSetting> => ({
+    scopeLevel: SettingScopeLevel.Lake as IScopedSetting['scopeLevel'],
+    scopeId: lakeId,
+    settingName: 'EnforceLakeAdmission',
+    settingValue: 'true',
+  });
+
+  /** Adapters whose lake REQUIRES a passage size, so the contract actually grades this write. */
+  const withPolicy = (platform: Record<string, string>, overrides: Array<Partial<IScopedSetting>> = []) => {
+    const base = makeAdapters([], lake({ requiredPassageTokenTarget: 1000 }));
+    return { db: { ...base.db, ...settingsDb(platform, overrides) } };
+  };
+
+  beforeEach(() => {
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('refuses a meta-tag join when the lake enforces and the owner policy disagrees', async () => {
+    const adapters = withPolicy({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake1')]);
+
+    await expect(run(adapters as never, [], [tag('datalake:lake', 1)])).rejects.toThrow(/requires passages of 1000/);
+  });
+
+  it('allows the same join when the lever is off - report-only is the default', async () => {
+    const adapters = withPolicy({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' });
+
+    const result = await run(adapters as never, [], [tag('datalake:lake', 1)]);
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('datalake:lake', 1)]));
+  });
+
+  it('allows the join when the owner policy matches what the lake requires', async () => {
+    const adapters = withPolicy({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '1000' }, [enforcingLake('lake1')]);
+
+    const result = await run(adapters as never, [], [tag('datalake:lake', 1)]);
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('datalake:lake', 1)]));
+  });
+
+  it('never refuses a write that only PRESERVES an existing membership - admission, not eviction', async () => {
+    // The file already carries the meta-tag, so this is a resend, not a join. A whole-array write
+    // can never leave a lake, so refusing here would trap the file's every future edit.
+    const base = makeAdapters([tag('datalake:lake', 1)], lake({ requiredPassageTokenTarget: 1000 }));
+    const adapters = {
+      db: {
+        ...base.db,
+        ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake1')]),
+      },
+    };
+
+    const result = await run(adapters as never, ['datalake:lake'], [tag('rename-me')]);
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('datalake:lake', 1)]));
+  });
+
+  it('grades a chunked file on its recorded target rather than the owner policy', async () => {
+    const base = makeAdapters([], lake({ requiredPassageTokenTarget: 1000 }));
+    const adapters = {
+      db: {
+        ...base.db,
+        ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '1000' }, [enforcingLake('lake1')]),
+      },
+    };
+
+    // Owner policy would conform (1000); the file's chunks were actually built at 512.
+    await expect(
+      reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], {
+        ...(adapters as never),
+        fileOwnerUserId: 'owner',
+        fileChunkedPassageTokenTarget: 512,
+      } as never)
+    ).rejects.toThrow(/chunks at 512/);
+  });
+
+  it('logs rather than silently passing when the file owner cannot be resolved', async () => {
+    const base = makeAdapters([], lake({ requiredPassageTokenTarget: 1000 }));
+    base.db.fabFiles.findById = vi.fn().mockResolvedValue(null);
+    const warn = vi.fn();
+
+    await reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], {
+      db: {
+        ...base.db,
+        ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake1')]),
+      },
+      logger: { warn },
+    } as never);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('admission contract NOT evaluated'), 'f1');
   });
 });

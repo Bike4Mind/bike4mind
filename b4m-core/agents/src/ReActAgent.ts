@@ -262,7 +262,10 @@ export class ReActAgent extends EventEmitter {
     this.context = {
       ...context,
       maxIterations: context.maxIterations ?? 50,
-      maxTokens: context.maxTokens ?? 4096,
+      // maxTokens is deliberately NOT defaulted. An absent budget is a real signal that
+      // travels to the server, which sizes the ceiling for the model; substituting a
+      // number here would forge a caller preference and cap adaptive-reasoning models
+      // low enough that thinking eats the whole budget and the answer is truncated.
       temperature: context.temperature ?? 0.7,
     };
     this.repeatedCallGuard = new RepeatedCallGuard(context.repeatedCallGuard);
@@ -314,7 +317,7 @@ export class ReActAgent extends EventEmitter {
     options: { model?: string; maxTokens?: number; temperature?: number; signal?: AbortSignal } = {}
   ): Promise<string> {
     const model = options.model ?? this.context.model;
-    const maxTokens = options.maxTokens ?? this.context.maxTokens ?? 4096;
+    const maxTokens = options.maxTokens ?? this.context.maxTokens;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
 
     let text = '';
@@ -363,7 +366,7 @@ export class ReActAgent extends EventEmitter {
 
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
-    const maxTokens = options.maxTokens ?? this.context.maxTokens ?? 4096;
+    const maxTokens = options.maxTokens ?? this.context.maxTokens;
     const maxTotalTokens = options.maxTotalTokens ?? this.context.maxTotalTokens;
     const maxHistoryIterations = options.maxHistoryIterations ?? 4;
 
@@ -422,6 +425,7 @@ export class ReActAgent extends EventEmitter {
               iterations,
               toolCalls: this.toolCallCount,
               reachedMaxIterations: false,
+              finishReason: this.lastStopReason,
             },
           };
 
@@ -824,6 +828,7 @@ export class ReActAgent extends EventEmitter {
           toolCalls: this.toolCallCount,
           reachedMaxIterations,
           reachedMaxTotalTokens: reachedMaxTotalTokens || undefined,
+          finishReason: this.lastStopReason,
           averageConfidence: avgConfidence,
           minConfidence,
           confidenceLog: this.confidenceLog.length > 0 ? this.confidenceLog : undefined,
@@ -1110,7 +1115,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   async runIteration(query?: string | MessageContent, options: AgentRunOptions = {}): Promise<IterationResult> {
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
-    const maxTokens = options.maxTokens ?? this.context.maxTokens ?? 4096;
+    const maxTokens = options.maxTokens ?? this.context.maxTokens;
     const maxTotalTokens = options.maxTotalTokens ?? this.context.maxTotalTokens;
 
     // Initialize on first call (not resumed from checkpoint)

@@ -24,7 +24,13 @@ import {
 import { useDataLakeSpend, useSetLakeVisibility, useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
-import { DATA_LAKE_GROUNDING_MODES, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
+import {
+  DATA_LAKE_GROUNDING_MODES,
+  DEFAULT_DATA_LAKE_GROUNDING_MODE,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+} from '@bike4mind/common';
 import type { DataLakeGroundingMode } from '@bike4mind/common';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 
@@ -62,8 +68,16 @@ export interface EditableLake {
    */
   groundingMode: DataLakeGroundingMode;
   /**
+   * The passage size (TOKENS) this lake REQUIRES of its member files, or `null` to inherit the
+   * platform default. `null` is not a cosmetic difference: an EXPLICIT target is the sole trigger
+   * for convergence (epic decision 5 - `isConvergeablePolicy`), so a lake left inheriting is
+   * measured and reported by health but never repaired, and the Converge action never appears.
+   */
+  requiredPassageTokenTarget: number | null;
+  /**
    * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
-   * Gates the editor-only per-lake config fields (System prompt, Preferred prompt, Grounding mode).
+   * Gates the editor-only per-lake config fields (System prompt, Preferred prompt, Grounding mode,
+   * Required passage size).
    */
   canManage: boolean;
   /**
@@ -123,6 +137,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [systemPrompt, setSystemPrompt] = useState('');
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
+  // Held as a STRING, not a number: '' is the "inherit the platform default" state and is what the
+  // save maps to the server's `null` clear sentinel. A numeric state would have to overload 0 or
+  // NaN for that, and both are values the range check below has to reject anyway.
+  const [requiredPassageTokenTarget, setRequiredPassageTokenTarget] = useState('');
   // Only fetch the picker options when an editor is actually viewing the settings (a lake is open
   // and manageable) - a reader never sees the field, so never pays for the list.
   const {
@@ -153,6 +171,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setSystemPrompt(lake.systemPrompt ?? '');
       setPreferredSystemPromptId(lake.preferredSystemPromptId ?? '');
       setGroundingMode(lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE);
+      setRequiredPassageTokenTarget(
+        typeof lake.requiredPassageTokenTarget === 'number' ? String(lake.requiredPassageTokenTarget) : ''
+      );
     }
     setTab('settings');
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
@@ -173,10 +194,22 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const clearingUserTag = !!lake?.requiredUserTag && !requiredUserTag.trim();
   const clearingEntitlement = !!lake?.requiredEntitlement && !requiredEntitlement.trim();
 
+  // Validated client-side against the SAME bounds UpdateDataLakeRequestInput enforces, so an
+  // out-of-range value is a helper-text correction rather than a 400 that loses the whole form
+  // (name, description and the gates are sent in the same request).
+  const trimmedTarget = requiredPassageTokenTarget.trim();
+  const parsedTarget = trimmedTarget === '' ? null : Number(trimmedTarget);
+  const targetInvalid =
+    parsedTarget !== null &&
+    (!Number.isInteger(parsedTarget) ||
+      parsedTarget < MIN_PASSAGE_TOKEN_TARGET ||
+      parsedTarget > OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+
   const handleSave = () => {
     if (!lake) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
+    if (targetInvalid) return;
     updateLake.mutate(
       {
         id: lake.id,
@@ -202,6 +235,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Editor-only, same manage gate. Always a concrete mode (no clear sentinel - a lake always
         // has a grounding mode), so it is sent as the chosen enum value.
         ...(lake.canManage ? { groundingMode } : {}),
+        // Editor-only, same manage gate. Sent even when null - null is the server's explicit CLEAR
+        // sentinel (drop the requirement and go back to inheriting), which is a state an owner has
+        // to be able to return to: it is what turns convergence back off for this lake.
+        ...(lake.canManage ? { requiredPassageTokenTarget: parsedTarget } : {}),
       },
       { onSuccess: onClose }
     );
@@ -313,6 +350,32 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           </FormHelperText>
         </FormControl>
       )}
+      {lake?.canManage && (
+        <FormControl error={targetInvalid}>
+          <FormLabel>Required passage size</FormLabel>
+          <Input
+            type="number"
+            value={requiredPassageTokenTarget}
+            onChange={e => setRequiredPassageTokenTarget(e.target.value)}
+            placeholder={`Inherit the default (${DEFAULT_PASSAGE_TOKEN_TARGET})`}
+            slotProps={{
+              input: {
+                min: MIN_PASSAGE_TOKEN_TARGET,
+                max: OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+                step: 1,
+                'data-testid': 'datalake-passage-target-input',
+              },
+            }}
+          />
+          <FormHelperText data-testid="datalake-passage-target-help">
+            {targetInvalid
+              ? `Enter a whole number between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, or leave blank to inherit the default.`
+              : 'How large this lake needs its documents chunked, in tokens. Leave blank to inherit the platform ' +
+                'default - a lake that inherits is measured by health but never repaired, so setting a value here is ' +
+                'what enables "Converge to policy". Changing it does not re-chunk anything on its own.'}
+          </FormHelperText>
+        </FormControl>
+      )}
       <FormControl>
         <FormLabel>Visibility</FormLabel>
         <RadioGroup
@@ -356,7 +419,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 : canShareToOrg
                   ? `Private. \u201COrganization\u201D scopes it to \u201C${activeOrg?.name}\u201D; \u201CPublic\u201D exposes it to everyone.`
                   : belongsToOrg
-                    ? 'Private. Switch to your team account (top-left account switcher) to share with your organization, or make it public.'
+                    ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
       </FormControl>
@@ -444,7 +507,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 variant="solid"
                 color="primary"
                 loading={updateLake.isPending}
-                disabled={!name.trim()}
+                disabled={!name.trim() || targetInvalid}
                 onClick={handleSave}
                 data-testid="datalake-settings-save-btn"
               >

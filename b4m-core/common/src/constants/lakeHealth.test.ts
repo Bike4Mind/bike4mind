@@ -4,6 +4,7 @@ import {
   CHARS_PER_TOKEN_SERVE_BOUND,
   SERVE_CHUNK_CHARS_CEILING,
   CONVERGENCE_PAUSED_NOTE,
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
 } from './chunking';
 import {
   resolveLakeHealthPolicy,
@@ -430,6 +431,66 @@ describe('summarizeLakeHealth', () => {
       DEFAULT_POLICY
     );
     expect(report.affectedMembers).toHaveLength(0);
+  });
+});
+
+describe('evaluateMemberHealth - passages DELETED by a halted wave must fail, not abstain', () => {
+  // The other half of the same bug. `resetChunkStateByIds` nulls all four rollups in the write that
+  // deletes the passages, so every predicate below used to abstain on absence: the member graded
+  // `unknown` across the board, landed in neither `failed` nor the ratio, and the lake still read
+  // "Reachable 100%" with an empty drill-down - the exact reported symptom.
+  //
+  // Every rollup here is `null`, deliberately, because that is what the reset actually writes. Zeros
+  // would take a different branch at each predicate and let a broken implementation pass.
+  const stranded = (over: Partial<LakeHealthMemberInput> = {}): LakeHealthMemberInput => ({
+    fabFileId: 'stranded',
+    chunkCount: 0,
+    vectorizedChunkCount: 0,
+    error: null,
+    notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+    chunkedCharCount: null,
+    maxChunkCharLength: null,
+    embeddedChunkCount: null,
+    embeddedCharCount: null,
+    ...over,
+  });
+
+  it('fails P3 on its proven zero rather than grading unknown', () => {
+    const r = evaluateMemberHealth(stranded(), DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('fail');
+    expect(r.failed).toContain('fullyVectorized');
+    expect(r.reachableChars).toBe(0);
+    expect(r.measured).toBe(true);
+  });
+
+  it('is named in the drill-down, and drops the lake off a fully-passing predicate tally', () => {
+    const healthy = member({ fabFileId: 'ok', chunkCount: 1, chunkedCharCount: 2000, embeddedCharCount: 2000 });
+    const summary = summarizeLakeHealth([healthy, stranded()], DEFAULT_POLICY);
+    expect(summary.affectedMembers.map(m => m.fabFileId)).toEqual(['stranded']);
+    expect(summary.predicates.fullyVectorized.fail).toBe(1);
+    expect(summary.predicates.fullyVectorized.unknown).toBe(0);
+  });
+
+  it('does NOT keep failing a member the rescue sweep rebuilt (marker outlives the repair)', () => {
+    // That path enqueues without a reset and nothing on the success path clears `notes`, so the
+    // marker survives a successful re-chunk. Keying on it alone would fail a healthy file forever.
+    const rebuilt = stranded({
+      chunkCount: 1,
+      vectorizedChunkCount: 1,
+      chunkedCharCount: 2000,
+      maxChunkCharLength: 2000,
+      embeddedChunkCount: 1,
+      embeddedCharCount: 2000,
+    });
+    const r = evaluateMemberHealth(rebuilt, DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('pass');
+    expect(r.failed).toEqual([]);
+    expect(r.reachableChars).toBe(2000);
+  });
+
+  it('leaves the vectorize-arm marker alone - it has chunks, so it grades on its real rollups', () => {
+    const r = evaluateMemberHealth(stranded({ chunkCount: 0, notes: CONVERGENCE_PAUSED_NOTE }), DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('unknown');
   });
 });
 
