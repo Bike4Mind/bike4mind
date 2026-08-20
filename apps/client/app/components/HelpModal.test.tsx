@@ -88,9 +88,9 @@ describe('HelpModal', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.warning).not.toHaveBeenCalled();
-    expect(h.logEventMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: { id: 'fb1', content: 'great app' } })
-    );
+    // Content must never reach the analytics event - CounterLog has no TTL, and logging the
+    // verbatim report text there would defeat the 90-day retention the FeedbackText split enforces.
+    expect(h.logEventMutate).toHaveBeenCalledWith(expect.objectContaining({ metadata: { id: 'fb1' } }));
   });
 
   it('shows a warning toast instead of success when nothing was delivered', async () => {

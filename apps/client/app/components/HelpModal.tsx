@@ -105,9 +105,12 @@ export const HelpModal: React.FC = () => {
         toast.warning('Saved your feedback, but we could not notify the team - please ping support if it is urgent.');
       }
 
+      // Never log the verbatim report text: CounterLog (where this analytics event lands)
+      // carries no TTL of its own, and doing so would defeat the 90-day retention the
+      // FeedbackText split otherwise enforces.
       logEvent.mutate({
         type: FeedbackEvents.FEEDBACK_SENT,
-        metadata: { id: feedbackCreated.id, content: feedbackCreated.content },
+        metadata: { id: feedbackCreated.id },
       });
 
       setFeedbackContent('');
