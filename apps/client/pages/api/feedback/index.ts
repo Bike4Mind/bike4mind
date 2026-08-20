@@ -1,5 +1,6 @@
 import { FeedbackModel, User } from '@bike4mind/database';
 import {
+  classifyStage,
   FeedbackEvents,
   FeedbackStatus,
   IOrganizationDocument,
@@ -21,7 +22,7 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,

@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
 // Mock the SST-backed Config so the test never touches `Resource`.
 vi.mock('@server/utils/config', () => ({
   Config: mocks.config,
-  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 
 vi.mock('axios', () => ({
@@ -32,15 +31,6 @@ vi.mock('@bike4mind/utils', () => ({
 // pure resolveSlackWebhookUrl test doesn't load the full model graph.
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-}));
-
-// Match the canonical helper from @bike4mind/common (same approach as mailer/index.test.ts).
-vi.mock('@bike4mind/common', () => ({
-  isPlaceholderValue: (value: string | undefined | null) => {
-    if (!value) return true;
-    const normalized = value.trim().toLowerCase();
-    return normalized === 'my-secret-placeholder-value' || normalized === 'not-configured';
-  },
 }));
 
 vi.mock('@bike4mind/observability', () => ({
