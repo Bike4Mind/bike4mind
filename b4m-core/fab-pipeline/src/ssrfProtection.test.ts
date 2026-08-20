@@ -585,6 +585,40 @@ describe('SSRF - IPv6 verdicts follow the address, not its spelling', () => {
     expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true);
   });
 
+  it('keeps internal-name suffixes blocked, zone-looking characters and all', () => {
+    // These suffix arms had exactly one assertion in the whole suite, which is why an unconditional `%`
+    // strip could truncate a NAME (`x%y.local` -> `x`) and silently stop them firing. A `%` is a forbidden
+    // domain code point, so WHATWG rejects these before either feeder sees them - but both predicates are
+    // re-exported as a general primitive, so the names have to survive the strip.
+    for (const name of [
+      'x.local',
+      'a.cluster.local',
+      'p.svc.cluster.local',
+      'q.pod.cluster.local',
+      'r.localhost',
+      'localhost',
+    ]) {
+      expect(isPrivateOrInternalHostname(name), name).toBe(true);
+    }
+    for (const name of [
+      'x%y.local',
+      'a%b.cluster.local',
+      'pod%1.svc.cluster.local',
+      'my%thing.pod.cluster.local',
+      'host%0.localhost',
+    ]) {
+      expect(isPrivateOrInternalHostname(name), name).toBe(true);
+    }
+    // A zone index on a real literal is still stripped, which is what the helper exists for.
+    expect(isPrivateIP('fe80::1%eth0')).toBe(true);
+    expect(isPrivateIP('127.0.0.1%eth0')).toBe(true);
+    expect(isPrivateIP('8.8.8.8%eth0')).toBe(false);
+    expect(isPrivateOrInternalHostname('[fe80::1]')).toBe(true);
+    // And an ordinary public name is still not private, with or without a stray `%`.
+    expect(isPrivateOrInternalHostname('example.com')).toBe(false);
+    expect(isPrivateOrInternalHostname('ex%ample.com')).toBe(false);
+  });
+
   it('keeps every exported gate agreeing about what counts as IPv4', () => {
     // The port strip lives in one shared helper for this reason: when it went into `isPrivateIP` alone,
     // `8.8.8.8:443` came back public from one export and private from the other, which is the same
