@@ -182,8 +182,8 @@ export const UPLOAD_ALL_FAILED_MESSAGE =
  * config validates server-side with zod, whose raw text (e.g. "Too small: expected
  * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
  * re-derived here from the config against the same rules to name the real culprit.
- * The prefix thresholds come from the same constants the schema uses; the slug rule
- * still mirrors CreateDataLakeRequestInput by hand.
+ * Both the prefix thresholds and the slug bound come from the same constants the schema
+ * validates against, so this translator cannot name a limit the server does not enforce.
  */
 function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: string } {
   // Network / offline: the request never reached the server, so there's no response body.
@@ -213,7 +213,7 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
       if (slugifyDataLakeName(config.name).length < MIN_DATA_LAKE_SLUG_LENGTH) {
         return {
           kind: 'validation',
-          message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
+          message: `The data lake name is too short. Use a name with at least ${MIN_DATA_LAKE_SLUG_LENGTH} letters or numbers.`,
         };
       }
       const prefix = submittedTagPrefix(config.tagPrefix);
