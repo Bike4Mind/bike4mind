@@ -387,7 +387,12 @@ function isPrivateIPv6(ip: string): boolean {
  * mostly colons - so it stays refused, and the bracketed spelling is what `normalizeIpv6` handles.
  */
 function stripZoneAndIpv4Port(host: string): string {
-  const zoneless = host.replace(/%.*$/, '');
+  // A zone index is only legal on an IP literal. Stripping it unconditionally truncated NAMES -
+  // `x%y.local` became `x`, so the `.local` / `.cluster.local` suffix checks in
+  // `isPrivateOrInternalHostname` stopped firing.
+  const head = host.split('%')[0];
+  const isLiteral = head.includes(':') || /^(\d+\.){3}\d+$/.test(head);
+  const zoneless = isLiteral ? head : host;
   return zoneless.match(/^((?:\d+\.){3}\d+):\d+$/)?.[1] ?? zoneless;
 }
 
