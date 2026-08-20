@@ -61,14 +61,19 @@ type FeedbackEmailRoute =
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
  * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
  * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production for the same reason as
+ * resolveFeedbackSlackRoute: one environment, no separate non-prod recipient list to leak into.
+ * `stageClass` itself stays the true classifyStage() result for metrics/logs.
  */
 export function resolveFeedbackEmailRoute(
   stage: string | undefined,
-  settings: Record<string, string>
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
 ): FeedbackEmailRoute {
   const stageClass = classifyStage(stage);
 
-  if (stageClass === 'production') {
+  if (stageClass === 'production' || singleEnvironmentInstall) {
     const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmail', settings));
     return recipients.length > 0
       ? { kind: 'send', recipients, stageClass }
@@ -193,7 +198,7 @@ const handler = baseApi()
 
     let email: FeedbackChannelDelivery;
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
-    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings);
+    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
       disabledChannelMetrics.push(

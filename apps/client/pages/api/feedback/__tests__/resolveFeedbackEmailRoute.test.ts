@@ -100,4 +100,28 @@ describe('resolveFeedbackEmailRoute', () => {
       stageClass: 'nonprod',
     });
   });
+
+  it('a self-host stage with singleEnvironmentInstall sends via the prod list, not the non-prod one', () => {
+    expect(resolveFeedbackEmailRoute('selfhost', { FeedbackReceiveEmail: prodEmail }, true)).toEqual({
+      kind: 'send',
+      recipients: [prodEmail],
+      stageClass: 'nonprod',
+    });
+  });
+
+  it('a self-host stage with singleEnvironmentInstall and no prod list skips no_recipients, not nonprod_unconfigured', () => {
+    expect(resolveFeedbackEmailRoute('selfhost', {}, true)).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'no_recipients',
+    });
+  });
+
+  it('singleEnvironmentInstall defaults to false, leaving hosted non-prod behavior unchanged', () => {
+    expect(resolveFeedbackEmailRoute('selfhost', { FeedbackReceiveEmail: prodEmail })).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'nonprod_unconfigured',
+    });
+  });
 });

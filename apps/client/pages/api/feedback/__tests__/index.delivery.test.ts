@@ -335,6 +335,25 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(body.delivery.channels.email).toEqual({ outcome: 'delivered' });
   });
 
+  it('sends via FeedbackReceiveEmail on a self-host install (B4M_SELF_HOST=true) even though its stage classifies nonprod', async () => {
+    const previousSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    mockConfig.STAGE = 'selfhost';
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'selfhost-admin@example.com';
+    try {
+      const { req, res } = run();
+      await mockRefs.postHandler!(req, res);
+
+      expect(mockEmailPublish).toHaveBeenCalledTimes(1);
+      expect(mockEmailPublish.mock.calls[0][0].to).toBe('selfhost-admin@example.com');
+      const body = res._getJSONData();
+      expect(body.delivery.channels.email).toEqual({ outcome: 'delivered' });
+    } finally {
+      process.env.B4M_SELF_HOST = previousSelfHost;
+    }
+  });
+
   it('never falls back to FeedbackReceiveEmail when a non-production stage has no non-prod address set, and logs at warn not error', async () => {
     mockConfig.STAGE = 'pr-1234';
     mockSettings.EnableFeedBackToEmail = true;
