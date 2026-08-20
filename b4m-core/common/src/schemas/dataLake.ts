@@ -6,13 +6,15 @@ import {
   DATA_LAKE_GROUNDING_MODES,
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
-// Slug validation
+// Hash validation
 
-const slugRegex = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
 const sha256Regex = /^[a-f0-9]{64}$/;
 
 // Data Lake CRUD
@@ -21,9 +23,11 @@ export const CreateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200),
   slug: z
     .string()
-    .min(2)
-    .max(60)
-    .regex(slugRegex, 'Slug must be lowercase alphanumeric with hyphens (e.g. "my-data-lake")'),
+    // Bounds and shape shared with the wizard, which slugifies the lake NAME and gates on the
+    // result before this ever runs (see slugifyDataLakeName / isValidDataLakeSlug).
+    .min(MIN_DATA_LAKE_SLUG_LENGTH)
+    .max(MAX_DATA_LAKE_SLUG_LENGTH)
+    .regex(DATA_LAKE_SLUG_REGEX, 'Slug must be lowercase alphanumeric with hyphens (e.g. "my-data-lake")'),
   description: z.string().max(2000).optional(),
   fileTagPrefix: z
     .string()
