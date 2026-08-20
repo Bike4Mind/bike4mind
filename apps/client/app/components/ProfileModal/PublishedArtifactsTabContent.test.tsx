@@ -456,6 +456,29 @@ describe('PublishedArtifactsTabContent - review regressions', () => {
     confirm.mockRestore();
   });
 
+  it('self-heals a page that settles empty even when the click-time flag missed it', async () => {
+    // Simulates the race: a second delete fires while `wasLastOnPage` still reads the stale,
+    // pre-first-delete row count (2 rows -> flag false), so the click-time step-back never fires.
+    // The settle-driven clamp below reacts to the actual post-delete response instead.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockList.mockResolvedValue(page([bundleRow, replyRow], { total: 27 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+
+    // The refetch triggered by this delete's invalidation settles with the true post-race state:
+    // the page is now empty, even though the click-time flag (2 rows -> false) missed it.
+    mockList.mockResolvedValueOnce(page([], { total: 25, skip: 25 }));
+
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+
+    await waitFor(() => expect(lastQuery().skip).toBe(0));
+    confirm.mockRestore();
+  });
+
   it('never shows the never-published copy while the library still has artifacts', async () => {
     // An empty PAGE is not an empty library. Telling an owner with 25 live artifacts that they
     // have published nothing is the worst version of this bug.

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
@@ -146,6 +146,17 @@ export default function PublishedArtifactsTabContent() {
 
   const artifacts = data?.artifacts ?? [];
   const total = data?.total ?? 0;
+
+  // Backstop alongside `wasLastOnPage` below: that flag is computed at click time from the
+  // render-time array, which `placeholderData` keeps stale while an invalidation is in flight, so
+  // a second delete fired in that window can still land on an empty page it didn't think it
+  // caused. This reacts to the settled response itself instead, so it self-heals regardless of
+  // which mutation (or how many in a race) emptied the page.
+  useEffect(() => {
+    if (!isLoading && artifacts.length === 0 && skip > 0) {
+      setSkip(Math.max(0, Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE));
+    }
+  }, [artifacts.length, isLoading, skip, total]);
 
   const facets: ManagedListFacets = data?.facets ?? { kind: {}, visibility: {}, gate: {}, comments: 0 };
   const filtering = isFiltering(filters, q);
