@@ -47,6 +47,30 @@ describe('snipSession', () => {
     expect(created).toEqual([{ sessionId: 'snip-1', prompt: 'later' }]);
   });
 
+  // Same defect the fork 500 exposed: create() validates promptMeta.session.{id,userId} while the
+  // live update() path does not, so a copied quest must bring its own session block.
+  it('rebinds promptMeta.session to the snip and its caller, supplying it when absent', async () => {
+    const { db, created } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndGreaterThanOrEqualToTimestamp.mockResolvedValueOnce([
+      { id: 'm2', sessionId: 'session-1', prompt: 'later', promptMeta: { warnings: ['partial coverage'] } },
+      {
+        id: 'm3',
+        sessionId: 'session-1',
+        prompt: 'later still',
+        promptMeta: { session: { id: 'session-1', userId: 'other-user' } },
+      },
+    ]);
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(created[0].promptMeta).toEqual({
+      warnings: ['partial coverage'],
+      session: { id: 'snip-1', userId: 'caller-1' },
+    });
+    expect(created[1].promptMeta).toEqual({ session: { id: 'snip-1', userId: 'caller-1' } });
+  });
+
   // findBySessionIdAndId returning null covers both "no such message" and "message belongs to a
   // different session" - the two are indistinguishable at this mocked layer (a real cross-session
   // pair is exercised at the repository level in QuestModel.findBySessionIdAndId.test.ts).
