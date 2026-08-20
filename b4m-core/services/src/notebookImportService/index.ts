@@ -30,6 +30,9 @@ interface NotebookRef {
  *
  * `Record<string, unknown>` for the rest of the payload, not the entity shape: the payloads still
  * do not match the schemas behind them, and narrowing that is a separate behaviour change.
+ *
+ * The return type is what an implementation *should* hand back; `takeStoreId` covers what one
+ * might actually hand back, since an adapter returning `toObject()` output carries no `id` virtual.
  */
 interface AttachmentRepository {
   create: (data: Record<string, unknown> & { id?: never }) => Promise<{ id: unknown }>;
