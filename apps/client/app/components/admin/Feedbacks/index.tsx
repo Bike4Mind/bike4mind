@@ -377,6 +377,11 @@ const FeedbackTab: React.FC = () => {
                           )}
                         </Stack>
                         {/* Content */}
+                        {feedbackItem.contentTruncated && (
+                          <Chip size="sm" color="warning" variant="soft" data-testid="feedback-content-truncated-badge">
+                            Truncated
+                          </Chip>
+                        )}
                         <Typography
                           level="body-sm"
                           sx={{
@@ -473,6 +478,17 @@ const FeedbackTab: React.FC = () => {
                           </Stack>
                         </Grid>
                         <Grid xs={5.5}>
+                          {feedbackItem.contentTruncated && (
+                            <Chip
+                              size="sm"
+                              color="warning"
+                              variant="soft"
+                              data-testid="feedback-content-truncated-badge"
+                              sx={{ mb: 0.5 }}
+                            >
+                              Truncated
+                            </Chip>
+                          )}
                           <Typography
                             level="body-sm"
                             sx={{

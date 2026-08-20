@@ -210,54 +210,76 @@ const migration: MigrationFile = {
       console.log(`[feedback-derived-keys] sample of skipped docs: ${skippedSample.join('; ')}`);
     }
 
-    // Phase B: copy non-empty content into the TTL'd sibling. Historical expiresAt uses a grace
-    // floor (migration start + 30 days) rather than the literal createdAt + 90d, so this backfill
-    // does not double as an unannounced bulk deletion for reports already older than 90 days -
-    // the floor gives operators a real window before the TTL first sweeps anything.
+    // Phase B+C: copy non-empty content into the TTL'd sibling, then immediately unset it from
+    // the permanent document - interleaved per BATCH, not accumulated across the whole
+    // collection. Copying everything first and unsetting only at the very end meant a run that
+    // exhausted the migrator's time budget partway through Phase B left Phase C unreached, so no
+    // content was ever unset - the next run's cursor (unchanged: still `content` present) would
+    // re-select and re-copy the exact same rows, forever, on a collection too large to finish
+    // both phases in one invocation. Doing the unset per batch makes each batch fully converged
+    // before moving on, so the loop is resumable at batch granularity, and it also caps the size
+    // of the `$in` array below well under BSON's document-size ceiling (a single collection-wide
+    // array of confirmed ids has no such ceiling protection).
+    //
+    // Historical expiresAt uses a grace floor (migration start + 30 days) rather than the literal
+    // createdAt + 90d, so this backfill does not double as an unannounced bulk deletion for
+    // reports already older than 90 days - the floor gives operators a real window before the
+    // TTL first sweeps anything.
     let textsCopied = 0;
-    const confirmedIds: mongoose.Types.ObjectId[] = [];
+    while (true) {
+      const docs = await feedbacks
+        .find(
+          { content: { $exists: true, $type: 'string', $ne: '' } },
+          { projection: { _id: 1, content: 1, createdAt: 1 } }
+        )
+        .limit(BATCH_SIZE)
+        .toArray();
+      if (docs.length === 0) break;
 
-    const contentCursor = feedbacks.find(
-      { content: { $exists: true, $type: 'string', $ne: '' } },
-      { projection: { _id: 1, content: 1, createdAt: 1 } }
-    );
-    for await (const doc of contentCursor) {
-      const literalExpiry = new Date(
-        (doc.createdAt ?? migrationStart).getTime() + FEEDBACK_CONTENT_RETENTION_DAYS * 24 * 60 * 60 * 1000
-      );
-      const graceFloor = new Date(migrationStart.getTime() + GRACE_DAYS * 24 * 60 * 60 * 1000);
-      const expiresAt = literalExpiry.getTime() > graceFloor.getTime() ? literalExpiry : graceFloor;
+      const confirmedIds: mongoose.Types.ObjectId[] = [];
+      for (const doc of docs) {
+        const literalExpiry = new Date(
+          (doc.createdAt ?? migrationStart).getTime() + FEEDBACK_CONTENT_RETENTION_DAYS * 24 * 60 * 60 * 1000
+        );
+        const graceFloor = new Date(migrationStart.getTime() + GRACE_DAYS * 24 * 60 * 60 * 1000);
+        const expiresAt = literalExpiry.getTime() > graceFloor.getTime() ? literalExpiry : graceFloor;
 
-      const result = await feedbackTexts.updateOne(
-        { _id: doc._id },
-        {
-          $setOnInsert: {
-            content: doc.content,
-            contentTruncated: false,
-            expiresAt,
-            createdAt: doc.createdAt ?? migrationStart,
+        const result = await feedbackTexts.updateOne(
+          { _id: doc._id },
+          {
+            $setOnInsert: {
+              content: doc.content,
+              contentTruncated: false,
+              expiresAt,
+              createdAt: doc.createdAt ?? migrationStart,
+            },
           },
-        },
-        { upsert: true }
-      );
-      if (result.upsertedCount > 0 || result.matchedCount > 0) {
-        textsCopied++;
-        confirmedIds.push(doc._id);
+          { upsert: true }
+        );
+        if (result.upsertedCount > 0 || result.matchedCount > 0) {
+          confirmedIds.push(doc._id);
+        }
       }
-    }
-    console.log(`[feedback-derived-keys] copied ${textsCopied} content rows into feedbacktexts`);
 
-    // Phase C: unset the permanent copy, only for confirmed sibling writes. Plain $set/$unset -
-    // no aggregation pipeline, no DocumentDB compatibility concern.
-    if (confirmedIds.length > 0) {
-      const unsetResult = await feedbacks.updateMany(
+      if (confirmedIds.length === 0) {
+        console.warn(
+          `[feedback-derived-keys] stopping content-split early: ${docs.length} docs matched but none confirmed`
+        );
+        break;
+      }
+
+      // Plain $set/$unset - no aggregation pipeline, no DocumentDB compatibility concern. This is
+      // what makes the batch's docs drop out of the filter above, so the next loop iteration (or
+      // a fresh run) naturally advances past everything already converged.
+      await feedbacks.updateMany(
         { _id: { $in: confirmedIds } },
         { $unset: { content: '' }, $set: { contentStored: true } }
       );
-      console.log(
-        `[feedback-derived-keys] unset content on ${unsetResult.modifiedCount ?? 0} docs (contentStored: true)`
-      );
+      textsCopied += confirmedIds.length;
+      console.log(`[feedback-derived-keys] copied+unset content on ${textsCopied} docs so far`);
     }
+    console.log(`[feedback-derived-keys] content split complete: ${textsCopied} docs total`);
+
     // Every doc that reached Phase A but never had content still needs contentStored:false so
     // the field is never left `undefined` on a document the schema declares it required on.
     await feedbacks.updateMany({ contentStored: { $exists: false } }, { $set: { contentStored: false } });

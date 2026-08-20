@@ -117,6 +117,37 @@ describe('HelpModal', () => {
     expect(toast.warning).not.toHaveBeenCalled();
   });
 
+  it('warns the reporter when their content was truncated, even though delivery succeeded', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      content: 'a very long report cut at the cap',
+      contentTruncated: true,
+      delivery: { delivered: true, channels: {} },
+    });
+    renderModal();
+
+    submitFeedback('a very long report cut at the cap');
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('trim'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('warns the reporter when the text itself failed to save', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      contentStored: false,
+      delivery: { delivered: true, channels: {} },
+    });
+    renderModal();
+
+    submitFeedback('great app');
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('could not save'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it('does not call the API or toast for empty/whitespace-only content', () => {
     renderModal();
 

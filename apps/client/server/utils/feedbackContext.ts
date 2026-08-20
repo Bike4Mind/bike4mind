@@ -88,6 +88,12 @@ async function resolveOwnedSessionId(
       logger.warn(`Dropped feedback sessionId claim: not a valid ObjectId (${claims.sessionId})`);
     } else if (await isOwnedSession(claims.sessionId, authenticatedUserId, logger)) {
       return { sessionId: claims.sessionId };
+    } else {
+      // isOwnedSession only logs the "session not found" case itself - a session that DOES exist
+      // but isn't owned by the submitter falls through silently otherwise, which is the one
+      // ownership-failure case most worth having in the logs (a stranger's session id reaching
+      // this far, unlike the questId branch above, which logs this case explicitly).
+      logger.warn('Dropped feedback sessionId claim: session not owned by the submitting user');
     }
   }
 

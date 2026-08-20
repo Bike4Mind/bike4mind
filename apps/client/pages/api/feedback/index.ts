@@ -461,8 +461,10 @@ const handler = baseApi()
     // toJSON: { virtuals: true }, which is what produces `id`; spreading the doc directly
     // yields Mongoose's internal _doc/$__ fields instead. `content` is echoed as the truncated
     // string actually persisted (or that would have been), not the raw request body, since it
-    // now lives on the FeedbackText sibling.
-    return res.status(201).json({ ...newFeedback.toJSON(), content: truncatedContent, delivery });
+    // now lives on the FeedbackText sibling. `contentTruncated` is surfaced here explicitly since
+    // it lives only on that sibling, never on newFeedback itself - without it, a caller has no way
+    // to tell the submitter their text was cut.
+    return res.status(201).json({ ...newFeedback.toJSON(), content: truncatedContent, contentTruncated, delivery });
   });
 
 export const config = {

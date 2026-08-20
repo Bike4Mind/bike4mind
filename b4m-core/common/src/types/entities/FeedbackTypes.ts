@@ -88,5 +88,10 @@ export interface FeedbackDeliveryResult {
   channels: Record<FeedbackDeliveryChannel, FeedbackChannelDelivery>;
 }
 
-/** POST /api/feedback response: the saved document plus how far delivery got. */
-export type CreateFeedbackResponse = IFeedbackDocument & { delivery?: FeedbackDeliveryResult };
+/** POST /api/feedback response: the saved document plus how far delivery got.
+ * `contentTruncated` is echoed here (not read off the document itself - it lives on the
+ * FeedbackText sibling, not FeedbackModel) so a caller can tell the submitter their text was cut. */
+export type CreateFeedbackResponse = IFeedbackDocument & {
+  delivery?: FeedbackDeliveryResult;
+  contentTruncated?: boolean;
+};

@@ -188,6 +188,66 @@ describe('feedback-derived-keys-and-text-split migration (real DB)', () => {
     expect(textIndexNames).toContain('feedback_text_ttl');
   });
 
+  it('converges each batch before continuing, so a later-batch failure does not undo an earlier one', async () => {
+    const BATCH_SIZE = 200; // must match the migration's own constant
+    const docs = Array.from({ length: BATCH_SIZE + 1 }, (_, i) => ({
+      _id: new mongoose.Types.ObjectId(),
+      userId: `user-${i}`,
+      content: `content ${i}`,
+      status: 'New',
+      username: 'reporter',
+      userEmail: 'reporter@example.com',
+      organization: 'Some Org',
+      createdAt: new Date(),
+    }));
+    await rawFeedbacks().insertMany(docs);
+
+    // Intercept Phase C's per-batch unset (identified by its $unset.content shape, so the Phase A
+    // bulkWrite and the final contentStored:false backfill are left alone) and fail it on the
+    // second batch - proving the first batch's convergence does not depend on the second
+    // completing.
+    let phaseCCallCount = 0;
+    const originalUpdateMany = mongoose.mongo.Collection.prototype.updateMany;
+    const updateManySpy = vi.spyOn(mongoose.mongo.Collection.prototype, 'updateMany').mockImplementation(function (
+      this: unknown,
+      filter: unknown,
+      update: unknown,
+      ...rest: unknown[]
+    ) {
+      const isPhaseCUnset =
+        (this as { collectionName?: string }).collectionName === 'feedbacks' &&
+        typeof update === 'object' &&
+        update !== null &&
+        '$unset' in update &&
+        typeof (update as { $unset?: { content?: unknown } }).$unset?.content !== 'undefined';
+      if (isPhaseCUnset) {
+        phaseCCallCount++;
+        if (phaseCCallCount === 2) {
+          return Promise.reject(new Error('simulated failure on the second batch'));
+        }
+      }
+      return originalUpdateMany.call(this, filter as never, update as never, ...(rest as []));
+    });
+
+    await expect(migration.up()).rejects.toThrow('simulated failure on the second batch');
+
+    const firstBatchDocs = await rawFeedbacks().find({ contentStored: true }).toArray();
+    expect(firstBatchDocs.length).toBe(BATCH_SIZE);
+    for (const doc of firstBatchDocs) {
+      expect(doc.content).toBeUndefined();
+      const sibling = await rawFeedbackTexts().findOne({ _id: doc._id });
+      expect(sibling).not.toBeNull();
+    }
+
+    updateManySpy.mockRestore();
+
+    // Re-running picks up exactly where it left off - only the one doc from the failed batch,
+    // never re-copying the already-converged 200.
+    await migration.up();
+    const allConverged = await rawFeedbacks().find({ contentStored: true }).toArray();
+    expect(allConverged.length).toBe(BATCH_SIZE + 1);
+  });
+
   it('is idempotent on re-run - identical final state, no duplicate sibling rows', async () => {
     await insertLegacyFeedback({ content: 'run me twice' });
 

@@ -51,34 +51,48 @@ const handler = baseApi().put(
     // contentApplied stays true when the caller didn't touch content at all - false only signals
     // a genuine no-op (the sibling had already expired under the 90-day TTL).
     let contentApplied = true;
-    // Only ever `true` (never explicitly `false`) - `undefined` means the caller didn't originate
-    // a fresh sibling this request, which is what cleanupOrphanedSibling's guard below relies on.
+    // Undefined: caller didn't touch content this request. true: originated a fresh sibling.
+    // false: cleared an existing one. Both true/false ride into the same $set below;
+    // cleanupOrphanedSibling only guards `true`, since a clear's own deleteOne either succeeds
+    // (nothing left to orphan) or throws and aborts the request before any $set is attempted.
     let contentStoredChange: boolean | undefined;
     if (content !== undefined) {
-      const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
-      if (feedback.contentStored) {
-        // upsert:false is deliberate: expiresAt is immutable, so a report whose text already
-        // expired must not be resurrected by editing it back in.
-        //
-        // Not rolled back if the status/username update below then fails: the sibling would keep
-        // the caller's edited text while the rest of the document reverts. Left as-is rather than
-        // adding a compensating write - the sibling holding what the caller actually submitted is
-        // arguably closer to correct than reverting it, and the update failing at all is rare.
-        const result = await FeedbackTextModel.updateOne(
-          { _id: id },
-          { $set: { content: truncated, contentTruncated } }
-        );
-        contentApplied = result.matchedCount > 0;
+      if (content.trim().length === 0) {
+        // Empty content means "clear the text", mirroring the create handler's treatment of an
+        // empty submission as nothing to store (index.ts's writeFeedbackText) - without this,
+        // an empty string reached FeedbackTextModel.create's required-string validator (which
+        // rejects ''), while the sibling-update branch wrote it unvalidated, so the two branches
+        // disagreed on what an empty edit meant and one of them 500'd.
+        if (feedback.contentStored) {
+          await FeedbackTextModel.deleteOne({ _id: id });
+          contentStoredChange = false;
+        }
       } else {
-        // This report never had text (e.g. a placeholder submission) - originating it now is a
-        // fresh write, not a resurrection, so it gets its own full retention window.
-        await FeedbackTextModel.create({
-          _id: id,
-          content: truncated,
-          contentTruncated,
-          expiresAt: feedbackContentExpiresAt(new Date()),
-        });
-        contentStoredChange = true;
+        const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
+        if (feedback.contentStored) {
+          // upsert:false is deliberate: expiresAt is immutable, so a report whose text already
+          // expired must not be resurrected by editing it back in.
+          //
+          // Not rolled back if the status/username update below then fails: the sibling would keep
+          // the caller's edited text while the rest of the document reverts. Left as-is rather than
+          // adding a compensating write - the sibling holding what the caller actually submitted is
+          // arguably closer to correct than reverting it, and the update failing at all is rare.
+          const result = await FeedbackTextModel.updateOne(
+            { _id: id },
+            { $set: { content: truncated, contentTruncated } }
+          );
+          contentApplied = result.matchedCount > 0;
+        } else {
+          // This report never had text (e.g. a placeholder submission) - originating it now is a
+          // fresh write, not a resurrection, so it gets its own full retention window.
+          await FeedbackTextModel.create({
+            _id: id,
+            content: truncated,
+            contentTruncated,
+            expiresAt: feedbackContentExpiresAt(new Date()),
+          });
+          contentStoredChange = true;
+        }
       }
     }
 

@@ -99,7 +99,14 @@ export const HelpModal: React.FC = () => {
       // Optional chaining: a rolling deploy can route this request to a server instance
       // still on the pre-delivery-field handler, where the record saved but `delivery` is
       // absent - fall back to the success toast (the pre-fix default) rather than throwing.
-      if (feedbackCreated.delivery?.delivered !== false) {
+      // contentStored false (with non-empty submitted text - this modal never sends an empty
+      // one) means the text-sibling write itself failed server-side: the report exists, but the
+      // words the user typed are gone, which is worth telling them rather than a plain success.
+      if (feedbackCreated.contentStored === false) {
+        toast.warning('Your feedback was received, but we could not save the message text - please try again.');
+      } else if (feedbackCreated.contentTruncated) {
+        toast.warning('Your feedback was saved, but it was long enough that we had to trim it a bit.');
+      } else if (feedbackCreated.delivery?.delivered !== false) {
         toast.success('Thank you! Your feedback has been submitted.');
       } else {
         toast.warning('Saved your feedback, but we could not notify the team - please ping support if it is urgent.');
