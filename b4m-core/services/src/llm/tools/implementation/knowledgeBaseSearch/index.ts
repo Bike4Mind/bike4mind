@@ -594,11 +594,10 @@ async function resolveKbSearchDefaultResults(context: ToolContext): Promise<numb
  * package's validation.
  */
 function clampMaxResults(raw: unknown, defaultResults: number): number {
-  if (raw === undefined || raw === null || raw === '') {
-    return Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
-  }
+  const safeDefault = Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  if (raw === undefined || raw === null || raw === '') return safeDefault;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  if (!Number.isFinite(n)) return safeDefault;
   return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
 }
 
@@ -1075,10 +1074,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             max_results: {
               type: 'number',
               // This schema is built synchronously (see the comment on KB_SEARCH_MAX_RESULTS
-              // above), so it states the coded default rather than the live kbSearchDefaultResults
-              // setting - an admin override changes what an omitted max_results resolves to, not
-              // this description.
-              description: `Maximum number of results to return (default: ${KB_SEARCH_DEFAULT_RESULTS_DEFAULT}, max: ${KB_SEARCH_MAX_RESULTS})`,
+              // above), so it cannot read the live kbSearchDefaultResults setting. Omitting the
+              // default rather than stating the coded one avoids the model reading a stale number
+              // and passing it explicitly as max_results, which would bypass an admin's raised
+              // default on every such call.
+              description: `Maximum number of results to return (max: ${KB_SEARCH_MAX_RESULTS})`,
               minimum: 1,
               maximum: KB_SEARCH_MAX_RESULTS,
             },
