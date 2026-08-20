@@ -83,6 +83,10 @@ const handler = baseApi().put(
           username,
           ...(contentStoredChange !== undefined ? { contentStored: contentStoredChange } : {}),
         },
+        // Originating a fresh sibling can happen on a pre-migration document that still carries
+        // its content directly on the permanent doc - unset it there too, or it survives forever
+        // on a field the 90-day TTL can never reach.
+        ...(contentStoredChange === true ? { $unset: { content: '' } } : {}),
       },
       { new: true }
     );

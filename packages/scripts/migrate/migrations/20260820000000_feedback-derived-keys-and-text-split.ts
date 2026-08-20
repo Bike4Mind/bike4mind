@@ -193,7 +193,11 @@ const migration: MigrationFile = {
       console.log(`[feedback-derived-keys] processed ${processed} (modified ${result.modifiedCount ?? 0})`);
 
       if ((result.modifiedCount ?? 0) === 0) {
-        console.warn(`[feedback-derived-keys] stopping early: ${docs.length} docs matched but none modified`);
+        const writeErrors = result.getWriteErrors?.() ?? [];
+        console.warn(
+          `[feedback-derived-keys] stopping early: ${docs.length} docs matched but none modified` +
+            (writeErrors.length > 0 ? ` - write errors: ${JSON.stringify(writeErrors)}` : ' - no write errors reported')
+        );
         break;
       }
     }

@@ -23,8 +23,14 @@ export function toRedactedFeedback(doc: HydratedDocument<IFeedbackDocument>) {
  * N+1. `contentExpired` distinguishes "the 90-day TTL swept this row" from "this report never had
  * text" (contentStored is false in the latter case); both render as an absent `content`, so a
  * caller that needs to tell them apart must check this flag rather than infer it.
+ *
+ * Falls back to `item.content` when no sibling row exists: a document created before this split
+ * (and not yet touched by the backfill migration) still carries its content directly, and
+ * `contentStored` defaults to false on it via the schema default rather than being unset - without
+ * this fallback, every pre-migration report's content would read as blank the moment this ships,
+ * well before the migration ever runs.
  */
-export async function hydrateFeedbackText<T extends { id: string; contentStored: boolean }>(
+export async function hydrateFeedbackText<T extends { id: string; contentStored: boolean; content?: string }>(
   items: T[]
 ): Promise<Array<T & { content?: string; contentExpired: boolean }>> {
   if (items.length === 0) return [];
@@ -33,7 +39,8 @@ export async function hydrateFeedbackText<T extends { id: string; contentStored:
   const contentById = new Map(texts.map(text => [text._id.toString(), text.content]));
 
   return items.map(item => {
-    const content = contentById.get(item.id);
+    const siblingContent = contentById.get(item.id);
+    const content = siblingContent ?? item.content;
     return { ...item, content, contentExpired: item.contentStored && content === undefined };
   });
 }

@@ -130,10 +130,12 @@ const handler = baseApi()
     // leaves contentStored false rather than failing the submission, but a Feedback save failure
     // after a successful text write must not leave an orphaned, unattributable text row behind.
     const feedbackId = new mongoose.Types.ObjectId();
+    // Computed once, outside the write, so the response below can echo the same truncated string
+    // that was (or would have been) persisted, not the raw untruncated request body.
+    const { content: truncatedContent, contentTruncated } = truncateFeedbackContent(content);
     const writeFeedbackText = async (): Promise<boolean> => {
       if (content.trim().length === 0) return false;
       try {
-        const { content: truncatedContent, contentTruncated } = truncateFeedbackContent(content);
         await FeedbackTextModel.create({
           _id: feedbackId,
           content: truncatedContent,
@@ -185,7 +187,9 @@ const handler = baseApi()
       await newFeedback.save();
     } catch (error) {
       if (contentStored) {
-        await FeedbackTextModel.deleteOne({ _id: feedbackId }).catch(() => undefined);
+        await FeedbackTextModel.deleteOne({ _id: feedbackId }).catch(cleanupError => {
+          req.logger.warn('Failed to delete orphaned FeedbackText sibling after a failed save', cleanupError);
+        });
       }
       throw error;
     }
@@ -455,9 +459,10 @@ const handler = baseApi()
 
     // newFeedback.toJSON() (not a spread of the hydrated doc) - the schema sets
     // toJSON: { virtuals: true }, which is what produces `id`; spreading the doc directly
-    // yields Mongoose's internal _doc/$__ fields instead. `content` is echoed from the request
-    // variable, not read off the saved doc, since it now lives on the FeedbackText sibling.
-    return res.status(201).json({ ...newFeedback.toJSON(), content, delivery });
+    // yields Mongoose's internal _doc/$__ fields instead. `content` is echoed as the truncated
+    // string actually persisted (or that would have been), not the raw request body, since it
+    // now lives on the FeedbackText sibling.
+    return res.status(201).json({ ...newFeedback.toJSON(), content: truncatedContent, delivery });
   });
 
 export const config = {
