@@ -20,10 +20,13 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
     selector({ selectedAccount: selectedAccount.current }),
 }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
-// DriveConnectAction pulls in React Query (useConfig / lake-connection hooks); stub it so these
-// step-order/name-validation tests need no QueryClientProvider. Its own behavior is covered by
-// DriveConnectAction.test.tsx.
+// Both Drive actions pull in React Query (useConfig / lake-connection hooks); stub them so these
+// step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
+// DriveConnectAction.test.tsx and DrivePendingConnectAction.test.tsx.
 vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+  default: () => null,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => null,
 }));
 
