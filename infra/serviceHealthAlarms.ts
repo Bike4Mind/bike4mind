@@ -50,6 +50,13 @@ export const serviceHealthAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('
  * Referencing the service components (rather than only their names) keeps this list
  * honest: deleting a service breaks this file at compile time instead of leaving a
  * dead alarm that silently never fires.
+ *
+ * PRECONDITION: only add a service whose task-count floor is at least 1. The alarm reads
+ * "no metrics" as "no tasks" as "down", so a service allowed to scale to zero would trip it
+ * every time it legitimately idled, and the resulting false pages would train everyone to
+ * ignore the one that matters. Both entries below satisfy it: subscriberFanout takes SST's
+ * default min=max=1, and chatCompletion is min 2 in production and min 1 elsewhere. A service
+ * that can reach zero needs a different signal, not this one.
  */
 const MONITORED_SERVICES: (EcsServiceHealthAlarmDescriptor & { service: sst.aws.Service })[] = [
   {

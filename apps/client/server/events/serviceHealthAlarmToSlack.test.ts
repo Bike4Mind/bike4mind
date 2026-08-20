@@ -83,7 +83,7 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const text = postedText();
     expect(text).toContain('service:subscriberFanoutV2');
-    expect(text).toContain('TaskFailedToStart');
+    expect(text).toContain('Failed To Start');
     expect(text).toContain('CannotPullContainerError');
     expect(text).not.toContain('Task failed to start');
   });
@@ -97,11 +97,22 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(postedText()).toContain('Task failed to start');
   });
 
-  it('tolerates a task event with no detail at all', async () => {
+  // The EventBridge rule already filters to TaskFailedToStart, so these two can only arrive if
+  // someone broadens it. Dropping them keeps the "Failed To Start" heading true by construction,
+  // and keeps a routine deploy (which stops tasks under UserInitiated / ServiceSchedulerInitiated)
+  // from burying the alarms that matter under deploy noise.
+  it('drops a stopped task that did not fail to start', async () => {
+    const essentialExited = {
+      ...taskFailedToStart,
+      detail: { ...taskFailedToStart.detail, stopCode: 'EssentialContainerExited' },
+    };
+    await handler(makeEvent(essentialExited));
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('drops a task event carrying no stop code', async () => {
     await handler(makeEvent({ 'detail-type': 'ECS Task State Change' }));
-    const text = postedText();
-    expect(text).toContain('unknown service');
-    expect(text).toContain('not reported');
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('ignores payloads that are neither an alarm nor a task state change', async () => {
@@ -113,7 +124,7 @@ describe('serviceHealthAlarmToSlack handler', () => {
     await handler(makeEvent(noTasksAlarm, { ...noTasksAlarm, NewStateValue: 'OK' }, taskFailedToStart));
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(postedText(0)).toContain('no-tasks');
-    expect(postedText(1)).toContain('TaskFailedToStart');
+    expect(postedText(1)).toContain('Failed To Start');
   });
 
   it('throws when Slack rejects the post so the subscription redrives', async () => {

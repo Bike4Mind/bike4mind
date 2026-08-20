@@ -33,6 +33,19 @@ interface EcsTaskStateChangeEvent {
   };
 }
 
+/**
+ * The only stop code this handler reports. The EventBridge rule already filters on it, so this
+ * re-check is redundant today and deliberately so: it keeps the "Failed To Start" heading true by
+ * construction, so broadening the rule later cannot silently relabel an ordinary stop as a startup
+ * failure.
+ *
+ * Reporting every stop code instead would be worse, not more general. `UserInitiated` and
+ * `ServiceSchedulerInitiated` fire on every routine deploy, so a broadened rule would turn this
+ * channel into deploy noise and the alarms would stop being read. Widening the contract is a
+ * deliberate act: extend this constant and give each code its own heading.
+ */
+const REPORTED_STOP_CODE = 'TaskFailedToStart';
+
 function isEcsTaskStateChange(payload: unknown): payload is EcsTaskStateChangeEvent {
   return (payload as EcsTaskStateChangeEvent)?.['detail-type'] === 'ECS Task State Change';
 }
@@ -57,12 +70,12 @@ function formatMessage(payload: unknown, stage: string): string | null {
 
   if (isEcsTaskStateChange(payload)) {
     const detail = payload.detail ?? {};
+    if (detail.stopCode !== REPORTED_STOP_CODE) return null;
     // The container-level reason is where CannotPullContainerError and friends land;
     // the task-level stoppedReason is often just a generic wrapper.
     const containerReason = detail.containers?.find(c => c.reason)?.reason;
     return [
       `🚨 *ECS Task Failed To Start - ${detail.group ?? 'unknown service'}*`,
-      `Stop code: ${detail.stopCode ?? 'unknown'}`,
       `Reason: ${containerReason ?? detail.stoppedReason ?? 'not reported'}`,
       `Task: ${detail.taskArn ?? 'unknown'}`,
       `Stage: ${stage}`,
