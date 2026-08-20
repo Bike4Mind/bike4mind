@@ -174,6 +174,17 @@ class DataLakeProposalRepository
     }
   }
 
+  async countPendingByLakes(dataLakeIds: string[]): Promise<Record<string, number>> {
+    if (dataLakeIds.length === 0) return {};
+    // Served by the {dataLakeId, status, createdAt} queue index - the same one listByLake uses, so
+    // this adds a read path without adding an index.
+    const rows = await this.proposalModel.aggregate<{ _id: string; count: number }>([
+      { $match: { dataLakeId: { $in: dataLakeIds }, status: 'pending' } },
+      { $group: { _id: '$dataLakeId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(r => [r._id, r.count]));
+  }
+
   async deleteForLake(dataLakeId: string): Promise<number> {
     const res = await this.proposalModel.deleteMany({ dataLakeId });
     return res.deletedCount ?? 0;

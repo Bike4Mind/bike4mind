@@ -8,6 +8,12 @@ export interface DataLakeProposalsPanelProps {
   error: unknown;
   /** The proposal a decision is currently in flight for, so only its own buttons show busy. */
   pendingProposalId?: string;
+  /**
+   * The last failed decision, kept ON the card. A toast is the wrong and only home for this: it
+   * fades, and approval is the slow action a reviewer looks away from - so the one who most needs the
+   * message is the one guaranteed to miss it, and the card gives no hint it was ever tried.
+   */
+  failure?: { proposalId: string; message: string };
   onApprove: (proposalId: string) => void;
   onDecline: (proposalId: string, reason?: string) => void;
 }
@@ -32,6 +38,7 @@ export function DataLakeProposalsPanel({
   isLoading,
   error,
   pendingProposalId,
+  failure,
   onApprove,
   onDecline,
 }: DataLakeProposalsPanelProps) {
@@ -55,15 +62,28 @@ export function DataLakeProposalsPanel({
   }
 
   if (!proposals?.length) {
+    // Reachable now: the tab stays put for as long as the modal is open, so finishing the last
+    // decision lands here instead of silently bouncing the reviewer into the Settings form.
     return (
-      <Typography level="body-sm" data-testid="datalake-proposals-empty">
-        Nothing is waiting for review. Content found for this lake shows up here for you to approve before it is added.
-      </Typography>
+      <Stack spacing={1} data-testid="datalake-proposals-empty">
+        <Typography level="body-sm">All caught up - nothing is waiting for review.</Typography>
+        <Typography level="body-xs" textColor="text.tertiary">
+          When a research run finds something for this lake it appears here first. Nothing reaches the lake until you
+          approve it.
+        </Typography>
+      </Stack>
     );
   }
 
   return (
     <Stack spacing={2} data-testid="datalake-proposals-list">
+      {/* What the two buttons actually DO. Approving is a live outbound fetch that can take a few
+          seconds and can fail on a dead link, and declining is remembered - neither is guessable from
+          a button label, and a reviewer meeting this queue for the first time has no other cue. */}
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposals-help">
+        Approving fetches the page now and adds it to this lake, chunked like any other file. Declining is remembered,
+        so the same source is not proposed again unless its content changes.
+      </Typography>
       {proposals.map(proposal => {
         const busy = pendingProposalId === proposal.id;
         return (
@@ -99,11 +119,15 @@ export function DataLakeProposalsPanel({
                 )}
               </Stack>
 
+              {/* `break-all`, not `break-word`: a producer-supplied URL is one long unbroken token, so
+                  word-level breaking leaves it overflowing the card - observed on a real seeded
+                  proposal with a deep path and a query string. */}
               <Link
                 href={proposal.sourceUrl}
                 target="_blank"
                 rel="noopener noreferrer nofollow"
                 level="body-xs"
+                sx={{ wordBreak: 'break-all' }}
                 data-testid="datalake-proposal-source"
               >
                 {proposal.sourceUrl}
@@ -141,6 +165,12 @@ export function DataLakeProposalsPanel({
                 </Box>
               )}
 
+              {failure?.proposalId === proposal.id && !busy && (
+                <Alert color="danger" size="sm" data-testid="datalake-proposal-failure">
+                  <Typography level="body-xs">{failure.message}</Typography>
+                </Alert>
+              )}
+
               <Divider />
 
               {decliningId === proposal.id ? (
@@ -149,6 +179,7 @@ export function DataLakeProposalsPanel({
                     size="sm"
                     value={reason}
                     autoFocus
+                    disabled={busy}
                     placeholder="Why are you declining? (optional)"
                     onChange={e => setReason(e.target.value)}
                     sx={{ flex: 1 }}
@@ -159,9 +190,10 @@ export function DataLakeProposalsPanel({
                     color="danger"
                     loading={busy}
                     onClick={() => {
+                      // Stay in decline mode until the mutation settles. Clearing it here (as this
+                      // did) unmounted the busy button in the same tick, so a decline showed NO
+                      // in-flight feedback at all - the row just sat there looking unclicked.
                       onDecline(proposal.id, reason.trim() || undefined);
-                      setDecliningId(null);
-                      setReason('');
                     }}
                     data-testid="datalake-proposal-decline-confirm-btn"
                   >
@@ -171,6 +203,7 @@ export function DataLakeProposalsPanel({
                     size="sm"
                     variant="plain"
                     color="neutral"
+                    disabled={busy}
                     onClick={() => {
                       setDecliningId(null);
                       setReason('');

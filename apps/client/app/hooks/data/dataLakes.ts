@@ -1221,8 +1221,14 @@ export function useDataLakeProposals(
     },
     enabled: !!dataLakeId && (opts?.enabled ?? true),
     retry: false,
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60,
+    // Refetch on focus, unlike the rest of this file: a reviewer keeps this panel open while opening
+    // sources in other tabs, and coming back to a queue that silently no longer matches the database
+    // is how you decline something a colleague already ruled on. Cheap - one small read of one lake's
+    // pending rows, and only while a manager has the modal open.
+    refetchOnWindowFocus: true,
+    // Short enough that returning to the tab shows the real queue, long enough that tab-flipping
+    // within a single review pass does not refetch on every switch.
+    staleTime: 1000 * 15,
   });
   return { ...query, isForbidden: isPermissionRejection(query.error) };
 }
@@ -1232,6 +1238,19 @@ export function useDataLakeProposals(
  * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
  * appears immediately, and its health badge stops reflecting a corpus that just changed.
  */
+/**
+ * The server's own refusal text for a failed review decision, or a fallback.
+ *
+ * Shared by the toast and the card's inline alert so the two can never disagree about what went
+ * wrong. The body key is `error`, per server/middlewares/errorHandler.ts - reading `message` (as
+ * this once did) matched nothing, so the fallback always won and the messages that matter most
+ * ("already been reviewed", "the source returned HTTP 404") never reached the reviewer.
+ */
+export function reviewProposalFailureMessage(error: unknown): string {
+  const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+  return refusal || 'Could not record that decision. Try again shortly.';
+}
+
 export function useReviewDataLakeProposal(dataLakeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -1259,13 +1278,7 @@ export function useReviewDataLakeProposal(dataLakeId: string) {
       toast.success(decision === 'approve' ? `Added "${proposal.title}" to the lake` : 'Proposal declined');
     },
     onError: (error: unknown) => {
-      // The body key is `error`, per server/middlewares/errorHandler.ts - reading `message` matched
-      // nothing, so the fallback always won. That mattered most for the one refusal a reviewer must
-      // see: the double-review guard's "This proposal has already been reviewed", where the generic
-      // "Try again shortly" is actively wrong advice because a retry can never succeed. Same shape as
-      // the transfer-ownership handler above.
-      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
-      toast.error(refusal || 'Could not record that decision. Try again shortly.');
+      toast.error(reviewProposalFailureMessage(error));
     },
   });
 }

@@ -7,7 +7,7 @@ import type {
   IDataLakeRepository,
 } from '@bike4mind/common';
 import { DATALAKE_TAG_STRENGTH, FabFileSourceType } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { resolveCanManageLake } from './authorizeLakeManage';
 
@@ -83,6 +83,30 @@ async function resolveReviewable(
   return { proposal, lake };
 }
 
+/**
+ * Turn an admission failure into something the REVIEWER can act on.
+ *
+ * The ingestion door rethrows whatever the fetch threw, so without this a reviewer who approves a
+ * source whose page has since 404'd is shown `Request failed with status code 404` - an axios string
+ * that names neither the cause (the source, not their click) nor the consequence (nothing was added,
+ * the proposal is back in the queue). Verified on a live walk before this existed.
+ *
+ * Deliberate refusals pass through untouched: `assertCanWriteDataLakeTags` and `assertLakeWritable`
+ * already say something true and specific, and rewording them here would bury a permission problem
+ * behind a fetch message.
+ */
+function asReviewerFacingAdmissionError(err: unknown): unknown {
+  if (err instanceof HTTPError) return err;
+
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  const detail = status
+    ? `the source returned HTTP ${status}`
+    : ((err as { message?: string })?.message ?? 'the fetch failed');
+  return new BadRequestError(
+    `Could not add this source: ${detail}. Nothing was added to the lake and the proposal is still waiting for review.`
+  );
+}
+
 /** The same writability rule the upload and Slack doors apply: only a draft or active lake takes new files. */
 function assertLakeTakesNewFiles(lake: IDataLakeDocument): void {
   assertLakeWritable(lake);
@@ -148,7 +172,7 @@ export async function approveDataLakeProposal(
     // report the real failure. If this release itself fails the row stays approved-but-empty, which
     // is still preferable to the alternative ordering's duplicate admission.
     await db.dataLakeProposals.releaseClaim(proposalId);
-    throw err;
+    throw asReviewerFacingAdmissionError(err);
   }
 
   await db.dataLakeProposals.recordAdmission(proposalId, fabFile.id);

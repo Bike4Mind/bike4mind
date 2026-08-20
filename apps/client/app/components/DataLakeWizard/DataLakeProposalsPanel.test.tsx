@@ -108,6 +108,38 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getByTestId('datalake-proposal-approve-btn')).toBeInTheDocument();
   });
 
+  // The spinner used to be unreachable: the row left decline mode in the same tick as the click, so a
+  // decline showed no in-flight feedback and looked like nothing had happened.
+  it('holds the decline row open after confirming so the in-flight state is visible', () => {
+    const { onDecline } = renderPanel();
+
+    fireEvent.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    fireEvent.change(screen.getByTestId('datalake-proposal-decline-reason'), { target: { value: 'paywalled' } });
+    fireEvent.click(screen.getByTestId('datalake-proposal-decline-confirm-btn'));
+
+    expect(onDecline).toHaveBeenCalledWith('prop-1', 'paywalled');
+    // Still in decline mode. Tearing it down in the same tick as the click (as this did) unmounted
+    // the busy button before it could render, so a decline showed no feedback at all - it read as a
+    // click that did nothing. The row leaves when the server confirms and the list refetches.
+    expect(screen.getByTestId('datalake-proposal-decline-confirm-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-proposal-decline-reason')).toHaveValue('paywalled');
+  });
+
+  it('explains what each action actually does', () => {
+    renderPanel();
+
+    // Approving is a live outbound fetch and declining is remembered - neither is guessable from the
+    // button labels alone.
+    expect(screen.getByTestId('datalake-proposals-help')).toHaveTextContent(/Approving fetches the page now/);
+    expect(screen.getByTestId('datalake-proposals-help')).toHaveTextContent(/Declining is remembered/);
+  });
+
+  it('reads as caught up rather than broken when the queue is empty', () => {
+    renderPanel({ proposals: [] });
+
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/All caught up/);
+  });
+
   it('flags a source a reviewer previously declined rather than hiding it', () => {
     renderPanel({ proposals: [proposal({ priorDisposition: 'declined' })] });
 

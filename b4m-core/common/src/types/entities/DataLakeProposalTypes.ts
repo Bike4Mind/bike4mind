@@ -170,6 +170,14 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
    * the reviewer stamp so the row reads as untouched rather than as approved-but-empty.
    */
   releaseClaim(id: string): Promise<void>;
+  /**
+   * Pending counts for many lakes in ONE aggregate, keyed by lake id. Lakes with nothing pending are
+   * omitted rather than zero-filled, so a caller can treat presence as "has work".
+   *
+   * Batched on purpose: this feeds the lake LIST, so a per-lake variant would be an N+1 across every
+   * lake a user can reach on every render of the manager.
+   */
+  countPendingByLakes(dataLakeIds: string[]): Promise<Record<string, number>>;
   /** Drop a deleted lake's queue. A proposal outliving its lake is unreviewable by anyone. */
   deleteForLake(dataLakeId: string): Promise<number>;
 }

@@ -26,6 +26,7 @@ import {
   useDataLakeSpend,
   useLakeConfigHistory,
   useReviewDataLakeProposal,
+  reviewProposalFailureMessage,
   useSetLakeVisibility,
   useUpdateDataLake,
 } from '@client/app/hooks/data/dataLakes';
@@ -130,7 +131,21 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const reviewProposal = useReviewDataLakeProposal(lake?.id ?? '');
   // Hidden while the queue is empty rather than shown with an empty state: until a producer runs
   // there is nothing to review, and a permanently-empty tab reads as a broken feature.
-  const showProposalsTab = !!lake?.canManage && !proposals.isForbidden && (proposals.data?.length ?? 0) > 0;
+  const queueHasItems = !!lake?.canManage && !proposals.isForbidden && (proposals.data?.length ?? 0) > 0;
+  // STICKY for as long as the modal is open. Deriving visibility purely from the current count meant
+  // ruling on the last proposal made the tab vanish under the reviewer mid-action, silently
+  // relocating them to the Settings form - which reads as the app losing their place, and hid the
+  // confirmation that they had finished. Sticky keeps them on a "nothing waiting" panel instead, and
+  // the tab is still absent on the next open, so an always-empty tab never appears.
+  // Stores WHICH lake earned the tab rather than a bare boolean, so switching lakes invalidates it by
+  // comparison. A separate reset effect would race this one on mount - whichever is declared last
+  // wins, which silently defeated the stickiness.
+  const [queueSeenFor, setQueueSeenFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (queueHasItems && lake?.id) setQueueSeenFor(lake.id);
+  }, [queueHasItems, lake?.id]);
+  const showProposalsTab =
+    (queueHasItems || (!!lake?.id && queueSeenFor === lake.id)) && !!lake?.canManage && !proposals.isForbidden;
   // A tab that has just been retracted must not stay selected, or the panel renders blank.
   const activeTab: DataLakeSettingsTab =
     (tab === 'spend' && !showSpendTab) ||
@@ -558,6 +573,16 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     isLoading={proposals.isLoading}
                     error={proposals.isForbidden ? null : proposals.error}
                     pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
+                    // Survives the toast: which source failed, and why, stays on its own card until
+                    // the next attempt on it.
+                    failure={
+                      reviewProposal.isError && reviewProposal.variables?.proposalId
+                        ? {
+                            proposalId: reviewProposal.variables.proposalId,
+                            message: reviewProposalFailureMessage(reviewProposal.error),
+                          }
+                        : undefined
+                    }
                     onApprove={proposalId => reviewProposal.mutate({ proposalId, decision: 'approve' })}
                     onDecline={(proposalId, reason) =>
                       reviewProposal.mutate({ proposalId, decision: 'decline', reason })

@@ -158,6 +158,45 @@ describe('approveDataLakeProposal', () => {
     expect(recordAdmission).not.toHaveBeenCalled();
   });
 
+  // A reviewer clicking Approve on a source whose page has since died used to be shown the raw
+  // `Request failed with status code 404` - observed on a live walk. It names neither the cause (the
+  // source, not their click) nor the consequence (nothing admitted, proposal still queued).
+  it('rewrites a raw fetch failure into something the reviewer can act on', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('Request failed with status code 404'), { response: { status: 404 } });
+    });
+    const { deps, releaseClaim } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
+      /Could not add this source: the source returned HTTP 404\. Nothing was added to the lake/
+    );
+    expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+  });
+
+  it('keeps a fetch failure with no status readable', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new Error('URL blocked for security reasons: private address');
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
+      /URL blocked for security reasons: private address\. Nothing was added to the lake/
+    );
+  });
+
+  // Deliberate refusals must NOT be reworded - burying a permission problem behind a fetch message
+  // would send the reviewer chasing the source instead of their access.
+  it('passes a deliberate refusal through untouched', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new BadRequestError("You do not have permission to change this data lake's files");
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
+      /^You do not have permission to change this data lake's files$/
+    );
+  });
+
   it('404s an unknown proposal', async () => {
     const { deps } = adapters({ proposal: null });
     await expect(approveDataLakeProposal('nope', ctx(), deps)).rejects.toThrow(NotFoundError);

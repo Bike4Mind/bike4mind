@@ -982,6 +982,28 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (2)');
   });
 
+  // Ruling on the last proposal used to make the tab vanish under the reviewer mid-action, silently
+  // relocating them to the Settings form - it read as the app losing their place, and hid the
+  // confirmation that they had finished the queue.
+  it('keeps the tab for the rest of the session once the queue empties', () => {
+    withQueue([queued()]);
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (1)');
+
+    withQueue([]);
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
+  });
+
   it('never fetches the queue for a caller who cannot manage the lake', () => {
     withQueue([queued()]);
     render(
