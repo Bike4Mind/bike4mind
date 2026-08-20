@@ -15,6 +15,9 @@ import {
   MAX_TAG_PREFIX_LENGTH,
   hasBlankTagPrefixSegment,
   satisfiesTagPrefix,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -407,5 +410,38 @@ describe('tagPrefixIssue - blank segments', () => {
   // the same culprit for an input that trips both rules.
   it('names the blank segment before the reserved namespace for "datalake::"', () => {
     expect(tagPrefixIssue('datalake::')).toMatch(/visible character/);
+  });
+});
+
+// These three are the SINGLE copy of a rule CreateDataLakeRequestInput enforces and the wizard
+// produces against, so pin the literals here: a change to any of them is a change to what the
+// create endpoint accepts, and must be a deliberate edit to this test rather than a silent drift.
+describe('data lake slug bounds', () => {
+  it('holds the bounds the create schema enforces', () => {
+    expect(MIN_DATA_LAKE_SLUG_LENGTH).toBe(2);
+    expect(MAX_DATA_LAKE_SLUG_LENGTH).toBe(60);
+  });
+
+  it('accepts a lowercase alphanumeric slug with interior hyphens', () => {
+    expect('my-data-lake').toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('ab').toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('a1').toMatch(DATA_LAKE_SLUG_REGEX);
+  });
+
+  it('rejects edge hyphens, uppercase, and other separators', () => {
+    for (const bad of ['-lake', 'lake-', 'My-Lake', 'my_lake', 'my lake', 'my.lake']) {
+      expect(bad).not.toMatch(DATA_LAKE_SLUG_REGEX);
+    }
+  });
+
+  // The pattern needs a leading AND a trailing alphanumeric in SEPARATE positions, so it
+  // already refuses a 1-char slug - the schema's minimum is belt-and-braces there. The client
+  // is why the minimum still has to be shared: isValidDataLakeSlug gates on LENGTH alone
+  // (slugifyDataLakeName's output satisfies the pattern by construction), so length is the
+  // only rule the wizard actually applies.
+  it('refuses a single character on its own, matching MIN_DATA_LAKE_SLUG_LENGTH', () => {
+    expect('a').not.toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('a'.length).toBeLessThan(MIN_DATA_LAKE_SLUG_LENGTH);
+    expect('ab'.length).toBe(MIN_DATA_LAKE_SLUG_LENGTH);
   });
 });
