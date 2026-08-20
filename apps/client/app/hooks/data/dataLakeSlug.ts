@@ -7,10 +7,6 @@
  */
 import { MAX_TAG_PREFIX_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
-// Re-exported so the wizard's gates and its "name too short" copy keep reading the slug
-// minimum from the helper they already import (see SourceSelectionStep, dataLakeWizard).
-export { MIN_DATA_LAKE_SLUG_LENGTH };
-
 /**
  * Slugify a string for use as a data lake slug. Trimming the leading/trailing
  * hyphen AFTER truncating is deliberate: truncation can land mid-word and leave a
