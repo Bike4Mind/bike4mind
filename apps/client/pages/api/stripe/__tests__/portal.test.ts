@@ -21,7 +21,7 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 // Deliberately NOT mocking the error classes: the real BadRequestError carries statusCode
 // 400, which lets the rejection test assert the status the client would actually receive
 // rather than only the message.
-import { BadRequestError, HttpStatus } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, HttpStatus } from '@bike4mind/common';
 
 const mockOrgFindById = vi.fn();
 const mockUserFindById = vi.fn();
@@ -41,8 +41,11 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-// Needed only so importing the handler resolves; the guard rejects long before it is reached.
-vi.mock('@server/services/organizationService', () => ({ resolveSubscriptionSource: vi.fn() }));
+// Drives the admin-grant branch on the Organization owner path; unreached on the guard tests.
+const mockResolveSubscriptionSource = vi.fn();
+vi.mock('@server/services/organizationService', () => ({
+  resolveSubscriptionSource: (...args: unknown[]) => mockResolveSubscriptionSource(...args),
+}));
 
 // Drive the origin verdict per test rather than hard-coding it: a stub pinned to `true` would
 // make the rejection path untestable, which is exactly the gap this file closes.
@@ -68,9 +71,9 @@ type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/settings/billing';
 
-function makeReq(callbackUrl = CALLBACK_URL) {
+function makeReq(callbackUrl = CALLBACK_URL, ownerType = 'User', ownerId = 'user_1') {
   const { req, res } = createMocks({ method: 'POST' });
-  (req as Record<string, unknown>).body = { callbackUrl, ownerType: 'User', ownerId: 'user_1' };
+  (req as Record<string, unknown>).body = { callbackUrl, ownerType, ownerId };
   (req as Record<string, unknown>).user = { id: 'user_1', email: 'buyer@example.com', name: 'Buyer' };
   return { req, res };
 }
@@ -127,5 +130,49 @@ describe('POST /api/stripe/portal - callbackUrl origin guard', () => {
     expect(mockPortalSessionsCreate).toHaveBeenCalledWith({ customer: 'cus_existing', return_url: CALLBACK_URL });
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toEqual({ url: 'https://billing.stripe/session' });
+  });
+
+  it('resolves the organization customer on the Organization owner path', async () => {
+    // The owner-type branch was previously unexercised: only the User path was asserted, so a
+    // regression that resolved the wrong customer here would not have failed anything.
+    mockOrgFindById.mockResolvedValue({
+      id: 'org_1',
+      userId: 'user_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      stripeCustomerId: 'cus_org',
+    });
+    const { req, res } = makeReq(CALLBACK_URL, 'Organization', 'org_1');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockOrgFindById).toHaveBeenCalledWith('org_1');
+    // 'cus_org', not the User path's 'cus_existing' - that difference is the assertion.
+    expect(mockPortalSessionsCreate).toHaveBeenCalledWith({ customer: 'cus_org', return_url: CALLBACK_URL });
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses the portal for an admin-granted organization instead of bootstrapping billing', async () => {
+    // An admin-granted org has no Stripe subscription; letting the portal auto-create a customer
+    // here would quietly start a billing relationship that only convert-to-paid should begin.
+    mockOrgFindById.mockResolvedValue({
+      id: 'org_1',
+      userId: 'user_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      stripeCustomerId: null,
+    });
+    mockFindActiveByOwner.mockResolvedValue([{ id: 'sub_1' }]);
+    mockResolveSubscriptionSource.mockReturnValue('admin_grant');
+    const { req, res } = makeReq(CALLBACK_URL, 'Organization', 'org_1');
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: ForbiddenError,
+      message: 'Contact support to enable billing for this organization.',
+    });
+
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPortalSessionsCreate).not.toHaveBeenCalled();
   });
 });
