@@ -1,10 +1,12 @@
-import { FeedbackModel, User } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
 import {
   FeedbackEvents,
   FeedbackStatus,
   IOrganizationDocument,
   PromptMetaZodSchema,
+  feedbackContentExpiresAt,
   redactFunctionCallsForViewer,
+  truncateFeedbackContent,
 } from '@bike4mind/common';
 import type {
   FeedbackChannelDelivery,
@@ -22,12 +24,14 @@ import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config, classifyStage } from '@server/utils/config';
+import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
   ALARM_WORTHY_SKIP_REASONS,
 } from '@server/utils/cloudwatch';
+import mongoose from 'mongoose';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
 
@@ -39,6 +43,11 @@ const CreateFeedbackRequestSchema = z.object({
   userEmail: z.string(),
   type: z.string().optional(),
   promptMeta: PromptMetaZodSchema.optional(),
+  // Untrusted pointers, not authorization keys - resolveFeedbackContext re-reads and
+  // ownership-checks whichever of these (or their promptMeta fallback) is present before any of
+  // it survives onto the saved document.
+  questId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -105,7 +114,7 @@ const handler = baseApi()
       console.log('Authenticated');
     }
 
-    const { userId, content, tags, username, userEmail, promptMeta, type } = newFeedbackData;
+    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId } = newFeedbackData;
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
@@ -114,11 +123,46 @@ const handler = baseApi()
       ? await User.findById(req.user.id).populate('organizationId')
       : await User.findOne({ email: userEmail }).populate('organizationId');
 
-    const organization = (existingUser?.organizationId as unknown as IOrganizationDocument)?.name || 'Unknown';
+    const organizationDoc = existingUser?.organizationId as unknown as IOrganizationDocument | undefined;
+    const organization = organizationDoc?.name || 'Unknown';
+
+    // organizationId/questId/sessionId become authorization keys for downstream scoped readers,
+    // so they are derived server-side here rather than trusted from the request body - see
+    // feedbackContext.ts for the full security rationale. `organization` above (the display
+    // string) is unaffected: it keeps its existing email-fallback resolution regardless.
+    const feedbackContext = await resolveFeedbackContext({
+      authenticatedUserId: authenticated ? req.user.id : undefined,
+      organizationId: organizationDoc?.id ?? null,
+      claims: {
+        questId: questId ?? promptMeta?.questId,
+        sessionId: sessionId ?? promptMeta?.session?.id,
+      },
+      logger: req.logger,
+    });
+
+    // Text-first (mirrors LakeAccessEventModel.record()): a FeedbackText write failure just
+    // leaves contentStored false rather than failing the submission, but a Feedback save failure
+    // after a successful text write must not leave an orphaned, unattributable text row behind.
+    const feedbackId = new mongoose.Types.ObjectId();
+    let contentStored = false;
+    if (content.trim().length > 0) {
+      try {
+        const { content: truncatedContent, contentTruncated } = truncateFeedbackContent(content);
+        await FeedbackTextModel.create({
+          _id: feedbackId,
+          content: truncatedContent,
+          contentTruncated,
+          expiresAt: feedbackContentExpiresAt(new Date()),
+        });
+        contentStored = true;
+      } catch (error) {
+        req.logger.error('Failed to write FeedbackText sibling', error);
+      }
+    }
 
     const newFeedback = new FeedbackModel({
+      _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
-      content,
       tags,
       status: FeedbackStatus.New,
       username: req.isAuthenticated() ? req.user.username : username,
@@ -126,8 +170,20 @@ const handler = baseApi()
       organization: organization,
       promptMeta: promptMeta,
       type,
+      sessionId: feedbackContext.sessionId,
+      questId: feedbackContext.questId,
+      organizationId: feedbackContext.organizationId,
+      subject: feedbackContext.subject,
+      contentStored,
     });
-    await newFeedback.save();
+    try {
+      await newFeedback.save();
+    } catch (error) {
+      if (contentStored) {
+        await FeedbackTextModel.deleteOne({ _id: feedbackId }).catch(() => undefined);
+      }
+      throw error;
+    }
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const stageClass = classifyStage(Config.STAGE);
@@ -150,11 +206,13 @@ const handler = baseApi()
     // incrementUserCounter) -- same containment as the Slack/email side-effects below.
     if (authenticated) {
       try {
+        // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so
+        // would defeat the 90-day retention the FeedbackText split otherwise enforces.
         await logEvent(
           {
             userId: newFeedback.userId,
             type: FeedbackEvents.CREATE_FEEDBACK,
-            metadata: { id: newFeedback.id, content },
+            metadata: { id: newFeedback.id },
           },
           { ability: req.ability }
         );
@@ -392,8 +450,9 @@ const handler = baseApi()
 
     // newFeedback.toJSON() (not a spread of the hydrated doc) - the schema sets
     // toJSON: { virtuals: true }, which is what produces `id`; spreading the doc directly
-    // yields Mongoose's internal _doc/$__ fields instead.
-    return res.status(201).json({ ...newFeedback.toJSON(), delivery });
+    // yields Mongoose's internal _doc/$__ fields instead. `content` is echoed from the request
+    // variable, not read off the saved doc, since it now lives on the FeedbackText sibling.
+    return res.status(201).json({ ...newFeedback.toJSON(), content, delivery });
   });
 
 export const config = {

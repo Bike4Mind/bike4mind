@@ -46,16 +46,12 @@ const handler = baseApi().put(
       throw new NotFoundError('Feedback not found');
     }
 
-    let updatedFeedback = await FeedbackModel.findOneAndUpdate(
-      { _id: id },
-      { $set: { status, username } },
-      { new: true }
-    );
-    if (!updatedFeedback) throw new NotFoundError('Feedback not found');
-
+    // Resolve the sibling write BEFORE the Feedback update, so contentStored (if it changes) can
+    // ride in the same $set as status/username - one write to the permanent document, not two.
     // contentApplied stays true when the caller didn't touch content at all - false only signals
     // a genuine no-op (the sibling had already expired under the 90-day TTL).
     let contentApplied = true;
+    let contentStoredChange: boolean | undefined;
     if (content !== undefined) {
       const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
       if (feedback.contentStored) {
@@ -75,13 +71,22 @@ const handler = baseApi().put(
           contentTruncated,
           expiresAt: feedbackContentExpiresAt(new Date()),
         });
-        updatedFeedback = await FeedbackModel.findOneAndUpdate(
-          { _id: id },
-          { $set: { contentStored: true } },
-          { new: true }
-        );
+        contentStoredChange = true;
       }
     }
+
+    const updatedFeedback = await FeedbackModel.findOneAndUpdate(
+      { _id: id },
+      {
+        $set: {
+          status,
+          username,
+          ...(contentStoredChange !== undefined ? { contentStored: contentStoredChange } : {}),
+        },
+      },
+      { new: true }
+    );
+    if (!updatedFeedback) throw new NotFoundError('Feedback not found');
 
     // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so
     // would defeat the 90-day retention this route otherwise enforces.
@@ -90,7 +95,6 @@ const handler = baseApi().put(
       { ability: req.ability }
     );
 
-    if (!updatedFeedback) throw new NotFoundError('Feedback not found');
     const [hydrated] = await hydrateFeedbackText([toRedactedFeedback(updatedFeedback)]);
     return res.json({ ...hydrated, contentApplied });
   })
