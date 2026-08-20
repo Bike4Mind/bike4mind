@@ -7,9 +7,17 @@ type Doc = Record<string, unknown>;
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
     if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
+    if (key === '$and') return (cond as Record<string, unknown>[]).every(sub => matches(doc, sub));
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
-    if (cond && typeof cond === 'object' && '$ne' in cond) return value !== (cond as { $ne: unknown }).$ne;
+    if (cond && typeof cond === 'object' && '$ne' in cond) {
+      const ne = (cond as { $ne: unknown }).$ne;
+      // Mongo treats a MISSING field as null, so `{$ne: null}` does not match one - which is the
+      // whole reason the stamped-file arm below can be written as `$ne: null` without matching every
+      // legacy row. Other `$ne` values (e.g. `isChunking: {$ne: true}`) do match a missing field.
+      if (ne === null) return value !== null && value !== undefined;
+      return value !== ne;
+    }
     if (cond && typeof cond === 'object' && '$lt' in cond) return (value as Date) < (cond as { $lt: Date }).$lt;
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
     if (cond && typeof cond === 'object' && '$not' in cond)
@@ -113,6 +121,36 @@ describe('buildFabFileChunkScanFilter', () => {
     const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
     expect(matches({ ...base, mimeType: 'text/markdown' }, filter)).toBe(true);
     expect(matches({ ...base, mimeType: 'application/pdf' }, filter)).toBe(true);
+  });
+
+  // #1939. This sweep is the only door that reaches a file outside every data lake, so excluding a
+  // STAMPED media file by mimeType would leave that stamp with no automatic exit - and a stamped
+  // file is withheld from search and named as "returns on its own", so no exit means a permanently
+  // false partial-results warning. One pass clears it: the chunker returns 0 chunks as it always
+  // would, and the commit clears the stamp.
+  it('sweeps a media file carrying a pending-rebuild stamp, which has no other recovery door', () => {
+    const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
+    for (const mimeType of ['audio/mpeg', 'image/png', 'video/mp4']) {
+      expect(matches({ ...base, mimeType }, filter)).toBe(false);
+      expect(matches({ ...base, mimeType, chunkRebuildRequestedAt: new Date() }, filter)).toBe(true);
+    }
+  });
+
+  // The exception must not widen the sweep past the stamp: the other terminal guards still apply,
+  // or a stamped media file that failed terminally would be re-enqueued on every pass forever.
+  it('still applies the error and no-extractable-text guards to a stamped media file', () => {
+    const stamped = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      mimeType: 'image/png',
+      chunkRebuildRequestedAt: new Date(),
+    };
+    expect(matches(stamped, filter)).toBe(true);
+    expect(matches({ ...stamped, error: 'chunker gave up' }, filter)).toBe(false);
+    expect(matches({ ...stamped, notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image` }, filter)).toBe(false);
   });
 });
 

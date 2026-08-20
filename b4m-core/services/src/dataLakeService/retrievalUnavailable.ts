@@ -45,9 +45,11 @@ export interface RetrievalUnavailableReport {
   };
   /**
    * True when content was withheld here - the single flag a consumer branches on, alongside
-   * `EmbeddingMismatchReport.partial`. For the `indexing` bucket it is TRANSIENT and clears on its
-   * own, which is why it is safe to raise on an ordinary in-progress ingest as well as on a
-   * convergence wave; for `paused` it does not. Both are the same fact for a reader - some of this
+   * `EmbeddingMismatchReport.partial`. For the `indexing` bucket it is transient in the ordinary
+   * case and clears on its own, which is why it is safe to raise on an in-progress ingest as well as
+   * on a convergence wave; for `paused` it never does. The one `indexing` member that does not clear
+   * by itself is a rebuild whose enqueue was lost (#1939) - rare, and the prose names the action for
+   * it rather than promising only time. Both buckets are the same fact for a reader - some of this
    * lake is not searchable right now - so they share the flag, and the prose says which is which.
    */
   partial: boolean;
@@ -171,10 +173,21 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     // is already re-embedding. Worded as "being replaced" rather than "no longer exist" because a
     // member reset but not yet committed still has its old chunk rows (#1939) - the claim has to be
     // true of the earliest point in the window as well as the rest of it.
+    //
+    // The trailing sentence is what keeps "returns on its own" from being a FALSE promise. A pending
+    // rebuild whose enqueue never landed (a producer killed between the reset and its sends) is
+    // withheld here indefinitely, and nothing brings it back until the rescue sweep runs or someone
+    // rebuilds the lake - so a bare "wait and re-run" would be exactly the wrong instruction, the
+    // same failure the `paused` bucket below exists to avoid. Stated as a CONDITIONAL escape hatch
+    // rather than by re-bucketing a stale stamp as `paused`: the two states differ in what a reader
+    // should do FIRST (wait vs act), which is what these buckets encode, and this keeps that split
+    // honest without giving a pure reporting function a clock or `paused` a cause it does not have.
     sentences.push(
       `Partial knowledge-base results: ${report.indexing.count} file(s)${namesOf(report.indexing)} are being ` +
         're-indexed right now and were withheld - their passages are being replaced and the replacements are ' +
-        'not searchable yet. They will return on their own once indexing completes; re-run the search then.'
+        'not searchable yet. They return on their own once indexing completes; re-run the search then. If they ' +
+        'are still missing much later, the rebuild did not finish - use the lake\'s "Rebuild passages" action, ' +
+        'or reprocess the files individually.'
     );
   }
   if (report.paused.count > 0) {

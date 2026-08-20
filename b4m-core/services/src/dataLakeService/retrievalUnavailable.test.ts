@@ -140,8 +140,24 @@ describe('buildRetrievalUnavailableReport', () => {
     expect(report.indexing.count).toBe(1);
     expect(report.paused.count).toBe(0);
     const prose = describeRetrievalUnavailable(report);
-    expect(prose).toContain('will return on their own');
+    expect(prose).toContain('return on their own');
     expect(prose).not.toContain('administrator');
+  });
+
+  // A pending rebuild whose enqueue was lost is withheld here indefinitely, so "wait and re-run" on
+  // its own would be the wrong instruction - the very failure the `paused` bucket exists to avoid,
+  // reached through the other bucket. The escape hatch keeps the promise honest without giving this
+  // pure reporting function a clock.
+  it('names the repair as well as the wait, so the indexing promise cannot be a false one', () => {
+    const report = buildRetrievalUnavailableReport([
+      { id: 'f1', fileName: 'rebuilding.pdf', notes: '', chunkRebuildRequestedAt: new Date() },
+    ]);
+    const prose = describeRetrievalUnavailable(report)!;
+
+    // Waiting still LEADS - it is the right first action for the ordinary case, which is the common one.
+    expect(prose.indexOf('re-run the search then')).toBeLessThan(prose.indexOf('Rebuild passages'));
+    expect(prose).toContain('the rebuild did not finish');
+    expect(prose).toContain('reprocess the files individually');
   });
 
   // EITHER arm buckets as paused. Bucketing the vectorize arm as `indexing` would print "they will
