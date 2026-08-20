@@ -376,6 +376,22 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * the affordance rather than exposing it), so this is a precision note, not a safety concern.
    */
   canRebuild: boolean;
+  /**
+   * Whether the requesting caller may edit this lake's admin-settable session-default OVERLAY
+   * (currently `groundingMode` only - see `IFallbackLakeSetting`). Same shape as `canRebuild`, for
+   * the same reason: a fallback (built-in) lake has no document, so `canManage` stays `false` for
+   * it, but the overlay attaches to no lake document either - see
+   * `assertFallbackLakeSettingsWriteAccess`. For a DB lake the two are identical
+   * (`canManageSettings === canManage`, and a DB lake's settings live on the document itself, so
+   * this flag gates nothing extra there); for a fallback lake `canManageSettings` is `ctx.isAdmin`
+   * directly, NOT `resolveCanManageLake` - an org-scoped registry lake must not let a customer-side
+   * org admin pass, mirroring `assertLakeRebuildAccess`'s reasoning exactly.
+   *
+   * REQUIRED, not optional - same reasoning as `canRebuild`: both producers (toManageableConfig,
+   * toFallbackConfig) must set it unconditionally, or an absent field silently hides the affordance
+   * (fails closed) rather than surfacing a compile error at the one spot that forgot it.
+   */
+  canManageSettings: boolean;
 }
 
 /**

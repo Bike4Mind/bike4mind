@@ -141,6 +141,24 @@ export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdata
   keyof UpdateDataLakeRequestInputType
 >;
 
+// A STATIC (registry) lake has no document, so it cannot go through UpdateDataLakeRequestInput /
+// updateDataLake - only its admin-settable overlay (see IFallbackLakeSetting) is writable, and only
+// the fields that overlay actually stores. Deliberately narrower than the DB-lake schema: no name,
+// description, or gate fields, since a fallback lake's identity is config, not editable metadata.
+export const UpdateFallbackLakeSettingsRequestInput = z.object({
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // Same shape and sentinel as UpdateDataLakeRequestInput's field above - kept deliberately
+  // identical so the two write paths cannot silently diverge on what a crafted body may contain.
+  // The session-activatable ALLOWLIST check is enforced at the write route (apps/client), same as
+  // the DB-lake path; this schema is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Same field, uncapped, as UpdateDataLakeRequestInput's above. Storage is unconditional - which
+  // registry lakes actually get this INJECTED is isTrustedForInjection's decision (org-scoped
+  // only, getDataLakePrompts.ts), not a write-time restriction, so an admin can set this ahead of
+  // a lake being scoped to an org without the value being rejected or silently dropped.
+  systemPrompt: z.string().optional(),
+});
+export type UpdateFallbackLakeSettingsRequestInputType = z.infer<typeof UpdateFallbackLakeSettingsRequestInput>;
 /**
  * `purging` is deliberately absent from `status`. It is transitional and past the point of no
  * return, so a lake in it is on its way out and is never something a caller should filter for.

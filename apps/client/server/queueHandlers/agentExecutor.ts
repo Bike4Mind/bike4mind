@@ -29,6 +29,7 @@ import {
   fabFileChunkRepository,
   projectRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
   mongoose,
   agentExecutionRepository,
   agentRepository,
@@ -1294,6 +1295,7 @@ async function processExecution(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls (add_entity / set_value / query). Without this
         // adapter they fall back to an in-memory id that fails the ObjectId
@@ -2880,6 +2882,7 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Required for the Lattice opt-in pool below to actually work: the
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls. Without this adapter they fall back to an in-memory
