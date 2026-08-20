@@ -457,9 +457,10 @@ describe('PublishedArtifactsTabContent - review regressions', () => {
   });
 
   it('self-heals a page that settles empty even when the click-time flag missed it', async () => {
-    // Simulates the race: a second delete fires while `wasLastOnPage` still reads the stale,
-    // pre-first-delete row count (2 rows -> flag false), so the click-time step-back never fires.
-    // The settle-driven clamp below reacts to the actual post-delete response instead.
+    // Stands in for the race: a single click here, but the mocked refetch below returns the
+    // state a second rapid delete would actually leave (page empty) rather than what the
+    // click-time `wasLastOnPage` flag saw (2 rows -> false, so it would not have stepped back).
+    // The settle-driven clamp reacts to that response instead of the click-time guess.
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockList.mockResolvedValue(page([bundleRow, replyRow], { total: 27 }));
     renderTab();
