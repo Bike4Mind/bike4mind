@@ -17,6 +17,7 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { dataLakeService } from '@bike4mind/services';
@@ -75,7 +76,16 @@ const handler = baseApi().post(
       const requestedTagNames = (data.tags ?? []).map(t => t.name);
       const ctx = await toAccessContext(req);
       await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+          scopedSettings: scopedSettingsRepository,
+        },
+        // This request creates the file, so the caller is its owner-to-be and the admission
+        // contract (#1680) predicts against their chunk policy.
+        members: [{ userId }],
+        logger: req.logger,
       });
       // This route creates the FabFile through the manager's direct FabFile.create(), not the
       // fabFileService.createFabFile door that gates the static-registry namespace centrally -

@@ -161,6 +161,11 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
    *   result, so resolvedLakeIds is genuinely populated) but are catalog-metadata reads (name/
    *   description), not content reads - a caller presenting this as "who read this lake's
    *   content" should filter or label by `surface` rather than treat every match as equivalent.
+   *
+   * ORDER IS PART OF THE CONTRACT: newest first by `createdAt`. With `limit`, that makes the result
+   * the most RECENT window rather than an arbitrary one, and the last element the window's start -
+   * which `assembleLakeAccessView` publishes as `windowStartsAt` on a truncated compliance export.
+   * Changing this sort silently turns that date wrong; the reads test pins it.
    */
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]> {
     const query = this.eventModel.find({ resolvedLakeIds: lakeId }).sort({ createdAt: -1 });

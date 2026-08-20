@@ -65,6 +65,17 @@ export const archiveDataLake = async (
     throw new BadRequestError('You do not have permission to archive this data lake');
   }
 
+  // Refused ahead of the status handling below, and for the same reason restore refuses it: the
+  // purge has been accepted and its sweep is irreversible (#1744). Falling through would settle
+  // this lake on 'archived', clobbering the claim - and the release that is supposed to rescue an
+  // abandoned purge is conditional on 'purging' (releasePurgingToDeleted), so it would match
+  // nothing and no-op, leaving the accepted purge silently abandoned. Not reachable from the UI (a
+  // purging lake is absent from every list, so no Archive control renders), but this service is
+  // the guard, not the client - which is the whole point of #1744.
+  if (existing.status === 'purging') {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be archived');
+  }
+
   // Only short-circuit on the terminal state. A lake left in the transitional
   // 'archiving' state by a crashed/timed-out prior attempt must be able to re-run -
   // the side effects below (cancel batches, archive files, recompute) are idempotent.

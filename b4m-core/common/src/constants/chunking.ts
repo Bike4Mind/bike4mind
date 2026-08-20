@@ -133,3 +133,38 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
  */
 export const CONVERGENCE_PAUSED_NOTE =
   'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
+
+/**
+ * `FabFile.notes` marker for the OTHER half of the same kill switch: a re-chunk dropped before it
+ * ran (#1676/#1681). Distinct from `CONVERGENCE_PAUSED_NOTE` because the damage is worse and the
+ * wording has to say so - the producer resets a wave's chunk state BEFORE the messages are handled,
+ * so a file halted here has NO chunks at all rather than chunks without vectors.
+ *
+ * Without a marker this state is invisible to every surface at once, which is the failure it exists
+ * to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health
+ * drops it from the denominator, convergence grades it `conformant` (its stale stamp still matches),
+ * search does not withhold it because it is not "in flight", and the rescue sweep's own filter
+ * passes over it. The file's passages are simply gone and nothing reports it.
+ *
+ * Same cross-layer reason as the constant above for living here: the queue handler writes it and
+ * b4m-core's evaluators read it, and b4m-core cannot import from apps/client.
+ */
+export const CONVERGENCE_PAUSED_CHUNK_NOTE =
+  'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
+  'rebuilt when convergence resumes.';
+
+/**
+ * Whether a file's `notes` marks it as stalled by the convergence kill switch, by either arm.
+ * THE predicate every reader uses, so adding a third stall marker reaches health, convergence and
+ * retrieval without three separate string comparisons drifting apart.
+ */
+export function isConvergencePausedNote(notes?: string | null): boolean {
+  return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
+}
+
+/**
+ * Datastore mirror of `isConvergencePausedNote`, for a Mongo `notes: { $in: [...] }`. Exported so a
+ * query and the in-memory predicate cannot drift: adding a third stall marker to this array reaches
+ * both. Declared after the two constants it names so the function above can close over it.
+ */
+export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;

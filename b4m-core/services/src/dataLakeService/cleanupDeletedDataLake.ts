@@ -49,7 +49,7 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
  * Phase 2 of permanent delete: the retry-safe hard-delete sweep over chunks, files,
  * batches, and the lake record. Runs in the background cleanup queue consumer (enqueued by an
  * explicit user/admin action), which is why it's idempotent - a partially-failed run leaves the
- * lake in 'deleted' and a DLQ retry re-runs it without error or double-deletion (delete-by-id and
+ * lake in 'purging' and a DLQ retry re-runs it without error or double-deletion (delete-by-id and
  * deleteMany are no-ops on already-purged data). Fan-outs are chunked (chunkSize) so a large lake
  * stays inside the Lambda timeout. Owner or admin only.
  *
@@ -69,7 +69,13 @@ export const cleanupDeletedDataLake = async (
   if (!(await resolveCanManageLake(existing, actor, { db }))) {
     throw new BadRequestError('You do not have permission to clean up this data lake');
   }
-  if (existing.status !== 'deleted') {
+  // 'purging' is the normal arrival state since #1744 - the route claims it at accept time, before
+  // this message is enqueued. 'deleted' stays valid for two reasons, and BOTH are load-bearing:
+  // messages enqueued before that change are still in flight, and a DLQ replay of a sweep that was
+  // released back to 'deleted' must run rather than fail on arrival. Narrowing this to one value
+  // would make the admin replay path (api/admin/dlq/replay.ts, which serves this queue - see
+  // dlqRegistry) decorative, and DLQ replay is the whole recovery story for a stuck purge.
+  if (existing.status !== 'purging' && existing.status !== 'deleted') {
     throw new BadRequestError('Data lake must be soft-deleted before cleanup');
   }
 
@@ -110,8 +116,9 @@ export const cleanupDeletedDataLake = async (
   // still exist. Clearing this lake's signals off the survivor is what makes the sparing durable:
   // the file keeps its bytes and its chunks, and stops being a member of a lake that is gone.
   //
-  // Runs BEFORE the lake record goes, so a throw here aborts with the lake still in 'deleted' and
-  // a DLQ retry re-runs the whole sweep - by then the survivor is an ordinary member, resolved up
+  // Runs BEFORE the lake record goes, so a throw here aborts with the lake still in 'purging' (the
+  // status the accept claimed - NOT 'deleted', so it is not restorable here) and a DLQ retry
+  // re-runs the whole sweep - by then the survivor is an ordinary member, resolved up
   // front and torn down with its chunks and index entry like any other.
   const survivors = await db.fabFiles.findIdsByDataLakeTag(scope);
   await inChunks(survivors, chunkSize, async id => {

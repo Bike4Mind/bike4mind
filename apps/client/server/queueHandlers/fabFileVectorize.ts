@@ -41,7 +41,11 @@ import {
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
@@ -142,9 +146,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
-    await fabFileRepository
-      .update({ id: fabFileId, notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
-      .catch(err => logger.error(`Failed to flag convergence-paused fabFile ${fabFileId}: ${err}`));
+    // Retried in-process, then FAILED to SQS rather than acked - the same trade the chunk handler
+    // makes, for the same reason and with the same bound. This marker is the only thing that makes an
+    // abandoned chunked-but-unvectorized file ENUMERABLE (the rebuild door selects on it), so acking a
+    // lost write leaves a file that reports as "still indexing" forever with no repair offered.
+    // fabFileVectorizeQueue sets `dlq: { retry: 3 }` with a 6-minute visibility timeout, and its DLQ
+    // is in DLQ_DESCRIPTORS and dlqRegistry, so a persistent failure alarms and is replayable instead
+    // of vanishing. Nothing destructive has run in this branch, so a redelivery is idempotent - and
+    // the already-vectorized guard above means a resumed file is never re-embedded.
+    for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
+      try {
+        await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false });
+        break;
+      } catch (err) {
+        if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
+          logger.error(
+            `Failed to flag convergence-paused fabFile ${fabFileId} after ${MARK_PAUSED_MAX_ATTEMPTS} ` +
+              `attempts; failing the delivery so SQS retries rather than stranding it unenumerable: ${err}`
+          );
+          throw err;
+        }
+        await new Promise(resolve => setTimeout(resolve, MARK_PAUSED_RETRY_DELAY_MS * attempt));
+      }
+    }
     logger.log(
       `[convergenceKillSwitch] Paused background vectorize work for fabFileId ${fabFileId}` +
         (payload.lakeId ? ` (lake ${payload.lakeId})` : '') +

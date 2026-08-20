@@ -12,15 +12,13 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
-import { createSession } from './sessionCrud';
 import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
 
 /**
- * Session transformation and message operations: message CRUD, fork/clone/snip,
- * generation control, sharing state, and summarization triggers.
+ * Message CRUD, generation control, sharing state, and summarization triggers.
  *
- * Depends on `sessionCrud` (for `createSession`) and `sessionSideEffects` (for event
- * publishing). The dependency direction is one-way - `sessionCrud` never imports from here.
+ * Depends on `sessionSideEffects` (for event publishing). Fork/snip live in
+ * `@bike4mind/services`' `sessionService`, not here.
  */
 
 /**
@@ -166,56 +164,6 @@ export const stopReply = async (sessionId: string, ability: Ability) => {
   }
 
   return latestQuest;
-};
-
-export const forkSession = async (sessionId: string, messageId: string, ability: Ability) => {
-  const session = await Session.findById(sessionId);
-  if (!session) throw new NotFoundError('Session not found');
-
-  const message = await Quest.findById(messageId);
-  if (!message) throw new NotFoundError('Message not found');
-  const newSession = await createSession(session.userId, { name: `Forked ${session.name}` }, ability);
-
-  // Need to also clone the knowledge and tools, tags, and summary
-  newSession.knowledgeIds = session.knowledgeIds;
-  newSession.tags = session.tags;
-  newSession.summary = session.summary;
-  newSession.summaryAt = session.summaryAt;
-  await newSession.save();
-
-  const messagesToFork = await Quest.find({ sessionId, timestamp: { $lte: message.timestamp } });
-  await Promise.all(
-    messagesToFork.map(async message => {
-      const { _id, id, ...messageData } = message.toObject();
-      return await addMessageToSession(session.userId, newSession.id, messageData, ability);
-    })
-  );
-  return newSession;
-};
-
-export const snipSession = async (sessionId: string, messageId: string, ability: Ability) => {
-  const session = await Session.findById(sessionId);
-  if (!session) throw new NotFoundError('Session not found');
-
-  const message = await Quest.findById(messageId);
-  if (!message) throw new NotFoundError('Message not found');
-  const newSession = await createSession(session.userId, { name: `Snipped ${session.name}` }, ability);
-
-  // Need to also clone the knowledge and tools, tags, and summary
-  newSession.knowledgeIds = session.knowledgeIds;
-  newSession.tags = session.tags;
-  newSession.summary = session.summary;
-  newSession.summaryAt = session.summaryAt;
-  await newSession.save();
-
-  const messagesToSnip = await Quest.find({ sessionId, timestamp: { $gte: message.timestamp } });
-  await Promise.all(
-    messagesToSnip.map(async message => {
-      const { _id, id, ...messageData } = message.toObject();
-      return await addMessageToSession(session.userId, newSession.id, messageData, ability);
-    })
-  );
-  return newSession;
 };
 
 export const summarizeSession = async (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => {

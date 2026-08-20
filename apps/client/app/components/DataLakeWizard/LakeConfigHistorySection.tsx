@@ -46,6 +46,9 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   unarchive: 'Unarchived',
   delete: 'Deleted',
   restore: 'Restored',
+  // Accept-time wording on purpose: the event is recorded when the purge is ACCEPTED, not when the
+  // sweep finishes, so 'Purged' would claim a completion this row cannot vouch for.
+  purge: 'Permanent deletion accepted',
   'auto-activate': 'Activated automatically',
 };
 

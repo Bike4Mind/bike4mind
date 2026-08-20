@@ -62,6 +62,17 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
   'delete',
   'restore',
   /**
+   * The phase-2 hard delete, recorded when the purge is ACCEPTED rather than when the sweep
+   * finishes (#1744). Deliberately NOT folded into `delete`: that verb is the recoverable phase-1
+   * soft delete, and an audit trail that cannot distinguish the reversible request from the
+   * irreversible one is telling the same lie the `status` field used to.
+   *
+   * This is also the ONLY audit record a purge leaves. `cleanupDeletedDataLake` records nothing,
+   * and it deletes the lake, its files, chunks, batches and grants - but never this collection, so
+   * an accept-time event is what survives to say the operation was requested at all.
+   */
+  'purge',
+  /**
    * The draft -> active flip driven by `activateIfDraft` (a tag edit, a file toggle, a batch
    * completion). Always records under the `system` RUNG, whoever triggered it: nothing authorized
    * it, because `activateIfDraft` runs no authorization check at all. The PRINCIPAL is a different

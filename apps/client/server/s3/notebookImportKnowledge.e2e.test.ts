@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { FabFile, Session } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * Knowledge files were built with field names the schema does not have (`name`/`size`/`path` rather
@@ -26,11 +30,11 @@ const USER = 'knowledge-import-owner';
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 60000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 60000);
+});
 afterEach(async () => {
   await Promise.all([FabFile.deleteMany({}, { hardDelete: true }), Session.deleteMany({}, { hardDelete: true })]);
 });
@@ -118,19 +122,19 @@ describe('notebook import writes knowledge files', () => {
     // The bytes were uploaded to this path, so the record has to point at the same one.
     expect(file?.filePath).toBe(uploaded[0]);
     expect(result.importedAttachments).toBe(1);
-  }, 60000);
+  });
 
   it('carries the original knowledge type through the export', async () => {
     await makeService().importNotebooks(USER, payload([knowledgeFile({ type: 'URL' })]) as never, OPTIONS as never);
 
     expect((await FabFile.findOne({ userId: USER }))?.type).toBe('URL');
-  }, 60000);
+  });
 
   it('falls back to FILE for exports written before type was carried', async () => {
     await makeService().importNotebooks(USER, payload([knowledgeFile({ type: undefined })]) as never, OPTIONS as never);
 
     expect((await FabFile.findOne({ userId: USER }))?.type).toBe('FILE');
-  }, 60000);
+  });
 
   it('records an id on the notebook that resolves to the file it wrote', async () => {
     await makeService().importNotebooks(USER, payload([knowledgeFile()]) as never, OPTIONS as never);
@@ -140,7 +144,7 @@ describe('notebook import writes knowledge files', () => {
 
     expect(notebook?.knowledgeIds).toHaveLength(1);
     expect(notebook?.knowledgeIds?.[0]).toBe(String(file?.id));
-  }, 60000);
+  });
 
   it('keeps the notebook and the files that worked when one file fails', async () => {
     const broken = knowledgeFile({ id: 'kf-2', name: 'broken.txt', content: undefined });
@@ -162,7 +166,7 @@ describe('notebook import writes knowledge files', () => {
     const file = await FabFile.findOne({ userId: USER });
     expect(notebook?.knowledgeIds).toEqual([String(file?.id)]);
     expect(result.warnings?.[0]).toContain('broken.txt');
-  }, 60000);
+  });
 
   it('degrades an unrecognised type rather than losing the file', async () => {
     await makeService().importNotebooks(
@@ -172,7 +176,7 @@ describe('notebook import writes knowledge files', () => {
     );
 
     expect((await FabFile.findOne({ userId: USER }))?.type).toBe('FILE');
-  }, 60000);
+  });
 
   it('warns once, not twice, when a file has an unknown type and also fails to write', async () => {
     // Content resolves, so the upload succeeds and the loop reaches the write - which then fails
@@ -188,7 +192,7 @@ describe('notebook import writes knowledge files', () => {
     expect(await FabFile.countDocuments({})).toBe(0);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings?.[0]).toContain('Failed to import knowledge file');
-  }, 60000);
+  });
 
   it('marks the file servable rather than leaving it for a scan that cannot see it', async () => {
     await makeService().importNotebooks(USER, payload([knowledgeFile()]) as never, OPTIONS as never);
@@ -196,7 +200,7 @@ describe('notebook import writes knowledge files', () => {
     // The row is written inside the import's transaction, and the S3 scan that would flip this
     // gives up ~7.5s later - long before a real import commits. A 'pending' file never recovers.
     expect((await FabFile.findOne({ userId: USER }))?.moderationStatus).toBe('clean');
-  }, 60000);
+  });
 
   it('reports a degraded type as an import, not as a failure', async () => {
     const result = await makeService().importNotebooks(
@@ -209,7 +213,7 @@ describe('notebook import writes knowledge files', () => {
     expect(result.importedAttachments).toBe(1);
     expect(result.warnings?.[0]).toContain('Imported');
     expect(result.warnings?.[0]).not.toContain('Failed to import');
-  }, 60000);
+  });
 
   it('refuses a file that would only reference the exporter storage', async () => {
     const remote = knowledgeFile({ content: undefined, contentUrl: 'https://other-env.test/knowledge/kf-1' });
@@ -221,7 +225,7 @@ describe('notebook import writes knowledge files', () => {
     expect(await FabFile.countDocuments({})).toBe(0);
     expect(result.importedAttachments).toBe(0);
     expect(result.warnings?.[0]).toContain('not implemented');
-  }, 60000);
+  });
 
   it('reports a store that returns no id rather than recording a dangling reference', async () => {
     const service = makeService({ knowledgeRepository: { create: async () => ({}) } });
@@ -230,7 +234,7 @@ describe('notebook import writes knowledge files', () => {
 
     expect(result.importedAttachments).toBe(0);
     expect(result.warnings?.[0]).toContain('no id');
-  }, 60000);
+  });
 
   it('reports a failed attachment instead of claiming success', async () => {
     // No content and no contentUrl: the service cannot resolve a path, so this one must fail.
@@ -245,5 +249,5 @@ describe('notebook import writes knowledge files', () => {
     expect(result.warnings?.[0]).toContain('notes.txt');
     // The count must reflect what landed, not what the file claimed.
     expect(result.importedAttachments).toBe(0);
-  }, 60000);
+  });
 });

@@ -540,6 +540,9 @@
                   "best-effort"
                 ]
               },
+              "stopReason": {
+                "type": "string"
+              },
               "thinking": {
                 "type": "array",
                 "items": {}
@@ -585,7 +588,8 @@
           "credits": {
             "used": 1,
             "usdCost": 0.00037
-          }
+          },
+          "stopReason": "end_turn"
         }
       },
       "createCompletionRequest": {
@@ -2102,7 +2106,7 @@
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "AI"
         ],

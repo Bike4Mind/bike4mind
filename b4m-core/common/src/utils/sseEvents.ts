@@ -36,6 +36,15 @@ export interface SSEContentEvent {
    * `X-B4M-Response-Format-Mode` HTTP header semantics for the SSE channel.
    */
   responseFormatMode?: 'native' | 'tool_use' | 'best-effort';
+  /**
+   * Why generation stopped, on the terminal event of a stream. Normalized to the
+   * `CompletionInfo.stopReason` vocabulary (see llm-adapters/stopReason.ts), so
+   * 'max_tokens' means the reply was CUT OFF rather than finished. Without this on the
+   * wire a truncated answer is indistinguishable from a complete one, which is exactly
+   * how a starved output budget stayed invisible to CLI users. Absent on interim
+   * chunks and whenever the provider reports nothing.
+   */
+  stopReason?: string;
 }
 
 export interface SSEErrorEvent {
@@ -88,6 +97,11 @@ export interface CompletionInfo {
    * How the backend honored response_format ('native' | 'tool_use' | 'best-effort').
    */
   responseFormatMode?: 'native' | 'tool_use' | 'best-effort';
+  /**
+   * Why generation stopped, in the vocabulary normalized by llm-adapters/stopReason.ts.
+   * Mirrored onto SSEContentEvent.stopReason by buildSSEEvent.
+   */
+  stopReason?: string;
 }
 
 /**
@@ -141,6 +155,10 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
 
   if (info?.responseFormatMode) {
     event.responseFormatMode = info.responseFormatMode;
+  }
+
+  if (info?.stopReason) {
+    event.stopReason = info.stopReason;
   }
 
   return event;

@@ -6138,8 +6138,18 @@
         },
         {
           "level": 3,
+          "text": "Chunk Policy (passage size)",
+          "anchor": "chunk-policy-passage-size"
+        },
+        {
+          "level": 3,
           "text": "Vector Embeddings",
           "anchor": "vector-embeddings"
+        },
+        {
+          "level": 3,
+          "text": "Lake Health (retrievability)",
+          "anchor": "lake-health-retrievability"
         },
         {
           "level": 2,
@@ -6280,6 +6290,21 @@
           "level": 3,
           "text": "Compliance",
           "anchor": "compliance"
+        },
+        {
+          "level": 3,
+          "text": "Data lake access and membership view",
+          "anchor": "data-lake-access-and-membership-view"
+        },
+        {
+          "level": 3,
+          "text": "Transferring a data lake to someone else",
+          "anchor": "transferring-a-data-lake-to-someone-else"
+        },
+        {
+          "level": 3,
+          "text": "Troubleshooting the access view",
+          "anchor": "troubleshooting-the-access-view"
         },
         {
           "level": 2,

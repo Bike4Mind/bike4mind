@@ -19,6 +19,7 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -195,8 +196,10 @@ export const SettingKeySchema = z.enum([
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'PauseLakeConvergence',
+  'LakeConvergenceBulkChangeSharePct',
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
+  'EnforceLakeAdmission',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -222,6 +225,7 @@ export const SettingKeySchema = z.enum([
   'ReferralCreditsAmount',
   'registrationLink',
   'FeedbackReceiveEmail',
+  'FeedbackReceiveEmailNonProd',
   'FeedbackKyle',
   'EnableFeedBackToEmail',
   'EnableFeedBackToSlack',
@@ -327,6 +331,7 @@ export const SettingKeySchema = z.enum([
   'SlackLiveopsWebhookUrl',
   'SlackUserActivityWebhookUrl',
   'SlackFeedbackWebhookUrl',
+  'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
 
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
@@ -1544,9 +1549,12 @@ export const API_SERVICE_GROUPS = {
       { key: 'SlackLiveopsWebhookUrl', order: 5 },
       { key: 'SlackUserActivityWebhookUrl', order: 6 },
       { key: 'SlackEmailAuditWebhookUrl', order: 6.5 },
+      { key: 'SlackFeedbackWebhookUrl', order: 6.75 },
+      { key: 'SlackNonProdFeedbackWebhookUrl', order: 6.8 },
       { key: 'FeedbackSendEmailUsername', order: 7 },
       { key: 'FeedbackSendEmailPassword', order: 8 },
       { key: 'FeedbackReceiveEmail', order: 9 },
+      { key: 'FeedbackReceiveEmailNonProd', order: 9.5 },
       { key: 'liveFeedbackEmail', order: 10 },
       { key: 'FeedbackKyle', order: 11 },
       { key: 'feedbackErik', order: 12 },
@@ -1951,6 +1959,29 @@ export const settingsMap = {
     // also pause all of an org's/owner's lake convergence, not only one lake at a time.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
+  LakeConvergenceBulkChangeSharePct: makeNumberSetting({
+    key: 'LakeConvergenceBulkChangeSharePct',
+    name: 'Data Lakes: Convergence bulk-change confirmation threshold (%)',
+    // Shared with the resolver's own fallback (see BULK_CHANGE_SHARE_PCT_DEFAULT for the rationale
+    // and for why this is one constant rather than two literals).
+    defaultValue: BULK_CHANGE_SHARE_PCT_DEFAULT,
+    min: 1,
+    max: 100,
+    description:
+      'Share of a data lake, as a percentage of its gradable members, above which owner-triggered ' +
+      'convergence (#1681) requires an explicit confirmation before it rewrites anything. A mass ' +
+      'rewrite is the signature of a misconfigured chunk policy, and every individual change inside ' +
+      'one looks locally reasonable, so the share is the only place the mistake is visible. The ' +
+      'guard is suppressed on lakes with fewer gradable members than the plan needs for a ' +
+      'percentage to mean anything. Lower it to make convergence ask more often; it never blocks a ' +
+      'confirmed run.',
+    category: 'AI',
+    order: 4,
+    dependsOn: 'EnableDataLakes',
+    // Same rungs as the kill switch it sits beside: an operator tightening or relaxing the guard
+    // usually wants it per lake, and the scheme requires Owner wherever Lake is settable.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
   EnforceLakeReadGrants: makeBooleanSetting({
     key: 'EnforceLakeReadGrants',
     name: 'Data Lakes: Enforce read-time grant resolution',
@@ -1972,6 +2003,32 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 95,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnforceLakeAdmission: makeBooleanSetting({
+    key: 'EnforceLakeAdmission',
+    name: 'Data Lakes: Enforce the admission contract',
+    defaultValue: false,
+    description:
+      'Retrievability contract at admission (#1680). OFF by default = report-only: a file whose chunks ' +
+      'cannot honor the chunk policy a lake REQUIRES is logged as quarantined ([admission] lines) but ' +
+      'still joins the lake, exactly as today. ON refuses the membership write instead, so unretrievable ' +
+      'content never becomes a member and no embedding spend is incurred for it; the caller gets an error ' +
+      'naming the required and actual passage targets. Enforcement applies to NEW memberships only - ' +
+      'files already in a lake are never evicted, and no query is ever blocked on lake health, which is ' +
+      'advisory permanently. Turn this on only after the lake health report shows how many members would ' +
+      'be refused. The lake rung is the one that matters (a lake enforces its own contract); the org and ' +
+      'owner rungs enforce across every lake in that scope at once. A flip is not instantaneous: the ' +
+      'settings cache is per-instance, so it applies immediately on the instance that served the change ' +
+      'and within ~5 min (one cache TTL) everywhere else - an upload that still succeeds right after ' +
+      'turning this on is stale cache, not a broken lever.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakes',
+    // Resolved through scopeForLake, so the rungs mirror PauseLakeConvergence: the contract is the
+    // LAKE's ("the policy I require"), which is why Lake is settable here even though the chunk
+    // policy it grades against is owner-altitude and deliberately is not (see DefaultChunkSize).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
@@ -2432,6 +2489,16 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 9,
   }),
+  FeedbackReceiveEmailNonProd: makeStringSetting({
+    key: 'FeedbackReceiveEmailNonProd',
+    name: 'Non-Production Feedback Email',
+    defaultValue: '',
+    description:
+      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 9.5,
+  }),
   FeedbackKyle: makeStringSetting({
     key: 'FeedbackKyle',
     name: 'Kyle Feedback Email',
@@ -2506,7 +2573,18 @@ export const settingsMap = {
     description: 'The webhook URL for sending feedback to the #bike4mind-feedback Slack channel.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
-    order: 7,
+    order: 6.75,
+    isSensitive: true,
+  }),
+  SlackNonProdFeedbackWebhookUrl: makeStringSetting({
+    key: 'SlackNonProdFeedbackWebhookUrl',
+    name: 'Non-Production Feedback Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 6.8,
     isSensitive: true,
   }),
   SlackEmailAuditWebhookUrl: makeStringSetting({
