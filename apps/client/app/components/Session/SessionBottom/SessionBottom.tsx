@@ -292,7 +292,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   }, [pendingMessageFiles]);
 
   const { data: sessionAgents = [] } = useGetSessionAgents(effectiveSessionId);
-  const { data: availableAgents = [] } = useGetAgents();
+  // Deliberately not defaulted to []: a literal default mints a fresh array on
+  // every render until the query resolves, which would defeat the memo below
+  // during exactly the window where it matters most (first typing on a cold page).
+  const { data: availableAgents } = useGetAgents();
 
   // Get chat history for the current session
   const { data: questsData } = useGetSessionQuests(effectiveSessionId);
@@ -301,12 +304,50 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Combine session agents and workBench agents for display
   const displayAgents = currentSessionId ? sessionAgents : workBenchAgents;
 
-  // Prepare data for LexicalChatInput
-  const lexicalAgents = availableAgents.map(agent => ({
-    id: agent.id,
-    name: agent.name,
-    triggerWords: agent.triggerWords,
-  }));
+  // Prepare data for LexicalChatInput.
+  //
+  // Memoised because the identity travels a long way: it becomes the mention
+  // plugin's `items`, and lexical-beautiful-mentions' lookup effect reacts to
+  // that identity by calling setResults([]) - a fresh array, so React can never
+  // dedupe it as an unchanged value. A new array per render therefore schedules
+  // an un-bailable update on every render, which keeps React's nested-update
+  // chain from ever settling. The chain is what eventually trips "Maximum update
+  // depth exceeded", reported from whichever setState happens to be the 51st
+  // link (in practice lexical's placeholder listener, which runs twice per
+  // editor commit). Unstable `items` also makes the plugin re-register its nine
+  // lexical commands on every render.
+  const lexicalAgents = useMemo(
+    () =>
+      (availableAgents ?? []).map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        triggerWords: agent.triggerWords,
+      })),
+    [availableAgents]
+  );
+
+  // Both handlers are memoised: LexicalChatInput hands them to OnChangePlugin and
+  // SubmitOnEnterPlugin, which key their lexical registrations on the identity, so
+  // inline arrows re-register an editor listener and a command on every render.
+  const handleInputChange = useCallback(
+    (newValue: string) => {
+      setChatInputValue(newValue);
+
+      // Save draft as user types. A new notebook has no id yet, so
+      // draft under the stable new-notebook key - it survives a
+      // full-page reload and is restored by useMessageDraft.
+      setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
+
+      const shouldShowSlashSuggestions =
+        typeof newValue === 'string' &&
+        newValue.startsWith('/') &&
+        !newValue.startsWith('/admin') &&
+        !newValue.includes(' '); // Hide when user has completed the command and added a space
+
+      setShowSlashSuggestions(shouldShowSlashSuggestions);
+    },
+    [setChatInputValue, setDraft, currentSessionId]
+  );
 
   const { rollRandomDice } = useRollDice();
 
@@ -318,6 +359,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     setChatCompletion,
     onAgentsAttached: () => setAgentBenchCollapsed(false),
   });
+
+  const handleEditorSubmit = useCallback(async () => {
+    // Block Enter-to-send while a response is still streaming
+    // or while files are still uploading/scanning.
+    if (shouldShowStopButton || submitting || hasActiveUploads) return;
+    await handleSendClick();
+  }, [shouldShowStopButton, submitting, hasActiveUploads, handleSendClick]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
   const sendPromptCallback = useCallback(
@@ -588,28 +636,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     <LexicalChatInput
                       ref={lexicalInputRef}
                       value={chatInputValue}
-                      onChange={newValue => {
-                        setChatInputValue(newValue);
-
-                        // Save draft as user types. A new notebook has no id yet, so
-                        // draft under the stable new-notebook key - it survives a
-                        // full-page reload and is restored by useMessageDraft.
-                        setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
-
-                        const shouldShowSlashSuggestions =
-                          typeof newValue === 'string' &&
-                          newValue.startsWith('/') &&
-                          !newValue.startsWith('/admin') &&
-                          !newValue.includes(' '); // Hide when user has completed the command and added a space
-
-                        setShowSlashSuggestions(shouldShowSlashSuggestions);
-                      }}
-                      onSubmit={async () => {
-                        // Block Enter-to-send while a response is still streaming
-                        // or while files are still uploading/scanning.
-                        if (shouldShowStopButton || submitting || hasActiveUploads) return;
-                        await handleSendClick();
-                      }}
+                      onChange={handleInputChange}
+                      onSubmit={handleEditorSubmit}
                       onPaste={handlePaste}
                       placeholder={`${t('session.typeYourMessage')}...`}
                       agents={lexicalAgents}

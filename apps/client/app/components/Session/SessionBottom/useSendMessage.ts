@@ -328,7 +328,9 @@ export function useSendMessage({
     }
   };
 
-  const handleSendClick = async (
+  // Body of the send. Always call it through `handleSendClick` below, never
+  // directly: the wrapper is what releases the submit mutex if this throws.
+  const runSendClick = async (
     newPrompt?: string,
     options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
   ): Promise<IChatHistoryItemDocument | undefined> => {
@@ -1126,6 +1128,42 @@ export function useSendMessage({
     setTimeout(() => {
       lexicalInputRef.current?.blur();
     }, 100);
+  };
+
+  /**
+   * Send, with a guaranteed release of the submit mutex on failure.
+   *
+   * `submittingRef` is flipped synchronously at the top of the body and is only
+   * cleared on paths the body reaches, so ANY throw in between latches it true
+   * for the lifetime of the mount - and because the guard at the top is a bare
+   * `return`, every later Enter, click and programmatic send goes silently
+   * nowhere until a reload. (Observed for real: React's "Maximum update depth
+   * exceeded", raised by the `setSubmitting(true)` state write itself while the
+   * composer's editor was in an update storm.)
+   *
+   * The ref is released directly rather than via `setSubmitting`, because the
+   * state write is exactly what can throw again here; the ref is what gates
+   * sending, so it must come first and unconditionally. A successful send is
+   * untouched: no throw, no release, and `submitting` stays true for the
+   * duration of the stream so the Stop affordance keeps rendering.
+   */
+  const handleSendClick = async (
+    newPrompt?: string,
+    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+  ): Promise<IChatHistoryItemDocument | undefined> => {
+    try {
+      return await runSendClick(newPrompt, options);
+    } catch (error) {
+      submittingRef.current = false;
+      try {
+        setSubmittingState(false);
+      } catch {
+        // Swallowed on purpose: if React is the thing failing, the ref release
+        // above has already restored sending, and the original error below is
+        // the one worth surfacing.
+      }
+      throw error;
+    }
   };
 
   // Auto-submit quest goal when websocket is ready (from /quests New Quest modal)

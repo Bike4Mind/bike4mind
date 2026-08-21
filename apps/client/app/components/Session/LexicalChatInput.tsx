@@ -132,6 +132,14 @@ export function $collectMentions(root: LexicalNode): LexicalMention[] {
 export const CHAT_MARKDOWN_TRANSFORMERS = [CODE, ...TEXT_FORMAT_TRANSFORMERS, UNORDERED_LIST, ORDERED_LIST];
 
 /**
+ * Transformers for the live typing shortcuts (lists are handled by our own
+ * plugin instead). Module-level so the identity is stable: MarkdownShortcutPlugin
+ * keys its registration effect on this array, so an inline literal re-registers
+ * every markdown shortcut on every render of the composer.
+ */
+const MARKDOWN_SHORTCUT_TRANSFORMERS = [CODE, INLINE_CODE];
+
+/**
  * Inline text formats that `CHAT_MARKDOWN_TRANSFORMERS` can actually serialize.
  *
  * Deliberately excludes underline / subscript / superscript: `RichTextPlugin`
@@ -573,6 +581,19 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
       [agents]
     );
 
+    // The plugin's lookup effect keys on the `items` identity and answers with
+    // setResults([]) - a fresh array React cannot dedupe - so an inline object
+    // literal here schedules an un-bailable update on every render. That is what
+    // keeps React's nested-update chain alive until something trips "Maximum
+    // update depth exceeded". It also re-registers the plugin's nine lexical
+    // commands each render.
+    const mentionItems = useMemo(() => ({ '@': agentMentionItems }), [agentMentionItems]);
+
+    // Stable identity: EditorRefPlugin keys its effect on this callback.
+    const handleEditorRef = useCallback((ref: LexicalChatInputRef) => {
+      editorRefStore.current = ref;
+    }, []);
+
     // Handle editor changes - export plain text for display/sync
     // Wrapped in useCallback to prevent unnecessary re-renders of OnChangePlugin
     const handleEditorChange = useCallback(
@@ -656,13 +677,11 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
           </PluginErrorBoundary>
 
           {/* Markdown shortcuts for inline code only (lists handled by custom plugin above) */}
-          <MarkdownShortcutPlugin transformers={[CODE, INLINE_CODE]} />
+          <MarkdownShortcutPlugin transformers={MARKDOWN_SHORTCUT_TRANSFORMERS} />
 
           {/* Beautiful Mentions Plugin for @mentions - third-party library, already stable */}
           <BeautifulMentionsPlugin
-            items={{
-              '@': agentMentionItems,
-            }}
+            items={mentionItems}
             menuAnchorClassName="mentions-menu-anchor"
             menuComponent={CustomMentionsMenu}
           />
@@ -679,7 +698,7 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
 
           {/* Editor ref plugin - exposes getMarkdown, insertContent, setSelection, and focus methods */}
           <PluginErrorBoundary pluginName="EditorRefPlugin">
-            <EditorRefPlugin onRef={ref => (editorRefStore.current = ref)} skipSyncRef={skipSyncRef} />
+            <EditorRefPlugin onRef={handleEditorRef} skipSyncRef={skipSyncRef} />
           </PluginErrorBoundary>
         </div>
       </LexicalComposer>
