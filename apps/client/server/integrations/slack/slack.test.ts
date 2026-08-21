@@ -37,6 +37,14 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+// feedbackMessage.ts pulls escapeSlackText from the real @bike4mind/services barrel, which
+// transitively imports @bike4mind/common (creditService etc.) - loading that against the partial
+// @bike4mind/common mock above breaks on missing exports it never needed otherwise. Stub with the
+// same escaping behavior instead; the real implementation is covered directly in feedbackMessage.test.ts.
+vi.mock('@bike4mind/services', () => ({
+  escapeSlackText: (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+}));
+
 vi.mock('@server/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),
   recordFeedbackDeliveryFailure: vi.fn(),
@@ -190,7 +198,7 @@ describe('resolveFeedbackSlackRoute', () => {
 });
 
 describe('postFeedbackToSlack', () => {
-  const args = ['Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', 'No prompt meta'] as const;
+  const args = ['Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', undefined] as const;
 
   beforeEach(() => {
     mocks.config.STAGE = 'production';
@@ -315,15 +323,29 @@ describe('postFeedbackToSlack', () => {
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
-  it('the non-prod stage marker never touches the redacted Prompt Meta section', async () => {
+  it('the non-prod stage marker never touches the Prompt Meta summary, and no owner-only field leaks through', async () => {
     mocks.config.STAGE = 'pr-1234';
     mocks.getSettingsMap.mockResolvedValue({
       SlackNonProdFeedbackWebhookUrl: 'https://hooks.slack.com/services/nonprod',
     });
-    await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', 'REDACTED_BLOB');
+    // A caller that failed to redact still can't leak returnValue through the summary -
+    // buildPromptMetaSummary's read allowlist doesn't read that field at all.
+    await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', {
+      functionCalls: [{ name: 'web_search', returnValue: 'PRIVATE TOOL OUTPUT' } as { name?: string }],
+    });
     const [, body] = mocks.post.mock.calls[0];
     const promptMetaSection = body.text.split('*Prompt Meta:*')[1];
-    expect(promptMetaSection).toContain('REDACTED_BLOB');
+    expect(promptMetaSection).toContain('web_search');
+    expect(promptMetaSection).not.toContain('PRIVATE TOOL OUTPUT');
     expect(promptMetaSection).not.toContain('[pr-1234]');
+  });
+
+  it('escapes Slack mrkdwn special characters in every user-influenced field, not just content', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    const injected = '<https://evil.example/|Open record>';
+    await postFeedbackToSlack(injected, injected, injected, injected, injected, injected, undefined);
+    const [, body] = mocks.post.mock.calls[0];
+    expect(body.text).not.toContain(injected);
+    expect(body.text).toContain('&lt;https://evil.example/|Open record&gt;');
   });
 });

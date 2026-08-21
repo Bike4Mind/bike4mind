@@ -188,7 +188,7 @@ const handler = baseApi()
         newFeedback.userEmail ?? '',
         newFeedback.userId,
         content,
-        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+        promptMetaForExternalEgress
       );
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
