@@ -1,0 +1,302 @@
+import {
+  ApiKeyType,
+  AudioGenerationToolCall,
+  extensionFromMimeType,
+  KnowledgeType,
+  SOUND_EFFECTS_MAX_INPUT_CHARS,
+  SoundGenerationVendor,
+  TTS_MAX_INPUT_CHARS,
+  VOICE_VENDOR_SUPPORTED_FORMATS,
+  VoiceGenerationVendor,
+  VoiceOutputFormat,
+} from '@bike4mind/common';
+import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
+import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
+import { getEffectiveApiKey } from '../../../../apiKeyService';
+import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
+import { ToolContext, ToolDefinition } from '../../base/types';
+
+const DEFAULT_TTS_PROVIDER: VoiceGenerationVendor = 'openai';
+// Sound effects have a single provider today; the vendor factory (aiSoundService)
+// is open for more.
+const SFX_PROVIDER: SoundGenerationVendor = 'elevenlabs';
+
+/** Generic, non-leaking message when a required provider key is not configured. */
+const UNAVAILABLE_MESSAGE = 'Error: Audio generation is currently unavailable. Please try again later.';
+
+const ttsApiKeyType = (provider: VoiceGenerationVendor): ApiKeyType =>
+  provider === 'elevenlabs' ? ApiKeyType.elevenlabs : ApiKeyType.openai;
+
+// Defensive shape check for the model-supplied tool arguments. `kind` stays a loose string
+// (the toolFn treats anything that is not 'sound_effect' as speech); this only guards the
+// types so a malformed call fails cleanly instead of casting `unknown` and reading garbage.
+// `durationSeconds` carries the same 0.5-30s bound the direct /api/ai/sound-effects endpoint
+// enforces (soundGeneration.ts): the model's own argument wins over audioConfig at resolution
+// time, so bounding it here is what actually caps SFX cost - an out-of-range value fails the
+// parse and returns before any paid provider call.
+const audioArgsSchema = z.object({
+  kind: z.string().optional(),
+  text: z.string().optional(),
+  durationSeconds: z.number().min(0.5).max(30).optional(),
+});
+
+/**
+ * In-chat / agent TTS + sound-effects generation, modeled on image_generation and
+ * music_generation. A second entry point (not a second config) to the direct-action
+ * Generate Audio UI from #1055/PR #1183: it consumes the same `useAudioGenSettings`
+ * selections (threaded in as `audioConfig`), the same provider services, and the same
+ * per-character (speech) / per-duration (sound effect) cost model as the direct endpoints.
+ *
+ * The model picks the `kind` (speech vs sound effect) and supplies the text; provider,
+ * voice, format and duration default from `audioConfig` so the user never has to pick an
+ * "audio model." Billing settles on delivery (onFinish) - the failure paths return before
+ * then, so an undelivered clip is never billed. The tool is host-agnostic: it just emits
+ * onStart/onFinish, and the host decides how to charge - classic chat reserves into
+ * toolCreditsMap for end-of-quest settlement (ToolBuilder + ChatCompletionProcess), agent
+ * mode folds the media USD into its per-iteration bill (see estimateGeneratedMediaUsd). The clip is
+ * uploaded to the generated-content bucket and pushed onto `quest.images` (the client
+ * splits by extension so audio renders as an inline player), with a browsable AUDIO copy
+ * kept in the Knowledge Base (best-effort).
+ */
+export const audioGenerationTool: ToolDefinition = {
+  name: 'audio_generation',
+  implementation: (context, config: AudioGenerationToolCall) => ({
+    toolFn: async val => {
+      const audioConfig = config ?? {};
+      const parsedArgs = audioArgsSchema.safeParse(val);
+      if (!parsedArgs.success) {
+        return 'Error: audio_generation received invalid arguments.';
+      }
+      const { kind, text, durationSeconds: toolDurationSeconds } = parsedArgs.data;
+
+      if (!text || !text.trim()) {
+        return 'Error: audio_generation requires non-empty text.';
+      }
+
+      // Anything that is not explicitly a sound effect is speech (the common case),
+      // so a caller that omits `kind` still gets a sensible result.
+      const isSoundEffect = kind === 'sound_effect';
+
+      if (isSoundEffect) {
+        // Reject over-length input before any paid provider call, matching the bound the
+        // direct /api/ai/sound-effects endpoint enforces (soundGeneration.ts). A crafted
+        // caller could otherwise round-trip an oversized prompt to the vendor.
+        if (text.length > SOUND_EFFECTS_MAX_INPUT_CHARS) {
+          return `Error: sound-effect description too long (max ${SOUND_EFFECTS_MAX_INPUT_CHARS} characters).`;
+        }
+
+        // Resolve the provider key BEFORE the affordability gate so a keyless, low-credit
+        // caller learns the actionable problem (missing key) instead of "insufficient credits".
+        const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.elevenlabs }, { db: context.db });
+        if (!apiKey) {
+          context.logger.error(
+            '[audio_generation] ElevenLabs API key is not configured; refusing to dispatch sound effect'
+          );
+          // serverConfig reports the tool available whenever EITHER key resolves, so an
+          // OpenAI-only user can reach this branch. Speech still works for them, so give the
+          // model an actionable message (it can retry with kind="speech") instead of the
+          // generic UNAVAILABLE_MESSAGE, which reads as "nothing works, try later".
+          return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
+        }
+
+        const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
+
+        // Affordability gate only (onStart): the host throws insufficient_credits here before
+        // the paid provider call. The charge itself is reserved in onFinish so a failed
+        // generation is never billed.
+        await context.onStart?.('audio_generation', {
+          kind: 'sound_effect',
+          provider: SFX_PROVIDER,
+          durationSeconds,
+        });
+
+        await context.statusUpdate({}, 'Generating sound effect...');
+
+        let audio: Buffer;
+        let contentType: string;
+        try {
+          ({ audio, contentType } = await aiSoundService(SFX_PROVIDER, apiKey, context.logger).generate(text, {
+            durationSeconds,
+            promptInfluence: audioConfig.promptInfluence,
+          }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          context.logger.error(`[audio_generation] sound-effect generation failed: ${message}`);
+          // Return a generic message, not the raw vendor error: provider strings can echo
+          // API-key hints or upstream URLs into the assistant context. Matches the direct
+          // /api/ai/sound-effects sanitization; the detail stays in the log above.
+          return `Error: sound-effect request rejected by the ${SFX_PROVIDER} provider.`;
+        }
+
+        const storedPath = await persistAndUpload(context, audio, contentType, 'sound-effect');
+
+        await context.onFinish?.('audio_generation', {
+          kind: 'sound_effect',
+          provider: SFX_PROVIDER,
+          durationSeconds,
+          paths: [storedPath],
+        });
+        await context.statusUpdate({ images: [storedPath] });
+        return 'Successfully generated sound effect';
+      }
+
+      // Speech (text-to-speech). serverConfig gates audio_generation on OpenAI OR ElevenLabs,
+      // so a user can have only one key while their saved ttsProvider names the other (e.g. an
+      // ElevenLabs-only user whose default is still openai). Fall back to whichever provider the
+      // user actually has a key for instead of hard-failing. Voices are provider-specific, so a
+      // fallback drops the configured voice and lets the fallback provider use its default.
+      let provider = audioConfig.ttsProvider ?? DEFAULT_TTS_PROVIDER;
+      let voice = audioConfig.voice || undefined;
+      // Chat's output contract is inline playback, and raw PCM has no container <audio> can
+      // decode (see the inline-audio regex in generatedMedia.ts), so coerce a pcm setting to
+      // mp3. The direct Generate Audio UI keeps pcm because it offers a download affordance;
+      // chat does not.
+      let format: VoiceOutputFormat | undefined = audioConfig.format === 'pcm' ? 'mp3' : audioConfig.format;
+      let apiKey = await getEffectiveApiKey(context.userId, { type: ttsApiKeyType(provider) }, { db: context.db });
+      if (!apiKey) {
+        const fallbackProvider: VoiceGenerationVendor = provider === 'elevenlabs' ? 'openai' : 'elevenlabs';
+        const fallbackKey = await getEffectiveApiKey(
+          context.userId,
+          { type: ttsApiKeyType(fallbackProvider) },
+          { db: context.db }
+        );
+        if (!fallbackKey) {
+          context.logger.error('[audio_generation] no TTS provider key is configured; refusing to dispatch');
+          return UNAVAILABLE_MESSAGE;
+        }
+        context.logger.warn(
+          `[audio_generation] ${provider} key not configured; falling back to ${fallbackProvider} for speech (provider default voice)`
+        );
+        provider = fallbackProvider;
+        voice = undefined;
+        // Format is provider-specific too (ElevenLabs maps a subset of OpenAI's set and throws
+        // locally on an unmapped one), so drop it if the fallback provider can't produce it and
+        // let that provider use its default - otherwise the very user this fallback rescues
+        // (e.g. openai-default + format 'flac' + ElevenLabs-only key) hard-fails every call.
+        format = format && VOICE_VENDOR_SUPPORTED_FORMATS[fallbackProvider].includes(format) ? format : undefined;
+        apiKey = fallbackKey;
+      }
+
+      // Reject over-length input before the paid call, per the resolved provider's cap.
+      if (text.length > TTS_MAX_INPUT_CHARS[provider]) {
+        return `Error: text too long for ${provider} speech (max ${TTS_MAX_INPUT_CHARS[provider]} characters).`;
+      }
+
+      // Gate on the input character count with a conservative (highest-rate) estimate:
+      // the resolved model isn't known until after synthesis, so onFinish settles the
+      // exact charge from the provider result. Over-estimating here fails toward the
+      // safe side (never a free call).
+      await context.onStart?.('audio_generation', {
+        kind: 'speech',
+        provider,
+        characters: text.length,
+      });
+
+      await context.statusUpdate({}, 'Generating speech...');
+
+      let audio: Buffer;
+      let contentType: string;
+      let resolvedModel: string;
+      let characters: number;
+      try {
+        ({
+          audio,
+          contentType,
+          model: resolvedModel,
+          characters,
+        } = await aiVoiceService(provider, apiKey, context.logger).synthesize(text, {
+          voice,
+          format,
+          language: provider === 'elevenlabs' && audioConfig.languageCode ? audioConfig.languageCode : undefined,
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        context.logger.error(`[audio_generation] speech generation failed: ${message}`);
+        // Generic message, not the raw vendor error - see the sound-effect branch above.
+        return `Error: TTS request rejected by the ${provider} provider.`;
+      }
+
+      const storedPath = await persistAndUpload(context, audio, contentType, 'speech');
+
+      // Settle on the ACTUAL billed model + character count so the tool charge matches
+      // the direct /api/ai/tts endpoint exactly (deductTtsCredits).
+      await context.onFinish?.('audio_generation', {
+        kind: 'speech',
+        provider,
+        model: resolvedModel,
+        characters,
+        paths: [storedPath],
+      });
+      await context.statusUpdate({ images: [storedPath] });
+      return 'Successfully generated speech';
+    },
+    toolSchema: {
+      name: 'audio_generation',
+      description:
+        '🔊 AUDIO GENERATION TOOL: Generate spoken audio (text-to-speech) or a short sound effect from text. Use kind="speech" when the user wants something read aloud / narrated / voiced ("say this", "read this out loud", "narrate", "voice this"). Use kind="sound_effect" for a short non-speech sound described in words ("a dog barking", "rain on a tin roof", "a whoosh"); sound effects require an ElevenLabs API key (speech also works with OpenAI). Do NOT use this for music or songs (that is music_generation). Voice, provider and format come from the user\'s saved audio settings; just pass the text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['speech', 'sound_effect'],
+            description: 'speech = read the text aloud (TTS); sound_effect = generate the described sound.',
+          },
+          text: {
+            type: 'string',
+            description:
+              'For speech: the exact words to speak. For a sound effect: a short description of the sound to generate.',
+          },
+          durationSeconds: {
+            type: 'number',
+            description:
+              'Sound-effect length in seconds (0.5-30). Ignored for speech; omit to let the provider choose.',
+            minimum: 0.5,
+            maximum: 30,
+          },
+        },
+        additionalProperties: false,
+        required: ['kind', 'text'],
+      },
+    },
+  }),
+};
+
+/**
+ * Upload the clip to the generated-content bucket (CDN-served, rides quest.images for
+ * inline playback) and keep a browsable AUDIO copy in the Knowledge Base (best-effort).
+ * Returns the generated-content storage path.
+ */
+async function persistAndUpload(
+  context: ToolContext,
+  audio: Buffer,
+  contentType: string,
+  source: 'speech' | 'sound-effect'
+): Promise<string> {
+  const ext = extensionFromMimeType(contentType) || 'mp3';
+  const filename = `${uuidv4()}.${ext}`;
+
+  // Pass ContentType so S3 serves audio/* and the browser <audio> element can play it.
+  // Always kept - this is what the inline player streams.
+  const storedPath = await context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
+
+  // Keep a browsable AUDIO copy in the Knowledge Base, honoring the user's
+  // saveGeneratedAudio preference - the same gate the direct /api/ai/tts and
+  // sound-effects endpoints apply (defaults on). AUDIO type so the file is never
+  // chunked/vectorized/attached to a completion.
+  if (context.user?.preferences?.saveGeneratedAudio ?? true) {
+    await persistGeneratedFileAsFabFile(context, {
+      fileName: `generated-${source}-${filename.slice(0, 8)}.${ext}`,
+      mimeType: contentType,
+      content: audio,
+      type: KnowledgeType.AUDIO,
+      tags: [
+        { name: 'generated', strength: 1 },
+        { name: source, strength: 1 },
+      ],
+    });
+  }
+
+  return storedPath;
+}

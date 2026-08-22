@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { KnowledgeType } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
-import { FabFile, fabFileRepository, fileTagRepository } from '@bike4mind/database';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import { DataLakeModel, dataLakeRepository, FabFile, fabFileRepository, fileTagRepository } from '@bike4mind/database';
 import { tagService } from '@bike4mind/services';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * End-to-end guard that deleting a tag leaves the three surfaces AGREEING: the tag documents, the
@@ -22,8 +26,11 @@ let mongoServer: MongoMemoryServer;
 const USER = 'lifecycle-user';
 const OTHER_USER = 'someone-else';
 const SCOPE = { userGroups: [], dataLakeTags: [] };
+// Models GET /api/files/tags/counts's WORKSPACES half specifically (see countOf below) - listFileTags
+// (SCOPE, unnarrowed) and the WORKSPACES aggregate no longer share one scope, so this test needs both.
+const WORKSPACE_SCOPE = { ...SCOPE, excludePersonalShares: true };
 
-const db = { tags: fileTagRepository, fabFiles: fabFileRepository };
+const db = { tags: fileTagRepository, fabFiles: fabFileRepository, dataLakes: dataLakeRepository };
 
 // The Tag model is registered by importing @bike4mind/database but is not exported from it.
 const TagModel = () => mongoose.model('Tag');
@@ -31,13 +38,13 @@ const TagModel = () => mongoose.model('Tag');
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 afterEach(async () => {
-  await Promise.all([FabFile.deleteMany({}), TagModel().deleteMany({})]);
+  await Promise.all([FabFile.deleteMany({}), TagModel().deleteMany({}), DataLakeModel.deleteMany({})]);
 });
 
 const seedFile = async (tags: string[], overrides: Record<string, unknown> = {}) => {
@@ -46,6 +53,9 @@ const seedFile = async (tags: string[], overrides: Record<string, unknown> = {})
     fileName: 'seed.txt',
     type: KnowledgeType.FILE,
     mimeType: 'text/plain',
+    // The schema defaults to 'pending', which computeDataLakeStats excludes - leaving it at the
+    // default would make every prefix-arm recompute assertion below pass unconditionally.
+    status: 'complete',
     tags: tags.map(name => ({ name, strength: 1 })),
     ...overrides,
   });
@@ -58,7 +68,7 @@ const rawTagsOf = async (id: string): Promise<string[]> => {
 };
 
 const countOf = async (tag: string): Promise<number> => {
-  const counts = await fabFileRepository.countFilesByTagForUser(USER, SCOPE);
+  const counts = await fabFileRepository.countFilesByTagForUser(USER, WORKSPACE_SCOPE);
   return counts.find(c => c.tag === tag)?.count ?? 0;
 };
 
@@ -122,5 +132,28 @@ describe('tagService.remove keeps tag documents, file tags and the count aggrega
     );
     expect(await countOf('invoices')).toBe(0);
     expect(await countOf('receipts')).toBe(2);
-  }, 30000);
+  });
+});
+
+// Against REAL Mongo, not a mock: proves the recompute reads the aggregate AFTER the bulk strip
+// has actually persisted, not a stale in-memory count.
+describe('tagService.remove recomputes a lake whose prefix-arm signal it just stripped', () => {
+  it('drops fileCount to 0 once the file loses its only prefix-arm tag', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Lake',
+      slug: 'lake',
+      fileTagPrefix: 'lk:',
+      datalakeTag: 'datalake:lake',
+      createdByUserId: USER,
+      fileCount: 1,
+      totalSizeBytes: 10,
+    });
+    const invoices = await fileTagRepository.findOrCreateByNameAndUserId('lk:invoices', USER, {});
+    await seedFile(['lk:invoices']);
+
+    await tagService.remove(USER, { id: invoices.id }, { db });
+
+    const persisted = await DataLakeModel.findById(lake.id);
+    expect(persisted?.fileCount).toBe(0);
+  });
 });

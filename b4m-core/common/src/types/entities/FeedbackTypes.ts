@@ -27,3 +27,39 @@ export interface IFeedback {
 }
 
 export interface IFeedbackDocument extends IFeedback, IMongoDocument {}
+
+/**
+ * Delivery-outcome types for the feedback notification fan-out (Slack + email). These describe
+ * whether a submitted feedback record actually reached a human, independent of FeedbackStatus
+ * above (which is an admin-triage workflow state and has nothing to do with delivery).
+ */
+export type FeedbackDeliveryChannel = 'slack' | 'email';
+
+/** 'production' is the only real-production signal (Resource.App.stage === 'production'); every other stage is 'nonprod'. */
+export type FeedbackDeliveryStageClass = 'production' | 'nonprod';
+
+/**
+ * Binary production/non-production bucket for a raw stage string. Pure so callers that need to
+ * unit-test stage-dependent routing/dimensioning can pass an arbitrary stage without mocking the
+ * SST-secret-loading module that owns the real deploy stage. Single source of truth for callers
+ * that used to each repeat `stage === 'production'` themselves.
+ */
+export function classifyStage(stage: string | undefined): FeedbackDeliveryStageClass {
+  return stage === 'production' ? 'production' : 'nonprod';
+}
+
+export type FeedbackDeliverySkipReason = 'disabled' | 'no_recipients' | 'unconfigured_webhook' | 'nonprod_unconfigured';
+
+export interface FeedbackChannelDelivery {
+  outcome: 'delivered' | 'skipped' | 'failed';
+  reason?: FeedbackDeliverySkipReason | 'error';
+}
+
+export interface FeedbackDeliveryResult {
+  /** True iff at least one channel actually fired - not merely attempted. */
+  delivered: boolean;
+  channels: Record<FeedbackDeliveryChannel, FeedbackChannelDelivery>;
+}
+
+/** POST /api/feedback response: the saved document plus how far delivery got. */
+export type CreateFeedbackResponse = IFeedbackDocument & { delivery?: FeedbackDeliveryResult };

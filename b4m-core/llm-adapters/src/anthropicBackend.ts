@@ -18,6 +18,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -32,10 +33,21 @@ import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
+import { systemContentToText } from './systemContent';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
+import {
+  buildThinkingParams,
+  resolveOutputMaxTokens,
+  THINKING_ANSWER_HEADROOM_TOKENS,
+  type ThinkingConfig,
+} from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
+import {
+  createDegenerateStreamGuard,
+  DEGENERATE_STREAM_STOP_REASON,
+  type DegenerateStreamVerdict,
+} from './degenerateStreamGuard';
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
   Partial<ThinkingConfig> & {
@@ -72,6 +84,13 @@ const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models
  * Floored to a round number for headroom against that formula being retuned.
  */
 const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
+
+/**
+ * Output budget used when the caller names none. Only applies to models that do NOT spend
+ * reasoning inside the output budget - resolveOutputMaxTokens sizes the rest for the model,
+ * so this value stays the historical one and non-reasoning behavior is unchanged.
+ */
+const DEFAULT_ANTHROPIC_MAX_TOKENS = 4096;
 
 /**
  * Accumulated multi-turn cache token total. Undefined when zero so turns
@@ -681,7 +700,7 @@ export class AnthropicBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     cb: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -810,7 +829,11 @@ export class AnthropicBackend implements ICompletionBackend {
       const systemMessages = messages.filter(m => m.role === 'system');
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
       for (const sm of systemMessages) {
-        const text = typeof sm.content === 'string' ? sm.content : JSON.stringify(sm.content);
+        const text = systemContentToText(sm.content);
+        // Anthropic rejects a text block with no non-whitespace content, and the public
+        // completions API accepts an unvalidated `content` array alongside `cache: true`
+        // (CompletionMessageSchema), so an empty one is reachable rather than theoretical.
+        if (text.trim() === '') continue;
         if (sm.cache === true) {
           blocks.push({ type: 'text', text, cache_control: { type: 'ephemeral' } });
         } else {
@@ -853,7 +876,19 @@ export class AnthropicBackend implements ICompletionBackend {
       this.logger.debug(
         `[Pre-API #6181] Sending ${filteredMessages.length} messages with ${toolUseCount} tool_use and ${toolResultCount} tool_result blocks`
       );
-      if (toolUseCount !== toolResultCount) {
+      // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool blocks from
+      // a PRIOR turn that had tools, even when THIS turn offers none (e.g. toolMode switched off
+      // between turns) - Anthropic rejects any tool_use/tool_result block when `tools` is absent
+      // from the request regardless of pairing, and a balanced count means the mismatch repair
+      // below never fires. Strip proactively instead of relying on the post-400 retry in
+      // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
+      if (!options.tools?.length) {
+        this.logger.warn(
+          `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}) but no tools offered this turn. Stripping all tool blocks.`
+        );
+        filteredMessages = stripAllToolBlocks(filteredMessages, this.logger);
+        ({ useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages));
+      } else if (toolUseCount !== toolResultCount) {
         this.logger.warn(
           `[Pre-API #6181] Tool block mismatch! tool_use: ${toolUseCount}, tool_result: ${toolResultCount}. Attempting auto-repair...`
         );
@@ -872,9 +907,30 @@ export class AnthropicBackend implements ICompletionBackend {
       }
     }
 
+    // Resolved here rather than at the thinking block below, because max_tokens needs it:
+    // an adaptive model reasons inside max_tokens on EVERY turn, not only when a caller
+    // explicitly enables thinking, so a flat fallback starved every in-process caller that
+    // names no budget (agent mode, subagents) and truncated the visible answer.
+    const currentModelInfo = this.modelRecordFor(model);
+
     const apiParams: ExtendedMessageCreateParams = {
       model,
-      max_tokens: options.maxTokens ?? 4096,
+      // Non-reasoning models keep the historical 4096 exactly; only models that spend
+      // reasoning inside the output budget are sized up. Safe against the SDK's
+      // non-streaming duration limit because the ANTHROPIC_NONSTREAMING_MAX_TOKENS clamp
+      // below still applies to the resolved value.
+      max_tokens: currentModelInfo
+        ? resolveOutputMaxTokens({
+            requested: options.maxTokens,
+            fallback: DEFAULT_ANTHROPIC_MAX_TOKENS,
+            modelInfo: currentModelInfo,
+            // Passed through as-is, matching cliCompletions: the declared `number` type is a
+            // claim about catalog data, not a guarantee, and resolveOutputMaxTokens absorbs
+            // an absent cap so neither call site has to invent its own fallback. See that
+            // call site for why toModelInfo's derived substitution is the actual gap.
+            modelMaxOutputTokens: currentModelInfo.max_tokens,
+          })
+        : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),
       messages: filteredMessages.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         // Preserve the content structure - it can be string or MessageContentObject[].
@@ -954,8 +1010,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // Add thinking parameters for models that support it. A catalog-only model
     // brings its own record, so a new Claude gets the right thinking shape
     // (buildThinkingParams reads thinkingStyle) instead of none at all.
-    const currentModelInfo = this.modelRecordFor(model);
-
+    // `currentModelInfo` is resolved above, where max_tokens needs it too.
     if (currentModelInfo?.can_think) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic
       // completion options; view them through a typed lens rather than `any`.
@@ -1047,6 +1102,14 @@ export class AnthropicBackend implements ICompletionBackend {
     // Setup the actual API call with API-specific options
     try {
       const func: { name?: string; id?: string; parameters?: string }[] = [];
+      // Set when the degeneration guard aborts this turn's stream. Declared HERE,
+      // outside the streaming promise, because the tool-execution branch below is
+      // what must honour it: a turn that had already collected a tool call before
+      // degenerating would otherwise execute those tools and recurse, so the run
+      // would continue after the abort - overwriting the stop reason and replaying
+      // stale assistant content. The in-promise `degenerateVerdict` is invisible
+      // from there.
+      let degeneratedThisTurn = false;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
@@ -1097,6 +1160,12 @@ export class AnthropicBackend implements ICompletionBackend {
           // Track idle timeout state at a scope accessible to catch block
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
+
+          // Degeneration state, also read from the catch block. The idle timer
+          // cannot cover this case - it resets on every stream event, and a
+          // repetition loop emits events continuously - so a stream that has
+          // stopped making progress would otherwise run to the token ceiling.
+          let degenerateVerdict: DegenerateStreamVerdict | undefined;
 
           (async () => {
             // Acquire semaphore slot before the API call. Released in the finally
@@ -1162,6 +1231,34 @@ export class AnthropicBackend implements ICompletionBackend {
               // input_json_delta events on these indices stream as text content
               // rather than being collected as a tool call.
               const responseFormatToolIndices = new Set<number>();
+
+              // Degeneration guard: watches emitted text for a stream that has
+              // stopped making progress and is just repeating itself. Aborts the
+              // same way the idle timeout does, but the abort path RESOLVES with
+              // the clean prefix rather than rejecting - the useful part of the
+              // answer is normally written before the loop starts, and throwing
+              // it away would be a worse outcome than a short reply.
+              const degenerateGuard = createDegenerateStreamGuard(options._internal?.degenerateStreamGuard);
+
+              /** Feed emitted text to the guard; abort the stream on the first verdict. */
+              const checkDegenerate = (emitted: string | undefined) => {
+                if (!emitted || degenerateVerdict) return;
+                const verdict = degenerateGuard.push(emitted);
+                if (!verdict) return;
+                degenerateVerdict = verdict;
+                degeneratedThisTurn = true;
+                // WARN, not error: this is a benign, handled abort that returns
+                // partial content - error severity would page LiveOps.
+                this.logger.warn('[AnthropicBackend] Stream aborted - output degenerated into repetition', {
+                  model,
+                  periodChars: verdict.periodChars,
+                  repeats: verdict.repeats,
+                  runChars: verdict.runChars,
+                  charsBeforeAbort: verdict.totalChars,
+                  unit: verdict.unit,
+                });
+                (stream as { controller?: AbortController }).controller?.abort?.();
+              };
 
               // Idle timeout setup for detecting streaming hangs
               // Feature flag controlled via options._internal.enableIdleTimeout
@@ -1260,6 +1357,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
+                      checkDegenerate(event.delta.text);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
                       // response_format=json_schema: stream the tool's
@@ -1270,6 +1368,7 @@ export class AnthropicBackend implements ICompletionBackend {
                         const partial = event.delta.partial_json || '';
                         if (partial) {
                           streamedText[event.index] = partial;
+                          checkDegenerate(partial);
                           await cb(streamedText, {
                             toolsUsed,
                             responseFormatMode: 'tool_use',
@@ -1280,6 +1379,13 @@ export class AnthropicBackend implements ICompletionBackend {
                         if (func[event.index]) {
                           func[event.index].parameters += event.delta.partial_json || '';
                         }
+                        // Tool ARGUMENTS count against the same output ceiling, so a
+                        // model that degenerates while writing a tool call would
+                        // otherwise run to the ceiling unwatched. Feed these deltas
+                        // too; the abort then also skips tool execution (see
+                        // `degeneratedThisTurn`), since half-written arguments from a
+                        // cut-off stream must not be executed.
+                        checkDegenerate(event.delta.partial_json || '');
                         // Also accumulate in collected content
                         if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                           // We'll parse the complete JSON at the end
@@ -1344,6 +1450,31 @@ export class AnthropicBackend implements ICompletionBackend {
               } finally {
                 // CRITICAL: Always cleanup idle timer to prevent memory leaks
                 if (idleTimer) clearTimeout(idleTimer);
+              }
+
+              // Same shape as the idle-timeout check below: the guard aborted, but the
+              // stream ended naturally instead of throwing AbortError, so the catch
+              // block never ran. Emit the degeneration stop reason and stop here
+              // rather than falling through to the clean terminal path, which would
+              // report this turn as a normal finish.
+              if (degenerateVerdict) {
+                this.logger.warn('[AnthropicBackend] Stream ended after degeneration abort - reporting partial reply', {
+                  model,
+                  charsBeforeAbort: degenerateVerdict.totalChars,
+                });
+                await cb([], {
+                  toolsUsed,
+                  stopReason: DEGENERATE_STREAM_STOP_REASON,
+                  // Forward the accumulated usage the clean terminal path forwards.
+                  // Omitting it drops settlement to the local tokenizer estimate, and a
+                  // degenerate turn is the worst case for an estimate: real output is large.
+                  inputTokens:
+                    accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
+                  outputTokens:
+                    accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                });
+                resolve();
+                return;
               }
 
               // If idle timeout was triggered but the stream ended naturally (e.g., HTTP connection dropped
@@ -1501,6 +1632,32 @@ export class AnthropicBackend implements ICompletionBackend {
                       `Anthropic API request timeout after ${requestTimeoutMs}ms - no streaming response received`
                     )
                   );
+                } else if (degenerateVerdict) {
+                  // Our own abort after the output degenerated into repetition.
+                  // Resolve rather than reject: the text emitted before the loop
+                  // started has already reached the caller through `cb` and is
+                  // normally the useful answer, so throwing an error here would
+                  // discard a good partial reply. Emit a terminal cb first (the
+                  // same shape as the clean path) so the caller learns WHY the
+                  // stream ended; DEGENERATE_STREAM_STOP_REASON is deliberately
+                  // outside CLEAN_FINISH_REASONS, so the reply renders with a
+                  // truncation notice rather than as a normal completion.
+                  this.logger.warn('[AnthropicBackend] Returning partial reply after degeneration abort', {
+                    model,
+                    charsBeforeAbort: degenerateVerdict.totalChars,
+                    repeats: degenerateVerdict.repeats,
+                  });
+                  await cb([], {
+                    toolsUsed,
+                    stopReason: DEGENERATE_STREAM_STOP_REASON,
+                    // No usage forwarded here: this is the AbortError path, so the
+                    // terminal message_delta that carries provider usage never arrived
+                    // and `usageInfo` is out of scope. The post-loop site above (stream
+                    // ended without throwing) does forward it.
+                    inputTokens: accumInputTokens,
+                    outputTokens: accumOutputTokens,
+                  });
+                  resolve();
                 } else if (isIdleTimeout) {
                   // Idle timeout - the stream was aborted due to no events being received
                   // The abort causes AbortError to be thrown, which we catch here.
@@ -1530,8 +1687,13 @@ export class AnthropicBackend implements ICompletionBackend {
           })();
         });
 
-        // If there are tool calls, execute them and continue the conversation
-        if (func.some(f => f && f.name)) {
+        // If there are tool calls, execute them and continue the conversation.
+        // Skipped entirely when the guard aborted this turn: the point of the abort
+        // is that the run STOPS, and any tool call collected before the loop began
+        // is from a stream we deliberately cut off, so executing it and recursing
+        // would resume the run, overwrite the degeneration stop reason, and replay
+        // stale assistant content.
+        if (!degeneratedThisTurn && func.some(f => f && f.name)) {
           // Track tool usage first (including ID for history reconstruction)
           const toolCallNames = func.filter(t => t?.name).map(t => t.name);
           this.logger.info('[Tool Execution] Model requested tool calls', {
@@ -1590,6 +1752,14 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Normalize the toolsUsed entry so callers can safely JSON.parse arguments
                 const entry = toolsUsed.find(t => t.name === name && t.id === id);
                 if (entry) entry.arguments = '{}';
+                // Mirrors the non-streaming site below: stamp toolsUsed too, so a call that
+                // never ran (not merely failed) still shows as such in promptMeta.
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool parameters were corrupted due to a stream interruption. Please retry.',
+                  false
+                );
                 continue;
               }
 
@@ -1678,6 +1848,10 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
                 });
 
+                // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
+                // toolsUsed was pushed with, so it's what correlates back to that entry.
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -1687,16 +1861,19 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Re-throw permission denials; inject error result for all others
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
                 this.logger.error('[Tool Execution] Tool failed', {
                   model,
                   toolName: outcome.name,
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: errorMessage,
                 });
 
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -1936,7 +2113,16 @@ export class AnthropicBackend implements ICompletionBackend {
                 { id, name, model, isMcpTool, streaming: false },
                 messages
               );
-              if (!parsedParams) continue;
+              if (!parsedParams) {
+                // Non-streaming twin of the streaming site above.
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool parameters were corrupted due to a stream interruption. Please retry.',
+                  false
+                );
+                continue;
+              }
 
               resolvedTools.push({ id: id ?? '', name, parameters, parsedParams, toolFn, isMcpTool });
             }
@@ -2023,6 +2209,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb(results, { toolsUsed });
                 });
 
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -2031,16 +2219,19 @@ export class AnthropicBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
                 this.logger.error('[Tool Execution] Tool failed (non-streaming)', {
                   model,
                   toolName: outcome.name,
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: errorMessage,
                 });
 
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -2435,7 +2626,12 @@ export class AnthropicBackend implements ICompletionBackend {
     const systemMessages = messages.filter(m => m.role === 'system');
     if (systemMessages.length === 0) return undefined;
 
-    return systemMessages.map(m => m.content).join('\n');
+    // Array-valued content must go through systemContentToText: a bare join coerces
+    // each block with String(), producing "[object Object]" in the prompt.
+    return systemMessages
+      .map(m => systemContentToText(m.content))
+      .filter(text => text.trim() !== '')
+      .join('\n');
   }
 
   private isToolUseEvent(event: unknown): event is ToolUseEvent {

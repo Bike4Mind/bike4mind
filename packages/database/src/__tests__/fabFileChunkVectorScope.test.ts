@@ -45,6 +45,56 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
   });
 });
 
+// Per-chunk embeddingModel, not FabFile.embeddingModel, is the source of truth here: a
+// re-embedded file's chunks can span more than one model (see IFabFileChunk.embeddingModel), and
+// a per-model retrieval index removal needs every model actually in use to reach every index.
+describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileIds', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('returns every distinct model across the requested files, deduped', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'b', tokenCount: 1, embeddingModel: 'model-b' },
+      { fabFileId: 'f2', text: 'c', tokenCount: 1, embeddingModel: 'model-a' },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds(['f1', 'f2']);
+
+    expect(models.sort()).toEqual(['model-a', 'model-b']);
+  });
+
+  it('excludes chunks outside the requested file ids', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'in-scope', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'out-of-scope', text: 'b', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds(['in-scope']);
+
+    expect(models).toEqual(['model-a']);
+  });
+
+  it('excludes chunks with no embeddingModel yet', async () => {
+    await FabFileChunk.create([{ fabFileId: 'f1', text: 'not vectorized', tokenCount: 1 }]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds(['f1']);
+
+    expect(models).toEqual([]);
+  });
+
+  it('an empty id list returns nothing without querying', async () => {
+    await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' }]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileIds([]);
+
+    expect(models).toEqual([]);
+  });
+});
+
 /**
  * The keyset contract the streaming ranker depends on. Without a total order and an exact cursor,
  * paging a corpus can skip or repeat chunks and retrieval results stop being reproducible - which

@@ -4,6 +4,7 @@ import { createOptimisticQuest, updateOptimisticQuest } from '@client/app/utils/
 import {
   B4MLLMTools,
   GenerateImageToolCall,
+  AudioGenerationToolCall,
   IChatHistoryItem,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -43,6 +44,7 @@ export type LLMCommandArgs = {
   questMaster?: LLMApiRequestBody['questMaster'];
   researchMode?: LLMApiRequestBody['researchMode'];
   imageConfig?: GenerateImageToolCall;
+  audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
     maxDepth?: number;
     duration?: number;
@@ -116,6 +118,7 @@ export async function handleLLMCommand(
       questMaster,
       researchMode,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       mcpServers,
       optimisticSessionId,
@@ -164,6 +167,7 @@ export async function handleLLMCommand(
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
       imageConfig: _omitImageConfig,
+      audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
       ...payload
     } = args;
@@ -231,6 +235,7 @@ export async function handleLLMCommand(
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
         ...(imageConfig ? { imageConfig } : {}),
+        ...(audioConfig ? { audioConfig } : {}),
         ...(agentMode ? { agentMode } : {}),
         // Send user's browser timezone for localized date/time context
         timezone: userTimezone,

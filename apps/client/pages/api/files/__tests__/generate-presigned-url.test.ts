@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
+  findOverrides: vi.fn(),
+  s3ClientConfigs: [] as unknown[],
 }));
 
 // The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain.
@@ -14,7 +17,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
+  S3Client: class {
+    constructor(config: unknown) {
+      h.s3ClientConfigs.push(config);
+    }
+  },
   PutObjectCommand: class {
     constructor(public input: unknown) {}
   },
@@ -27,8 +34,24 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: h.findOverrides },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
+  dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+}));
+
+// The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
+// entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
+// comes from req.user (never the body), preserving the security property the route depends on.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    entitlementKeys: [],
+    administeredOrgIds: [],
+  })),
 }));
 
 // Only the settings read is stubbed; checkStorageLimit and resolveSupportedMimeType are real
@@ -79,6 +102,14 @@ const tagNamesOf = (callIndex = 0) => {
   return persisted.tags?.map(t => t.name).sort();
 };
 
+describe('POST /api/files/generate-presigned-url - S3 client config', () => {
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
+    // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
+    // mismatches whatever the browser actually PUTs.
+    expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+});
+
 describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -114,6 +145,57 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
 
     expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  // This route creates the FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates this namespace centrally - it needs its own
+  // check, same as the meta-tag one above.
+  it('refuses a non-admin self-applying a static-registry-prefixed tag (e.g. opti:)', async () => {
+    const { res } = makeRes();
+    await expect(run(body({ tags: [{ name: 'opti:report', strength: 1 }] }), res)).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The admission contract (#1680) at this door. It reaches it through
+ * `assertCanWriteDataLakeTags`' `members` option - the contract's ONLY opt-in signal - and the real
+ * service runs here, so deleting that option makes this refusal disappear.
+ */
+describe('POST /api/files/generate-presigned-url - admission contract', () => {
+  // Deliberately not a round number: the owner's chunk policy resolves to a coded default here, and
+  // a required target that happened to match it would satisfy the contract instead of violating it.
+  const ENFORCING_LAKE = { ...LAKE, requiredPassageTokenTarget: 4321 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+    h.findByDatalakeTag.mockResolvedValue(ENFORCING_LAKE);
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+    h.findOverrides.mockResolvedValue([
+      { scopeLevel: 'lake', scopeId: 'lake-1', settingName: 'EnforceLakeAdmission', settingValue: 'true' },
+    ]);
+  });
+
+  it('refuses the upload before any presigned URL when the lake enforces and the policy disagrees', async () => {
+    const { res } = makeRes();
+
+    await expect(run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
+      /requires passages of 4321/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('allows it when no scoped override turns the lever on - report-only is the default', async () => {
+    h.findOverrides.mockResolvedValue([]);
+    const { res } = makeRes();
+
+    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });
 

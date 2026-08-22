@@ -40,6 +40,19 @@ export function isBflImageModel(model?: string | null): boolean {
   return (BFL_IMAGE_MODELS as readonly string[]).includes(model);
 }
 
+/**
+ * Image models offering a prompt-enhancement toggle, where the provider rewrites and expands the
+ * prompt before generating. BFL takes it as `prompt_upsampling`; GeminiImageService maps the same
+ * flag onto Google's `enhancePrompt` (text-to-image only - its `edit()` path builds no generation
+ * config). OpenAI discards the parameter, so GPT-Image and DALL-E are excluded.
+ *
+ * One predicate on purpose: the settings UI, the reset defaults and the image-template snapshot all
+ * have to agree about this field, and they previously did so through three separate BFL checks.
+ */
+export function supportsPromptUpsampling(model?: string | null): boolean {
+  return isBflImageModel(model) || isGeminiImageModel(model);
+}
+
 /** Returns true specifically for gpt-image-2 (including versioned snapshots like gpt-image-2-2026-04-21). */
 export function isGPTImage2Model(model?: string | null): boolean {
   if (!model) return false;
@@ -122,4 +135,26 @@ export function isModelAccessible(
   const normalizedKeys = entitlementKeys.map(normalizeEntitlementKey);
   const normalizedAllowedEntitlements = (model.allowedEntitlements ?? []).map(normalizeEntitlementKey);
   return normalizedKeys.some(key => normalizedAllowedEntitlements.includes(key));
+}
+
+/**
+ * Image models that can serve an *edit* (image + optional mask) request. Deliberately
+ * narrower than the generation catalog: of the BFL family only Fill does mask inpainting
+ * (Kontext models are image-to-image transforms dispatched through ImageGeneration's
+ * transform path, not edit), and XAI exposes no edit endpoint at all.
+ *
+ * Must stay the single source of truth for both edit dispatchers - the image-edit queue
+ * handler (services/llm/ImageEdit.ts) and the chat edit_image tool - so neither silently
+ * substitutes a model the user did not pick and was not billed for.
+ */
+export const EDIT_SUPPORTED_IMAGE_MODELS = [
+  ...OPENAI_IMAGE_MODELS,
+  ImageModels.FLUX_PRO_FILL,
+  ...GEMINI_IMAGE_MODELS,
+] as const;
+
+/** Returns true for image models that support editing; gates both edit dispatch paths. */
+export function supportsImageEdit(model?: string | null): boolean {
+  if (!model) return false;
+  return (EDIT_SUPPORTED_IMAGE_MODELS as readonly string[]).includes(model);
 }

@@ -12,7 +12,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId } from './router';
+import { router, whatsNewDistributionId, appUrlForLambdaEnv } from './router';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -38,6 +38,19 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   visibilityTimeout: '12 minutes',
   dlq: {
     queue: lakeMemoryQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
+// Google Drive -> data lake ingest (#1589). Walks a connected Drive folder, fetches/exports each
+// file, and lands bytes in fabFileBucket for the existing chunk/vectorize pipeline. Long ingest, so
+// a generous timeout; idempotent by driveFileId, so a dropped run is safe to retry.
+const driveLakeIngestQueueDLQ = new sst.aws.Queue('driveLakeIngestQueueDLQ', {});
+const driveLakeIngestQueue = new sst.aws.Queue('driveLakeIngestQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: driveLakeIngestQueueDLQ.arn,
     retry: 2,
   },
 });
@@ -728,7 +741,32 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
+    // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
+    // the sqs:SendMessage grant that linking the queue confers.
+    link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/driveLakeIngest.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket: the handler streams fetched Drive bytes into the FabFile bucket via
+    // getFilesStorage().upload, which fires the existing objectCreated -> chunk -> vectorize pipeline.
+    // driveLakeIngestQueue: this handler self-re-enqueues to defer a concurrent second sync behind the
+    // one in flight, so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant that
+    // linking the queue confers (mirrors lakeMemoryQueue above).
+    link: [...allSecrets, fabFileBucket, driveLakeIngestQueue],
     logging: {
       retention: '3 days',
     },
@@ -1018,7 +1056,7 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
   },
   SINGLE_RECORD_BATCH
@@ -1348,6 +1386,7 @@ export {
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
   lakeMemoryQueue,
+  driveLakeIngestQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1376,6 +1415,7 @@ export {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   lakeMemoryQueueDLQ,
+  driveLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1406,6 +1446,7 @@ export {
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   lakeMemoryQueueSubscription,
+  driveLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

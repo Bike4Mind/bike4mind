@@ -16,6 +16,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -39,7 +40,7 @@ const handler = baseApi({ auth: false })
     // In dev, derive callback URL from the actual request host so the token
     // exchange uses the same URL that was sent to the OAuth provider
     const authenticateOptions: Record<string, unknown> = { session: false };
-    if (process.env.APP_URL?.includes('localhost')) {
+    if (isLocalAppUrl()) {
       const protocol = req.headers['x-forwarded-proto'] || 'http';
       const host = req.headers.host || 'localhost:3000';
       authenticateOptions.callbackURL = `${protocol}://${host}/api/auth/${strategy}/callback`;

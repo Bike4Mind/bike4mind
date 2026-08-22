@@ -7,6 +7,7 @@ import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
+import { clampChunkSize } from '@client/app/utils/chunkSize';
 import { updateFileUtility } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -22,7 +23,10 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   // 2100) where they used to differ by 5% - so a cold mount would silently chunk at a different
   // granularity than a warm one. The effect below resyncs if the setting arrives after mount.
   const configuredChunkSize = useGetSettingsValue('DefaultChunkSize');
-  const [chunkSize, setChunkSize] = useState<number>(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET);
+  // clamped in the initializer below - see clampChunkSize (chunkSize.ts)
+  const [chunkSize, setChunkSize] = useState<number>(
+    clampChunkSize(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET)
+  );
   const [chunkSizeDisplay, setChunkSizeDisplay] = useState<string>(`${chunkSize} tokens`);
   const queryClient = useQueryClient();
   const [recheckingVectorization, setRecheckingVectorization] = useState<boolean>(false);
@@ -37,7 +41,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   // rather than on `chunkSize` so a user's manual edit is not stomped on a later settings refetch.
   useEffect(() => {
     const resolved = Number(configuredChunkSize);
-    if (resolved) setChunkSize(resolved);
+    if (resolved) setChunkSize(clampChunkSize(resolved));
   }, [configuredChunkSize]);
 
   return (
@@ -60,13 +64,19 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
         <Typography>Chunks &amp; Vectorize</Typography>
         <Tooltip title="Chunking breaks your file into smaller pieces.">
           <Input
+            data-testid="knowledge-chunk-controls-size-input"
             type="string"
             color="success"
             value={chunkSizeDisplay}
             onChange={e => setChunkSizeDisplay(e.target.value)}
             onBlur={e => {
-              setChunkSizeDisplay(`${chunkSize} tokens`);
-              setChunkSize(Number(e.target.value));
+              // Number('') is 0, not NaN, so a blank blur must be checked explicitly rather than
+              // relying on Number.isFinite alone - otherwise it clamps to a bogus 0 instead of
+              // falling back below.
+              const parsed = Number(e.target.value);
+              const next = Number.isFinite(parsed) && parsed > 0 ? clampChunkSize(parsed) : chunkSize;
+              setChunkSizeDisplay(`${next} tokens`);
+              setChunkSize(next);
             }}
             onFocus={() => {
               setChunkSizeDisplay(chunkSizeDisplay.replace(' tokens', ''));
@@ -88,6 +98,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
       <Stack direction="row" spacing={2} justifyContent="space-between">
         <Tooltip title="Chunking breaks your file into smaller pieces, while vectorizing creates a vector representation of your chunks.">
           <Button
+            data-testid="knowledge-chunk-controls-chunk-btn"
             color="success"
             variant="solid"
             fullWidth

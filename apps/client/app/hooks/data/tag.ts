@@ -7,7 +7,12 @@ import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 
 interface TagCountsResponse {
+  // Unnarrowed - drives the Tags view tag tree, whose click-through lists (and counts) personal
+  // shares too. Do NOT use this to build WORKSPACES rows - see workspaceTagCounts.
   tagCounts: { tag: string; count: number }[];
+  // Excludes personal shares - the pair HomeViewPanel (WORKSPACES) reads for row existence.
+  workspaceTagCounts: { tag: string; count: number }[];
+  // Excludes personal shares - sizes the SAME workspace rows workspaceTagCounts creates.
   namespaceCounts: { namespace: string; fileCount: number }[];
 }
 

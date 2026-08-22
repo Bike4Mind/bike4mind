@@ -14,6 +14,7 @@
 import { modelDiscoveryFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
+import { dlqAlarmTopic } from './dlqAlarms';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -123,6 +124,10 @@ export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
 
 export const deprecatedModelRequestAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
+  : undefined;
+
+export const dataLakeStuckBatchesAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
 
 // --- MetricAlarm definitions (only created for monitored stages) ---
@@ -1028,6 +1033,121 @@ if (isMonitoredStage) {
     alarmActions: [deprecatedModelRequestAlarm!.arn],
     tags: {
       Application: 'ModelSunset',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Data Lake stuck-batch count
+   *
+   * The reconciler (hosted cron + self-host worker) samples the stuck-batch gauge once per
+   * sweep; each forced-terminal batch is lost work for a user, but an occasional one is expected
+   * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
+   * problem, not a one-off.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * server/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
+   * Namespace: Lumina5/DataLakeBatch / StuckBatches
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeStuckBatchesHigh', {
+    name: `${$app.name}-${$app.stage}-data-lake-stuck-batches-high`,
+    alarmDescription:
+      'Data lake stuck-batch count crossed threshold - the reconciler is forcing an unusual number of batches terminal',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'StuckBatches',
+    namespace: 'Lumina5/DataLakeBatch',
+    period: 86400, // 1 day - matches the once-per-sweep sample cadence
+    statistic: 'Maximum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Medium',
+    },
+  });
+
+  // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
+  // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
+  // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
+  // divergence between the two lists would surface as a bare TypeError at deploy-plan time - this
+  // guard turns that into a readable error instead.
+  if (!dlqAlarmTopic) {
+    throw new Error('feedback delivery alarms require dlqAlarmTopic');
+  }
+
+  /**
+   * Alarm: Feedback Delivery Failure
+   *
+   * A user submitted feedback and it failed to reach at least one enabled channel or recipient -
+   * the submission is saved, but nobody was notified of the failure. This also fires on a PARTIAL
+   * failure (one bad address in a multi-recipient list) even though the response still reports
+   * `delivered: true` for the channel overall - alerting on that is deliberate, since a silently
+   * dropped recipient is exactly the kind of gap this pair of alarms exists to surface. Feedback
+   * volume is low, so any loss is worth investigating; threshold 0 means one failure alarms.
+   *
+   * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
+   * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
+   * from server/integrations/slack/slack.ts's postFeedbackToSlack and
+   * pages/api/feedback/index.ts's email path.
+   * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
+   * rollup entry (see buildFeedbackDeliveryFailureMetrics), the same pattern
+   * `anthropicRateLimitErrors` above uses - scoping by the actual deploying stage rather than a
+   * dimensionless or binary production/non-production split means this alarm only ever matches
+   * failures from ITS OWN stage, so the dev-stage deployment of this alarm can receive data too,
+   * and an unrelated PR-preview's failures never trip either the dev or production alarm.
+   */
+  new aws.cloudwatch.MetricAlarm('feedbackDeliveryFailures', {
+    name: `${$app.name}-${$app.stage}-feedback-delivery-failures`,
+    alarmDescription: 'Feedback delivery failed for at least one channel or recipient',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DeliveryFailed',
+    namespace: 'Lumina5/FeedbackDelivery',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'FeedbackDelivery',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Feedback Delivery Misconfigured
+   *
+   * The ticket's own opening scenario: an admin left Slack/email feedback enabled but never
+   * finished configuring it (no webhook URL, or no recipient list) - not a hard error, so it
+   * never trips `feedbackDeliveryFailures` above, but it is exactly the "fails silently" case
+   * this pair of alarms exists to close. Deliberate operator choices ('disabled',
+   * 'nonprod_unconfigured') do not emit the rollup this reads - see
+   * buildFeedbackDeliverySkippedMetrics - so this alarm never pages for a setting an admin chose.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
+   * the same two call sites as feedbackDeliveryFailures above.
+   * Namespace: Lumina5/FeedbackDelivery / DeliverySkipped, Stage-scoped identically.
+   */
+  new aws.cloudwatch.MetricAlarm('feedbackDeliveryMisconfigured', {
+    name: `${$app.name}-${$app.stage}-feedback-delivery-misconfigured`,
+    alarmDescription: 'Feedback delivery is enabled but not actually configured (no webhook URL or no recipients)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DeliverySkipped',
+    namespace: 'Lumina5/FeedbackDelivery',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'FeedbackDelivery',
       Severity: 'Medium',
     },
   });

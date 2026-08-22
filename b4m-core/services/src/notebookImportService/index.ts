@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import {
   NotebookExportFormat,
   ExportedNotebook,
@@ -11,22 +12,118 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
+import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
+import { normalizeId } from '@bike4mind/utils';
+import type { IChatHistoryItem } from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
+
+/** A notebook the import can address: found by name, or just created. */
+interface NotebookRef {
+  id: string;
+  userId: string;
+}
+
+/**
+ * The created document is the only source of truth for the id: these entities have no `id` schema
+ * path, so one passed in is dropped on insert. `data` excludes `id` to keep it that way - passing
+ * one is a compile error rather than a session full of references that resolve to nothing.
+ *
+ * `Record<string, unknown>` for the rest of the payload, not the entity shape: the payloads still
+ * do not match the schemas behind them, and narrowing that is a separate behaviour change.
+ *
+ * The return type is what an implementation *should* hand back; `takeStoreId` covers what one
+ * might actually hand back, since an adapter returning `toObject()` output carries no `id` virtual.
+ */
+interface AttachmentRepository {
+  create: (data: Record<string, unknown> & { id?: never }) => Promise<{ id: unknown }>;
+}
 
 export interface NotebookImportAdapters {
-  sessionRepository: any; // SessionRepository
-  chatHistoryRepository: any; // ChatHistoryRepository
-  knowledgeRepository: any; // KnowledgeRepository
-  artifactRepository: any; // ArtifactRepository
-  toolRepository: any; // ToolRepository
-  agentRepository: any; // AgentRepository
-  fileStorageService: any; // FileStorageService
-  userRepository: any; // UserRepository
-  logger: any; // Logger
-  generateId: () => string; // ID generation function
+  // Property syntax throughout, not method shorthand: methods are compared bivariantly, so an
+  // implementation demanding a narrower argument than the service passes would still compile.
+  sessionRepository: {
+    /**
+     * `id` is excluded deliberately: it is not a SessionSchema path, only Mongoose's getter-only
+     * `_id` virtual, so `BaseRepository.create`'s `Omit<T, 'id' | ...>` was always right and a
+     * passed id was always dropped. Excluding it here makes re-adding one a compile error.
+     */
+    create: (data: Record<string, unknown> & { id?: never }) => Promise<NotebookRef>;
+    find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+  };
+  /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
+  chatHistoryRepository: {
+    bulkCreate: (items: IChatHistoryItem[]) => Promise<unknown>;
+    deleteMany: (filter: { sessionId: string }) => Promise<unknown>;
+  };
+  knowledgeRepository: AttachmentRepository;
+  /**
+   * The exception, and the reason is the read side rather than the schema: artifacts are looked up
+   * by their own `id` (`artifact_<ts>_<rand>`, not ObjectId-castable), so the id this service
+   * generates is the one readers will use. Knowledge, tools and agents resolve by `_id`, so theirs
+   * has to come from the store.
+   */
+  artifactRepository: { create: (data: Record<string, unknown> & { id: string }) => Promise<unknown> };
+  toolRepository: AttachmentRepository;
+  agentRepository: AttachmentRepository;
+  fileStorageService: {
+    uploadFile: (path: string, content: Buffer) => Promise<unknown>;
+  };
+  /** Only checked for existence - the import never reads a field off the user. */
+  userRepository: {
+    findById: (id: string) => Promise<unknown>;
+  };
+  logger: ILogger;
+  generateId: () => string;
 }
+
+/** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
+ * know would otherwise fail the write and lose the file. */
+function toKnowledgeType(raw: string | undefined): KnowledgeType {
+  return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
+}
+
+// Declared here rather than imported: `types.ts` is re-exported wholesale from the package entry
+// point, so exporting it there would put a one-word generic name in this package's public API.
+type Expect<T extends true> = T;
+
+/**
+ * Fails typecheck if a whole slot is re-loosened to `any` - every one of them used to be. Lives in
+ * src, not a test: tsconfig excludes *.test.ts, so only `turbo:typecheck` enforces it. Sibling
+ * guard: notebookExportService's NotebookExportTypesStayNarrowed.
+ *
+ * It only sees the slot type, so a nested `any` (say a method parameter) slips past it. The
+ * file-level `no-explicit-any: error` at the top covers that case; the rule is repo-wide `warn`,
+ * and `lint:check` runs `--quiet`, so warnings alone would print nothing.
+ */
+export type NotebookImportAdaptersStayNarrowed = Expect<
+  0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
+>;
 
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
+
+  /**
+   * Attachment failures. Deliberately not `errors`: the handler rolls the whole import back on a
+   * non-empty `errors`, so one unreadable file would discard every notebook that imported cleanly.
+   */
+  private attachmentWarnings: string[] = [];
+
+  /** Attachments actually persisted, as opposed to the count the export file claims. */
+  private attachmentsWritten = 0;
+
+  /**
+   * The store assigns the id; anything else records a reference that resolves to nothing.
+   * `normalizeId` rather than `String()`: these adapters may hand back a populated document,
+   * which `String()` would turn into "[object Object]".
+   */
+  private takeStoreId(created: unknown, kind: string): string {
+    const id = normalizeId((created as { id?: unknown } | null)?.id);
+    if (!id) {
+      throw new Error(`${kind} store returned no id`);
+    }
+    return id;
+  }
 
   async importNotebooks(
     targetUserId: string,
@@ -59,6 +156,9 @@ export class NotebookImportService {
         newNotebookIds: [],
       };
 
+      this.attachmentWarnings = [];
+      this.attachmentsWritten = 0;
+
       // Process each notebook
       for (const notebook of parsedData.notebooks) {
         try {
@@ -67,7 +167,6 @@ export class NotebookImportService {
           if (importedNotebookId) {
             result.importedNotebooks++;
             result.importedMessages += notebook.chatHistory.length;
-            result.importedAttachments += this.countAttachments(notebook);
             result.newNotebookIds!.push(importedNotebookId);
           } else {
             result.skippedNotebooks++;
@@ -81,6 +180,9 @@ export class NotebookImportService {
           });
         }
       }
+
+      result.importedAttachments = this.attachmentsWritten;
+      result.warnings!.push(...this.attachmentWarnings);
 
       // Determine overall success
       result.success = result.errors!.length === 0 || result.importedNotebooks > 0;
@@ -128,11 +230,7 @@ export class NotebookImportService {
       return this.handleExistingSession(existingSession, notebook, options);
     }
 
-    // Create new session
-    const newSessionId = options.preserveIds ? notebook.id : this.adapters.generateId();
-
     const sessionData = {
-      id: newSessionId,
       userId: targetUserId,
       name: this.generateSessionName(notebook.name, options),
       firstCreated: new Date(notebook.firstCreated),
@@ -151,7 +249,7 @@ export class NotebookImportService {
 
     // Import attachments first to get IDs
     if (options.importKnowledge && notebook.knowledge.length > 0) {
-      sessionData.knowledgeIds = await this.importKnowledgeFiles(notebook.knowledge, targetUserId, options);
+      sessionData.knowledgeIds = await this.importKnowledgeFiles(notebook.knowledge, targetUserId);
     }
 
     if (options.importArtifacts && notebook.artifacts.length > 0) {
@@ -159,19 +257,25 @@ export class NotebookImportService {
     }
 
     if (options.importTools && notebook.tools.length > 0) {
-      sessionData.toolIds = await this.importTools(notebook.tools, targetUserId, options);
+      sessionData.toolIds = await this.importTools(notebook.tools, targetUserId);
     }
 
     if (options.importAgents && notebook.agents.length > 0) {
-      sessionData.agentIds = await this.importAgents(notebook.agents, targetUserId, options);
+      sessionData.agentIds = await this.importAgents(notebook.agents, targetUserId);
     }
+
+    this.attachmentsWritten +=
+      sessionData.knowledgeIds.length +
+      sessionData.artifactIds.length +
+      sessionData.toolIds.length +
+      sessionData.agentIds.length;
 
     // Create session
     const createdSession = await this.adapters.sessionRepository.create(sessionData);
 
     // Import chat history
     if (notebook.chatHistory.length > 0) {
-      await this.importChatHistory(notebook.chatHistory, createdSession.id, options);
+      await this.importChatHistory(notebook.chatHistory, createdSession.id, targetUserId, options);
     }
 
     return createdSession.id;
@@ -181,7 +285,7 @@ export class NotebookImportService {
     notebook: ExportedNotebook,
     targetUserId: string,
     options: NotebookImportOptions
-  ): Promise<any> {
+  ): Promise<NotebookRef | null> {
     // Try to find by exact name match
     const existingSessions = await this.adapters.sessionRepository.find({
       userId: targetUserId,
@@ -192,7 +296,7 @@ export class NotebookImportService {
   }
 
   private async handleExistingSession(
-    existingSession: any,
+    existingSession: NotebookRef,
     notebook: ExportedNotebook,
     options: NotebookImportOptions
   ): Promise<string | null> {
@@ -203,7 +307,7 @@ export class NotebookImportService {
       case 'overwrite':
         // Delete existing chat history and replace
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, options);
+        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
 
         // Update session metadata
         await this.adapters.sessionRepository.updateById(existingSession.id, {
@@ -228,7 +332,7 @@ export class NotebookImportService {
 
       case 'merge':
         // Append chat history to existing session
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, options);
+        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
 
         // Update last updated time
         await this.adapters.sessionRepository.updateById(existingSession.id, {
@@ -245,10 +349,12 @@ export class NotebookImportService {
   private async importChatHistory(
     chatHistory: ExportedChatMessage[],
     sessionId: string,
+    ownerUserId: string,
     options: NotebookImportOptions
   ): Promise<void> {
-    const chatItems = chatHistory.map(message => ({
-      id: options.preserveIds ? message.id : this.adapters.generateId(),
+    const chatItems: IChatHistoryItem[] = chatHistory.map(message => ({
+      // A generated id is not a valid key for the message store; omit the field so it assigns one.
+      ...(options.preserveIds && message.id && { id: message.id }),
       sessionId,
       timestamp: new Date(message.timestamp),
       type: message.type,
@@ -258,7 +364,18 @@ export class NotebookImportService {
       questMasterReply: message.questMasterReply,
       images: message.images || [],
       fabFileIds: message.attachedFiles || [],
-      promptMeta: message.promptMeta,
+      // The store requires the owning session on promptMeta. The export carries metrics only,
+      // and an imported message belongs to the new notebook, so this is rebuilt rather than
+      // carried over.
+      //
+      // Deliberately NOT rebindPromptMetaSession (@bike4mind/common), which fork/snip/clone use:
+      // that spreads the source session block, and an import can land in a different tenant than
+      // it was exported from, so organizationId/projectId must be dropped here rather than carried
+      // into another org's analytics rollups. Must stay in sync with that helper's doc comment.
+      promptMeta: message.promptMeta && {
+        ...message.promptMeta,
+        session: { id: sessionId, userId: ownerUserId },
+      },
       status: message.status,
       creditsUsed: message.creditsUsed,
       pinned: message.pinned,
@@ -266,20 +383,16 @@ export class NotebookImportService {
       questMasterPlanId: message.questMasterPlanId,
     }));
 
-    // Bulk create chat history items
     await this.adapters.chatHistoryRepository.bulkCreate(chatItems);
   }
 
-  private async importKnowledgeFiles(
-    knowledgeFiles: ExportedKnowledgeFile[],
-    targetUserId: string,
-    options: NotebookImportOptions
-  ): Promise<string[]> {
+  private async importKnowledgeFiles(knowledgeFiles: ExportedKnowledgeFile[], targetUserId: string): Promise<string[]> {
     const importedIds: string[] = [];
 
     for (const file of knowledgeFiles) {
       try {
-        const newFileId = options.preserveIds ? file.id : this.adapters.generateId();
+        // Not branched on `preserveIds`: reusing the source id would imply this is the same document.
+        const storageKeySuffix = this.adapters.generateId();
 
         let filePath: string;
 
@@ -287,30 +400,42 @@ export class NotebookImportService {
         if (file.content) {
           // Decode base64 content and upload
           const content = Buffer.from(file.content, 'base64');
-          filePath = `knowledge/${targetUserId}/${newFileId}`;
+          filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
           await this.adapters.fileStorageService.uploadFile(filePath, content);
         } else if (file.contentUrl) {
           // Copy from existing location
-          filePath = await this.copyFileFromUrl(file.contentUrl, targetUserId, newFileId);
+          filePath = await this.copyFileFromUrl(file.contentUrl, targetUserId, storageKeySuffix);
         } else {
           throw new Error('No content or URL provided for file');
         }
 
-        // Create knowledge record
+        // No `id`: FabFile has no such path, so the store assigns one.
         const knowledgeData = {
-          id: newFileId,
           userId: targetUserId,
-          name: file.name,
+          fileName: file.name,
           mimeType: file.mimeType,
-          size: file.size,
-          path: filePath,
-          uploadedAt: new Date(file.uploadedAt),
-          metadata: file.metadata,
+          fileSize: file.size,
+          filePath,
+          type: toKnowledgeType(file.type),
+          // The S3 scan that would flip this cannot see the row: it is written inside the import's
+          // transaction and the scan gives up after ~7.5s, long before a real import commits, so a
+          // 'pending' file would be unservable forever. Safe to mark clean here because the export
+          // only emits content for a file that was already clean at source.
+          moderationStatus: 'clean',
         };
+        // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
-        await this.adapters.knowledgeRepository.create(knowledgeData);
-        importedIds.push(newFileId);
+        importedIds.push(this.takeStoreId(await this.adapters.knowledgeRepository.create(knowledgeData), 'knowledge'));
+
+        // After the write, not before: the file has to have landed for "imported as FILE" to be
+        // true, and a file that then failed would otherwise be reported twice. Absent is expected
+        // of older exports; present-but-unknown is format drift worth saying.
+        if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
+          this.attachmentWarnings.push(`Imported "${file.name}" as FILE: unrecognised knowledge type "${file.type}"`);
+        }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.attachmentWarnings.push(`Failed to import knowledge file "${file.name}": ${message}`);
         this.adapters.logger.warn('Failed to import knowledge file', {
           fileName: file.name,
           error,
@@ -346,6 +471,9 @@ export class NotebookImportService {
         await this.adapters.artifactRepository.create(artifactData);
         importedIds.push(newArtifactId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import artifact', {
           artifactName: artifact.name,
           error,
@@ -356,19 +484,12 @@ export class NotebookImportService {
     return importedIds;
   }
 
-  private async importTools(
-    tools: ExportedTool[],
-    targetUserId: string,
-    options: NotebookImportOptions
-  ): Promise<string[]> {
+  private async importTools(tools: ExportedTool[], targetUserId: string): Promise<string[]> {
     const importedIds: string[] = [];
 
     for (const tool of tools) {
       try {
-        const newToolId = options.preserveIds ? tool.id : this.adapters.generateId();
-
         const toolData = {
-          id: newToolId,
           userId: targetUserId,
           name: tool.name,
           description: tool.description,
@@ -377,9 +498,11 @@ export class NotebookImportService {
           metadata: tool.metadata,
         };
 
-        await this.adapters.toolRepository.create(toolData);
-        importedIds.push(newToolId);
+        importedIds.push(this.takeStoreId(await this.adapters.toolRepository.create(toolData), 'tool'));
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import tool "${tool.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import tool', {
           toolName: tool.name,
           error,
@@ -390,19 +513,12 @@ export class NotebookImportService {
     return importedIds;
   }
 
-  private async importAgents(
-    agents: ExportedAgent[],
-    targetUserId: string,
-    options: NotebookImportOptions
-  ): Promise<string[]> {
+  private async importAgents(agents: ExportedAgent[], targetUserId: string): Promise<string[]> {
     const importedIds: string[] = [];
 
     for (const agent of agents) {
       try {
-        const newAgentId = options.preserveIds ? agent.id : this.adapters.generateId();
-
         const agentData = {
-          id: newAgentId,
           userId: targetUserId,
           name: agent.name,
           description: agent.description,
@@ -411,9 +527,11 @@ export class NotebookImportService {
           metadata: agent.metadata,
         };
 
-        await this.adapters.agentRepository.create(agentData);
-        importedIds.push(newAgentId);
+        importedIds.push(this.takeStoreId(await this.adapters.agentRepository.create(agentData), 'agent'));
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import agent "${agent.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import agent', {
           agentName: agent.name,
           error,
@@ -450,13 +568,11 @@ export class NotebookImportService {
     }
   }
 
-  private async copyFileFromUrl(sourceUrl: string, targetUserId: string, newFileId: string): Promise<string> {
-    // Not yet implemented - returns the source URL as a fallback.
-    return sourceUrl;
-  }
-
-  private countAttachments(notebook: ExportedNotebook): number {
-    return notebook.knowledge.length + notebook.artifacts.length + notebook.tools.length + notebook.agents.length;
+  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<string> {
+    // Throws rather than returning the source URL: handing back the exporter's own storage key
+    // records a file the importing user has no copy of, and counts it as imported. The caller
+    // turns this into a per-file warning, so the notebook still imports.
+    throw new Error('importing a knowledge file by URL reference is not implemented');
   }
 }
 

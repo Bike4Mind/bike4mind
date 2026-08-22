@@ -41,7 +41,8 @@ import ProductAccess from '../ProductAccess';
 import SystemMessageModal from '../SystemMessageModal';
 import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/data/user';
-import { IUserDocument, UserLevelType, WithOrgRef } from '@bike4mind/common';
+import { IUserDocument, UserLevelType } from '@bike4mind/common';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useShallow } from 'zustand/shallow';
 import { useQueryClient } from '@tanstack/react-query';
@@ -51,11 +52,14 @@ import { useNavigate } from '@tanstack/react-router';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 
 interface UsersViewProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
   index: number;
   inModal?: boolean;
 }
 
+// Keyed by IUserDocument, not the narrower list-projection row: admins edit fields the
+// list endpoint does not read back (e.g. emailVerifiedAt), and the PATCH body is a
+// Partial<IUserDocument>.
 export type EditedFieldsState = {
   [key in keyof Partial<IUserDocument>]: boolean;
 };
@@ -75,7 +79,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
   const enforceMFA = adminSettings?.enforceMFA === 'true';
 
   const [editedFields, setEditedFields] = useState<EditedFieldsState>({});
-  const [formState, setFormState] = useState<WithOrgRef<IUserDocument>>({ ...user });
+  const [formState, setFormState] = useState<AdminUserListItem>({ ...user });
   // Optional reason for a manual credit change; persisted on the audit record
   // (see adminUpdateUser) only when currentCredits is actually edited.
   const [creditReason, setCreditReason] = useState('');
@@ -128,7 +132,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
     const data = Object.entries(editedFields).reduce<Partial<IUserDocument> & { creditReason?: string }>(
       (acc, [key, value]) => {
         if (value) {
-          acc[key as keyof IUserDocument] = formState[key as keyof IUserDocument] as any;
+          // formState carries admin-editable fields beyond the list projection, so index it
+          // structurally rather than through AdminUserListItem's narrower keys.
+          (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
         }
         return acc;
       },

@@ -77,7 +77,7 @@ import {
 import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
-import { deductCreditsWithOrgSupport } from '../creditService';
+import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
@@ -451,6 +451,15 @@ export class ImageGenerationService {
       const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
       throw insufficientCreditsError(
         `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
+      );
+    }
+
+    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
+    // shared pool. This is the only enforcement point - the settlement write
+    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
+    if (organization && isMemberCreditCapExceeded(organization, user.id, requiredCredits)) {
+      throw insufficientCreditsError(
+        `Your organization member credit limit has been reached for image generation. Contact your organization administrator.`
       );
     }
 
@@ -915,6 +924,9 @@ export class ImageGenerationService {
             aspect_ratio,
             output_format,
             safety_tolerance,
+            // GeminiImageService maps this to Google's `enhancePrompt`. Only the text-to-image path
+            // honours it: `edit()` takes ImageEditOptions and does not build a generation config.
+            prompt_upsampling,
           });
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {

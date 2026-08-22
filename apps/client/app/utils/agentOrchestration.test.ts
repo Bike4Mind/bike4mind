@@ -118,6 +118,7 @@ describe('buildDefaultOrchestrationProfile', () => {
       'image_generation',
       'edit_image',
       'music_generation',
+      'audio_generation',
       'excel_generation',
       // Inline visualization artifacts - emit an <artifact> block, write nothing.
       'recharts',

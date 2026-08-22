@@ -138,6 +138,21 @@ describe('addMember', () => {
     expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
+  it('should treat members == seats - 1 as full because the owner holds a seat (#1423)', async () => {
+    // Owner-inclusive accounting: 2 members + the owner == 3 == seats, so the org is full even though
+    // users.length (2) is below seats (3). The member-only definition would have admitted this add.
+    mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue({
+      ...mockOrganization,
+      seats: 3,
+      users: [{ userId: 'user-1' }, { userId: 'user-2' }],
+    });
+    await expect(
+      addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters)
+    ).rejects.toThrow(UnprocessableEntityError);
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
   it('should add user to organization if force is true even if at capacity', async () => {
     const orgWithUsers = {
       ...mockOrganization,

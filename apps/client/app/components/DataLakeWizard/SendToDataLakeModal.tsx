@@ -80,6 +80,9 @@ export default function SendToDataLakeModal() {
       });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(lake.id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // A new member shifts the lake's reachable-content share; the final figure lands once the file
+      // finishes processing, and the badge picks it up on its next refetch.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(lake.id) });
       // The tag write above lands on the file, so every per-tag file count is now stale.
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success(`Saved ${sourceLabel} to “${lake.name}”. It'll be searchable once processing finishes.`);

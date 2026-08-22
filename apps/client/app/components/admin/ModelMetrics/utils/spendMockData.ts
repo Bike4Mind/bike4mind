@@ -1,82 +1,15 @@
 /**
- * Typed mock fixture for the Spend tab (issue No. 1507).
- *
- * The exported types below are the DATA CONTRACT for the wiring ticket: the
- * real backend query should return a `SpendData`-shaped payload so the Spend
- * tab can drop the mock and consume live data with no component changes.
- *
- * Everything here is fabricated. It only exists so the tab is reviewable as a
- * standalone visual PR; do not read anything into the numbers.
+ * Fabricated sample data for the Spend tab, retained only for tests; do not read
+ * anything into the numbers. The `SpendData` contract itself lives in
+ * `@bike4mind/common` (shared by the tab and the /api/admin/spend handler).
  */
-
-/** How a KPI's raw numeric value should be rendered. */
-export type SpendKpiFormat = 'currency' | 'currencyPrecise' | 'number' | 'ms' | 'percent';
-
-/** Stable identifier for each KPI card so wiring can map query results by key. */
-export type SpendKpiKey =
-  | 'estCost'
-  | 'requests'
-  | 'costPerRequest'
-  | 'creditsUsed'
-  | 'activeAccounts'
-  | 'p50Latency'
-  | 'p95Latency'
-  | 'errorRate'
-  | 'refusalRate';
-
-export interface SpendKpi {
-  key: SpendKpiKey;
-  label: string;
-  /** Raw value for the current period; the component handles formatting. */
-  value: number;
-  /** Raw value for the immediately prior period, used to compute the delta. */
-  priorValue: number;
-  format: SpendKpiFormat;
-  /**
-   * Whether an increase is a good thing. Drives the delta color: cost/latency
-   * rising is bad (red), requests/credits rising is good (green).
-   */
-  higherIsBetter: boolean;
-}
-
-export interface SpendByAccountRow {
-  accountId: string;
-  accountName: string;
-  estCost: number;
-  requests: number;
-  creditsUsed: number;
-  costPerRequest: number;
-}
-
-export interface CostByModelRow {
-  modelId: string;
-  modelName: string;
-  estCost: number;
-  requests: number;
-  /** Share of total est. cost across all models, 0..1. */
-  share: number;
-}
-
-export interface DailyCostPoint {
-  /** ISO date, YYYY-MM-DD. */
-  date: string;
-  cost: number;
-}
-
-export interface SpendData {
-  /** Human label for the selected period (echoes the ControlPanel range). */
-  periodLabel: string;
-  /** Human label for the prior comparison period. */
-  priorPeriodLabel: string;
-  kpis: SpendKpi[];
-  byAccount: SpendByAccountRow[];
-  byModel: CostByModelRow[];
-  dailyCost: DailyCostPoint[];
-}
+import type { SpendData } from '@bike4mind/common';
 
 export const spendMockData: SpendData = {
   periodLabel: 'Last 30 days',
   priorPeriodLabel: 'Prior 30 days',
+  hasData: true,
+  activeAccounts: 47,
   kpis: [
     {
       key: 'estCost',

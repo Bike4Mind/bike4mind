@@ -1,13 +1,13 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import React, { useState } from 'react';
 import { Chip, Tooltip } from '@mui/joy';
 import CircleIcon from '@mui/icons-material/Circle';
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
 import LoginDetailsModal from './LoginDetailsModal';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { AuthEvents } from '@bike4mind/common';
 
 interface LoginsViewProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
 }
 
 const LoginsView: React.FC<LoginsViewProps> = ({ user }) => {

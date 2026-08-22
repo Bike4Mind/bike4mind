@@ -3,6 +3,7 @@ import {
   Casino as DiceIcon,
   Image as ImageIcon,
   MusicNote as MusicIcon,
+  GraphicEq as AudioIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -36,6 +37,11 @@ export const TOOLS_MAP = {
     name: 'Music Generation',
     description: 'Generate background music',
     icon: <MusicIcon />,
+  },
+  audio_generation: {
+    name: 'Audio Generation',
+    description: 'Generate speech or sound effects',
+    icon: <AudioIcon />,
   },
   mermaid_chart: {
     name: 'Mermaid Chart',

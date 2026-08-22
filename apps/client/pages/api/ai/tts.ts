@@ -1,6 +1,6 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
-  ttsRequestSchema,
+  synthesizeSpeechContract,
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
@@ -32,10 +32,14 @@ const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
  * Mirrors the multi-vendor image API (aiImageService). The legacy
  * /api/ai/text-to-speech and /api/elabs/text-to-speech routes remain as thin
  * adapters over the same aiVoiceService abstraction.
+ *
+ * Auth mode and request validation come from synthesizeSpeechContract (the same
+ * source of truth that drives the OpenAPI spec), so `req.validated` is the parsed,
+ * typed body.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
   const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
-    ttsRequestSchema.parse(req.body);
+    req.validated;
 
   const vendor = provider ?? DEFAULT_PROVIDER;
 

@@ -6,14 +6,24 @@ vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
-const h = vi.hoisted(() => ({ cleanup: vi.fn() }));
+const h = vi.hoisted(() => ({
+  cleanup: vi.fn(),
+  releasePurgingToDeleted: vi.fn(),
+  openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
+  selfHostOpenSearchEnabled: vi.fn(() => false),
+}));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   dataLakeBatchRepository: {},
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { cleanupDeletedDataLake: h.cleanup } }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: { cleanupDeletedDataLake: h.cleanup, openSearchRetrievalIndex: h.openSearchRetrievalIndex },
+}));
+vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 
 import { dispatch } from './dataLakeCleanup';
 
@@ -37,10 +47,52 @@ describe('dataLakeCleanup consumer', () => {
     );
   });
 
-  it('swallows a BadRequestError (permanently-invalid message) instead of retrying to the DLQ', async () => {
+  // Only self-host OpenSearch needs this port wired (see ports.ts) - Atlas's vector index lives
+  // on the FabFileChunk collection itself, so the chunk sweep already removes it there.
+  it('passes retrievalIndex: undefined when self-host OpenSearch is off', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.openSearchRetrievalIndex).not.toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ retrievalIndex: undefined })
+    );
+  });
+
+  it('wires a real retrievalIndex when self-host OpenSearch is on', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.openSearchRetrievalIndex).toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
+    );
+  });
+
+  it('releases an accepted purge its own guard refused, and says so at ERROR (#1744)', async () => {
+    // Was a silent WARN, which is precisely how an accepted, irreversible purge could vanish with no
+    // user-visible trace. The release puts the lake back in the deleted list where its owner can
+    // see it and retry, so the purge either completes or comes back - never neither.
     h.cleanup.mockRejectedValue(new BadRequestError('must be soft-deleted'));
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('releasing the accepted purge'),
+      expect.objectContaining({ dataLakeId: 'lake1' })
+    );
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+  });
+
+  it('does NOT release on an unexpected error, since that sweep may be half-done', async () => {
+    // The release advertises the lake as restorable. Only a guard failure is known to have
+    // destroyed nothing; a DB/network failure can land mid-sweep, so that path retries to the DLQ
+    // and is recovered by admin replay instead.
+    h.cleanup.mockRejectedValue(new Error('mongo down'));
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('mongo down');
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
   });
 
   it('rethrows an unexpected error so SQS retries then DLQs', async () => {
@@ -53,5 +105,7 @@ describe('dataLakeCleanup consumer', () => {
     await expect(dispatch(makeEvent({ actor: { userId: 'u1' } }), {} as never, logger)).resolves.toBeUndefined();
     expect(h.cleanup).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
+    // Parsing the lake id is what failed, so there is no purge to release.
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
   });
 });

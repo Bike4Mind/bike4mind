@@ -8,21 +8,25 @@ import {
   ModelInfo,
   MusicGenerationVendor,
 } from '@bike4mind/common';
+import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateMusicCredits } from './base/utils';
+import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
 import type { CostInput } from '../imageCostCalculator/types';
 import { estimateMusicCredits } from '../../musicCost';
+import { estimateAudioCredits, type AudioCostInput } from '../../audioCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
 import { buildSharedTools } from '../sharedToolBuilder';
+import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 
@@ -93,6 +97,10 @@ export interface ToolBuilderConfig {
   entitlementKeys?: string[];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
+  /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
+  inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
+  fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -145,6 +153,7 @@ const TOOL_PREAMBLES: Record<string, string> = {
   image_generation: 'Generating an image…',
   edit_image: 'Editing the image…',
   music_generation: 'Composing music…',
+  audio_generation: 'Generating audio…',
 };
 
 function resolveToolPreamble(toolName: string): string | null {
@@ -192,7 +201,7 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 /**
  * Apply a partial status-update change set onto the live quest object.
  *
- * Most fields are overwritten wholesale via Object.assign, but three fields
+ * Most fields are overwritten wholesale via Object.assign, but four fields
  * accrete across a single turn and MUST merge instead of overwrite:
  *   - promptMeta.citables: accreted by web_search / knowledge retrieval; merged
  *     and deduped by stable identity (id, then url, then title) to avoid duplicate
@@ -206,6 +215,12 @@ function resolveToolStatus(toolName: string, data: any): string | null {
  *     request down to just the last call's image. Merge-append with dedup;
  *     onToolFinish dedup-appends the same paths, so this stays idempotent for a
  *     single call.
+ *   - promptMeta.retrieval: the forced/lake-memory arm (ChatCompletionFeatures)
+ *     writes this directly, before any tool call, and a tool's own retrieval
+ *     write must merge onto it rather than replace it wholesale - otherwise a
+ *     zero-result knowledge_base_search after a successful lake-memory recall
+ *     (or vice versa) would silently erase the other's outcome. See
+ *     mergeRetrievalSummary (retrievalSummaryMerge.ts) for the merge policy.
  *
  * Mutates `quest` in place.
  */
@@ -225,6 +240,7 @@ export function applyQuestStatusChanges(
       return true;
     });
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
+    const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = {
       ...quest.promptMeta,
       ...changedPromptMeta,
@@ -232,6 +248,9 @@ export function applyQuestStatusChanges(
       // Omit the key entirely when neither side has warnings, so an untouched quest is not
       // given an empty array it never had.
       ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
+      // Explicit override, not left to the spread above: an incoming write here must MERGE onto
+      // an existing forced-arm value, never replace it (see the docblock above).
+      ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
     };
   } else if (changedPromptMeta) {
     quest.promptMeta = changedPromptMeta;
@@ -282,6 +301,7 @@ export interface BuildToolsArgs {
   thinking?: { enabled: boolean; budget_tokens: number };
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
+  toolAvailability?: ToolAvailability;
 }
 
 // Reuse the role enum validated at the API boundary by QuestStartBodySchema so the
@@ -379,6 +399,81 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units: billedSeconds,
+        })
+      );
+    }
+    if (!quest.images) quest.images = [];
+    data.paths.forEach(path => {
+      if (!quest.images?.includes(path)) quest.images?.push(path);
+    });
+  }
+
+  /**
+   * Up-front affordability gate for audio_generation (onToolStart): throws
+   * insufficient_credits before the paid provider call. Speech is gated on a conservative
+   * per-character estimate (the resolved model is not known until synthesis returns);
+   * sound effects on the duration. The reservation is deferred to settleAudioCredits so a
+   * failed generation is never billed. Exposed for unit-testing the audio credit branch.
+   */
+  gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
+    if (!enforceCredits || !this.deps.db.creditTransactions) return;
+    validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
+  }
+
+  /**
+   * Reserve + record a delivered audio clip's credits (onToolFinish) and ride its path on
+   * quest.images. Reached only after generation succeeds. Speech settles on the ACTUAL
+   * resolved model + character count so the charge matches the direct /api/ai/tts endpoint
+   * exactly; sound effects settle on the duration. Does not persist the quest - the caller
+   * saves. Exposed for unit-testing the audio credit branch.
+   */
+  settleAudioCredits(
+    quest: IChatHistoryItemDocument,
+    data: {
+      kind: 'speech' | 'sound_effect';
+      provider: VoiceGenerationVendor | SoundGenerationVendor;
+      model?: string;
+      characters?: number;
+      durationSeconds?: number;
+      paths: string[];
+    },
+    enforceCredits: boolean,
+    organization?: IOrganizationDocument | null
+  ): void {
+    if (enforceCredits && !!this.deps.db.creditTransactions) {
+      const costInput: AudioCostInput =
+        data.kind === 'sound_effect'
+          ? {
+              kind: 'sound_effect',
+              provider: data.provider as SoundGenerationVendor,
+              durationSeconds: data.durationSeconds,
+            }
+          : {
+              kind: 'speech',
+              provider: data.provider as VoiceGenerationVendor,
+              model: data.model,
+              characters: data.characters ?? 0,
+            };
+      const { requiredCredits: creditsUsed, usdCost, units } = estimateAudioCredits(costInput);
+      this.deps.logger.info(`Credits used for tool audio_generation (${data.kind}): ${creditsUsed}`);
+      this.reserveToolCredits('audio_generation', creditsUsed);
+      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+      recordToolUsageEvent(
+        this.deps.db,
+        this.deps.logger,
+        'audio_generation',
+        buildToolUsageEvent({
+          quest,
+          user: this.deps.user,
+          organization,
+          provider: data.provider,
+          // Speech always resolves a real model id; a sound effect has none, so
+          // qualify it by provider (e.g. "elevenlabs-sound_effect") instead of the
+          // bare kind so per-model COGS analytics stays clean.
+          model: data.model ?? `${data.provider}-${data.kind}`,
+          costUsd: usdCost,
+          creditsCharged: creditsUsed,
+          units,
         })
       );
     }
@@ -589,6 +684,7 @@ export class ToolBuilder {
     thinking,
     agentStore,
     externalTools,
+    toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     return buildSharedTools(
       {
@@ -598,6 +694,8 @@ export class ToolBuilder {
         db: this.deps.db,
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
+        inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
@@ -664,6 +762,11 @@ export class ToolBuilder {
             const { provider, lengthMs } = data as { provider: MusicGenerationVendor; lengthMs: number };
             this.gateMusicCredits({ provider, lengthMs }, enforceCredits, organization);
           }
+
+          if (toolName === 'audio_generation') {
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            this.gateAudioCredits(data as AudioCostInput, enforceCredits, organization);
+          }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
@@ -680,6 +783,26 @@ export class ToolBuilder {
             this.settleMusicCredits(
               quest,
               data as { paths: string[]; provider: MusicGenerationVendor; lengthMs: number; modelId: string },
+              enforceCredits,
+              organization
+            );
+            await saveQuest(quest);
+          }
+          if (toolName === 'audio_generation') {
+            // Settle audio billing HERE (not onToolStart) so only a delivered clip is charged:
+            // the tool's failure paths return before onFinish. Audio rides quest.images; the
+            // client splits by extension to render an inline player.
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            this.settleAudioCredits(
+              quest,
+              data as {
+                kind: 'speech' | 'sound_effect';
+                provider: VoiceGenerationVendor | SoundGenerationVendor;
+                model?: string;
+                characters?: number;
+                durationSeconds?: number;
+                paths: string[];
+              },
               enforceCredits,
               organization
             );
@@ -769,6 +892,7 @@ export class ToolBuilder {
         agentOnlyMcpServers,
         getAbortSignal,
         externalTools,
+        toolAvailability,
       }
     );
   }

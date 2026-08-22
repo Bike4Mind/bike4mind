@@ -9,9 +9,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
+import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
 
 const getSettingsValueMock = vi.fn();
 const extractMock = vi.fn();
+const sendToQueueMock = vi.fn();
 
 // Pass the inner handler straight through so the test drives it directly, skipping connectDB and the
 // warmer-invocation shortcut that the real wrapper performs.
@@ -26,6 +28,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes/extractLakeMemory', () => ({
   extractLakeMemoryForBatch: (...a: unknown[]) => extractMock(...a),
 }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => sendToQueueMock(...a) }));
+vi.mock('sst', () => ({ Resource: { lakeMemoryQueue: { url: 'https://sqs.example/lake-memory' } } }));
 
 const { dispatch } = await import('./lakeMemoryExtraction');
 
@@ -36,7 +40,7 @@ const PAYLOAD = { batchId: 'batch-1', dataLakeId: 'lake-1', userId: 'user-1' };
 describe('lakeMemoryExtraction handler (#1440)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    extractMock.mockResolvedValue({ docsProcessed: 1, factsWritten: 1 });
+    extractMock.mockResolvedValue({ docsProcessed: 1, factsWritten: 1, hasMore: false });
   });
 
   it('extracts when EnableLakeMemory is on', async () => {
@@ -46,6 +50,40 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
 
     expect(getSettingsValueMock).toHaveBeenCalledWith('EnableLakeMemory');
     expect(extractMock).toHaveBeenCalledTimes(1);
+    // Fully covered (hasMore:false) -> no continuation enqueued.
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('re-enqueues a continuation run when the lake was not fully covered', async () => {
+    getSettingsValueMock.mockResolvedValue(true);
+    extractMock.mockResolvedValue({ docsProcessed: 100, factsWritten: 250, hasMore: true });
+
+    await dispatch(event(PAYLOAD), context());
+
+    // Same payload re-queued with the next slice; the next invocation resumes from the persisted cursor.
+    expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', { ...PAYLOAD, slice: 1 });
+  });
+
+  it('stops the continuation chain at the slice ceiling instead of re-enqueuing unbounded', async () => {
+    // A pathologically large lake keeps returning hasMore. The chain must not grow without limit: once
+    // the slice count reaches LAKE_MEMORY_MAX_CONTINUATION_SLICES the handler stops re-enqueuing and logs,
+    // leaving the persisted cursor for the next finalize to resume from.
+    getSettingsValueMock.mockResolvedValue(true);
+    extractMock.mockResolvedValue({ docsProcessed: 100, factsWritten: 250, hasMore: true });
+
+    await dispatch(event({ ...PAYLOAD, slice: LAKE_MEMORY_MAX_CONTINUATION_SLICES - 1 }), context());
+
+    expect(extractMock).toHaveBeenCalledTimes(1);
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('does not re-enqueue a continuation when the flag was turned off after enqueue', async () => {
+    getSettingsValueMock.mockResolvedValue(false);
+
+    await dispatch(event(PAYLOAD), context());
+
+    expect(extractMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
   });
 
   it('drops a queued extraction when the flag was turned off after enqueue', async () => {

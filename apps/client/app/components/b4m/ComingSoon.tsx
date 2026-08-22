@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 const ComingSoon = () => {
   const [email, setEmail] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleEmailChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setEmail(event.target.value);
@@ -17,15 +18,26 @@ const ComingSoon = () => {
       toast.error('Please fill out all fields.');
       return;
     }
+    if (isSubmitting) return;
 
-    await createFeedbackOnServer({
-      userId: 'Unknown',
-      userEmail: email,
-      tags: ['comingSoon', 'marketing'],
-      status: FeedbackStatus.New,
-    });
+    setIsSubmitting(true);
+    try {
+      await createFeedbackOnServer({
+        userId: 'Unknown',
+        content: 'Coming soon signup',
+        username: email,
+        userEmail: email,
+        tags: ['comingSoon', 'marketing'],
+        status: FeedbackStatus.New,
+      });
 
-    toast.success('Thank you! You will be notified when we launch.');
+      toast.success('Thank you! You will be notified when we launch.');
+    } catch (error) {
+      console.error('Failed to submit signup:', error);
+      toast.error('Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -54,6 +66,7 @@ const ComingSoon = () => {
         }}
       >
         <Input
+          data-testid="coming-soon-email-input"
           placeholder="Your Email Address"
           type="email"
           value={email}
@@ -61,7 +74,9 @@ const ComingSoon = () => {
           sx={{ width: '100%', maxWidth: '400px' }}
         />
         <Button
+          data-testid="coming-soon-submit-btn"
           type="submit"
+          disabled={isSubmitting}
           sx={{ mt: 2, backgroundColor: 'primary', '&:hover': { backgroundColor: 'primary.dark' } }}
         >
           Notify Me

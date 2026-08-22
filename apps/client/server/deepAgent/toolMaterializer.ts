@@ -1,12 +1,20 @@
 import { Resource } from 'sst';
-import { buildSharedTools, type ToolBuilderDeps, type ToolBuilderCallbacks } from '@bike4mind/services';
+import {
+  buildSharedTools,
+  resolveToolAvailability,
+  type ToolBuilderDeps,
+  type ToolBuilderCallbacks,
+} from '@bike4mind/services';
 import {
   adminSettingsRepository,
   apiKeyRepository,
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  fallbackLakeSettingsRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
+  organizationRepository,
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -56,7 +64,19 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
     }
 
     const apiKeyTable = await buildSystemApiKeyTable(config.logger);
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Resolved for the OWNER, not the system identity the key table above uses. That table only
+    // backs the model; every key-gated tool resolves its own key from `context.userId` at call
+    // time, which is `toolDeps.userId` = ownerUserId below - so resolving as 'system' here would
+    // gate on keys the tools never use. Fail-closed: a deep agent runs headless, with nobody to
+    // add a missing key mid-wake. Never rejects, so it is safe in this Promise.all.
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        ownerUserId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger: config.logger }
+      ),
+    ]);
 
     const toolDeps: ToolBuilderDeps = {
       userId: ownerUserId,
@@ -71,10 +91,13 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
@@ -99,6 +122,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       buildSharedTools(toolDeps, toolCallbacks, {
         enabledTools: enabledToolNames,
         config: { deep_research: true },
+        toolAvailability,
       }) ?? []
     );
   };

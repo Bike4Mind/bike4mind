@@ -15,6 +15,7 @@ export * from './PendingOtcTokenModel';
 export * from './RegistrationInviteModel';
 export * from './SessionModel';
 export * from './SubscriberModel';
+export * from './TrustedDeviceModel';
 export * from './UserActivityCounterModel';
 export * from './UserApiKeyAuditLogModel';
 export * from './UserApiKeyModel';
