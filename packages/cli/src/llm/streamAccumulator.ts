@@ -38,6 +38,10 @@ export class StreamAccumulator {
   private toolsUsed: ToolUse[] = [];
   private thinkingBlocks: unknown[] = [];
   private lastUsageInfo: CompletionInfo = {};
+  // Latched separately from lastUsageInfo, which is wholesale REPLACED by each
+  // usage-bearing event: stopReason can arrive on a different event than the final
+  // usage numbers, so folding it in there would let a later event drop it.
+  private stopReason: string | undefined;
 
   /**
    * Fold one streaming event into the accumulated turn. `error` events carry no
@@ -51,6 +55,7 @@ export class StreamAccumulator {
         if (event.usage || event.credits) {
           this.lastUsageInfo = extractUsageInfo(event);
         }
+        if (event.stopReason) this.stopReason = event.stopReason;
         break;
       case 'tool_use':
         if (event.text) this.accumulatedText += event.text;
@@ -59,6 +64,7 @@ export class StreamAccumulator {
         if (event.usage || event.credits) {
           this.lastUsageInfo = extractUsageInfo(event);
         }
+        if (event.stopReason) this.stopReason = event.stopReason;
         break;
       case 'error':
         break;
@@ -97,10 +103,11 @@ export class StreamAccumulator {
         toolsUsed: this.toolsUsed,
         thinking: this.thinkingBlocks.length > 0 ? this.thinkingBlocks : undefined,
         ...this.lastUsageInfo,
+        stopReason: this.stopReason,
       };
       await callback([cleanedText], info);
     } else if (cleanedText) {
-      await callback([cleanedText], this.lastUsageInfo);
+      await callback([cleanedText], { ...this.lastUsageInfo, stopReason: this.stopReason });
     }
   }
 }

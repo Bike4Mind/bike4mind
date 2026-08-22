@@ -127,3 +127,73 @@ describe('notebook import: chat history', () => {
     expect(item.promptMeta).toBeUndefined();
   });
 });
+
+const withAttachments = {
+  exportVersion: '1.0.0',
+  notebooks: [
+    {
+      ...NOTEBOOK,
+      tools: [{ id: 'exported-tool-id', name: 'Tool One', createdAt: '2026-01-01T00:00:00.000Z' }],
+      agents: [{ id: 'exported-agent-id', name: 'Agent One', createdAt: '2026-01-01T00:00:00.000Z' }],
+    },
+  ],
+};
+
+/** The store assigns the id; recording anything else leaves a reference that resolves to nothing. */
+describe('attachment ids come from the store, not from this service', () => {
+  const runWithAttachments = async (opts: Record<string, unknown>) => {
+    const { adapters } = makeAdapters();
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-tool-id' });
+    (adapters.agentRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-agent-id' });
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      withAttachments as never,
+      {
+        ...OPTIONS,
+        importTools: true,
+        importAgents: true,
+        ...opts,
+      } as never
+    );
+    const sessionCreate = adapters.sessionRepository.create as ReturnType<typeof vi.fn>;
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    return sessionCreate.mock.calls[0][0];
+  };
+
+  it.each([true, false])('records store-assigned attachment ids, preserveIds=%s', async preserveIds => {
+    const sessionData = await runWithAttachments({ preserveIds });
+    expect(sessionData.toolIds).toEqual(['store-tool-id']);
+    expect(sessionData.agentIds).toEqual(['store-agent-id']);
+  });
+
+  /**
+   * `id` is not a SessionSchema path - it is Mongoose's getter-only `_id` virtual - so passing it
+   * is silently dropped. Sending it anyway is what made "Preserve Original IDs" look functional
+   * for notebooks when it never was.
+   */
+  it('does not send an id the session schema will drop', async () => {
+    const sessionData = await runWithAttachments({ preserveIds: true });
+    expect('id' in sessionData).toBe(false);
+  });
+});
+
+/** A store that returns no id must skip the attachment, not record a stringified `undefined`. */
+describe('an attachment store that returns no id is not recorded', () => {
+  it('warns and records nothing rather than storing the string "undefined"', async () => {
+    const { adapters } = makeAdapters();
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      withAttachments as never,
+      {
+        ...OPTIONS,
+        importTools: true,
+      } as never
+    );
+
+    const sessionData = (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(sessionData.toolIds).toEqual([]);
+    expect(result.warnings?.join(' ')).toContain('tool store returned no id');
+  });
+});

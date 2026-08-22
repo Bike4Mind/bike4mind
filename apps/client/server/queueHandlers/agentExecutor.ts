@@ -29,6 +29,7 @@ import {
   fabFileChunkRepository,
   projectRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
   mongoose,
   agentExecutionRepository,
   agentRepository,
@@ -72,6 +73,7 @@ import {
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -1300,6 +1302,7 @@ async function processExecution(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls (add_entity / set_value / query). Without this
         // adapter they fall back to an in-memory id that fails the ObjectId
@@ -1351,6 +1354,12 @@ async function processExecution(
     // "image 1 of N" grid renders just like classic chat after the run completes.
     const generatedImages: string[] = [];
 
+    // Per-turn retrieval outcome, accumulated the same way generatedImages is above: the agent
+    // path has no live quest to accrete onto during the run, so tool calls' retrieval writes are
+    // merged here (same OR/worst-of policy as classic chat's applyQuestStatusChanges) and flushed
+    // through persistRunAsQuest once the run completes (#1867).
+    let retrievalSummary: RetrievalSummary | undefined;
+
     // UI side-effects a tool emitted (e.g. optimizer console populate). The chat path
     // collects these on quest.uiSideEffects via its onUiSideEffect callback; the agent
     // path never supplied one, so they were silently dropped. `pendingSideEffects` buffers
@@ -1366,6 +1375,9 @@ async function processExecution(
           for (const img of changes.images) {
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
+        }
+        if (changes?.promptMeta?.retrieval) {
+          retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
         if (status) {
           await sendWs('progress', { executionId, status });
@@ -2031,7 +2043,8 @@ async function processExecution(
           logger,
           generatedImages,
           undefined,
-          allSideEffects
+          allSideEffects,
+          retrievalSummary
         );
         return;
       }
@@ -2512,7 +2525,8 @@ async function processExecution(
       logger,
       generatedImages,
       finalCheckpoint.finishReason,
-      allSideEffects
+      allSideEffects,
+      retrievalSummary
     );
 
     // Memento parity with chat_completion, write side. Gates come from the resolver's verdict
@@ -2542,7 +2556,10 @@ async function processExecution(
       const userFacingMessage = toUserFacingFailureMessage(errorMessage);
       await sendWs('failed', { executionId, reason: 'error', message: userFacingMessage });
       // Persist the failed run in chat history so the user still sees their
-      // prompt after refresh, with the (sanitized) reason as the reply.
+      // prompt after refresh, with the (sanitized) reason as the reply. Pre-existing 3-arg call
+      // (matches origin/main): generatedImages/finishReason/allSideEffects/retrievalSummary are
+      // all omitted here already, not something this PR changed - a hard-error path deliberately
+      // does not claim partial content or partial retrieval signal alongside the failure.
       await persistRunAsQuest(executionId, `${userFacingMessage}.`, logger);
     } catch (cleanupErr) {
       logger.error('[Error] Failed to update execution status on error', {
@@ -2889,6 +2906,7 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Required for the Lattice opt-in pool below to actually work: the
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls. Without this adapter they fall back to an in-memory
@@ -2922,6 +2940,12 @@ async function processSubagentDispatch(
     };
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {
+        // KNOWN GAP (#1867): a dispatched subagent's retrieval calls are not accumulated here.
+        // Unlike images (addImagesByAgentExecutionId below), there is no equivalent
+        // mergeRetrievalByAgentExecutionId write path onto the parent's Quest, so a nested
+        // subagent that calls a knowledge tool leaves no retrieval record on the diagnosis
+        // panel for that turn. Tracked as a fast-follow rather than added here.
+        //
         // A subagent has no Quest of its own and runs in a separate Lambda from the parent,
         // so any images it generates would never reach the chat bubble. Write them onto the
         // PARENT's Quest so they render inline alongside the parent's images ($addToSet keeps
@@ -3103,6 +3127,16 @@ async function processSubagentDispatch(
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
       availableModels: models,
+      // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
+      // orchestrator cannot test whether a grandchild's model is serviceable and
+      // falls back to pairing this child's backend with the grandchild's model id
+      // - the 404 that the pairing fix exists to prevent, one level down.
+      resolveBackend: (modelId: string) => {
+        const info = models.find((m: { id: string }) => m.id === modelId);
+        return info
+          ? getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo: info, logger, endUserId: child.userId })
+          : null;
+      },
       signal: abortController.signal,
       onProgress: async (status: string) => {
         await sendWs('progress', { executionId: parentId, status });

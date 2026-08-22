@@ -1,4 +1,10 @@
-import { IChatHistoryItemRepository, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IChatHistoryItemRepository,
+  IFabFileRepository,
+  ISessionRepository,
+  IUserRepository,
+  rebindPromptMetaSession,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
@@ -17,7 +23,7 @@ type ForkSessionAdapters = {
     fabFiles: IFabFileRepository;
     chatHistories: Pick<
       IChatHistoryItemRepository,
-      'findById' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
+      'findBySessionIdAndId' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
     >;
   };
 } & CreateSessionAdapters;
@@ -32,7 +38,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   const session = await db.sessions.findByIdAndUserId(sessionId, userId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await db.chatHistories.findById(messageId);
+  const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
 
   const newSession = await createSession(
@@ -54,10 +60,13 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   );
 
   await Promise.all(
-    messagesToFork.map(async ({ id, ...messageData }) => {
+    messagesToFork.map(async ({ id, promptMeta, ...messageData }) => {
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,
+        // Not cosmetic: the store REQUIRES promptMeta.session.{id,userId} on create(), and quests
+        // carrying promptMeta with no session block exist on disk - see rebindPromptMetaSession.
+        promptMeta: rebindPromptMetaSession(promptMeta, { sessionId: newSession.id, userId }),
       });
     })
   );

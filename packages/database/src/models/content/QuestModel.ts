@@ -42,6 +42,20 @@ const LakeMemorySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
+// Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
+// auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
+// re-parse since `attempted`/`outcome` are required). Top-level on promptMeta, not nested under
+// `context` - see the field's own comment in QuestModel.ts and in promptMeta.ts for why a
+// one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
+const RetrievalSummarySchema = subSchema({
+  attempted: { type: Boolean, required: true },
+  // No enum -- see the file header on why this schema's job is to not lose the value, not
+  // to validate it. Zod (RetrievalSummarySchema, promptMeta.ts) remains the contract.
+  outcome: { type: String, required: true },
+  surfaces: [{ type: String, required: false }],
+  dataLakeTags: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -263,6 +277,9 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         verbatimTurnsExcluded: { type: Number, required: false },
       },
     },
+    // Must stay in sync with the Zod PromptMeta `retrieval` (parity test enforces it). Top-level,
+    // not nested under `context` above - see RetrievalSummarySchema's comment.
+    retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
@@ -351,7 +368,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     claudeMessageId: { type: String, required: false },
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
-    prompt: { type: String, required: true },
+    // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
+    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
+    // could therefore never protect the write that omits it; it only fired on create(), the copy
+    // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
+    // notebook. Same reasoning as promptMeta.session (see rebindPromptMetaSession), one field over.
+    // Note `prompt ?? ''` is not an alternative: Mongoose's `required` on a String rejects '' too.
+    prompt: { type: String, required: false },
     fabFileIds: { type: [String], required: false },
     agentIds: { type: [String], required: false },
     reply: { type: String, required: false },

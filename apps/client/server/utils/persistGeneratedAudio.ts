@@ -1,6 +1,12 @@
 import { Logger } from '@bike4mind/observability';
 import { KnowledgeType, extensionFromMimeType, type AudioSaveSkippedReason } from '@bike4mind/common';
-import { FabFile, User, adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
+import {
+  FabFile,
+  User,
+  adminSettingsRepository,
+  dataLakeRepository,
+  scopedSettingsRepository,
+} from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 
@@ -80,6 +86,9 @@ export async function persistGeneratedAudio(params: {
       {
         db: {
           adminSettings: adminSettingsRepository,
+          // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
+          // enforcement override would silently not apply on this door.
+          scopedSettings: scopedSettingsRepository,
           fabFiles: FabFile,
           users: User,
           dataLakes: dataLakeRepository,

@@ -6,7 +6,7 @@ export const ResearcherAgent = (config?: ServerAgentConfig): ServerAgentDefiniti
   description:
     'Information gathering, web search, documentation search, and multi-source synthesis. Delegate when users need research, information lookup, or comprehensive answers from multiple sources.',
   model: config?.model ?? ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
-  fallbackModels: [ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
+  fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
   defaultThoroughness: config?.defaultThoroughness ?? 'medium',
   maxIterations: { quick: 3, medium: 8, very_thorough: 15 },
   deniedTools: ['image_generation', 'edit_image', 'delegate_to_agent', ...(config?.extraDeniedTools ?? [])],

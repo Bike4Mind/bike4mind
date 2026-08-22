@@ -2,6 +2,7 @@ import {
   IAdminSettingsRepository,
   IDataLakeRepository,
   IFabFileDocument,
+  IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
 } from '@bike4mind/common';
@@ -28,6 +29,10 @@ type CreateFabFileByUrlAdapters = {
       create: (data: Omit<IFabFileDocument, 'id'>) => Promise<IFabFileDocument>;
     };
     adminSettings: IAdminSettingsRepository;
+    // Optional, but wire it: this `db` is handed straight to `createFabFile`, whose admission
+    // contract (#1680) resolves its enforcement lever from here. Absent, the lever resolves
+    // platform-only and a per-org/owner/lake override silently does nothing on this door.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };

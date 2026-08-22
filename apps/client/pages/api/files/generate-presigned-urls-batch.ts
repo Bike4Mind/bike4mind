@@ -17,6 +17,7 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
@@ -61,11 +62,32 @@ const handler = baseApi().post(async (req: Request, res) => {
   }
   const datalakeTag = dataLake?.datalakeTag;
 
+  // The admission contract (#1680) for the lake this upload is JOINING. `assertLakeWriteAccess`
+  // above answered "may you write here"; this answers "will this content be findable once it is
+  // here". Checked before a single presigned URL is handed out, so a refused upload costs no S3
+  // round-trip and no embedding spend. No FabFile exists yet, so the subject is the owner-to-be
+  // (the uploader) and the gate predicts from THEIR chunk policy - the same value fabFileChunk
+  // will resolve. Report-only unless the lake's EnforceLakeAdmission lever is on.
+  const admissionSettings = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
+  if (dataLake) {
+    await dataLakeService.assertLakeAdmission([dataLake], [{ userId }], {
+      db: admissionSettings,
+      logger: req.logger,
+    });
+  }
+
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
   // through per-file tags. Gate every such tag with the same write check.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
   await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
-    db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    db: {
+      dataLakes: dataLakeRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      ...admissionSettings,
+    },
+    // These files are being created by this request, so the uploader is their owner-to-be.
+    members: [{ userId }],
+    logger: req.logger,
   });
   // This route creates each FabFile through the manager's direct FabFile.create(), not the
   // fabFileService.createFabFile door that gates the static-registry namespace centrally - so

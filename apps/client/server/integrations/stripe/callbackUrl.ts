@@ -4,16 +4,20 @@
  * hosted page - letting an attacker (or a confused admin) point them at an
  * external domain is an open-redirect / phishing vector through Stripe's brand.
  *
- * Fail-closed semantics: if APP_URL is not configured in a production-shaped
- * environment we reject rather than waving everything through. The dev-only
- * pass-through guards against the obvious misconfiguration (typo, secret
- * rotation gone bad, new stage missing the var) silently disabling the check.
+ * Fail-closed semantics: with APP_URL missing, anything that is not local development
+ * rejects rather than waving every origin through. Deliberately `!== 'development'` and not
+ * `=== 'production'`: `next build` bakes NODE_ENV into the server bundle and nothing in
+ * infra/ sets it per stage, so it cannot tell deployed stages apart - only a local dev
+ * process from everything else. Same NODE_ENV predicate as
+ * server/utils/telemetryHashLookup.ts:16, which warns rather than rejects. APP_URL is
+ * injected per-construct rather than globally (see infra/constants.ts), so a future
+ * construct that forgets it fails closed here instead of silently disabling the check.
  */
 export function isAllowedCallbackOrigin(url: string): boolean {
   const appUrl = process.env.APP_URL;
   if (!appUrl) {
-    if (process.env.NODE_ENV === 'production') return false;
-    return true; // dev convenience; APP_URL is set in all deployed stages
+    if (process.env.NODE_ENV !== 'development') return false;
+    return true; // local dev only; APP_URL is injected in all deployed stages
   }
   try {
     return new URL(url).origin === new URL(appUrl).origin;

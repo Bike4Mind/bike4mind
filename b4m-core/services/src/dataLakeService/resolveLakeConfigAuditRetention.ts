@@ -2,13 +2,23 @@ import { IAdminSettingsRepository, resolveLakeConfigAuditRetentionDays } from '@
 import { getSettingsByNames } from '@bike4mind/utils';
 
 /**
- * The minimal logger the lake services thread (`req.logger` at the routes). `warn` is OPTIONAL so
- * this accepts BOTH house adapter flavors - the required-`warn` shape (transferLakeOwnership,
+ * The minimal logger the lake services thread (`req.logger` at the routes). Both methods are OPTIONAL
+ * so this accepts BOTH house adapter flavors - the required-`warn` shape (transferLakeOwnership,
  * archiveDataLake) and the optional-method shape (`{ warn?: ... }`, used by the fabFileService tag
  * doors) - without forcing a cast at either kind of call site. A full `Logger` satisfies it too.
- * The consumer falls back to `console.warn`, so an absent method still cannot go silent.
+ *
+ * `warn` is for a degraded-but-correct outcome (a settings read that fell back to the floor default);
+ * `error` is for AUDIT LOSS, matching the read-side twin's severity. A consumer falls back through
+ * whichever method exists and finally to `console`, so an absent method still cannot go silent - see
+ * `recordLakeConfigChange`, which resolves error -> warn -> `console.error`.
  */
-export type LakeConfigAuditLogger = { warn?: (msg: string, ...args: unknown[]) => void };
+export type LakeConfigAuditLogger = {
+  warn?: (msg: string, ...args: unknown[]) => void;
+  // `meta?: Record<string, unknown>` rather than `...args: unknown[]`: the app's own Logger declares
+  // error narrowly (see recomputeStatsForLakeTags), and a rest-of-unknown parameter here would refuse
+  // it. This shape accepts both that logger and a wider one.
+  error?: (msg: string, meta?: Record<string, unknown>) => void;
+};
 
 /**
  * Read the platform-configured lake CONFIG-audit retention, already floor/ceiling-clamped.

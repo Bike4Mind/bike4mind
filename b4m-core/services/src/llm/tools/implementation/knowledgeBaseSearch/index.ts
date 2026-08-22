@@ -4,6 +4,7 @@ import {
   getEmbeddingModelCost,
   IFabFileDocument,
   isSupportedEmbeddingModel,
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -25,17 +26,19 @@ import {
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
-import {
-  describeEmbeddingMismatch,
-  PARTIAL_RESULTS_STATUS_SUFFIX,
-} from '../../../../dataLakeService/embeddingMismatch';
+import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
+import { describeSearchLimitations } from '../../../../dataLakeService/retrievalUnavailable';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   SemanticChunkResult,
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
-import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
+import {
+  positiveIntOr,
+  resolveSearchBudgets,
+  type ResolvedSearchBudgets,
+} from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
 import { attributeAccessedLakeIds, type AttributableLake } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
@@ -301,7 +304,8 @@ async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
   corpusLabel: string,
-  skipNotice?: string | null
+  skipNotice?: string | null,
+  dataLakeTags: string[] = []
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -332,7 +336,13 @@ async function emitSemanticCitables(
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
     // does not narrow to this literal. Pre-existing pattern in this file.
-    { promptMeta: { citables, ...(skipNotice ? { warnings: [skipNotice] } : {}) } } as any,
+    {
+      promptMeta: {
+        citables,
+        ...(skipNotice ? { warnings: [skipNotice] } : {}),
+        retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
+      },
+    } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
 }
@@ -427,7 +437,7 @@ async function trySemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    const skipNotice = describeSearchLimitations(search);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
     if (search.results.length === 0)
       return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
@@ -438,7 +448,7 @@ async function trySemanticKbSearch(
     // value arrives already clamped to KB_SEARCH_MAX_RESULTS; this arm must not re-derive it.
     const ranked = search.results.slice(0, maxResults);
 
-    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
+    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice, dataLakeTags);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
@@ -462,7 +472,16 @@ async function trySemanticKbSearch(
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
-    // A genuine failure must not fabricate a notice.
+    // A genuine failure must not fabricate a notice. It also must not go unrecorded: the
+    // keyword arm below runs next and, on a hit, would otherwise be the only write this turn,
+    // stamping outcome:'ok' over a search that actually threw. Recording 'failed' here relies on
+    // mergeRetrievalSummary's worst-of-severity merge (failed always outranks ok) to survive that
+    // later write (#1867 review).
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+      },
+    } as any);
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -511,12 +530,12 @@ async function tryScopedSemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    const skipNotice = describeSearchLimitations(search);
     if (search.results.length === 0)
       return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 
     const ranked = search.results.slice(0, maxResults);
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice, []);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
     return {
@@ -529,17 +548,52 @@ async function tryScopedSemanticKbSearch(
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
+    // See the matching catch in trySemanticKbSearch above: relies on mergeRetrievalSummary's
+    // worst-of-severity merge to survive the scoped keyword arm's later 'ok' write.
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+      },
+    } as any);
     return NO_SEMANTIC_RESULT;
   }
 }
 
 /**
- * Bounds on `max_results`. The tool schema below and the clamp in the handler BOTH read these,
+ * Ceiling on `max_results`. The tool schema below and the clamp in the handler BOTH read this,
  * so the number advertised to the model and the number enforced on it cannot drift apart - the
  * same reason the serve budget is derived from the chunk policy rather than set beside it.
+ *
+ * Stays a coded constant rather than the `kbSearchDefaultResults` setting's sibling lever: it is
+ * also the tool schema's advertised `maximum`, and that schema is built synchronously (see
+ * `knowledgeBaseSearchTool.implementation` below), so raising it here alone would be inert - a
+ * model reading `maximum: 10` from its own tool schema won't ask for more than 10 regardless.
  */
 export const KB_SEARCH_MAX_RESULTS = 10;
-export const KB_SEARCH_DEFAULT_RESULTS = 5;
+
+/**
+ * The admin's configured `kbSearchDefaultResults`, or the coded default on anything unusable.
+ * Mirrors `resolveForcedRetrievalCharBudget` in `ChatCompletionFeatures.ts`: same try/catch
+ * shape, same loud-fallback policy, same "resolved once per turn" discipline enforced by the
+ * caller (see the closure-scoped cache in `knowledgeBaseSearchTool.implementation`).
+ */
+async function resolveKbSearchDefaultResults(context: ToolContext): Promise<number> {
+  try {
+    const configured = await context.db.adminSettings.getSettingsValue('kbSearchDefaultResults');
+    return positiveIntOr(
+      configured as string | number | null | undefined,
+      KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+      'kbSearchDefaultResults',
+      context.logger
+    );
+  } catch (err) {
+    context.logger.warn(
+      `Knowledge base search: failed to read kbSearchDefaultResults; falling back to ${KB_SEARCH_DEFAULT_RESULTS_DEFAULT}`,
+      err
+    );
+    return KB_SEARCH_DEFAULT_RESULTS_DEFAULT;
+  }
+}
 
 /**
  * Narrow a model-supplied `max_results` to the bound the schema advertises.
@@ -554,13 +608,19 @@ export const KB_SEARCH_DEFAULT_RESULTS = 5;
  * the model nothing, a negative slices off the best-ranked results, and a non-numeric poisons
  * topK as NaN. Typed `unknown` because the declared `number` is only a claim about JSON we parsed.
  *
- * Unset takes the default rather than the floor, matching positiveIntOr in resolveSearchBudgets:
- * `null` and `''` are the model declining to choose, not a request for one result.
+ * Unset takes `defaultResults` rather than the floor, matching positiveIntOr in
+ * resolveSearchBudgets: `null` and `''` are the model declining to choose, not a request for one
+ * result. `defaultResults` is the caller's already-resolved `kbSearchDefaultResults` value, not
+ * re-read here, so this stays synchronous. It is still run through the same clamp below: the
+ * setting's own schema already rejects a stored value above KB_SEARCH_MAX_RESULTS, but clamping
+ * here too keeps that ceiling a guarantee of this function, not a fact borrowed from a different
+ * package's validation.
  */
-function clampMaxResults(raw: unknown): number {
-  if (raw === undefined || raw === null || raw === '') return KB_SEARCH_DEFAULT_RESULTS;
+function clampMaxResults(raw: unknown, defaultResults: number): number {
+  const safeDefault = Math.min(Math.max(defaultResults, 1), KB_SEARCH_MAX_RESULTS);
+  if (raw === undefined || raw === null || raw === '') return safeDefault;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return KB_SEARCH_DEFAULT_RESULTS;
+  if (!Number.isFinite(n)) return safeDefault;
   return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
 }
 
@@ -693,14 +753,19 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
     let lastSkipNotice: string | null = null;
+    // Resolved at most once per completion, same discipline as searchCallCount above -
+    // getSettingsValue is an uncached read, so a settings read on every search_knowledge_base
+    // call would cost a real DB round-trip for no benefit.
+    let defaultResultsPromise: Promise<number> | undefined;
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
         await context.onStart?.('search_knowledge_base', params);
         const { query, tags, file_type } = params;
+        defaultResultsPromise ??= resolveKbSearchDefaultResults(context);
         // Every consumer below reads maxResults, never params.max_results: one clamp at the
         // single entry point is what keeps a later edit from reopening the hole at one of them.
-        const maxResults = clampMaxResults(params.max_results);
+        const maxResults = clampMaxResults(params.max_results, await defaultResultsPromise);
 
         searchCallCount++;
         if (searchCallCount > MAX_SEARCHES) {
@@ -722,6 +787,13 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Base Search: fabfiles repository not available');
+          // Both the semantic and keyword arms below depend on context.db.fabfiles - with it
+          // absent, nothing can be searched, so this is a genuine failure, not an abstain.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base search is not available at this time.';
         }
 
@@ -732,6 +804,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
           // empty-scope agent surface must read as a pure "nothing in scope" early return, not
           // acquire new behavior tied to a signal this surface was never designed to receive.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return formatSearchResults([]);
         }
 
@@ -946,7 +1023,18 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
             await context.statusUpdate(
-              { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
+              {
+                promptMeta: {
+                  citables,
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'ok',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                  },
+                },
+              } as any,
               foundStatus
             );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
@@ -955,7 +1043,19 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
             const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
-              { promptMeta: semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {} } as any,
+              {
+                promptMeta: {
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  // Ran to completion and legitimately found nothing - must be distinguishable
+                  // from "never searched" (#1867).
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'ok',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                  },
+                },
+              } as any,
               (scope
                 ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
                 : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix
@@ -1003,6 +1103,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           );
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
+          // A retrieval that threw must not be byte-identical to one never attempted (#1867).
+          // dataLakeTags is empty here - the error can occur before any arm resolves which lakes
+          // were in scope, so there is nothing honest to stamp at this outer catch.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return 'An error occurred while searching your knowledge base. Please try again.';
         }
       },
@@ -1031,7 +1139,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             },
             max_results: {
               type: 'number',
-              description: `Maximum number of results to return (default: ${KB_SEARCH_DEFAULT_RESULTS}, max: ${KB_SEARCH_MAX_RESULTS})`,
+              // This schema is built synchronously (see the comment on KB_SEARCH_MAX_RESULTS
+              // above), so it cannot read the live kbSearchDefaultResults setting. Omitting the
+              // default rather than stating the coded one avoids the model reading a stale number
+              // and passing it explicitly as max_results, which would bypass an admin's raised
+              // default on every such call.
+              description: `Maximum number of results to return (max: ${KB_SEARCH_MAX_RESULTS})`,
               minimum: 1,
               maximum: KB_SEARCH_MAX_RESULTS,
             },

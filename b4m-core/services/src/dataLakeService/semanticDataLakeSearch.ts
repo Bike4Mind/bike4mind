@@ -28,6 +28,12 @@ import {
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
 import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
+import {
+  buildRetrievalUnavailableReport,
+  emptyRetrievalUnavailableReport,
+  partitionByIndexAvailability,
+  type RetrievalUnavailableReport,
+} from './retrievalUnavailable';
 import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
@@ -165,6 +171,13 @@ export interface SemanticDataLakeSearchResult {
    * space". A lake can be fully scanned and still return a partial answer.
    */
   embeddingMismatch: EmbeddingMismatchReport;
+  /**
+   * What was in scope but could not be SERVED, as distinct from what could not be COMPARED
+   * (`embeddingMismatch`) or was not REACHED (`scan.truncated`). Content mid-(re)index has no
+   * vectors and its previous ones are already gone, so it is refused rather than allowed to
+   * contribute nothing while its neighbours are re-ranked into the top-K (#1681 constraint 1).
+   */
+  retrievalUnavailable: RetrievalUnavailableReport;
   /** Same value as `scan.filesScoped`; retained for existing consumers. */
   filesInScope: number;
   embeddingModel: string;
@@ -246,6 +259,19 @@ interface RankableFile {
   vectorizedChunkCount?: number;
   /** ANN readiness signal, shared by the Atlas and self-host OpenSearch paths - see vectorSearchEligibility.ts. */
   chunkEmbeddingModelStampedAt?: Date | string | null;
+  /**
+   * The next three exist for the mid-(re)index refusal (#1681) and are read ONLY by
+   * `partitionByIndexAvailability`. `chunkCount` with `vectorizedChunkCount` says whether the file's
+   * chunks are embedded yet; `error` and `notes` say whether a shortfall is a genuine in-flight
+   * pass or a permanent stall (which must NOT be withheld, or a broken file silently marks every
+   * search partial forever).
+   */
+  chunkCount?: number;
+  error?: string | null;
+  notes?: string | null;
+  /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
+   *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
+  chunkRebuildRequestedAt?: Date | string | null;
 }
 
 /**
@@ -313,6 +339,7 @@ function emptyResult(
     chunksScored: 0,
     embeddingModel,
     embeddingMismatch: emptyEmbeddingMismatchReport(),
+    retrievalUnavailable: emptyRetrievalUnavailableReport(),
     scan: { ...emptyScanAccounting(budgets), ...overrides },
     alternateModelsEmbedded: [],
   };
@@ -574,7 +601,7 @@ async function rankChunksForFiles(args: {
   // Withhold files whose recorded model puts their vectors in another embedding space, BEFORE the
   // scan: foreign vectors then never enter a page and never spend the chunk budget, so a large
   // off-model file cannot crowd out chunks that could have matched.
-  const scopedFiles = fileIds.map(id => {
+  const allScopedFiles = fileIds.map(id => {
     const file = fileById.get(id);
     return {
       id,
@@ -582,8 +609,25 @@ async function rankChunksForFiles(args: {
       embeddingModel: file?.embeddingModel,
       vectorizedChunkCount: file?.vectorizedChunkCount,
       chunkEmbeddingModelStampedAt: file?.chunkEmbeddingModelStampedAt,
+      chunkCount: file?.chunkCount,
+      error: file?.error,
+      notes: file?.notes,
+      chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
     };
   });
+  // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old
+  // vectors are already deleted and their new chunks carry none, so they can only contribute
+  // nothing - the choice is between reporting that and letting the top-K quietly fill up with
+  // neighbours. Refusing here rather than after the scan also keeps them out of the mismatch
+  // report, where a vector-less file would otherwise be miscounted as an embedding-space problem.
+  const { servable: scopedFiles, withheld: reindexing } = partitionByIndexAvailability(allScopedFiles);
+  const retrievalUnavailable = buildRetrievalUnavailableReport(reindexing);
+  if (reindexing.length > 0) {
+    logger?.warn?.(
+      `[semanticSearch] withheld ${reindexing.length} file(s) that are mid-(re)index; results are partial`,
+      { fileIds: reindexing.slice(0, 5).map(f => f.id) }
+    );
+  }
   const { primary: rankable, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
   // Foreign-model files no path has served (yet). Filtering `scopedFiles` (rather than
   // concatenating the grouper's alternate buckets) preserves scope order, so `excludedFiles.sample`
@@ -606,6 +650,7 @@ async function rankChunksForFiles(args: {
     return {
       ...emptyResult(embeddingModel, budgets, { filesMatching: args.filesMatching, filesScoped: fileIds.length }),
       embeddingMismatch: mismatch.report(),
+      retrievalUnavailable,
     };
   }
 
@@ -879,6 +924,7 @@ async function rankChunksForFiles(args: {
     filesInScope: scan.filesScoped,
     chunksScored: scanned.chunksScored,
     embeddingMismatch: mismatchReport,
+    retrievalUnavailable,
     embeddingModel,
     scan,
     alternateModelsEmbedded,
@@ -945,6 +991,16 @@ export async function semanticDataLakeSearch(
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
+        // Index-state fields for the mid-(re)index refusal (#1681). Both builders must carry them:
+        // a builder that omits them hands the partition a file with chunkCount undefined, which
+        // reads as "nothing to withhold" and re-arms the silent-degradation bug on that entrypoint.
+        chunkCount: f.chunkCount,
+        error: f.error,
+        notes: f.notes,
+        // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
+        // ranking map below still names it) is exactly the omission this comment warns about, and it
+        // fails silently - the member reads as an image and is served.
+        chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
       },
     ])
   );
@@ -1032,6 +1088,16 @@ export async function fileScopedSemanticSearch(
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
+        // Index-state fields for the mid-(re)index refusal (#1681). Both builders must carry them:
+        // a builder that omits them hands the partition a file with chunkCount undefined, which
+        // reads as "nothing to withhold" and re-arms the silent-degradation bug on that entrypoint.
+        chunkCount: f.chunkCount,
+        error: f.error,
+        notes: f.notes,
+        // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
+        // ranking map below still names it) is exactly the omission this comment warns about, and it
+        // fails silently - the member reads as an image and is served.
+        chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
       },
     ])
   );

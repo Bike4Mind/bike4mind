@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
-import { ErrorResponse } from './schemas';
+import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
 // Specific file, not the barrel (`../schemas`): the barrel re-exports actions.ts,
 // which imports @bike4mind/hearth - absent in the install-only CI openapi job.
 import { ApiErrorSchema } from '../schemas/chat';
@@ -21,6 +21,26 @@ type ContractResponse = {
  * JSON shape to model, only a media type.
  */
 const BINARY_SCHEMA = { type: 'string', contentEncoding: 'binary' } as const;
+
+/**
+ * Re-apply the deprecation to a `name` a bespoke error schema inherited from
+ * `ApiErrorSchema` (see CONVENTIONS.md section 1: those extend the envelope rather than
+ * re-declaring it). `.extend()` carries the field through as a plain optional string, so
+ * without this the sunset notice would appear on the shared `ErrorResponse` component and
+ * nowhere else. Keyed on field *identity*, not the name `name`, so a schema that declares
+ * a `name` of its own - a person's name, say - is left alone.
+ */
+function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
+  // Structural rather than `z.ZodObject`: that type's shape values widen to $ZodType,
+  // which does not carry the `.openapi()` augmentation.
+  const objectSchema = schema as unknown as {
+    shape?: Record<string, z.ZodTypeAny>;
+    extend?: (shape: Record<string, z.ZodTypeAny>) => z.ZodTypeAny;
+  };
+  const inherited = objectSchema.shape?.name;
+  if (!inherited || inherited !== ApiErrorSchema.shape.name || !objectSchema.extend) return schema;
+  return objectSchema.extend({ name: inherited.openapi(DEPRECATED_NAME_METADATA) });
+}
 
 /**
  * Register a transport-agnostic {@link EndpointContract} as an OpenAPI operation.
@@ -50,7 +70,7 @@ export function registerContract(contract: EndpointContract): void {
       ? BINARY_SCHEMA
       : body.schema === ApiErrorSchema
         ? ErrorResponse
-        : body.schema.openapi(componentName, {
+        : annotateInheritedName(body.schema).openapi(componentName, {
             ...(body.example !== undefined && { example: body.example }),
           });
 

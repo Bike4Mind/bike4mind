@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FabFile, FabFileChunk, fabFileRepository, fabFileChunkRepository } from '../models/content/FabFileModel';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE, REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
 import { setupMongoTest } from '../__test__/utils';
 
 const TAG = 'datalake:rebuild-test';
@@ -99,6 +100,92 @@ describe('FabFileRepository.findChunkedFilesByScope', () => {
   });
 });
 
+describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('finds both arms: nothing retrievable, no error, marker set', async () => {
+    // What a halted wave leaves behind. `findChunkedFilesByScope` needs chunked:true and
+    // `countFailedFilesByScope` needs a non-empty error, so without this read the rebuild door
+    // reported underChunkedCount 0 and hid its own button on the lake that needed it.
+    const [strandedChunkArm] = await FabFile.create([
+      makeFile({ userId: 'u1', chunked: false, chunkCount: 0, error: null, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+    ]);
+    // The VECTORIZE arm, and the one QA actually hit - it outnumbered the chunk arm ~33 to 1 live.
+    // Chunks exist and are correctly sized, so `chunked:true` puts it in findChunkedFilesByScope's
+    // set but findUnderChunkedFabFileIds has no oversized chunk to flag. It carries no vector, so the
+    // search read path returns nothing for it: QA measured a lake at `Reachable 41%` offering neither
+    // Converge nor Rebuild, because convergence graded these conformant and this read passed over them.
+    const [strandedVectorizeArm] = await FabFile.create([
+      makeFile({
+        userId: 'u1',
+        chunked: true,
+        chunkCount: 45,
+        vectorizedChunkCount: 0,
+        error: null,
+        notes: CONVERGENCE_PAUSED_NOTE,
+      }),
+    ]);
+    await FabFile.create([
+      makeFile({ userId: 'u1', chunked: false, chunkCount: 0 }), // chunkless, but never had passages
+      // Marker outlived a rescue-sweep rebuild (that path never resets, so `notes` survives) - the
+      // file is healthy again and must NOT be re-selected. vectorizedChunkCount MUST be set to a
+      // positive number here: leaving it at its 0 default describes a file with chunks and no vectors,
+      // which is the stranded vectorize arm above, not a repaired file - so the fixture would pass
+      // against a read that ignores the vector count entirely.
+      makeFile({ userId: 'u1', chunkCount: 4, vectorizedChunkCount: 4, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+      // Partially vectorized: some passages DO rank, so the repair door leaves it alone (same split
+      // partitionByIndexAvailability makes).
+      makeFile({ userId: 'u1', chunkCount: 90, vectorizedChunkCount: 40, notes: CONVERGENCE_PAUSED_NOTE }),
+      makeFile({ userId: 'u2', chunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE, isChunking: true }),
+      makeFile({ userId: 'u2', chunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE, deletedAt: new Date() }),
+      makeFile({
+        userId: 'u3',
+        chunkCount: 0,
+        notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        tags: [{ name: 'datalake:other', strength: 1 }],
+      }),
+    ]);
+
+    const result = await fabFileRepository.findConvergencePausedFilesByScope(scope);
+    expect(result.map(r => r.id).sort()).toEqual(
+      [strandedChunkArm._id.toString(), strandedVectorizeArm._id.toString()].sort()
+    );
+  });
+
+  // #1939's arm: a rebuild the reset stamped and nothing ever committed. There is no marker to find
+  // it by - a producer killed between the reset and its sends never reached the consumer that would
+  // have written one - so the stamp's AGE is what separates "stranded" from "still on the queue".
+  it('offers a stale pending rebuild, and leaves a fresh one alone', async () => {
+    const stale = new Date(Date.now() - REBUILD_PENDING_STALE_MS - 60_000);
+    const [stranded] = await FabFile.create([
+      makeFile({ userId: 'u1', chunked: false, chunkCount: 0, error: null, notes: '', chunkRebuildRequestedAt: stale }),
+    ]);
+    await FabFile.create([
+      // Enqueued moments ago: re-driving it would double-charge the embedder for a message that is
+      // simply waiting for its worker.
+      makeFile({ userId: 'u1', chunked: false, chunkCount: 0, notes: '', chunkRebuildRequestedAt: new Date() }),
+      // Terminally failed with its stamp still on it. Re-driving repeats the same failure every
+      // wave; countFailedFilesByScope is where these are reported instead.
+      makeFile({ userId: 'u1', chunkCount: 0, notes: '', chunkRebuildRequestedAt: stale, error: 'boom' }),
+      // Committed: the rebuild landed and cleared the stamp, so nothing is owed.
+      makeFile({ userId: 'u1', chunkCount: 4, vectorizedChunkCount: 4, chunkRebuildRequestedAt: null }),
+      // Another lake's member - the arm must not widen the membership predicate.
+      makeFile({
+        userId: 'u3',
+        chunkCount: 0,
+        chunkRebuildRequestedAt: stale,
+        tags: [{ name: 'datalake:other', strength: 1 }],
+      }),
+    ]);
+
+    const result = await fabFileRepository.findConvergencePausedFilesByScope(scope);
+    expect(result.map(r => r.id)).toEqual([stranded._id.toString()]);
+  });
+});
+
 describe('FabFileRepository.resetChunkStateByIds', () => {
   setupMongoTest();
   beforeEach(async () => {
@@ -131,6 +218,10 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
     expect(after?.vectorizedChunkCount).toBe(0);
     expect(after?.error).toBeNull();
     expect(after?.chunkEmbeddingModelStampedAt).toBeNull();
+    // #1939: stamped in the SAME write as everything above. The caller's queue send is a separate
+    // operation that can fail - or never run, if the producer dies - and this is what keeps the
+    // state it just created from being indistinguishable from an image.
+    expect(after?.chunkRebuildRequestedAt).toBeInstanceOf(Date);
   });
 
   it('SKIPS a file a worker is mid-run on, so the reset cannot release a live lease', async () => {
@@ -146,6 +237,9 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
     const after = await FabFile.findById(busy._id).lean();
     expect(after?.isChunking).toBe(true); // lease survived
     expect(after?.chunked).toBe(true); // and its chunks were not un-flagged
+    // Not stamped either: a file whose reset was skipped has no rebuild outstanding, and marking one
+    // would report a healthy in-flight file as mid-rebuild for as long as the stamp sat there.
+    expect(after?.chunkRebuildRequestedAt).toBeNull();
   });
 
   it('an empty id list is a no-op', async () => {

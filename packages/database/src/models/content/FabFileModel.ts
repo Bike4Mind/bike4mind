@@ -1,4 +1,6 @@
 import {
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  CONVERGENCE_PAUSED_NOTES,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   FabFileChunkPolicyConflict,
@@ -9,6 +11,7 @@ import {
   IFabFileVersion,
   FabFileSourceType,
   KnowledgeType,
+  REBUILD_PENDING_STALE_MS,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -17,7 +20,11 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
-import { buildDataLakeMembershipFilter, buildNoOtherLakeMetaTagFilter } from '../../queries/dataLakeLifecycleScope';
+import {
+  buildDataLakeMembershipFilter,
+  buildDataLakeMembershipQuery,
+  buildNoOtherLakeMetaTagFilter,
+} from '../../queries/dataLakeLifecycleScope';
 
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
@@ -1128,6 +1135,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * membership + liveness filter as computeDataLakeStats, and only members that produced chunks
    * (`chunkCount > 0`): a chunkless image or a still-pending upload carries no retrievable content.
    *
+   * ONE exception, and it is the case this report exists for: a member the convergence kill switch
+   * stopped mid-rewrite is chunkless because its passages were DELETED, not because it never had
+   * any. Excluding it made a lake report "Reachable 100%" over the members it still had while a
+   * document sat entirely unsearchable and absent from the drill-down - the green-counters-but-
+   * broken reading the four rules exist to catch. Admitted by its marker so it grades its real zero.
+   *
    * `limit` bounds how many rows reach app memory. It fetches one extra to detect overflow, so the
    * caller can report coverage as partial and log it, rather than silently truncating a percentage.
    */
@@ -1142,6 +1155,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       vectorizedChunkCount: number | null;
       error: string | null;
       notes: string | null;
+      chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
@@ -1150,13 +1164,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   > {
     return this.fabFileModel.aggregate([
       {
-        $match: {
-          ...buildDataLakeMembershipFilter(scope),
+        // buildDataLakeMembershipQuery, NOT a spread: the membership predicate's prefix arm is itself
+        // a top-level `$or`, so spreading it beside this one would drop it and grade every file in
+        // the install as a member of this lake.
+        $match: buildDataLakeMembershipQuery(scope, {
           deletedAt: null,
           archivedAt: null,
           status: { $ne: 'pending' },
-          chunkCount: { $gt: 0 },
-        },
+          // Plus the pending-rebuild stamp (#1939): between a wave's reset and its chunk worker's
+          // commit a member is chunkless with no marker of any other kind, so without this arm it
+          // leaves the denominator for the whole rebuild - and never comes back if the rebuild was
+          // never enqueued. It grades as in-flight, not as a failure; see evaluateMemberHealth.
+          $or: [
+            { chunkCount: { $gt: 0 } },
+            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkRebuildRequestedAt: { $ne: null } },
+          ],
+        }),
       },
       // Deterministic order before the truncation bound, so which members a very large lake reports
       // on (and therefore the headline it shows) is reproducible across refreshes rather than jittering.
@@ -1179,10 +1203,92 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // would leave the evaluator's arm reading undefined and silently never firing - the same
           // shape as the contract gap that disabled the vectorizedChunkCount gate.
           notes: { $ifNull: ['$notes', null] },
+          // The FOURTH stall/in-flight input. A member reset by a wave carries none of the three
+          // above, so omitting this would admit it at the $match and then grade it as a settled
+          // zero - worse than dropping it, because it would fail P3 on a rebuild that is merely
+          // in progress.
+          chunkRebuildRequestedAt: { $ifNull: ['$chunkRebuildRequestedAt', null] },
           chunkedCharCount: { $ifNull: ['$chunkedCharCount', null] },
           maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
           embeddedChunkCount: { $ifNull: ['$embeddedChunkCount', null] },
           embeddedCharCount: { $ifNull: ['$embeddedCharCount', null] },
+        },
+      },
+    ]);
+  }
+
+  /**
+   * Per-member facts for owner-triggered convergence (#1681). See the interface doc for why this is
+   * a separate read from findDataLakeHealthMembers rather than an extension of it.
+   */
+  async findLakeConvergenceMembers(
+    scope: DataLakeMembershipScope,
+    limit = 25_000
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      userId: string;
+      fileName?: string;
+      tags: { name: string }[];
+      chunkCount: number;
+      vectorizedChunkCount: number | null;
+      error: string | null;
+      notes: string | null;
+      chunkRebuildRequestedAt: Date | null;
+      maxChunkCharLength: number | null;
+      chunkedPassageTokenTarget: number | null;
+    }>
+  > {
+    return this.fabFileModel.aggregate([
+      {
+        // buildDataLakeMembershipQuery, NOT a spread - see findDataLakeHealthMembers. Dropping the
+        // membership predicate here is the worse of the two, because this read decides which files a
+        // wave REWRITES: it would re-chunk other lakes' documents at this lake's target.
+        $match: buildDataLakeMembershipQuery(scope, {
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+          // `chunkCount > 0` OR the halted-rewrite marker. A member the kill switch stopped mid-wave
+          // has no chunks BECAUSE ITS OWN WERE DELETED, and excluding it is what let it disappear
+          // from this plan at the same time as from health and from search - repairable by exactly
+          // the rewrite this plan produces, but only if it is allowed to reach the grader.
+          // Same third arm as findDataLakeHealthMembers, same reason (#1939): a member between its
+          // reset and its rebuild is chunkless and unmarked, and dropping it here is what let a
+          // never-enqueued rebuild disappear from the plan that would have re-driven it.
+          $or: [
+            { chunkCount: { $gt: 0 } },
+            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkRebuildRequestedAt: { $ne: null } },
+          ],
+          // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
+          // chunks that are already being replaced, so grading them would decide on stale facts.
+          isChunking: { $ne: true },
+        }),
+      },
+      // Deterministic order before the truncation bound, so a truncated plan is reproducible.
+      { $sort: { _id: 1 } },
+      { $limit: limit + 1 },
+      {
+        $project: {
+          _id: 0,
+          fabFileId: { $toString: '$_id' },
+          userId: { $toString: '$userId' },
+          fileName: 1,
+          // Only the tag NAME is projected - findMemberLakesForFile is the sole consumer and reads
+          // nothing else, and a lake can carry thousands of members.
+          tags: { $map: { input: { $ifNull: ['$tags', []] }, as: 't', in: { name: '$$t.name' } } },
+          chunkCount: { $ifNull: ['$chunkCount', 0] },
+          // Preserve null (UNMEASURED) rather than coalescing to 0: the decision must tell "not yet
+          // measured" from "measured as zero", and collapsing them would rewrite a whole lake whose
+          // #1665 backfill has not run.
+          vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
+          error: { $ifNull: ['$error', null] },
+          notes: { $ifNull: ['$notes', null] },
+          // See findDataLakeHealthMembers: without it a member admitted by the stamp above would be
+          // graded on stale facts instead of being reported as `indexingInFlight`.
+          chunkRebuildRequestedAt: { $ifNull: ['$chunkRebuildRequestedAt', null] },
+          maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
+          chunkedPassageTokenTarget: { $ifNull: ['$chunkedPassageTokenTarget', null] },
         },
       },
     ]);
@@ -1273,6 +1379,65 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  /**
+   * The lake's convergence-stranded files: everything the kill switch left with NO searchable
+   * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
+   *
+   *  - CHUNK arm: passages deleted by a halted wave, so `chunked:false` and `chunkCount:0` - a shape
+   *    findChunkedFilesByScope cannot see either, and one indistinguishable from an image or a
+   *    pending upload without the marker.
+   *  - VECTORIZE arm: chunks exist but carry no vector. `chunked:true`, so this file DOES appear in
+   *    findChunkedFilesByScope - but only reaches the rebuild wave if it also has an oversized chunk,
+   *    which a correctly-chunked file does not. QA measured a lake at `Reachable 41%` with ten such
+   *    files and neither Converge nor Rebuild offered: convergence graded them conformant (they are
+   *    at target) and this read passed over them, so the panel exposed no self-service repair at all.
+   *
+   *  - STALE-PENDING arm: a rebuild was stamped by `resetChunkStateByIds` and never committed
+   *    (#1939). The producer died between the reset and its sends, or the message was lost; either
+   *    way there is no marker to upgrade and nothing scheduled to rebuild it. Shaped like the CHUNK
+   *    arm and invisible in exactly the same way, so it belongs behind the same door - it is simply
+   *    identified by an OLD stamp instead of a note. The age bound is what keeps this door off a
+   *    rebuild that is merely in flight; REBUILD_PENDING_STALE_MS derives it from the chunk queue's
+   *    visibility timeout, so a message still awaiting its first redelivery is never re-driven.
+   *
+   * Selected by the marker plus "nothing of it is retrievable", the same condition
+   * `partitionByIndexAvailability` withholds on, rather than by chunk count - so this door offers a
+   * repair for exactly the population search refuses to serve. `$in` over the shared
+   * CONVERGENCE_PAUSED_NOTES so it cannot drift from `isConvergencePausedNote`.
+   */
+  async findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        // buildDataLakeMembershipQuery, NOT a spread: the conditions below name a top-level `$or`
+        // and the membership predicate's prefix arm is one too, so spreading would silently delete
+        // the membership predicate and offer every file in the install for this lake's rebuild.
+        buildDataLakeMembershipQuery(scope, {
+          deletedAt: null,
+          archivedAt: null,
+          $or: [
+            { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } },
+            // `error` empty on this arm, unlike the note arm where it is empty by construction: a
+            // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
+            // same deterministic failure every wave. Those files are reported by
+            // countFailedFilesByScope instead, which is the split this door already relies on.
+            {
+              chunkRebuildRequestedAt: { $lt: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
+              error: { $in: [null, ''] },
+            },
+          ],
+          // Keeps a REPAIRED file out of the wave. `$not: {$gt: 0}` deliberately also matches a null
+          // or absent count, so a legacy file carrying the marker is offered the repair rather than
+          // silently skipped. commitFabFileChunks clearing the marker is the primary guard; this is
+          // what holds if a marker is ever left behind.
+          vectorizedChunkCount: { $not: { $gt: 0 } },
+          isChunking: { $ne: true },
+        }),
+        { _id: 1, userId: 1 }
+      )
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
   async resetChunkStateByIds(ids: string[]): Promise<string[]> {
     if (ids.length === 0) return [];
     // The ONE reset shape for re-chunking, shared by the bulk "Rebuild passages" wave and the
@@ -1326,6 +1491,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // A stale readiness stamp would make the Atlas cutover read path treat the file as
                 // ANN-ready before its new chunks are re-stamped (see vectorSearchEligibility.ts).
                 chunkEmbeddingModelStampedAt: null,
+                // The whole point of doing this in ONE write (#1939). Everything above takes the
+                // file's passages away on paper; this is what says so. Without it the gap between
+                // this reset and the caller's queue send carries no marker at all, and a producer
+                // that dies in that gap - or a consumer whose own marker write is lost - leaves a
+                // chunkless, error-less, note-less file that health, convergence, the retrieval
+                // withhold and the rebuild door all read as an image.
+                chunkRebuildRequestedAt: new Date(),
               },
             }
           );
@@ -1718,6 +1890,9 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // the file stays chunked at its owner-altitude policy.
     chunkedPassageTokenTarget: { type: Number, required: false },
     chunkPolicyConflict: { type: Schema.Types.Mixed, required: false, default: null },
+    // Stamped by resetChunkStateByIds in the same write that clears the rollups, so the state a
+    // rebuild creates is never unmarked (#1939). See IFabFile.chunkRebuildRequestedAt.
+    chunkRebuildRequestedAt: { type: Date, default: null },
     isVectorizing: { type: Boolean, default: false },
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },

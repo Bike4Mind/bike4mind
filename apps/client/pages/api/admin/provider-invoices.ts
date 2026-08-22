@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { providerInvoiceRepository } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 
 /**
@@ -18,7 +19,11 @@ const InvoiceBody = z.object({
   note: z.string(),
 });
 
-const handler = baseApi()
+// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+// before req.user is set, so a key issued for a narrow integration can't read or
+// enter provider invoices just because its owner is an admin. JWT/browser admins
+// skip that check and still pass the isAdmin gates below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
     return res.json({ invoices: await providerInvoiceRepository.newestPerMonthProvider() });

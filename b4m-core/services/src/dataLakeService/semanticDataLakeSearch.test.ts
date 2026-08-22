@@ -1454,3 +1454,128 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     });
   });
 });
+
+// #1681 constraint 1. A convergence rewrite deletes the member's chunk rows and reinserts rows
+// carrying no vector, and the chunk read filters on vector presence - so the member contributes
+// nothing and its OLD vectors are already gone. "Serve stale" is not available. It must be refused
+// explicitly and the result set marked partial, or neighbouring chunks quietly fill the top-K and
+// the model answers confidently from a corpus with a hole in it.
+describe('semanticDataLakeSearch withholds mid-(re)index members (#1681)', () => {
+  const withFiles = (files: Record<string, unknown>[], findVectors: ReturnType<typeof vi.fn>) => ({
+    db: {
+      fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+      fabfilechunks: { findVectorsByFabFileIds: findVectors },
+    },
+  });
+
+  const converging = { id: 'converging', fileName: 'Big.pdf', tags: [], chunkCount: 12, vectorizedChunkCount: 0 };
+  const settled = { id: 'settled', fileName: 'Clean.pdf', tags: [], chunkCount: 4, vectorizedChunkCount: 4 };
+
+  it('never loads the converging member chunk vectors, and still ranks its neighbours', async () => {
+    const findVectors = pagingChunkMock([
+      { id: 'ch1', fabFileId: 'settled', vector: [1, 0], text: 'settled content' },
+    ] as never);
+
+    const result = await semanticDataLakeSearch(baseParams(), withFiles([converging, settled], findVectors) as never);
+
+    expect(findVectors.mock.calls[0][0]).toEqual(['settled']);
+    expect(result.results.map(r => r.fileId)).toEqual(['settled']);
+  });
+
+  it('marks the result set partial and names the withheld member', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([converging, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.partial).toBe(true);
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.indexing.sample).toEqual([{ fileId: 'converging', fileName: 'Big.pdf' }]);
+  });
+
+  it('reports a fully-settled lake as complete', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.partial).toBe(false);
+    expect(result.retrievalUnavailable.indexing.count).toBe(0);
+  });
+
+  // The refusal must reach the allow-list entrypoint too - a builder that forgets the index-state
+  // fields silently re-arms the bug on that door alone.
+  it('applies to the file-scoped entrypoint as well', async () => {
+    const getAccessibleFiles = vi.fn().mockResolvedValue([converging]);
+    const findVectorsByFabFileIds = pagingChunkMock([] as never);
+
+    const result = await fileScopedSemanticSearch(
+      {
+        query: 'stage III treatment',
+        fileIds: ['converging'],
+        embeddingModel: 'text-embedding-ada-002' as SemanticDataLakeSearchParams['embeddingModel'],
+        apiKeyTable: { openai: 'k' },
+      },
+      { db: { fabfiles: { getAccessibleFiles }, fabfilechunks: { findVectorsByFabFileIds } } } as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+  });
+
+  // #1939. The pending-rebuild stamp is the ONLY in-flight signal a chunkless member carries, so a
+  // builder that drops it hands the partition a file that reads as an image and serves it silently.
+  // Both entrypoints are asserted for the same reason the two above are - and this pair is not
+  // theoretical: the field was carried into the ranking map but NOT into either `fileById` builder,
+  // so `indexing.count` read 0 against a real local lake until that was fixed.
+  const rebuilding = {
+    id: 'rebuilding',
+    fileName: 'Reset.pdf',
+    tags: [],
+    chunkCount: 0,
+    vectorizedChunkCount: 0,
+    notes: '',
+    error: null,
+    chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+  };
+
+  it('withholds a member whose rebuild was requested but never committed', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([rebuilding, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.indexing.sample).toEqual([{ fileId: 'rebuilding', fileName: 'Reset.pdf' }]);
+    // Bucketed as re-indexing, never as paused: the prose for `paused` tells the reader an
+    // administrator has to act, which is wrong for an ordinary rebuild.
+    expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+
+  it('serves the same member once the stamp is cleared, so the stamp is what decides', async () => {
+    const result = await semanticDataLakeSearch(
+      baseParams(),
+      withFiles([{ ...rebuilding, chunkRebuildRequestedAt: null }, settled], pagingChunkMock([] as never)) as never
+    );
+
+    expect(result.retrievalUnavailable.partial).toBe(false);
+  });
+
+  it('applies the pending-rebuild withhold to the file-scoped entrypoint as well', async () => {
+    const getAccessibleFiles = vi.fn().mockResolvedValue([rebuilding]);
+    const findVectorsByFabFileIds = pagingChunkMock([] as never);
+
+    const result = await fileScopedSemanticSearch(
+      {
+        query: 'stage III treatment',
+        fileIds: ['rebuilding'],
+        embeddingModel: 'text-embedding-ada-002' as SemanticDataLakeSearchParams['embeddingModel'],
+        apiKeyTable: { openai: 'k' },
+      },
+      { db: { fabfiles: { getAccessibleFiles }, fabfilechunks: { findVectorsByFabFileIds } } } as never
+    );
+
+    expect(result.retrievalUnavailable.indexing.count).toBe(1);
+    expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+});

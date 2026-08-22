@@ -1,5 +1,6 @@
 import {
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
@@ -66,6 +67,9 @@ export interface CreateFabFileAdapters {
     // Optional: the file-create fan-in applies only its own/hardcoded datalake tags, so it need not
     // wire the grant repo; assertCanWriteDataLakeTags degrades to the createdByUserId + org rung.
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // Optional: absent means the admission contract (#1680) resolves its enforcement lever from the
+    // platform value only, so a caller that has no scoped store still gets the platform decision.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
     generateSignedUrl: (path: string, expireInSeconds: number, type?: 'get' | 'put') => Promise<string>;
@@ -113,7 +117,8 @@ export const createFabFile = async (
 
   const actor = { userId, isAdmin: !!user.isAdmin };
   const tagNames = (params.tags ?? []).map(t => t.name);
-  await assertCanWriteDataLakeTags(actor, tagNames, { db });
+  // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
+  await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   const ext = getFileExtension(params.fileName);

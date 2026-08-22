@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -26,6 +26,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import StorageIcon from '@mui/icons-material/Storage';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -74,6 +75,8 @@ import {
   useUnarchiveDataLake,
   useUnderChunkedCount,
   useRechunkDataLake,
+  useLakeConvergencePlan,
+  useConvergeDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -81,11 +84,17 @@ import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
+import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
+import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
+import { DataLakeAccessModal } from './DataLakeAccessModal';
 import type { EditableLake } from './DataLakeSettingsModal';
+import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
+import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
@@ -158,6 +167,7 @@ export default function DataLakeManagerPanel() {
   // sidebar footer's Discover button flips it the same way.
   const managerTab = useDataLakeWizardStore(s => s.managerTab);
   const openManager = useDataLakeWizardStore(s => s.openManager);
+  const managerLakeId = useDataLakeWizardStore(s => s.managerLakeId);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
@@ -174,6 +184,18 @@ export default function DataLakeManagerPanel() {
   const [path, setPath] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
+  const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
+  const [editingFallbackLakeId, setEditingFallbackLakeId] = useState<string | null>(null);
+
+  // Deep-link: a per-lake action elsewhere (the page rail's header) opens the manager already
+  // pointed at that lake. Only a non-null id steers; null is the plain "open at root" case and
+  // must not wipe a selection the user made inside the panel.
+  useEffect(() => {
+    if (!managerLakeId) return;
+    setLakeId(managerLakeId);
+    setPath([]);
+    setSelectedFile(null);
+  }, [managerLakeId]);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
@@ -202,11 +224,37 @@ export default function DataLakeManagerPanel() {
           // Absent when withheld from a non-editor OR the lake predates the field; seed the default
           // so the picker always shows a concrete mode (matching how the resolver treats absence).
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
+          // the field renders as blank - and the state in which this lake never converges.
+          requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,
           canManage: !!l.canManage,
           embeddingSpendMicroUsd: l.embeddingSpendMicroUsd,
         }
       : null;
   }, [dataLakes, editingLakeId]);
+
+  // Same live-list derivation as editingLake: the access modal only needs the lake's id + name,
+  // and re-deriving from the list keeps it in step if the lake is renamed while the modal is open.
+  const accessLake = useMemo(() => {
+    const l = dataLakes?.find(d => d.id === accessLakeId);
+    return l ? { id: l.id, name: l.name } : null;
+  }, [dataLakes, accessLakeId]);
+  // Same live-list derivation as editingLake, for a fallback (built-in) lake's narrower settings
+  // editor. Separate state/derivation because a fallback lake can never populate EditableLake's
+  // required fields (name is its only real one; description/tags/visibility don't apply to it).
+  const editingFallbackLake = useMemo<EditableFallbackLake | null>(() => {
+    const l = dataLakes?.find(d => d.id === editingFallbackLakeId);
+    return l
+      ? {
+          id: l.id,
+          name: l.name,
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          systemPrompt: l.systemPrompt ?? '',
+          organizationId: l.organizationId ?? '',
+        }
+      : null;
+  }, [dataLakes, editingFallbackLakeId]);
 
   const selectLake = (lake: ManagerLake) => {
     setLakeId(lake.id);
@@ -281,6 +329,8 @@ export default function DataLakeManagerPanel() {
             fileCount={lakeCount(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
+            onOpenAccess={() => setAccessLakeId(activeLake.id)}
+            onOpenFallbackSettings={() => setEditingFallbackLakeId(activeLake.id)}
             onReviewTaxonomy={setReviewingBatchId}
             onArchived={() => {
               setLakeId(null);
@@ -304,6 +354,9 @@ export default function DataLakeManagerPanel() {
       )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+      <FallbackLakeSettingsModal lake={editingFallbackLake} onClose={() => setEditingFallbackLakeId(null)} />
+
+      <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />
 
       {/* Review/apply the background AI tag suggestions for a batch */}
       {reviewingBatch && (
@@ -751,6 +804,7 @@ function ManagerNav({
                 <DialogContent>
                   This irreversibly deletes “{purgeTarget?.name}” and all its files, chunks, and batches. This cannot be
                   undone.
+                  {purgeTarget && <PurgeDriveWarning lakeId={purgeTarget.id} />}
                 </DialogContent>
                 <DialogActions>
                   <Button
@@ -1096,11 +1150,58 @@ function NavLifecycleSection({
 
 // Right pane: selected lake's details + management actions
 
+/**
+ * Purge-time warning that the lake still has a Drive folder attached. Renders nothing when there is
+ * no connection (or it is not visible to this caller - the endpoint 404s on a personal lake and
+ * 403s for a non-manager).
+ *
+ * It deliberately does NOT promise that purging releases the connection, because today it does not:
+ * the row survives its lake and its globally-unique driveFolderId then blocks re-claiming that
+ * folder app-wide, with no UI or API path back (#1807). So the copy tells the user to disconnect
+ * FIRST. When #1807 lands and teardown releases the connection itself, this wording must change
+ * with it - it describes a defect, not a design.
+ */
+function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
+  // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
+  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
+  // populate would trade one wasted request for silently withholding the warning on a lake that
+  // does have a connection. A rare 404 on a purge dialog is the cheaper failure.
+  const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
+
+  // A FAILED read is not "no connection". Collapsing it into the silent case would borrow the
+  // benign default's meaning for an unknown, and the cost lands on the one action that cannot be
+  // undone: the user purges, the row survives, and its globally-unique driveFolderId blocks
+  // re-claiming that folder app-wide with no path back (#1807). A 404 (personal lake / no
+  // connection) resolves to `connection: null` and is NOT an error, so this only fires on a real
+  // failure - it does not nag on every ordinary purge.
+  if (isError) {
+    return (
+      <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. If one is, purging leaves the
+        connection behind and that folder cannot be connected to another lake afterwards - restore the lake and
+        disconnect Drive first to be safe.
+      </Typography>
+    );
+  }
+  if (isLoading || !connection) return null;
+
+  const folder = connection.folderName || connection.driveFolderId;
+  return (
+    <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
+      This lake still syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging leaves that connection behind, and
+      the folder cannot be connected to another lake afterwards. Restore the lake and disconnect Drive first.
+    </Typography>
+  );
+}
+
 function LakeInfoPanel({
   lake,
   fileCount,
   taxonomyBatch,
   onOpenSettings,
+  onOpenAccess,
+  onOpenFallbackSettings,
   onReviewTaxonomy,
   onArchived,
   onDeleted,
@@ -1110,6 +1211,10 @@ function LakeInfoPanel({
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
+  /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */
+  onOpenAccess: () => void;
+  /** Opens the narrower settings editor for a fallback (built-in) lake - see canManageSettings. */
+  onOpenFallbackSettings: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
   /** Called after the active lake is archived, so the panel exits to root instead of the
@@ -1126,7 +1231,7 @@ function LakeInfoPanel({
   const deleteLake = usePermanentDeleteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
-  const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
+  const visibility = lakeVisibilityLabel(lake);
   // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
   // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
   // surfaced when the lake actually has legacy oversized-chunk files to repair (the count
@@ -1139,6 +1244,27 @@ function LakeInfoPanel({
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
+
+  // Convergence toward the lake's OWN declared chunk policy (#1681). Distinct from "Rebuild
+  // passages", which repairs a fixed legacy defect (oversized whole-document blobs) against a
+  // universal threshold: this repairs drift from a policy THIS lake declares, so it only exists for
+  // a lake with an explicit one. Same `canRebuild` gate as the sibling action - the server enforces
+  // it again (assertLakeRebuildAccess) and the plan read is safe for any reader.
+  const { data: convergencePlan } = useLakeConvergencePlan(lake.id, !!lake.canRebuild);
+  const converge = useConvergeDataLake(lake.id);
+  // Confirm dialog state: the bulk-change guard's whole point is that the share is SEEN before it
+  // is accepted, so `confirm: true` is only ever sent from this dialog.
+  const [convergeConfirmOpen, setConvergeConfirmOpen] = useState(false);
+  // waveSize, NOT convergeableCount: the latter counts whole-lake drift before the cross-lake check,
+  // so a lake whose entire remaining drift belongs to a lake requiring a different target would show
+  // an action count that repairs nothing on every click, forever. Verified live on a preview.
+  const convergeWaveSize = convergencePlan?.waveSize ?? 0;
+  const convergeBlockedCount = convergencePlan?.crossLakeConflictCount ?? 0;
+  const canConverge = !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize > 0;
+  // Nothing to repair from here, but the lake is NOT converged - surfaced as its own advisory so the
+  // absence of a button is explained rather than read as "healthy".
+  const showConvergeBlocked =
+    !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize === 0 && convergeBlockedCount > 0;
 
   return (
     <Box
@@ -1212,6 +1338,19 @@ function LakeInfoPanel({
               >
                 Settings
               </Button>
+              <Tooltip title="See who can access this lake, and who has read it" size="sm">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  startDecorator={<PeopleOutlineIcon sx={{ fontSize: 16 }} />}
+                  data-testid={`datalake-access-btn-${lake.id}`}
+                  onClick={onOpenAccess}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Access
+                </Button>
+              </Tooltip>
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -1227,6 +1366,24 @@ function LakeInfoPanel({
                 </Button>
               </Tooltip>
             </>
+          )}
+          {/* A fallback lake's narrower settings editor (currently grounding mode only), same shape
+              as the Rebuild gate below: canManageSettings is a NARROWER flag than canManage, so a
+              fallback lake (canManage always false) can still get here. `!lake.canManage` excludes
+              a DB lake, which already has this affordance inside the canManage fragment above via
+              the full DataLakeSettingsModal. */}
+          {lake.canManageSettings && !lake.canManage && (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+              data-testid={`datalake-fallback-settings-btn-${lake.id}`}
+              onClick={onOpenFallbackSettings}
+              sx={{ flexShrink: 0, fontSize: '13px' }}
+            >
+              Settings
+            </Button>
           )}
           {/* Rebuild passages is gated on canRebuild, a NARROWER flag than canManage: a fallback
               (built-in) lake has no document (canManage is always false for it) but can still be
@@ -1252,6 +1409,106 @@ function LakeInfoPanel({
               </Button>
             </Tooltip>
           )}
+          {/* Converge to policy (#1681). Only shown for a lake with an EXPLICIT chunk policy and
+              something measurably off it - an `inherited` lake is measured and reported by health
+              but never repaired (epic decision 5), so there is nothing to offer. */}
+          {canConverge && (
+            <Tooltip
+              title={
+                `Re-chunk ${convergeWaveSize} file(s) to this lake's declared passage target of ` +
+                `${convergencePlan?.policy.requiredTarget} tokens. They are unsearchable until re-indexing ` +
+                'completes. Runs in bounded waves; safe to repeat.'
+              }
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-converge-policy-btn-${lake.id}`}
+                loading={converge.isPending}
+                onClick={() =>
+                  convergencePlan?.requiresConfirmation ? setConvergeConfirmOpen(true) : converge.mutate({})
+                }
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Converge to policy ({convergeWaveSize})
+              </Button>
+            </Tooltip>
+          )}
+          {showConvergeBlocked && (
+            <Tooltip
+              title={
+                `${convergeBlockedCount} file(s) in this lake do not satisfy its passage target and cannot be ` +
+                'repaired here: another data lake requires a different target for them, so re-chunking would make ' +
+                'the two lakes take turns rewriting them. Align the two lakes, or remove the files from one.'
+              }
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                data-testid={`datalake-converge-blocked-chip-${lake.id}`}
+                sx={{ flexShrink: 0 }}
+              >
+                {convergeBlockedCount} blocked by another lake
+              </Chip>
+            </Tooltip>
+          )}
+          {/* Bulk-change guard (#1681 constraint 4). A mass rewrite is the signature of a
+              MISCONFIGURED policy, and every individual change inside one looks locally reasonable -
+              the share is the only place the mistake is visible, so it is stated before the button
+              that accepts it, and `confirm: true` is sent from nowhere else. */}
+          <Modal open={convergeConfirmOpen} onClose={() => setConvergeConfirmOpen(false)}>
+            <ModalDialog data-testid="datalake-converge-confirm" role="alertdialog">
+              {/* The share and the file count describe DIFFERENT populations and must both say which:
+                  `changeShare` is whole-lake drift (every candidate, pre-wave-bound and pre-conflict)
+                  and is what the guard fired on, while `convergeWaveSize` is what this click actually
+                  rewrites. Stating one as a headline over the other reads as "40% == 25 files" and has
+                  the owner accept a number they were never shown. */}
+              <DialogTitle>
+                {Math.round((convergencePlan?.changeShare ?? 0) * 100)}% of this lake is off-policy - re-chunk now?
+              </DialogTitle>
+              <DialogContent>
+                <Typography level="body-sm">
+                  {convergencePlan?.convergeableCount ?? 0} of {convergencePlan?.membersConsidered ?? 0} files do not
+                  match this lake{"'"}s passage target of {convergencePlan?.policy.requiredTarget} tokens. Rewriting
+                  this much of a lake at once usually means the policy itself is wrong - check the target before
+                  continuing.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 1 }}>
+                  This run repairs the first {convergeWaveSize}; re-run it to continue through the rest.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 1 }}>
+                  Each file stops being findable by search from the moment it is rewritten until its re-indexing
+                  finishes. Its old passages are deleted first, so there is nothing to serve in the meantime.
+                </Typography>
+                {(convergencePlan?.crossLakeConflictCount ?? 0) > 0 && (
+                  <Typography level="body-sm" sx={{ mt: 1 }}>
+                    {convergencePlan?.crossLakeConflictCount} file(s) are excluded because another data lake requires a
+                    different passage target for them; repairing those would make the two lakes take turns rewriting
+                    them.
+                  </Typography>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button
+                  variant="solid"
+                  color="warning"
+                  data-testid="datalake-converge-confirm-btn"
+                  loading={converge.isPending}
+                  onClick={() => converge.mutate({ confirm: true }, { onSuccess: () => setConvergeConfirmOpen(false) })}
+                >
+                  Re-chunk anyway
+                </Button>
+                <Button variant="plain" color="neutral" onClick={() => setConvergeConfirmOpen(false)}>
+                  Cancel
+                </Button>
+              </DialogActions>
+            </ModalDialog>
+          </Modal>
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
           {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones
@@ -1286,6 +1543,9 @@ function LakeInfoPanel({
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
             </Chip>
           )}
+          {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
+              and it previously gave no sign a Drive folder was feeding it (#1645). */}
+          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />

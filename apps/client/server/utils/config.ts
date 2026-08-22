@@ -99,6 +99,7 @@ const Config = {
 } as const;
 
 const isProduction = () => Resource.App.stage === 'production';
+
 // True only for local development, never in deployed environments.
 const isDevelopment = () => {
   const isLocal = process.env.IS_LOCAL === 'true';

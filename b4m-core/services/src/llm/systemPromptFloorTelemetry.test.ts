@@ -1,10 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { BuilderInjectedBlock } from '@bike4mind/utils';
+import type { SystemPromptDetail } from '@bike4mind/common';
 import {
   buildAlwaysOnFloorDetails,
   buildInjectedBlockDetails,
+  DELIVERED_DETAIL_ORDER,
+  sortDetailsByDeliveryOrder,
   type AlwaysOnFloorInput,
 } from './systemPromptFloorTelemetry';
+import { PROMPT_SOURCE_METADATA, PROMPT_SOURCE_ORDER } from './systemPromptSources';
 
 // Deterministic stand-in for the real tiktoken counter: token count == char length.
 const lengthCounter = (content: string) => Promise.resolve(content.length);
@@ -176,5 +180,58 @@ describe('buildInjectedBlockDetails', () => {
     expect(counter).toHaveBeenCalledTimes(2);
     expect(counter).toHaveBeenCalledWith('FORMAT');
     expect(counter).toHaveBeenCalledWith('IMAGE');
+  });
+});
+
+describe('sortDetailsByDeliveryOrder', () => {
+  const row = (name: string): SystemPromptDetail =>
+    ({ source: 'admin', name, tokenCount: 1, wasIncluded: true }) as SystemPromptDetail;
+
+  it('puts the always-on floor rows back in front of sources they ship ahead of', () => {
+    // The batch order the caller appends in: derived stack, then floor, then injected blocks.
+    // artifact_emission and help_center genuinely precede abstention and extra_context in the prompt.
+    const sorted = sortDetailsByDeliveryOrder([
+      row('date_time_context'),
+      row('abstention'),
+      row('extra_context'),
+      row('artifact_emission'),
+      row('help_center'),
+      row('format_prompt'),
+    ]).map(d => d.name);
+
+    expect(sorted).toEqual([
+      'format_prompt',
+      'date_time_context',
+      'artifact_emission',
+      'help_center',
+      'abstention',
+      'extra_context',
+    ]);
+  });
+
+  it('leads with the two blocks the builder prepends, image nudge first', () => {
+    // buildAndSortMessages prepends the format prompt and then the image prompt, so the image
+    // nudge ends up ahead of it in the payload.
+    expect(DELIVERED_DETAIL_ORDER.slice(0, 2)).toEqual(['image_prompt', 'format_prompt']);
+  });
+
+  it('agrees with PROMPT_SOURCE_ORDER for every tagged source', () => {
+    const derived = DELIVERED_DETAIL_ORDER.slice(2);
+
+    expect(derived).toEqual(PROMPT_SOURCE_ORDER.map(source => PROMPT_SOURCE_METADATA[source].name));
+  });
+
+  it('sorts an unknown row last instead of throwing, so a telemetry gap cannot fail a completion', () => {
+    const sorted = sortDetailsByDeliveryOrder([row('something_new'), row('date_time_context')]).map(d => d.name);
+
+    expect(sorted).toEqual(['date_time_context', 'something_new']);
+  });
+
+  it('is stable for rows sharing a position', () => {
+    const first = row('mementos');
+    const second = row('mementos');
+    second.tokenCount = 99;
+
+    expect(sortDetailsByDeliveryOrder([first, second])[1].tokenCount).toBe(99);
   });
 });

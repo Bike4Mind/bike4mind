@@ -41,9 +41,7 @@ vi.mock('@bike4mind/utils', () => ({
   BadRequestError: class BadRequestError extends Error {},
 }));
 
-const mockUserFind = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({ id: 'target-user', username: 'targetUser' })
-);
+const mockUserFind = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'target-user', username: 'targetUser' }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
 }));

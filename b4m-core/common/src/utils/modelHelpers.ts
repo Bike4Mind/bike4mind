@@ -136,3 +136,25 @@ export function isModelAccessible(
   const normalizedAllowedEntitlements = (model.allowedEntitlements ?? []).map(normalizeEntitlementKey);
   return normalizedKeys.some(key => normalizedAllowedEntitlements.includes(key));
 }
+
+/**
+ * Image models that can serve an *edit* (image + optional mask) request. Deliberately
+ * narrower than the generation catalog: of the BFL family only Fill does mask inpainting
+ * (Kontext models are image-to-image transforms dispatched through ImageGeneration's
+ * transform path, not edit), and XAI exposes no edit endpoint at all.
+ *
+ * Must stay the single source of truth for both edit dispatchers - the image-edit queue
+ * handler (services/llm/ImageEdit.ts) and the chat edit_image tool - so neither silently
+ * substitutes a model the user did not pick and was not billed for.
+ */
+export const EDIT_SUPPORTED_IMAGE_MODELS = [
+  ...OPENAI_IMAGE_MODELS,
+  ImageModels.FLUX_PRO_FILL,
+  ...GEMINI_IMAGE_MODELS,
+] as const;
+
+/** Returns true for image models that support editing; gates both edit dispatch paths. */
+export function supportsImageEdit(model?: string | null): boolean {
+  if (!model) return false;
+  return (EDIT_SUPPORTED_IMAGE_MODELS as readonly string[]).includes(model);
+}

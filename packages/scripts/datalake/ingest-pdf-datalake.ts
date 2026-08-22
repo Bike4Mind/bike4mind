@@ -48,6 +48,7 @@ import {
   buildDataLakeMembershipFilter,
   connectDB,
   adminSettingsRepository,
+  scopedSettingsRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
@@ -517,7 +518,17 @@ async function main(opts: Options): Promise<number> {
     await dataLakeService.assertCanWriteDataLakeTags(
       { userId: opts.userId, isAdmin: !!owner?.isAdmin },
       [lake.datalakeTag],
-      { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } }
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+          scopedSettings: scopedSettingsRepository,
+        },
+        // Every file this script ingests is created under --userId, so that is the owner the
+        // admission contract (#1680) grades the lake's passage policy against.
+        members: [{ userId: opts.userId }],
+      }
     );
   } else if (!owner?.isAdmin) {
     // Static lakes have no creator to authorize against; the API rejects their tags
