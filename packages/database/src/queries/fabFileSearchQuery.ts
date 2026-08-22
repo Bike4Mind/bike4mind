@@ -500,7 +500,19 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     // it must reach `partitionByIndexAvailability` to be withheld and REPORTED rather than silently
     // absent. `$in` over CONVERGENCE_PAUSED_NOTES so this covers EITHER arm and cannot drift from
     // `isConvergencePausedNote`, which the in-memory arm now calls. Keep the two in sync.
-    andConditions.push({ $or: [{ vectorized: true }, { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } }] });
+    //
+    // Third arm: a REQUESTED-but-uncommitted rebuild (#1939). The reset writes `vectorized: false`
+    // and clears `notes` together, so between it and the consumer's marker there is no note for the
+    // arm above to match and the row was dropped here, before the post-filter or the withhold could
+    // report it. `$ne: null` also excludes a missing field, so this matches only rows carrying a
+    // real stamp.
+    andConditions.push({
+      $or: [
+        { vectorized: true },
+        { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } },
+        { chunkRebuildRequestedAt: { $ne: null } },
+      ],
+    });
   }
   // Matched against the pre-lowered, indexed `fileNameLower` (no $options:'i' - index-safe).
   const markerRegex = buildFilenameMarkerRegex(options?.excludeFilenameMarkers);

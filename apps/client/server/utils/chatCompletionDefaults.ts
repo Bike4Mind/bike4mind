@@ -29,6 +29,7 @@ import {
   usageEventRepository,
   userRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
 import {
   ChatModels,
@@ -136,6 +137,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
       dataLakes: dataLakeRepository,
+      fallbackLakeSettings: fallbackLakeSettingsRepository,
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,

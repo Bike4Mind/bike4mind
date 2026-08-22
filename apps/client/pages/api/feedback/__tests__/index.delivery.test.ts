@@ -75,7 +75,6 @@ vi.mock('@bike4mind/utils', () => ({
 const mockConfig = vi.hoisted(() => ({ STAGE: 'production' as string | undefined }));
 vi.mock('@server/utils/config', () => ({
   Config: mockConfig,
-  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));

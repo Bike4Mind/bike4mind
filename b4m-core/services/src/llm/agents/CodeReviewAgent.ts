@@ -5,7 +5,7 @@ export const CodeReviewAgent = (config?: ServerAgentConfig): ServerAgentDefiniti
   name: 'code_review',
   description: 'Code review specialist for analyzing code quality, bugs, and improvements',
   model: config?.model ?? ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
-  fallbackModels: [ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
+  fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
   defaultThoroughness: config?.defaultThoroughness ?? 'medium',
   maxIterations: { quick: 3, medium: 8, very_thorough: 15 },
   deniedTools: ['image_generation', 'edit_image', 'delegate_to_agent', ...(config?.extraDeniedTools ?? [])],

@@ -12,6 +12,7 @@ import {
   summarizeLakeHealth,
   type LakeHealthMemberInput,
 } from './lakeHealth';
+import { isMemberIndexingInFlight } from './lakeConvergence';
 
 // Default policy: 512 tokens -> policyChars 3072, serveCap 3072, P4 pass.
 const DEFAULT_POLICY = resolveLakeHealthPolicy({ inheritedTarget: DEFAULT_PASSAGE_TOKEN_TARGET });
@@ -549,4 +550,116 @@ describe('evaluateMemberHealth - convergence-paused files must GRADE, not hide',
     expect(summary.measuredChunkedChars).toBe(10000); // 2000 finished + 8000 paused, not 2000 alone
     expect(summary.reachableShare).toBeCloseTo(0.4, 5); // (2000 + 2000) / 10000, not 1.0
   });
+});
+
+describe('evaluateMemberHealth - a rebuild in progress must read as pending, not as damage', () => {
+  // #1939. Same shape on disk as the halted member above - chunkless, all four rollups null - and it
+  // must grade the OPPOSITE way, because the only difference is whether anything is coming back.
+  // The stamp is what tells them apart. Every rollup is `null`, deliberately, because that is what
+  // `resetChunkStateByIds` writes; zeros would take a different branch at each predicate.
+  const rebuilding = (over: Partial<LakeHealthMemberInput> = {}): LakeHealthMemberInput => ({
+    fabFileId: 'rebuilding',
+    chunkCount: 0,
+    vectorizedChunkCount: 0,
+    error: null,
+    notes: '',
+    chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+    chunkedCharCount: null,
+    maxChunkCharLength: null,
+    embeddedChunkCount: null,
+    embeddedCharCount: null,
+    ...over,
+  });
+
+  // Hard-failing P3 here is the failure mode the whole design avoids: it would paint a lake red for
+  // the length of every ordinary "Rebuild passages" wave and every per-file reprocess.
+  it('grades P3 as pending and contributes nothing to the ratio', () => {
+    const r = evaluateMemberHealth(rebuilding(), DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('unknown');
+    expect(r.failed).toEqual([]);
+    expect(r.reachableChars).toBeNull();
+    expect(r.measured).toBe(false);
+  });
+
+  // Being IN the member set is the whole point - a member that is merely absent is one nobody can
+  // tell from a lake that never had it. It shows up as coverage below 1, not as a failure.
+  it('stays in the lake report as unmeasured coverage instead of disappearing', () => {
+    const healthy = member({ fabFileId: 'ok', chunkCount: 1, chunkedCharCount: 2000, embeddedCharCount: 2000 });
+    const summary = summarizeLakeHealth([healthy, rebuilding()], DEFAULT_POLICY);
+
+    expect(summary.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 2 });
+    expect(summary.affectedMembers).toEqual([]);
+    expect(summary.predicates.fullyVectorized.fail).toBe(0);
+    expect(summary.predicates.fullyVectorized.unknown).toBe(1);
+    // The measured member still sets the headline: a rebuild in flight must not drag it to 0%.
+    expect(summary.reachableShare).toBe(1);
+  });
+
+  // A rebuild that STOPPED is not one still running, so both settled markers outrank a stamp left
+  // behind - otherwise a halted member would hide in the pending bucket instead of failing P3.
+  it('lets the halted marker and a terminal error outrank a leftover stamp', () => {
+    expect(
+      evaluateMemberHealth(rebuilding({ notes: CONVERGENCE_PAUSED_CHUNK_NOTE }), DEFAULT_POLICY).status.fullyVectorized
+    ).toBe('fail');
+    const failed = evaluateMemberHealth(rebuilding({ error: 'boom', embeddedChunkCount: 0 }), DEFAULT_POLICY);
+    expect(failed.status.fullyVectorized).toBe('pass'); // 0 embedded >= 0 chunks: settled, nothing owed
+    expect(failed.measured).toBe(false); // its char rollups are gone, so it contributes no ratio
+  });
+
+  // The stamp is cleared transactionally by commitFabFileChunks, so a rebuilt member grades on its
+  // real rollups again rather than being parked as in-flight forever.
+  it('grades normally once the rebuild has committed and cleared the stamp', () => {
+    const rebuilt = rebuilding({
+      chunkRebuildRequestedAt: null,
+      chunkCount: 1,
+      vectorizedChunkCount: 1,
+      chunkedCharCount: 2000,
+      maxChunkCharLength: 2000,
+      embeddedChunkCount: 1,
+      embeddedCharCount: 2000,
+    });
+    const r = evaluateMemberHealth(rebuilt, DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('pass');
+    expect(r.reachableChars).toBe(2000);
+  });
+});
+
+// `evaluateMemberHealth`'s own settled test is a hand-written mirror of `isMemberIndexingInFlight`,
+// which convergence and the retrieval withhold call directly. The two must agree arm for arm, or a
+// member reads as in flight to search and as settled to health at the same moment. Pinned as
+// behaviour rather than by reading the private const: P3 is exactly `unknown` while indexing is in
+// flight, given rollups that would otherwise decide it.
+describe('lake health and convergence agree on what "still indexing" means', () => {
+  const shapes: Array<{ name: string; over: Partial<LakeHealthMemberInput> }> = [
+    { name: 'settled and fully embedded', over: { chunkCount: 2, vectorizedChunkCount: 2 } },
+    { name: 'vector rollup still short', over: { chunkCount: 2, vectorizedChunkCount: 1 } },
+    { name: 'terminally failed', over: { chunkCount: 2, vectorizedChunkCount: 0, error: 'boom' } },
+    {
+      name: 'halted by the kill switch',
+      over: { chunkCount: 2, vectorizedChunkCount: 0, notes: CONVERGENCE_PAUSED_NOTE },
+    },
+    { name: 'legacy null vector rollup', over: { chunkCount: 2, vectorizedChunkCount: null } },
+    {
+      name: 'rebuild outstanding',
+      over: { chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date() },
+    },
+    {
+      name: 'stamp left behind by a failed rebuild',
+      over: { chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date(), error: 'boom' },
+    },
+  ];
+
+  for (const { name, over } of shapes) {
+    it(`agrees for a member that is ${name}`, () => {
+      const m = member({ embeddedChunkCount: over.chunkCount ?? 0, ...over });
+      const inFlight = isMemberIndexingInFlight({
+        chunkCount: m.chunkCount,
+        vectorizedChunkCount: m.vectorizedChunkCount,
+        error: m.error,
+        notes: m.notes,
+        chunkRebuildRequestedAt: m.chunkRebuildRequestedAt,
+      });
+      expect(evaluateMemberHealth(m, DEFAULT_POLICY).status.fullyVectorized === 'unknown').toBe(inFlight);
+    });
+  }
 });

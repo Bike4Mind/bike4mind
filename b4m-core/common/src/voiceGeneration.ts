@@ -1,4 +1,7 @@
 import z from 'zod';
+// The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
+// dist in the CI openapi job (same note as tts.contract.ts).
+import { ApiErrorSchema } from './schemas/chat';
 
 // Providers supported by the unified TTS API. Mirrors supportedImageGenerationVendor.
 export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
@@ -133,17 +136,19 @@ export type TtsBase64Response = z.infer<typeof ttsBase64ResponseSchema>;
  * provider (`provider_not_configured`) versus a configured key the provider
  * rejected (`provider_rejected`).
  */
-export const ttsErrorResponseSchema = z.object({
-  error: z.string(),
+export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
   errorCode: z.enum(['provider_not_configured', 'provider_rejected']).optional(),
-  request_id: z.string().optional(),
 });
 
 /**
  * 413 body: the audio was generated and billed but exceeds the serverless
  * response-size cap. When a browsable copy was saved, `fileUrl` is how the caller
  * retrieves the audio it paid for.
+ *
+ * Not derived from `ApiErrorSchema`, unlike `ttsErrorResponseSchema`: this body is
+ * written directly (pages/api/ai/tts.ts, the exceedsTtsResponseLimit guard) rather
+ * than thrown, so errorHandler never sees it and never adds `name` here.
  */
 export const ttsResponseTooLargeSchema = z.object({
   error: z.string(),

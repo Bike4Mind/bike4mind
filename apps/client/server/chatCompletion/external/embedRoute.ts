@@ -45,6 +45,7 @@ import {
   fabFileRepository,
   fabFileChunkRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
@@ -260,6 +261,7 @@ async function buildEmbedServerTools(args: {
       fabfilechunks: fabFileChunkRepository,
       users: userRepository,
       dataLakes: dataLakeRepository,
+      fallbackLakeSettings: fallbackLakeSettingsRepository,
       organizations: organizationRepository,
       usageEvents: usageEventRepository,
       lakeAccessEvents: lakeAccessEventRepository,

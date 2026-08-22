@@ -294,7 +294,8 @@ async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
   corpusLabel: string,
-  skipNotice?: string | null
+  skipNotice?: string | null,
+  dataLakeTags: string[] = []
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -325,7 +326,13 @@ async function emitSemanticCitables(
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
     // does not narrow to this literal. Pre-existing pattern in this file.
-    { promptMeta: { citables, ...(skipNotice ? { warnings: [skipNotice] } : {}) } } as any,
+    {
+      promptMeta: {
+        citables,
+        ...(skipNotice ? { warnings: [skipNotice] } : {}),
+        retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
+      },
+    } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
 }
@@ -458,7 +465,7 @@ async function trySemanticKbSearch(
     });
     const ranked = bound.kept;
 
-    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
+    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice, dataLakeTags);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
     );
@@ -485,7 +492,16 @@ async function trySemanticKbSearch(
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
-    // A genuine failure must not fabricate a notice.
+    // A genuine failure must not fabricate a notice. It also must not go unrecorded: the
+    // keyword arm below runs next and, on a hit, would otherwise be the only write this turn,
+    // stamping outcome:'ok' over a search that actually threw. Recording 'failed' here relies on
+    // mergeRetrievalSummary's worst-of-severity merge (failed always outranks ok) to survive that
+    // later write (#1867 review).
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+      },
+    } as any);
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -560,7 +576,7 @@ async function tryScopedSemanticKbSearch(
       logger: context.logger,
     });
     const ranked = bound.kept;
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice, []);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
     return {
@@ -576,6 +592,13 @@ async function tryScopedSemanticKbSearch(
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
+    // See the matching catch in trySemanticKbSearch above: relies on mergeRetrievalSummary's
+    // worst-of-severity merge to survive the scoped keyword arm's later 'ok' write.
+    await context.statusUpdate({
+      promptMeta: {
+        retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+      },
+    } as any);
     return NO_SEMANTIC_RESULT;
   }
 }
@@ -841,6 +864,13 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Base Search: fabfiles repository not available');
+          // Both the semantic and keyword arms below depend on context.db.fabfiles - with it
+          // absent, nothing can be searched, so this is a genuine failure, not an abstain.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base search is not available at this time.';
         }
 
@@ -851,6 +881,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
           // empty-scope agent surface must read as a pure "nothing in scope" early return, not
           // acquire new behavior tied to a signal this surface was never designed to receive.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return formatSearchResults([]);
         }
 
@@ -1065,7 +1100,18 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
             await context.statusUpdate(
-              { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
+              {
+                promptMeta: {
+                  citables,
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'ok',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                  },
+                },
+              } as any,
               foundStatus
             );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
@@ -1074,7 +1120,19 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
             const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
-              { promptMeta: semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {} } as any,
+              {
+                promptMeta: {
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  // Ran to completion and legitimately found nothing - must be distinguishable
+                  // from "never searched" (#1867).
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'ok',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                  },
+                },
+              } as any,
               (scope
                 ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
                 : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix
@@ -1122,6 +1180,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           );
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
+          // A retrieval that threw must not be byte-identical to one never attempted (#1867).
+          // dataLakeTags is empty here - the error can occur before any arm resolves which lakes
+          // were in scope, so there is nothing honest to stamp at this outer catch.
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any);
           return 'An error occurred while searching your knowledge base. Please try again.';
         }
       },
