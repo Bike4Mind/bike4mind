@@ -28,8 +28,10 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import {
   COUNT_CHIP_SX,
@@ -55,6 +57,8 @@ import {
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
 } from '@client/app/hooks/data/dataLakes';
+import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
@@ -62,6 +66,7 @@ import { satisfiesTagPrefix } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
+
 
 // Left sidebar
 
@@ -81,9 +86,7 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
-  isDiscovering: boolean;
-  /** Toggles the public-lake Discover catalog in the right pane. */
+  /** Opens the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
@@ -102,7 +105,6 @@ export default function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
-  isDiscovering,
   onDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
@@ -124,8 +126,10 @@ export default function ManagerNav({
   const restoreDeletedLake = useRestoreDeletedDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const cleanupLake = useCleanupDataLake();
-  const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
-  const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
+  // Fetched up front rather than on first expand: an empty section renders as a single "No
+  // archived" row instead of an accordion, and that needs the count before anyone clicks.
+  const { data: archivedLakes } = useGetArchivedDataLakes();
+  const { data: deletedLakes } = useGetDeletedDataLakes();
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   // Dep on .data, not the whole result: react-query returns a fresh result object on every
@@ -161,11 +165,17 @@ export default function ManagerNav({
             (f.tags ?? []).map(t => t.name),
             prefix
           )
-      )
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+      );
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
+
+  // TreeView highlights a SET of files (chat mode attaches several); the manager opens one at a
+  // time, so this is that one id as a set.
+  const selectedFileIds = useMemo(
+    () => new Set(selectedFileId ? [selectedFileId] : []),
+    [selectedFileId]
+  );
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];
@@ -304,9 +314,7 @@ export default function ManagerNav({
             }}
           />
           <ListItemContent>
-            <Typography noWrap sx={{ ...rowTypographySx, fontWeight: selected ? 'lg' : 400 }}>
-              {file.fileName.replace(/\.[^/.]+$/, '')}
-            </Typography>
+            <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
           </ListItemContent>
         </ListItemButton>
       </ListItem>
@@ -413,6 +421,26 @@ export default function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {/* Owner marker in the LIST itself, not just the detail pane: the
+                                  row otherwise shows only a name, so an admin (who sees every
+                                  tenant's lakes, even private) can't tell whose is whose without
+                                  opening each one. The owner name is already on the row, so this
+                                  costs no extra request. */}
+                              {lake.isOwn === false && (
+                                <Tooltip
+                                  title={
+                                    lake.ownerDisplayName
+                                      ? `Owned by ${lake.ownerDisplayName}`
+                                      : 'Owned by another user'
+                                  }
+                                  size="sm"
+                                >
+                                  <PersonOutlineIcon
+                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
+                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
                               {/* Background AI-tag suggestion indicator - an independent clock
                                   from ingest, so this can appear well after the lake's files
                                   are already fully uploaded/searchable. */}
@@ -479,76 +507,57 @@ export default function ManagerNav({
               open={showArchived}
               onToggle={() => setShowArchived(v => !v)}
               testid="datalake-archived-section"
-              emptyText="No archived data lakes."
-              lakes={showArchived ? filterByName(archivedLakes) : undefined}
+              emptyLabel="No files"
+              lakes={archivedLakes ? filterByName(archivedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-btn-${lake.id}`}
-                      onClick={() => unarchiveLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete (recoverable)" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-delete-btn-${lake.id}`}
-                      onClick={() => deleteLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
+              // An array, not a fragment: Joy's Menu clones its first child with data-first-child,
+              // which a Fragment rejects with a console error.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-btn-${lake.id}`}
+                  icon={<UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => unarchiveLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="delete"
+                  testId={`datalake-delete-btn-${lake.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Delete"
+                  onClick={() => deleteLake.mutate(lake.id)}
+                  danger
+                />,
+              ]}
             />
 
             {/* Deleted (recoverable until purged) */}
             <NavLifecycleSection
-              label="Deleted (recoverable)"
+              label="Deleted"
               open={showDeleted}
               onToggle={() => setShowDeleted(v => !v)}
               testid="datalake-deleted-section"
-              emptyText="No deleted data lakes."
-              lakes={showDeleted ? filterByName(deletedLakes) : undefined}
+              emptyLabel="No files"
+              lakes={deletedLakes ? filterByName(deletedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                      onClick={() => restoreDeletedLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <RestoreIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Purge permanently" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-purge-btn-${lake.id}`}
-                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
+              // Array for the same data-first-child reason as the archived section above.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-deleted-btn-${lake.id}`}
+                  icon={<RestoreIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => restoreDeletedLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="purge"
+                  testId={`datalake-purge-btn-${lake.id}`}
+                  icon={<DeleteForeverIcon sx={{ fontSize: 16 }} />}
+                  label="Purge permanently"
+                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                  danger
+                />,
+              ]}
             />
 
             {/* Irreversible purge confirmation */}
@@ -558,6 +567,7 @@ export default function ManagerNav({
                 <DialogContent>
                   This irreversibly deletes &ldquo;{purgeTarget?.name}&rdquo; and all its files, chunks, and batches.
                   This cannot be undone.
+                  {purgeTarget && <PurgeDriveWarning lakeId={purgeTarget.id} />}
                 </DialogContent>
                 <DialogActions>
                   <Button
@@ -585,7 +595,7 @@ export default function ManagerNav({
           articles={articles}
           breadcrumb={path}
           onNavigate={navigate}
-          selectedFileId={selectedFileId}
+          selectedFileIds={selectedFileIds}
           onSelectFile={onSelectFile}
           isLoading={filesLoading}
           isError={filesError}
@@ -604,19 +614,13 @@ export default function ManagerNav({
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
-        <Tooltip
-          title={
-            isDiscovering
-              ? 'Showing public data lakes. Click to return to your own lakes.'
-              : 'Browse data lakes other people have published, from across the app.'
-          }
-          size="sm"
-        >
+        <Tooltip title="Browse data lakes other people have published, from across the app." size="sm">
+          {/* Navigates to the catalog; deliberately stateless - it never reads as pressed, because
+              it is not a mode you are holding. Leaving is the nav's Back row. */}
           <Button
-            variant={isDiscovering ? 'soft' : 'outlined'}
+            variant="outlined"
             color="neutral"
             onClick={onDiscover}
-            aria-pressed={isDiscovering}
             data-testid="datalake-manager-discover-btn"
             sx={FOOTER_BTN_SX}
           >
@@ -634,5 +638,50 @@ export default function ManagerNav({
         </Button>
       </Box>
     </Box>
+  );
+}
+
+/**
+ * Purge-time warning that the lake still has a Drive folder attached. Renders nothing when there is
+ * no connection (or it is not visible to this caller - the endpoint 404s on a personal lake and
+ * 403s for a non-manager).
+ *
+ * It deliberately does NOT promise that purging releases the connection, because today it does not:
+ * the row survives its lake and its globally-unique driveFolderId then blocks re-claiming that
+ * folder app-wide, with no UI or API path back (#1807). So the copy tells the user to disconnect
+ * FIRST. When #1807 lands and teardown releases the connection itself, this wording must change
+ * with it - it describes a defect, not a design.
+ */
+function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
+  // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
+  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
+  // populate would trade one wasted request for silently withholding the warning on a lake that
+  // does have a connection. A rare 404 on a purge dialog is the cheaper failure.
+  const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
+
+  // A FAILED read is not "no connection". Collapsing it into the silent case would borrow the
+  // benign default's meaning for an unknown, and the cost lands on the one action that cannot be
+  // undone: the user purges, the row survives, and its globally-unique driveFolderId blocks
+  // re-claiming that folder app-wide with no path back (#1807). A 404 (personal lake / no
+  // connection) resolves to `connection: null` and is NOT an error, so this only fires on a real
+  // failure - it does not nag on every ordinary purge.
+  if (isError) {
+    return (
+      <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. If one is, purging leaves the
+        connection behind and that folder cannot be connected to another lake afterwards - restore the lake and
+        disconnect Drive first to be safe.
+      </Typography>
+    );
+  }
+  if (isLoading || !connection) return null;
+
+  const folder = connection.folderName || connection.driveFolderId;
+  return (
+    <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
+      This lake still syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging leaves that connection behind, and
+      the folder cannot be connected to another lake afterwards. Restore the lake and disconnect Drive first.
+    </Typography>
   );
 }

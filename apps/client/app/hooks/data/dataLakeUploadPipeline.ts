@@ -1,7 +1,20 @@
-import { folderTagForFile, isSupportedFabFileMimeType } from '@bike4mind/common';
+import {
+  folderTagForFile,
+  isSupportedFabFileMimeType,
+  hasBlankTagPrefixSegment,
+  submittedTagPrefix,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
+} from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { UploadErrorKind, UploadProgress, WizardStep } from '@client/app/stores/useDataLakeWizardStore';
+import type {
+  DataLakeFormValues,
+  PendingDriveFolder,
+  UploadErrorKind,
+  UploadProgress,
+  WizardStep,
+} from '@client/app/stores/useDataLakeWizardStore';
 import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { api } from '@client/app/contexts/ApiContext';
@@ -45,7 +58,8 @@ export const UPLOAD_ALL_FAILED_MESSAGE =
  * config validates server-side with zod, whose raw text (e.g. "Too small: expected
  * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
  * re-derived here from the config against the same rules to name the real culprit.
- * Keep the rule thresholds in sync with CreateDataLakeRequestInput (common/schemas/dataLake).
+ * The prefix thresholds come from the same constants the schema uses; the slug rule
+ * still mirrors CreateDataLakeRequestInput by hand.
  * `snapshot` is the config/isAppend state the caller read when classifying - same store,
  * same tick as the old inline read (store reads don't belong in this pure module).
  */
@@ -83,11 +97,27 @@ export function classifyUploadError(
           message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
         };
       }
-      const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
-      if (prefix.length < 2) {
+      const prefix = submittedTagPrefix(config.tagPrefix);
+      if (prefix.length < MIN_TAG_PREFIX_LENGTH) {
         return {
           kind: 'validation',
-          message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+          message: `The tag prefix is too short. Use at least ${MIN_TAG_PREFIX_LENGTH} characters ending in ":" (e.g. "legal:").`,
+        };
+      }
+      // Start Upload gates on this same bound, applied to this same submitted form, so the
+      // wizard should never get here - kept so a prefix arriving by any other route still
+      // names itself rather than falling through to the neutral message below.
+      if (prefix.length > MAX_TAG_PREFIX_LENGTH) {
+        return {
+          kind: 'validation',
+          message: `The tag prefix is too long. Use ${MAX_TAG_PREFIX_LENGTH} characters or fewer, including the trailing ":".`,
+        };
+      }
+      if (hasBlankTagPrefixSegment(prefix)) {
+        return {
+          kind: 'validation',
+          message:
+            'The tag prefix has a blank ":" segment. Give every segment a visible character (e.g. "legal:" or "legal:contracts:").',
         };
       }
     }
@@ -123,6 +153,53 @@ export function classifyUploadError(
   }
 
   return { kind: 'unknown', message: 'Batch upload failed. Please try again.' };
+}
+
+/**
+ * Zeroed progress counters for a fresh commit attempt. `totalFiles` is left at 0 for the caller
+ * that knows the real count to override - the fileless Drive commit genuinely has none.
+ */
+export function zeroProgressCounts(): Partial<UploadProgress> {
+  return {
+    totalFiles: 0,
+    uploadedFiles: 0,
+    chunkedFiles: 0,
+    vectorizedFiles: 0,
+    failedFiles: 0,
+    failedFileNames: [],
+    processingFailedFiles: 0,
+  };
+}
+
+/**
+ * Create the lake the wizard is configuring (create mode only). Shared by both commit paths - the
+ * batch upload and the fileless Drive-only create (useCreateLakeFromDrive) - so a lake is born from
+ * exactly the same fields either way.
+ *
+ * `tagPrefix` is passed in rather than derived here: it is the value every client-side gate already
+ * judged (see submittedTagPrefix), and re-deriving it would let the two drift.
+ */
+export async function createWizardLake(config: DataLakeFormValues, tagPrefix: string): Promise<string> {
+  // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads the store
+  // at call time, like the wizard config itself, so it can't go stale.
+  const organizationId = activeOrgId();
+  const res = await api.post<{ id: string }>('/api/data-lakes', {
+    name: config.name,
+    // The slug we ask for. The server disambiguates it against lakes in scope, so the created
+    // lake's real slug can differ - everything downstream keys off the id.
+    slug: slugifyDataLakeName(config.name),
+    description: config.description || undefined,
+    fileTagPrefix: tagPrefix,
+    requiredUserTag: config.requiredUserTag || undefined,
+    requiredEntitlement: config.requiredEntitlement || undefined,
+    ...(organizationId ? { organizationId } : {}),
+  } satisfies CreateDataLakeRequestInputType);
+  return res.data.id;
+}
+
+/** Bind a Drive folder picked during create to the lake that now exists (POST drive-sync). */
+export async function connectPendingDriveFolder(dataLakeId: string, folder: PendingDriveFolder): Promise<void> {
+  await api.post('/api/data-lakes/drive-sync', { dataLakeId, ...folder });
 }
 
 /**
@@ -222,7 +299,7 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
 }> {
   // Read from store at mutation time to avoid stale closure
   // (same pattern as useComputeHashes)
-  const { config, allFiles, targetLake, optionalSteps } = useDataLakeWizardStore.getState();
+  const { config, allFiles, targetLake, optionalSteps, pendingDriveFolder } = useDataLakeWizardStore.getState();
   let included = allFiles.filter(f => !f.excluded);
   if (included.length === 0) throw new Error('No files to upload');
 
@@ -258,30 +335,12 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   }
   // 'update' and 'duplicate' both upload: 'update' will overwrite, 'duplicate' creates new
 
-  // Ensure tag prefix ends with ':'
-  const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
+  // Exactly the value every client-side rule judged (see submittedTagPrefix), so what was
+  // gated is what gets sent.
+  const tagPrefix = submittedTagPrefix(config.tagPrefix);
 
   // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
-  let dataLakeId: string;
-  if (targetLake) {
-    dataLakeId = targetLake.id;
-  } else {
-    // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads
-    // the store at mutation time, like the wizard config above, so it can't go stale.
-    const organizationId = activeOrgId();
-    const dataLakeRes = await api.post<{ id: string }>('/api/data-lakes', {
-      name: config.name,
-      // The slug we ask for. The server disambiguates it against lakes in scope, so the
-      // created lake's real slug can differ - everything downstream keys off the id.
-      slug: slugifyDataLakeName(config.name),
-      description: config.description || undefined,
-      fileTagPrefix: tagPrefix,
-      requiredUserTag: config.requiredUserTag || undefined,
-      requiredEntitlement: config.requiredEntitlement || undefined,
-      ...(organizationId ? { organizationId } : {}),
-    } satisfies CreateDataLakeRequestInputType);
-    dataLakeId = dataLakeRes.data.id;
-  }
+  const dataLakeId = targetLake ? targetLake.id : await createWizardLake(config, tagPrefix);
   let uploadedCount = 0;
   // Hoisted above the try so the outcome branch + the catch can reconcile the batch
   // and clean up the records setup created. `failedFileIds` are the FabFiles presign
@@ -324,13 +383,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     // Switch to upload step and set initial progress
     cb.setStep('upload');
     cb.updateUploadProgress({
+      ...zeroProgressCounts(),
       totalFiles: included.length,
-      uploadedFiles: 0,
-      chunkedFiles: 0,
-      vectorizedFiles: 0,
-      failedFiles: 0,
-      processingFailedFiles: 0,
-      failedFileNames: [],
       status: 'uploading',
       currentBatchId: batchId,
       // Clear any error from a prior attempt so a retry starts clean.
@@ -466,6 +520,30 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
         failedFileIds,
       })
       .catch(() => {});
+
+    // A Drive folder picked during create is connected only HERE - after the lake exists and its
+    // files have landed. Connecting any earlier would strand a connection row behind the rollback
+    // the total-failure branch above performs on the new lake. Never in append mode: there
+    // DriveConnectAction already connected on the spot.
+    if (!targetLake && pendingDriveFolder) {
+      try {
+        await connectPendingDriveFolder(dataLakeId, pendingDriveFolder);
+      } catch (e) {
+        // The files are in, so the batch is a success - don't fail it over the Drive half.
+        // Name the actual refusal (not an org manager, folder claimed elsewhere, Drive not
+        // linked) AND where to retry, since this mutation offers no retry of its own.
+        // Reason last: it is a server sentence of its own, with no punctuation we can rely on
+        // to splice mid-message.
+        toast.error(
+          `Files uploaded, but the Google Drive folder was not connected - connect it from the data lake's header to retry. ${
+            // Create-mode only (guarded above), so the classifier gets isAppend: false.
+            classifyUploadError(e, { config: { name: config.name, tagPrefix: config.tagPrefix }, isAppend: false })
+              .message
+          }`,
+          { duration: 10000 }
+        );
+      }
+    }
 
     cb.updateUploadProgress({ status: 'complete' });
 

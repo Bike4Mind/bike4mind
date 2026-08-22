@@ -1,5 +1,6 @@
 import { AdminSettings } from '@bike4mind/database/infra';
 import { redactSettingSecrets, settingsMap, type AdminSettingDoc } from '@bike4mind/common';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
 
@@ -34,9 +35,18 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   //
   // Server-side consumers (apiKeyService.getEffective*) read AdminSettings directly and
   // are unaffected by this endpoint.
-  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting =>
-    redactSettingSecrets(setting as unknown as AdminSettingDoc)
-  );
+  //
+  // Sensitive values are stored encrypted; decrypt before redacting so the mask carries the
+  // real last-4 rather than the ciphertext tail. Only the mask leaves the server - the
+  // decrypted plaintext exists here just long enough to compute it. decryptAtRest passes a
+  // plaintext (not-yet-migrated) or non-encrypted value through unchanged.
+  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting => {
+    const decrypted =
+      typeof setting.settingValue === 'string'
+        ? { ...setting, settingValue: decryptAtRest(setting.settingValue) }
+        : setting;
+    return redactSettingSecrets(decrypted as unknown as AdminSettingDoc);
+  });
 
   // defaultEmbeddingModel's default is env-dependent on self-host (a local Ollama embedder when
   // no cloud key, else the cloud default - see defaultEmbeddingModelForEnv). The client cannot

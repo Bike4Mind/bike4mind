@@ -21,8 +21,10 @@ import {
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import type { PerMTokRate } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { DiscoveryStatusCard } from './DiscoveryStatusCard';
+import { SuccessorCostChip, SuccessorCostPanel } from './SuccessorCostDelta';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
@@ -71,6 +73,8 @@ interface LifecycleStatus {
   expired: ExpiringRow[];
   queue: QueueItem[];
   staleReferences: StaleReference[];
+  /** Per-MTok rates in force, by model id, for pricing a proposed successor. */
+  perMTokRates?: Record<string, PerMTokRate>;
 }
 
 const PROBLEM_COLOR: Record<StaleReference['problem'], ColorPaletteProp> = {
@@ -236,6 +240,7 @@ export const ModelLifecycleTab: React.FC = () => {
   };
 
   const horizon = status ? horizonRows(status) : [];
+  const rates = status?.perMTokRates ?? {};
 
   return (
     <Box data-testid="model-lifecycle-panel">
@@ -318,7 +323,18 @@ export const ModelLifecycleTab: React.FC = () => {
                         {item.suggestion?.deprecationDate ?? '-'}
                         {item.suggestion?.retirementDate ? ` / ${item.suggestion.retirementDate}` : ''}
                       </td>
-                      <td>{item.suggestion?.replacedBy ?? '-'}</td>
+                      <td>
+                        {item.suggestion?.replacedBy ?? '-'}
+                        {item.suggestion?.replacedBy && (
+                          <Box sx={{ mt: 0.25 }}>
+                            <SuccessorCostChip
+                              modelId={item.modelId}
+                              successorId={item.suggestion.replacedBy}
+                              rates={rates}
+                            />
+                          </Box>
+                        )}
+                      </td>
                       <td>
                         <Chip size="sm" variant="soft">
                           {item.suggestion?.source ?? 'unknown'}
@@ -472,6 +488,11 @@ export const ModelLifecycleTab: React.FC = () => {
                 slotProps={{ input: { 'data-testid': 'model-lifecycle-replacedby-input' } }}
               />
             </FormControl>
+            {/* Priced against what is typed, not what was suggested: the override is the
+                decision that needs the number, and it is the one the queue cannot precompute. */}
+            {acceptTarget && (
+              <SuccessorCostPanel modelId={acceptTarget.modelId} successorId={replacedBy.trim()} rates={rates} />
+            )}
             <FormControl required>
               <FormLabel>Note (audit trail: what confirms this deprecation?)</FormLabel>
               <Textarea

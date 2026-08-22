@@ -121,6 +121,58 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('persistResolvedMementoGates (#1525)', () => {
+    it('is absent on a fresh execution', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.resolvedMementoGates).toBeUndefined();
+    });
+
+    it('persists the resolved gates and reads them back verbatim through the typed sub-schema', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: true,
+        v2: false,
+        v2OptInLookupFailed: true,
+      });
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.resolvedMementoGates).toEqual({ v1: true, v2: false, v2OptInLookupFailed: true });
+    });
+
+    it('stores the sub-document without an _id and drops unknown fields (typed sub-schema, not Mixed)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      // Cast: the typed method never passes extras, but the sub-schema must strip them rather than
+      // let arbitrary keys ride into the DB - the reason this is a Schema and not `Mixed`.
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: false,
+        v2: true,
+        v2OptInLookupFailed: false,
+        rogue: 'nope',
+      } as unknown as { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean });
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      const gates = loaded?.resolvedMementoGates as Record<string, unknown> | undefined;
+      expect(gates).toEqual({ v1: false, v2: true, v2OptInLookupFailed: false });
+      expect(gates?.rogue).toBeUndefined();
+      expect(gates?._id).toBeUndefined();
+    });
+
+    it('overwrites a prior verdict (last write wins)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: true,
+        v2: true,
+        v2OptInLookupFailed: false,
+      });
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: false,
+        v2: false,
+        v2OptInLookupFailed: false,
+      });
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.resolvedMementoGates).toEqual({ v1: false, v2: false, v2OptInLookupFailed: false });
+    });
+  });
+
   describe('addChildExecution', () => {
     it('links a child id to the parent without duplicating', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution());

@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // createMongoReplSet is not exported from the package barrel / dist; deep-import the source.
-import { createMongoReplSet } from '../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   Group,
   Organization,
@@ -13,6 +16,10 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * Transactional guard for #1219: proves the org soft-delete participates in the caller's
@@ -42,11 +49,11 @@ const adapters = {
 beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri());
-}, 60000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await replSet?.stop();
-}, 60000);
+});
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });

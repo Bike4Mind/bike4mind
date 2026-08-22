@@ -1,4 +1,4 @@
-import { ModelBackend, type IModelDiscoveryState, type ModelRecord } from '@bike4mind/common';
+import { ModelBackend, successorCostDelta, type IModelDiscoveryState, type ModelRecord } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
@@ -8,6 +8,7 @@ import {
   detectParserRowShifts,
   planLifecycle,
   planLifecycleSignals,
+  verifyReplacement,
   type LifecyclePlanInput,
 } from './lifecyclePlan';
 import type { DiscoveredModel, PerTokenRates, SourceContribution } from './types';
@@ -629,5 +630,66 @@ describe('planLifecycle replacedBy', () => {
       expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-5', replacedBy: 'gpt-6' });
       expect(result.suggestions[0].detail).toContain('it is itself deprecated');
     });
+  });
+});
+
+/**
+ * The admin chip and panel in the client render `successorCostDelta`, whose
+ * docblock says it must agree with the cost clause here. Nothing else pins the
+ * two together, and a drift would show an operator a green delta on a successor
+ * this function had already refused.
+ */
+describe('successorCostDelta agrees with the cost clause', () => {
+  const RATES_PER_MTOK = [0, 0.02, 0.3, 0.5, 2, 6, 75];
+
+  const constraintInput = (current: string, successor: string, perToken: Map<string, PerTokenRates>) => ({
+    resolvedInForce: new Map([active(current), active(successor)]),
+    ratesInForce: perToken,
+  });
+
+  it('never reads cheaper-or-equal where verifyReplacement blocks on cost', () => {
+    const disagreements: string[] = [];
+
+    for (const currentInput of RATES_PER_MTOK) {
+      for (const currentOutput of RATES_PER_MTOK) {
+        for (const successorInput of RATES_PER_MTOK) {
+          for (const successorOutput of RATES_PER_MTOK) {
+            const perMTok = {
+              current: { input: currentInput, output: currentOutput },
+              successor: { input: successorInput, output: successorOutput },
+            };
+            const perToken = rates({
+              current: [currentInput / 1e6, currentOutput / 1e6],
+              successor: [successorInput / 1e6, successorOutput / 1e6],
+            });
+
+            const delta = successorCostDelta('current', 'successor', perMTok);
+            const blockers = verifyReplacement(
+              'successor',
+              'current',
+              constraintInput('current', 'successor', perToken)
+            );
+            const blockedOnCost = blockers.includes('cost-not-lower') || blockers.includes('cost-unverifiable');
+
+            if ((delta.verdict === 'cheaper-or-equal') === blockedOnCost) {
+              disagreements.push(`${JSON.stringify(perMTok)} -> ${delta.verdict} vs ${blockers.join()}`);
+            }
+          }
+        }
+      }
+    }
+
+    expect(disagreements).toEqual([]);
+  });
+
+  it('reads unverifiable exactly where the clause cannot check the cost', () => {
+    const perToken = rates({ current: [0.3 / 1e6, 0.5 / 1e6] });
+
+    expect(successorCostDelta('current', 'successor', { current: { input: 0.3, output: 0.5 } }).verdict).toBe(
+      'unverifiable'
+    );
+    expect(verifyReplacement('successor', 'current', constraintInput('current', 'successor', perToken))).toContain(
+      'cost-unverifiable'
+    );
   });
 });

@@ -111,6 +111,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     source: existing.source,
     claudeVersion: existing.claudeVersion,
     hearthChannelId: device.hearthChannelId,
+    endpoint,
     logger,
   });
 

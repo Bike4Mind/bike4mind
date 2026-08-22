@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 
 import GrantSubscriptionModal from './GrantSubscriptionModal';
@@ -6,7 +7,7 @@ import AdminApiKeysModal from './AdminApiKeysModal';
 import MFAStatusBadge from '../MFAStatusBadge';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
+import { IUserDocument } from '@bike4mind/common';
 import KeyIcon from '@mui/icons-material/Key';
 import CardGiftcardIcon from '@mui/icons-material/CardGiftcard';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -20,7 +21,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
 interface UserDetailsProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
 }

@@ -11,6 +11,19 @@ export interface FileSearchResult {
 }
 
 /**
+ * stat() that yields null instead of throwing. Following a symlink is best-effort here:
+ * a dangling link, or one pointing somewhere unreadable, must not take down a whole
+ * directory listing.
+ */
+function statOrNull(targetPath: string): fs.Stats | null {
+  try {
+    return fs.statSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Load gitignore rules from project root
  */
 function loadIgnoreRules(projectRoot: string): ReturnType<typeof ignore> {
@@ -212,18 +225,26 @@ function listAbsoluteDirectory(absolutePath: string, filterQuery?: string): File
     // Convert to FileSearchResult format (max 15 items)
     return filteredEntries.slice(0, 15).map(entry => {
       const fullPath = path.join(normalizedPath, entry.name);
+      // A Dirent describes the entry, not the link target, so a symlink answers false to
+      // BOTH isDirectory() and isFile(). Left unresolved, a symlinked directory listed as
+      // a file and stopped offering path completion past it - which is the normal layout
+      // under a dotfile manager. stat() follows the link; a broken one throws and keeps
+      // the Dirent's answer, so it still lists rather than disappearing.
+      const target = entry.isSymbolicLink() ? statOrNull(fullPath) : null;
+      const isDirectory = target ? target.isDirectory() : entry.isDirectory();
+      const isFile = target ? target.isFile() : entry.isFile();
+
       const result: FileSearchResult = {
         path: fullPath,
-        isDirectory: entry.isDirectory(),
+        isDirectory,
       };
 
-      // Add file size if it's a file
-      if (entry.isFile()) {
-        try {
-          const fileStats = fs.statSync(fullPath);
+      // Add file size if it's a file. Reuses the stat already taken for a symlink so a
+      // resolved link costs one syscall, not two.
+      if (isFile) {
+        const fileStats = target ?? statOrNull(fullPath);
+        if (fileStats) {
           result.size = fileStats.size;
-        } catch {
-          // Ignore stat errors
         }
       }
 

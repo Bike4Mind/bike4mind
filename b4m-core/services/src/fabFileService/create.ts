@@ -1,8 +1,12 @@
 import {
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
   IFabFileDocument,
   IUserDocument,
   IOrganizationDocument,
+  FabFileSourceType,
   KnowledgeType,
   SupportedFabFileMimeTypes,
   isStorableFabFileMimeType,
@@ -18,6 +22,7 @@ import {
 } from '@bike4mind/utils';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 
 export const createFabFileSchema = z.object({
   fileName: z.string(),
@@ -58,6 +63,13 @@ export interface CreateFabFileAdapters {
     organizations?: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // Optional: the file-create fan-in applies only its own/hardcoded datalake tags, so it need not
+    // wire the grant repo; assertCanWriteDataLakeTags degrades to the createdByUserId + org rung.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // Optional: absent means the admission contract (#1680) resolves its enforcement lever from the
+    // platform value only, so a caller that has no scoped store still gets the platform decision.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
     generateSignedUrl: (path: string, expireInSeconds: number, type?: 'get' | 'put') => Promise<string>;
@@ -67,19 +79,47 @@ export interface CreateFabFileAdapters {
       options?: { ContentType?: string; ContentLength?: number }
     ) => Promise<string>;
   };
+  /**
+   * Where this file came from, stamped by the server that ingested it.
+   *
+   * Deliberately an ADAPTER rather than a field on `createFabFileSchema`: that schema is parsed
+   * straight from an HTTP request body, so anything in it is caller-controlled. A client could
+   * then upload its own file and label it `sourceType: SLACK` with someone else's channel and
+   * message ts - forging exactly the audit trail provenance is meant to establish. Only a
+   * server-side caller that actually performed the ingest can pass this.
+   */
+  provenance?: {
+    sourceType: FabFileSourceType;
+    sourceMetadata?: Record<string, unknown>;
+  };
 }
 
 const DEFAULT_MAX_FILE_SIZE = 20;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
+/**
+ * Every caller of `createFabFile` is gated against lake membership here, whether or not it also
+ * gates itself up front (a few HTTP routes already call `assertCanWriteDataLakeTags` before
+ * reaching this) - so a new caller, like `researchTaskService`/`downloadRelevantLinks` used to
+ * be, cannot forget the check by omission. A write that bypasses this service entirely (e.g.
+ * `fabFileRepository.create()`/a direct model call) gets NO such gate; today's few such bypasses
+ * only ever set hardcoded or no tags, never a caller-controlled name, but a future one gaining a
+ * caller-supplied `tags` field must route through here instead.
+ */
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage }: CreateFabFileAdapters
+  { db, storage, provenance }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
+
+  const actor = { userId, isAdmin: !!user.isAdmin };
+  const tagNames = (params.tags ?? []).map(t => t.name);
+  // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
+  await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  assertCanWriteStaticRegistryTags(actor, tagNames);
 
   const ext = getFileExtension(params.fileName);
   let mimeType = params.mimeType || getMimeTypeByExtension(ext);
@@ -111,6 +151,10 @@ export const createFabFile = async (
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
+    ...(provenance && {
+      sourceType: provenance.sourceType,
+      ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),
+    }),
     mimeType,
     filePath,
     users: [],

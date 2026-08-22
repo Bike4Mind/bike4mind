@@ -13,13 +13,13 @@
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository } from '@bike4mind/database';
-import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
+import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
 
 /** EntitlementRequest carries no logger; the routes calling this are Express requests that do. */
-type RetrievalScopeRequest = EntitlementRequest & { logger?: Logger };
+type RetrievalScopeRequest = EntitlementRequest & MembershipRequest & { logger?: Logger };
 
 /** The tag/prefix triple `semanticDataLakeSearch` scopes on. Mirrors the core resolver's return. */
 export type RetrievalLakeScope = Awaited<ReturnType<typeof dataLakeService.getDynamicDataLakeAccess>>;
@@ -89,15 +89,24 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
   const entitlementKeys = await getRequestEntitlements(req);
 
   // Projected field-for-field to what ToolContext hands the same function in the chat tool,
-  // so "same lake set" is a property of the call, not a coincidence.
+  // so "same lake set" is a property of the call, not a coincidence. Membership is resolved
+  // INSIDE the shared resolver from user.id, not from user.organizationId (the selected-org
+  // display pointer) - see DataLakeAccessContext (#1674).
   const scope = await dataLakeService.getDynamicDataLakeAccess({
-    db: { dataLakes: dataLakeRepository },
+    db: {
+      dataLakes: dataLakeRepository,
+      // The resolver derives membership itself from user.id; serve that lookup from the
+      // request memo so one request resolves membership once across toAccessContext and this
+      // scope. Any other id (defense-in-depth - the resolver only asks about user.id today)
+      // falls through to the repository.
+      organizations: {
+        findMembershipOrgIds: (uid: string) =>
+          uid === user.id ? getRequestMembershipOrgIds(req) : organizationRepository.findMembershipOrgIds(uid),
+      },
+    },
     user: {
       id: user.id,
       tags: user.tags ?? [],
-      // Normalize once at the retrieval context seam, mirroring toAccessContext on the management
-      // side (#1281): a populated-doc org id would otherwise reach the gate as "[object Object]".
-      organizationId: normalizeId(user.organizationId),
     },
     entitlementKeys,
     logger: req.logger,

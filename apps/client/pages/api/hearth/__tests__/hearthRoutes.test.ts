@@ -8,7 +8,7 @@ const {
   createChannelMock,
   listChannelsForUserMock,
   tailEventsMock,
-  actorNamesByIdMock,
+  actorIdentitiesByIdMock,
   upsertPresenceMock,
   presenceForChannelMock,
   storeMock,
@@ -34,7 +34,7 @@ const {
     createChannelMock: vi.fn(),
     listChannelsForUserMock: vi.fn(),
     tailEventsMock: vi.fn(),
-    actorNamesByIdMock: vi.fn(),
+    actorIdentitiesByIdMock: vi.fn(),
     upsertPresenceMock: vi.fn(),
     presenceForChannelMock: vi.fn(),
     storeMock,
@@ -103,7 +103,7 @@ vi.mock('@bike4mind/database', () => ({
     createChannel: createChannelMock,
     listChannelsForUser: listChannelsForUserMock,
     tailEvents: tailEventsMock,
-    actorNamesById: actorNamesByIdMock,
+    actorIdentitiesById: actorIdentitiesByIdMock,
     upsertPresence: upsertPresenceMock,
     presenceForChannel: presenceForChannelMock,
   },
@@ -182,10 +182,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1', nextSeq: 5, userId: 'u1' });
   ensureChannelByNameMock.mockResolvedValue({ _id: 'ch-default', nextSeq: 0, userId: 'u1' });
-  ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' }, displayName: 'erik' });
+  ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' }, displayName: 'erik', kind: 'human' });
   hearthLogAppendMock.mockResolvedValue(DOMAIN_EVENT);
   hearthLogCatchupMock.mockResolvedValue([DOMAIN_EVENT]);
-  actorNamesByIdMock.mockResolvedValue(new Map([['actor-1', 'erik']]));
+  actorIdentitiesByIdMock.mockResolvedValue(new Map([['actor-1', { displayName: 'erik', kind: 'human' }]]));
   storeMock.getCursor.mockResolvedValue(1);
   tailEventsMock.mockResolvedValue([DOMAIN_EVENT]);
   sendToClientMock.mockResolvedValue(undefined);
@@ -391,7 +391,7 @@ describe('GET /api/hearth/presence', () => {
   it('publishes the row cap so a full page does not read as the whole roster', async () => {
     getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1' });
     presenceForChannelMock.mockResolvedValue([]);
-    actorNamesByIdMock.mockResolvedValue(new Map());
+    actorIdentitiesByIdMock.mockResolvedValue(new Map());
 
     const res = makeRes();
     await get()(makeReq({}, { channelId: 'ch-1' }), res);
@@ -426,7 +426,7 @@ describe('GET /api/hearth/presence', () => {
       presenceRow('a-working', 'running', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
       presenceRow('a-idle', 'idle', '2026-07-27T10:00:30Z'),
     ]);
-    actorNamesByIdMock.mockResolvedValue(new Map([['a-blocked', 'agent one']]));
+    actorIdentitiesByIdMock.mockResolvedValue(new Map([['a-blocked', { displayName: 'agent one', kind: 'agent' }]]));
 
     const res = makeRes();
     await get()(makeReq({}, { channelId: 'ch-1' }), res);
@@ -492,6 +492,74 @@ describe('POST /api/hearth/catchup', () => {
     expect(hearthLogCatchupMock).not.toHaveBeenCalled();
     expect(storeMock.setCursor).not.toHaveBeenCalled();
     expect((res.body as { cursor: number }).cursor).toBe(5);
+  });
+});
+
+// The badge a surface renders is only as trustworthy as the value the route
+// puts on the wire, so every route that names an actor is asserted to badge it
+// too - deleting `actorKind` from the wire functions otherwise left the whole
+// suite green.
+describe('actorKind reaches every response that names an actor', () => {
+  it('POST /events badges the actor it just resolved', async () => {
+    ensureActorMock.mockResolvedValue({
+      _id: { toString: () => 'actor-1' },
+      displayName: 'erik (a1b2)',
+      displayLabel: 'erik (my nb)',
+      kind: 'agent',
+    });
+    const res = makeRes();
+    await eventsRouter._routes.post(makeReq({ channelId: 'ch-1', human: { text: 'hi' } }), res);
+
+    // The friendly label, matching what catchup resolves for the same actor: the
+    // live event and the caught-up copy must not render under two names.
+    expect((res.body as { event: unknown }).event).toMatchObject({
+      actorName: 'erik (my nb)',
+      actorKind: 'agent',
+    });
+    expect(sendToClientMock).toHaveBeenCalledWith(
+      'u1',
+      'wss://test',
+      expect.objectContaining({ event: expect.objectContaining({ actorKind: 'agent' }) })
+    );
+  });
+
+  it('POST /catchup badges each event from the resolved identities', async () => {
+    actorIdentitiesByIdMock.mockResolvedValue(new Map([['actor-1', { displayName: 'agent one', kind: 'agent' }]]));
+    const res = makeRes();
+    await catchupRouter._routes.post(makeReq({ channelId: 'ch-1' }), res);
+    expect((res.body as { events: unknown[] }).events[0]).toMatchObject({
+      actorName: 'agent one',
+      actorKind: 'agent',
+    });
+  });
+
+  it('GET /presence badges each roster row', async () => {
+    presenceForChannelMock.mockResolvedValue([presenceRow('a-1', 'running', '2026-07-27T10:00:00Z')]);
+    actorIdentitiesByIdMock.mockResolvedValue(new Map([['a-1', { displayName: 'agent one', kind: 'agent' }]]));
+    const res = makeRes();
+    await presenceRouter._routes.get(makeReq({}, { channelId: 'ch-1' }), res);
+    expect((res.body as { presence: unknown[] }).presence[0]).toMatchObject({
+      actorName: 'agent one',
+      actorKind: 'agent',
+    });
+  });
+
+  // Every write the B4M CLI makes originates in an LLM tool call, so its session
+  // says so; without this the account's agent traffic badged as Human.
+  it('a session may declare a non-human kind and still gets a server-derived name', async () => {
+    await eventsRouter._routes.post(
+      makeReq({ channelId: 'ch-1', human: { text: 'hi' }, session: { id: 'sess-1', kind: 'agent' } }),
+      makeRes()
+    );
+    expect(ensureActorMock).toHaveBeenCalledWith('u1', 'agent', expect.stringMatching(/^erik \(/));
+  });
+
+  it('a session may not declare itself human, on any route', async () => {
+    const body = { channelId: 'ch-1', human: { text: 'hi' }, session: { id: 'sess-1', kind: 'human' } };
+    for (const router of [eventsRouter, catchupRouter]) {
+      await expect(router._routes.post(makeReq(body), makeRes())).rejects.toThrow();
+    }
+    expect(ensureActorMock).not.toHaveBeenCalled();
   });
 });
 

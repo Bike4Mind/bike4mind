@@ -20,11 +20,12 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUserCreditAdjustments, userCreditAdjustmentsKey } from '../hooks/useUserCreditAdjustments';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 
 interface CreditAdjustmentModalProps {
   open: boolean;
   onClose: () => void;
-  selectedUser: any;
+  selectedUser: AdminUserListItem | null;
   onCreditAdjustment: (userId: string, currentCredits: number, adjustment: number, note?: string) => Promise<void>;
 }
 

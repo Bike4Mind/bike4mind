@@ -30,6 +30,12 @@ export interface Message {
     steps?: AgentStep[];
     model?: string;
     permissionDenied?: boolean; // True if this message ended due to permission denial
+    /**
+     * Provider stop reason, when the reply did NOT finish cleanly (see isEarlyStop in
+     * `@bike4mind/common`). Present only for an early stop, so its mere presence means
+     * "this answer was cut off" - the renderer needs no vocabulary knowledge.
+     */
+    earlyStopReason?: string;
     cancelled?: boolean; // True if this message/operation was cancelled by user
     isContinuation?: boolean; // True if this is a continuation message (renders without header)
     // Subagent execution metadata
@@ -197,7 +203,12 @@ export interface CliConfig {
     enabled: boolean;
   }>;
   preferences: {
-    maxTokens: number;
+    /**
+     * Output-token ceiling per completion. Unset means "let the server size it for the
+     * model", which is the right default: a pinned small value starves models that spend
+     * reasoning tokens inside the output budget. Only set this to impose a real cap.
+     */
+    maxTokens?: number;
     temperature: number;
     autoSave: boolean;
     autoCompact?: boolean; // Enable auto-compact at 80% context usage (default: true)
@@ -206,6 +217,7 @@ export interface CliConfig {
     exportFormat: 'markdown' | 'json';
     maxIterations: number | null; // null = infinite iterations
     enableSkillTool?: boolean; // Enable AI skill invocation (default: true)
+    enableWorkItemTools?: boolean; // Enable the persistent work_item_* tools, which need a signed-in B4M account (default: false)
     enableRemoteSkills?: boolean; // Sync skills from B4M web on startup (default: true)
     enableParallelToolExecution?: boolean; // Enable parallel execution of read-only tools (default: false)
     enableDynamicAgentCreation?: boolean; // Enable dynamic agent creation (default: false, experimental)

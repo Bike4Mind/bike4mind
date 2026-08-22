@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
+  ApiKeyScope,
   COMPLETION_SOURCES,
   CreditHolderType,
   type IPlatformEndpointUsage,
@@ -35,8 +36,13 @@ const QuerySchema = z.object({
  *    ownerType-filterable, with API-key consumers resolved to key/owner labels.
  *  - ApiKeyUsageLog-derived endpoint/latency (request counts only, no credits).
  * Admin-only.
+ *
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+ * before req.user is set, so a key issued for a narrow integration can't read
+ * platform usage just because its owner is an admin. JWT/browser admins skip that
+ * check and still pass the isAdmin gate below.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }

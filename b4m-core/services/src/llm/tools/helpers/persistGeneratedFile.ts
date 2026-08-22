@@ -36,8 +36,8 @@ export async function persistGeneratedFileAsFabFile(
 
   // No session means nothing to attach the file to (e.g. some non-chat tool harnesses).
   if (!sessionId) return;
-  if (!db.fabfiles || !db.users || !db.adminSettings) {
-    logger.warn('[persistGeneratedFileAsFabFile] missing db adapters — skipping FabFile persist');
+  if (!db.fabfiles || !db.users || !db.adminSettings || !db.dataLakes) {
+    logger.warn('[persistGeneratedFileAsFabFile] missing db adapters - skipping FabFile persist');
     return;
   }
 
@@ -60,6 +60,7 @@ export async function persistGeneratedFileAsFabFile(
           fabFiles: db.fabfiles,
           adminSettings: db.adminSettings,
           users: db.users,
+          dataLakes: db.dataLakes,
         },
         storage: {
           upload: (path, content, options) => storage.upload(content, path, options),

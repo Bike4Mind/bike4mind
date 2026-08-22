@@ -18,8 +18,18 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     super(model);
   }
 
+  /**
+   * Returns the entry only while it is still live. The `expiresAt` TTL index is what eventually
+   * deletes the row, but Mongo's TTL monitor runs about once a minute, so without this guard an
+   * entry stayed readable for up to ~60s past its own expiry - a stale report served as fresh, a
+   * closed rate-limit window read as open. Callers that need the expired document itself (to
+   * report a window's reset time, say) must query the model directly.
+   *
+   * A row with no `expiresAt` at all never expires - the TTL index ignores it too - so it stays
+   * readable.
+   */
   async findByKey(key: string) {
-    return this.findOne({ key });
+    return this.findOne({ key, $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] });
   }
 
   async deleteByKey(key: string) {
@@ -160,6 +170,21 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     limit: number,
     ttlMs: number
   ): Promise<{ success: boolean; count: number; expiresAt: Date }> {
+    return this.tryAddWithinLimitFixedWindow(key, 1, limit, ttlMs);
+  }
+
+  /**
+   * `tryIncrementWithinLimitFixedWindow` generalized to add `amount` per call (spend
+   * metering, where each event's weight differs). All-or-nothing: if count + amount
+   * would exceed `limit`, nothing is applied. `amount <= 0` is a no-op success (nothing
+   * to meter); a window that cannot fit `amount` at all (`limit < amount`) is a deny.
+   */
+  async tryAddWithinLimitFixedWindow(
+    key: string,
+    amount: number,
+    limit: number,
+    ttlMs: number
+  ): Promise<{ success: boolean; count: number; expiresAt: Date }> {
     const now = new Date();
     const freshExpiresAt = new Date(now.getTime() + ttlMs);
 
@@ -171,46 +196,61 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
       return { success: true, count, expiresAt: doc.expiresAt };
     };
 
-    // (1) Increment if doc exists, in-window, and under limit.
+    if (amount <= 0) {
+      // Nothing to meter. Report current window state without consuming from it.
+      const existing = await this.model.findOne({ key, expiresAt: { $gt: now } });
+      const count = (existing?.result as { count?: number })?.count ?? 0;
+      return { success: true, count, expiresAt: existing?.expiresAt ?? freshExpiresAt };
+    }
+
+    // `count + amount <= limit`, expressed as a query bound. With amount = 1 this is the
+    // original `$lt: limit`. Also the `limit < amount` deny: the bound goes negative and
+    // matches nothing (counts are never negative).
+    const roomBound = { $lte: limit - amount };
+
+    // (1) Add if doc exists, in-window, and the amount still fits.
     const incremented = await this.model.findOneAndUpdate(
       {
         key,
         expiresAt: { $gt: now },
-        'result.count': { $lt: limit },
+        'result.count': roomBound,
       },
-      { $inc: { 'result.count': 1 } },
+      { $inc: { 'result.count': amount } },
       { new: true }
     );
     if (incremented) return readSuccess(incremented);
 
-    // (2) Claim a fresh window - absent doc, expired doc, or legacy shape.
-    try {
-      const claimed = await this.model.findOneAndUpdate(
-        {
-          key,
-          $or: [{ expiresAt: { $lte: now } }, { 'result.count': { $exists: false } }],
-        },
-        { $set: { result: { count: 1 }, expiresAt: freshExpiresAt } },
-        { upsert: true, new: true }
-      );
-      if (claimed) return readSuccess(claimed);
-    } catch (err) {
-      if ((err as { code?: number }).code !== 11000) throw err;
-      // (3) Duplicate-key: doc exists, not expired. Either at limit or another
-      // caller just claimed it. Retry the increment once.
-      const retried = await this.model.findOneAndUpdate(
-        {
-          key,
-          expiresAt: { $gt: now },
-          'result.count': { $lt: limit },
-        },
-        { $inc: { 'result.count': 1 } },
-        { new: true }
-      );
-      if (retried) return readSuccess(retried);
+    // (2) Claim a fresh window - absent doc, expired doc, or legacy shape. Skipped when the
+    // amount cannot fit even in an empty window, which must deny rather than seed count > limit.
+    if (amount <= limit) {
+      try {
+        const claimed = await this.model.findOneAndUpdate(
+          {
+            key,
+            $or: [{ expiresAt: { $lte: now } }, { 'result.count': { $exists: false } }],
+          },
+          { $set: { result: { count: amount }, expiresAt: freshExpiresAt } },
+          { upsert: true, new: true }
+        );
+        if (claimed) return readSuccess(claimed);
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
+        // (3) Duplicate-key: doc exists, not expired. Either at limit or another
+        // caller just claimed it. Retry the add once.
+        const retried = await this.model.findOneAndUpdate(
+          {
+            key,
+            expiresAt: { $gt: now },
+            'result.count': roomBound,
+          },
+          { $inc: { 'result.count': amount } },
+          { new: true }
+        );
+        if (retried) return readSuccess(retried);
+      }
     }
 
-    // At limit. Look up current state for Retry-After.
+    // No room. Look up current state for Retry-After.
     const existing = await this.model.findOne({ key });
     const count = (existing?.result as { count?: number })?.count ?? limit;
     return {
@@ -295,6 +335,57 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
       claimed: false,
       existingData: existingDoc.result as Record<string, unknown> | undefined,
     };
+  }
+
+  /**
+   * Read a dedupe entry's value without claiming or mutating it.
+   *
+   * Treats an expired-but-not-yet-swept document as absent: Mongo's TTL monitor
+   * runs about once a minute, so `expiresAt <= now` rows are still readable and
+   * would otherwise look like live reservations.
+   */
+  async readDedup(key: string): Promise<Record<string, unknown> | null> {
+    const doc = await this.model.findOne({ key, expiresAt: { $gt: new Date() } });
+    return (doc?.result as Record<string, unknown> | undefined) ?? null;
+  }
+
+  /**
+   * Compare-and-set on a dedupe entry: replace `result` only while
+   * `result[ownerField]` still equals `ownerValue`.
+   *
+   * The owner guard is what stops a submit that stalled past its TTL from
+   * overwriting a newer submit's reservation. Passing `ttlMs` extends the
+   * expiry; omitting it leaves the original expiry in place, which is what a
+   * state flip wants - the window should not slide just because the state moved.
+   */
+  async casUpdateDedup(
+    key: string,
+    ownerField: string,
+    ownerValue: string,
+    data: Record<string, unknown>,
+    ttlMs?: number
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = { result: data };
+    if (ttlMs !== undefined) {
+      set.expiresAt = new Date(Date.now() + ttlMs);
+    }
+
+    const updated = await this.model.findOneAndUpdate(
+      { key, [`result.${ownerField}`]: ownerValue },
+      { $set: set },
+      { new: true }
+    );
+
+    return !!updated;
+  }
+
+  /**
+   * Compare-and-delete on a dedupe entry: remove it only while
+   * `result[ownerField]` still equals `ownerValue`.
+   */
+  async casDeleteDedup(key: string, ownerField: string, ownerValue: string): Promise<boolean> {
+    const result = await this.model.deleteOne({ key, [`result.${ownerField}`]: ownerValue });
+    return (result.deletedCount ?? 0) > 0;
   }
 }
 

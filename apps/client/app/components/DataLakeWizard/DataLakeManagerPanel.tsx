@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box } from '@mui/joy';
 import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
 import { useActiveDataLakeBatches, useGetDataLakes, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
@@ -8,7 +8,11 @@ import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
+import { DataLakeAccessModal } from './DataLakeAccessModal';
+import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
+import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
+import { DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import type { ManagerLake } from './manager/shared';
 import { prefixSegments } from './manager/shared';
@@ -48,6 +52,7 @@ export default function DataLakeManagerPanel() {
   // sidebar footer's Discover button flips it the same way.
   const managerTab = useDataLakeWizardStore(s => s.managerTab);
   const openManager = useDataLakeWizardStore(s => s.openManager);
+  const managerLakeId = useDataLakeWizardStore(s => s.managerLakeId);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
@@ -64,6 +69,18 @@ export default function DataLakeManagerPanel() {
   const [path, setPath] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
+  const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
+  const [editingFallbackLakeId, setEditingFallbackLakeId] = useState<string | null>(null);
+
+  // Deep-link: a per-lake action elsewhere (the page rail's header) opens the manager already
+  // pointed at that lake. Only a non-null id steers; null is the plain "open at root" case and
+  // must not wipe a selection the user made inside the panel.
+  useEffect(() => {
+    if (!managerLakeId) return;
+    setLakeId(managerLakeId);
+    setPath([]);
+    setSelectedFile(null);
+  }, [managerLakeId]);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
@@ -87,10 +104,42 @@ export default function DataLakeManagerPanel() {
           // '' both when unset and when the server withheld it (non-editors never receive
           // the text); the modal renders the field off canManage, never off this value.
           systemPrompt: l.systemPrompt ?? '',
+          // Same as systemPrompt: '' when unset OR withheld from a non-editor; rendered off canManage.
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          // Absent when withheld from a non-editor OR the lake predates the field; seed the default
+          // so the picker always shows a concrete mode (matching how the resolver treats absence).
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
+          // the field renders as blank - and the state in which this lake never converges.
+          requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,
           canManage: !!l.canManage,
+          embeddingSpendMicroUsd: l.embeddingSpendMicroUsd,
         }
       : null;
   }, [dataLakes, editingLakeId]);
+
+  // Same live-list derivation as editingLake: the access modal only needs the lake's id + name,
+  // and re-deriving from the list keeps it in step if the lake is renamed while the modal is open.
+  const accessLake = useMemo(() => {
+    const l = dataLakes?.find(d => d.id === accessLakeId);
+    return l ? { id: l.id, name: l.name } : null;
+  }, [dataLakes, accessLakeId]);
+  // Same live-list derivation as editingLake, for a fallback (built-in) lake's narrower settings
+  // editor. Separate state/derivation because a fallback lake can never populate EditableLake's
+  // required fields (name is its only real one; description/tags/visibility don't apply to it).
+  const editingFallbackLake = useMemo<EditableFallbackLake | null>(() => {
+    const l = dataLakes?.find(d => d.id === editingFallbackLakeId);
+    return l
+      ? {
+          id: l.id,
+          name: l.name,
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          systemPrompt: l.systemPrompt ?? '',
+          organizationId: l.organizationId ?? '',
+        }
+      : null;
+  }, [dataLakes, editingFallbackLakeId]);
 
   const selectLake = (lake: ManagerLake) => {
     setLakeId(lake.id);
@@ -105,13 +154,10 @@ export default function DataLakeManagerPanel() {
 
   // Discover swaps the right pane, but the activeLake branch below outranks it - so a click
   // while a lake was open changed nothing on screen, then surfaced later as the catalog
-  // appearing when the user pressed Back. Exit the lake on the way in. Toggling back out is
-  // the only exit that does not require owning a lake to click.
-  const toggleDiscover = () => {
-    if (managerTab === 'discover') {
-      openManager('mine');
-      return;
-    }
+  // appearing when the user pressed Back. Exit the lake on the way in. One-way by design: the
+  // catalog is a place you go, not a mode you hold, so the nav's Back row is the way out (which
+  // also means leaving never depends on owning a lake to click).
+  const openDiscover = () => {
     setLakeId(null);
     setPath([]);
     setSelectedFile(null);
@@ -151,8 +197,7 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
-        isDiscovering={managerTab === 'discover'}
-        onDiscover={toggleDiscover}
+        onDiscover={openDiscover}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -169,8 +214,15 @@ export default function DataLakeManagerPanel() {
             fileCount={lakeCount(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
+            onOpenAccess={() => setAccessLakeId(activeLake.id)}
+            onOpenFallbackSettings={() => setEditingFallbackLakeId(activeLake.id)}
             onReviewTaxonomy={setReviewingBatchId}
             onArchived={() => {
+              setLakeId(null);
+              setPath([]);
+              setSelectedFile(null);
+            }}
+            onDeleted={() => {
               setLakeId(null);
               setPath([]);
               setSelectedFile(null);
@@ -187,6 +239,9 @@ export default function DataLakeManagerPanel() {
       )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+      <FallbackLakeSettingsModal lake={editingFallbackLake} onClose={() => setEditingFallbackLakeId(null)} />
+
+      <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />
 
       {/* Review/apply the background AI tag suggestions for a batch */}
       {reviewingBatch && (

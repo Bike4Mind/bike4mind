@@ -10,6 +10,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
   mementoRepository,
@@ -27,6 +28,7 @@ import {
   usageEventRepository,
   userRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
 import {
   ChatModels,
@@ -134,6 +136,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
       dataLakes: dataLakeRepository,
+      fallbackLakeSettings: fallbackLakeSettingsRepository,
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
@@ -174,6 +177,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

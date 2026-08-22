@@ -1,9 +1,11 @@
 import { ToolDefinition } from './base/types';
 export type { ToolContext, ToolDefinition } from './base/types';
+export { mergeRetrievalSummary, type RetrievalSummary } from './retrievalSummaryMerge';
 import { diceRollTool } from './implementation/diceroll';
 import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';
 import { musicGenerationTool } from './implementation/musicGeneration';
+import { audioGenerationTool } from './implementation/audioGeneration';
 import { webSearchTool } from './implementation/websearch';
 import { webFetchTool } from './implementation/webfetch';
 import { wolframAlphaTool } from './implementation/wolfram_alpha';
@@ -101,6 +103,7 @@ export const b4mTools = {
   image_generation: imageGenerationTool,
   edit_image: imageEditTool,
   music_generation: musicGenerationTool,
+  audio_generation: audioGenerationTool,
   web_search: webSearchTool,
   web_fetch: webFetchTool,
   wolfram_alpha: wolframAlphaTool,

@@ -9,6 +9,8 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -85,6 +87,7 @@ const handler = baseApi()
               onDeleteComplete: async (_fabFile, sizeToDeduct) => {
                 totalSizeToDeduct += sizeToDeduct;
               },
+              searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
             }
           );
 
@@ -141,7 +144,10 @@ const handler = baseApi()
 
     // After every delete transaction has committed, so the aggregation sees each `deletedAt`.
     if (deletedFileTagNames.length > 0) {
-      await recomputeStatsForLakeTags(deletedFileTagNames, { logger: req.logger });
+      await recomputeStatsForLakeTags(deletedFileTagNames, {
+        logger: req.logger,
+        actor: { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+      });
     }
 
     const parts: string[] = [];

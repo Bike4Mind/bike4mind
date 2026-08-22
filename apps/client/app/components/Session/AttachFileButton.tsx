@@ -47,56 +47,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
-
-const GOOGLE_DRIVE_PICKER_STYLE_ID = 'b4m-google-drive-picker-styles';
-
-const ensureGoogleDrivePickerStyles = () => {
-  if (typeof document === 'undefined') return;
-  if (document.getElementById(GOOGLE_DRIVE_PICKER_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = GOOGLE_DRIVE_PICKER_STYLE_ID;
-  style.textContent = `
-    .picker-dialog,
-    .picker-dialog-bg,
-    .google-picker-dialog {
-      z-index: 1400 !important;
-    }
-
-    /* Improve file type icons */
-    .picker-spr-generic-file,
-    .picker-spr-unknown-file {
-      background: #f1f3f4 !important;
-      border-radius: 2px !important;
-      position: relative !important;
-    }
-
-    /* Google Docs icon */
-    .picker-spr-doc-icon {
-      background: #4285f4 !important;
-      border-radius: 2px !important;
-    }
-
-    /* Google Sheets icon */
-    .picker-spr-spreadsheet-icon {
-      background: #0f9d58 !important;
-      border-radius: 2px !important;
-    }
-
-    /* PDF icon */
-    .picker-spr-pdf-icon {
-      background: #ea4335 !important;
-      border-radius: 2px !important;
-    }
-
-    /* Fallback for missing thumbnails */
-    .picker-photo-control-default {
-      background: #f8f9fa !important;
-      border: 1px solid #dadce0 !important;
-      border-radius: 4px !important;
-    }
-  `;
-  document.head.appendChild(style);
-};
+import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
 import type { AttachScopeMode } from '@bike4mind/common';
 

@@ -58,13 +58,16 @@ vi.mock('@client/app/utils/authRedirect', () => ({
   applyRedirect: mocks.applyRedirect,
   appendRedirectTo: (url: string) => url,
 }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ resetRefreshPromise: vi.fn() }));
+vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: vi.fn() }));
 vi.mock('@client/app/utils/signupConversion', () => ({ trackSignupConversion: mocks.trackSignupConversion }));
 vi.mock('@client/app/hooks/useCommonStyles', () => ({
   useCommonStyles: () => ({ inputStyles: {}, dividerStyles: {} }),
 }));
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useBrandingSettings: () => ({}) }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useBrandingSettings: () => ({}),
+  usePublicConfig: () => ({ data: { allowTrustedDevices: true } }),
+}));
 vi.mock('next/image', () => ({ default: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string) => k }),

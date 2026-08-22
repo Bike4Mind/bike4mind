@@ -1,3 +1,7 @@
+import type { MetadataFilter } from '@server/analytics/metadataFilterContract';
+
+export type { MetadataFilter };
+
 export enum AnalyticsSubTab {
   UserActivity = 'user_activity',
   DailyReport = 'daily_report',
@@ -23,12 +27,6 @@ export interface DateFilters {
 export interface UserActivityFilters {
   counterNameSearch: string;
   userEmailSearch: string;
-}
-
-export interface MetadataFilter {
-  field: string;
-  operator: 'equals' | 'contains' | 'in' | 'exists' | 'not_exists';
-  value?: unknown;
 }
 
 export interface AnalyticsState {

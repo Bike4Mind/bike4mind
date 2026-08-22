@@ -13,12 +13,18 @@ import {
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CloseIcon from '@mui/icons-material/Close';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
-import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import TreeRowLabel from './TreeRowLabel';
+import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
+import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -33,6 +39,7 @@ import {
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import { gray } from '@client/app/utils/themes/colors';
 
 interface DataLakeChatTreeProps {
@@ -41,8 +48,17 @@ interface DataLakeChatTreeProps {
   articles: IFabFileDocument[];
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
-  onSelectFile: (file: IFabFileDocument) => void;
+  /** Threaded to DataLakeTreeView's cross-tree article search. */
+  source?: DataLakeBrowseSource;
+  selectedFileIds: ReadonlySet<string>;
+  /** Menu action: attach the file to the chat session. */
+  onAttachFile: (file: IFabFileDocument) => void;
+  /** Open the file. Runs from the row's own click as well as the menu's View item. */
+  onViewFile: (file: IFabFileDocument) => void;
+  /** Gates the menu's Remove item (owning lake resolved + manageable). */
+  canDeleteFile: (file: IFabFileDocument) => boolean;
+  /** Menu action: request removal from the owning lake (host owns the confirm). */
+  onDeleteFile: (file: IFabFileDocument) => void;
   isLoading: boolean;
   isError?: boolean;
   /** Header title (the lake root label, e.g. "Data Lakes"). */
@@ -65,8 +81,12 @@ export default function DataLakeChatTree({
   articles,
   breadcrumb,
   onNavigate,
-  selectedFileId,
-  onSelectFile,
+  source,
+  selectedFileIds,
+  onAttachFile,
+  onViewFile,
+  canDeleteFile,
+  onDeleteFile,
   isLoading,
   isError,
   title,
@@ -91,7 +111,7 @@ export default function DataLakeChatTree({
         borderColor: isDark ? gray[800] : gray[200],
       }}
     >
-      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '2px' }}>
         <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: 'text.primary' }}>
           {title}
         </Typography>
@@ -241,9 +261,7 @@ export default function DataLakeChatTree({
           >
             <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
             <ListItemContent>
-              <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-                {humanizeSegment(node.segment, depth)}
-              </Typography>
+              <TreeRowLabel label={humanizeSegment(node.segment, depth)} />
             </ListItemContent>
             <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
               {node.fileCount}
@@ -252,22 +270,90 @@ export default function DataLakeChatTree({
         </ListItem>
       );
     },
-    renderFileRow: (file, selected, onSelect) => (
+    renderFileRow: (file, selected) => (
       <ListItem>
+        {/* Clicking the row runs the View action - the same ListItemButton the folder rows use,
+            so the two lists share their geometry and hover treatment. The actions trigger
+            reveals on hover/focus, stays visible on touch (no-hover) devices, and pins while its
+            menu is open (:has on aria-expanded) so the anchor cannot fade under an open menu. */}
         <ListItemButton
-          selected={selected}
-          onClick={onSelect}
+          // Deliberately NOT Joy's `selected`: that paints its own active-variant ground, which
+          // overrides the sidebar-matching background below. aria-current carries the state.
+          aria-current={selected ? 'true' : undefined}
+          onClick={() => onViewFile(file)}
           data-testid={`datalake-file-${file.id}`}
-          sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
+          sx={{
+            ...treeRowSx(theme.palette.notebooklist.hoverBg),
+            // Tighter than the folder rows' 8px so the actions trigger sits closer to the edge.
+            paddingInlineEnd: '4px',
+            // Selected state mirrors the sidebar's active chat row (Session/SidenavItem): the
+            // focused ground plus a 2px primary bar at the left edge, hover leaves it alone, and
+            // the row's actions stay revealed. Keep the two in sync if either changes.
+            position: 'relative',
+            backgroundColor: selected ? theme.palette.notebooklist.focusedBackground : undefined,
+            '&::before': selected
+              ? {
+                  content: '""',
+                  position: 'absolute',
+                  left: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: '2px',
+                  height: '80%',
+                  backgroundColor: theme.palette.primary[500],
+                  borderRadius: '1px',
+                }
+              : undefined,
+            '&:hover': selected ? { backgroundColor: theme.palette.notebooklist.focusedBackground } : undefined,
+            '@media (hover: hover)': { '& .dl-row-actions': { opacity: selected ? 1 : 0 } },
+            '&:hover .dl-row-actions, &:focus-within .dl-row-actions': { opacity: 1 },
+            '&:has([aria-expanded="true"]) .dl-row-actions': { opacity: 1 },
+          }}
         >
+          {/* Icon and label stay constant across selection, as in the sidebar - the ground and
+              the left bar carry the state on their own. A processing failure overrides both to
+              danger so an unfindable file reads as failed at a glance. */}
           <ArticleOutlinedIcon
-            sx={{ fontSize: 16, color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary', flexShrink: 0 }}
+            sx={{ fontSize: 16, color: file.error ? 'danger.500' : 'text.tertiary', flexShrink: 0 }}
           />
           <ListItemContent>
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}>
-              {file.fileName.replace(/\.[^/.]+$/, '')}
-            </Typography>
+            <TreeRowLabel
+              label={file.fileName.replace(/\.[^/.]+$/, '')}
+              color={file.error ? 'danger.500' : undefined}
+            />
           </ListItemContent>
+          <FileIndexingAlert file={file} />
+          {/* The row itself is the View action, so an actions click must not also fire it.
+              Caught here rather than on the trigger: MenuButton owns its own onClick. */}
+          <Box
+            className="dl-row-actions"
+            onClick={e => e.stopPropagation()}
+            sx={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0, transition: 'opacity 0.15s' }}
+          >
+            <RowActionsMenu testId={`datalake-row-menu-btn-${file.id}`} ariaLabel="File actions">
+              <RowMenuItem
+                testId={`datalake-attach-item-${file.id}`}
+                icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
+                label="Attach to chat"
+                onClick={() => onAttachFile(file)}
+              />
+              <RowMenuItem
+                testId={`datalake-view-item-${file.id}`}
+                icon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
+                label="View"
+                onClick={() => onViewFile(file)}
+              />
+              {canDeleteFile(file) && (
+                <RowMenuItem
+                  testId={`datalake-delete-item-${file.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Remove"
+                  onClick={() => onDeleteFile(file)}
+                  danger
+                />
+              )}
+            </RowActionsMenu>
+          </Box>
         </ListItemButton>
       </ListItem>
     ),
@@ -278,13 +364,16 @@ export default function DataLakeChatTree({
   };
 
   return (
+    // The chrome's file rows wire their own onClick straight to onViewFile, so TreeView's
+    // per-row callback is unused here (it exists for the page tree) and gets a no-op.
     <DataLakeTreeView
       tree={tree}
       articles={articles}
       breadcrumb={breadcrumb}
       onNavigate={onNavigate}
-      selectedFileId={selectedFileId}
-      onSelectFile={onSelectFile}
+      source={source}
+      selectedFileIds={selectedFileIds}
+      onSelectFile={() => {}}
       isLoading={isLoading}
       isError={isError}
       chrome={chrome}

@@ -42,6 +42,20 @@ const LakeMemorySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
+// Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
+// auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
+// re-parse since `attempted`/`outcome` are required). Top-level on promptMeta, not nested under
+// `context` - see the field's own comment in QuestModel.ts and in promptMeta.ts for why a
+// one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
+const RetrievalSummarySchema = subSchema({
+  attempted: { type: Boolean, required: true },
+  // No enum -- see the file header on why this schema's job is to not lose the value, not
+  // to validate it. Zod (RetrievalSummarySchema, promptMeta.ts) remains the contract.
+  outcome: { type: String, required: true },
+  surfaces: [{ type: String, required: false }],
+  dataLakeTags: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -181,6 +195,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // is the capped cache-read count used for the discount; estimatedCost /
       // creditsUsed are the billed amounts (previously computed but not persisted).
       cacheReadInputTokens: { type: Number, required: false },
+      // cacheCreationInputTokens is the billed cache-WRITE count (1.25x rate), the most
+      // expensive component of a cold turn. Must stay declared alongside the Zod field or
+      // strict mode strips it and the write rate becomes unmeasurable again.
+      cacheCreationInputTokens: { type: Number, required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },
@@ -259,6 +277,9 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         verbatimTurnsExcluded: { type: Number, required: false },
       },
     },
+    // Must stay in sync with the Zod PromptMeta `retrieval` (parity test enforces it). Top-level,
+    // not nested under `context` above - see RetrievalSummarySchema's comment.
+    retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },

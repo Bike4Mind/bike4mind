@@ -40,7 +40,7 @@ export interface DeleteFabFileAdapter {
       IFabFileRepository,
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctEmbeddingModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
   };
@@ -48,6 +48,11 @@ export interface DeleteFabFileAdapter {
     delete: (path: string) => Promise<unknown>;
   };
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
+  /**
+   * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
+   * would survive as permanent orphans in its embeddingModel's OpenSearch index.
+   */
+  searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
 export const deleteFabFile = async (
@@ -55,7 +60,7 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete } = adapter;
+  const { db, storage, onDeleteComplete, searchIndex } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -81,8 +86,19 @@ export const deleteFabFile = async (
       }
     }
 
+    // Resolve BEFORE the Mongo chunks are deleted below - their per-chunk embeddingModel is the
+    // only place this survives once they're gone. A re-embedded file's chunks can span more
+    // than one model (see IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the
+    // file's CURRENT model only - would miss an OpenSearch index left by an earlier embed.
+    const chunkEmbeddingModels = searchIndex
+      ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([ownedFile.id])
+      : [];
+
     // Handle deletion of new FabFileChunks
     await db.fabFileChunks.deleteManyByFabFileId(ownedFile.id);
+    if (searchIndex) {
+      await Promise.all(chunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(ownedFile.id, model)));
+    }
 
     // Unlink the deleted fabFile from all associated sessions
     const sessions = await db.sessions.findAllWithKnowledgeId(ownedFile.id);

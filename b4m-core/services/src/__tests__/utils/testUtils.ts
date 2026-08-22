@@ -58,6 +58,10 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
   getAccessibleFiles: vi.fn(),
+  // Default true ("I still own my claim") rather than the vi.fn() default of undefined/falsy,
+  // which would otherwise silently read as "claim lost" for any test that reaches this guard
+  // through the shared mock without overriding it.
+  confirmChunkClaim: vi.fn().mockResolvedValue(true),
   findByIdAndUserId: vi.fn(),
   findAllInIds: vi.fn(),
   findMetadataByIds: vi.fn(),
@@ -80,12 +84,26 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
+  findByDriveFileIdsInDataLake: vi.fn(),
+  findByDriveConnectionIdInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
+  setChunkPolicyConflict: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  findDataLakeHealthMembers: vi.fn(),
+  findLakeConvergenceMembers: vi.fn(),
+  findFileIdsMissingChunkedCharCount: vi.fn(),
+  setChunkedCharCount: vi.fn(),
+  findFileIdsMissingChunkRollups: vi.fn(),
+  setChunkRollups: vi.fn(),
+  findChunkedFilesByScope: vi.fn(),
+  findConvergencePausedFilesByScope: vi.fn(),
+  resetChunkStateByIds: vi.fn(),
+  countFailedFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
+  hasArchivedMemberExclusiveToDataLakeTag: vi.fn(),
   findDeletedByDataLakeTag: vi.fn(),
   undeleteByDataLakeTag: vi.fn(),
   softDeleteByDataLakeTag: vi.fn(),
@@ -93,6 +111,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   hardDeleteByIds: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
+  sumFileSizeByUserId: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({
@@ -140,6 +159,7 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     findBySid: vi.fn(),
     findActiveByUserId: vi.fn(),
     rotateHash: vi.fn(),
+    registerReplayUse: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
   });
@@ -154,6 +174,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     removeGroupsFromUser: vi.fn(),
     findUserIdsByGroupIds: vi.fn(),
     findByIds: vi.fn(),
+    findActiveEmailsByIds: vi.fn(),
     findByUsernameOrEmail: vi.fn(),
     findByIdWithPassword: vi.fn(),
     findByEmailVerificationToken: vi.fn(),
@@ -183,11 +204,13 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     addMemberRaisingSeats: vi.fn(),
     addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
+    findIdsWithAdminRights: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     updateUserDetails: vi.fn(),
+    findMembershipOrgIds: vi.fn(),
   });
 
 export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>

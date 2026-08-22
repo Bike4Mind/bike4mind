@@ -557,6 +557,36 @@ jobs:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
 
+      # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
+      # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
+      # `pnpm --recursive ... test` has no project to run in either. They passed locally and
+      # nowhere else, which is worse than having no tests - infra/__tests__ holds the guard that
+      # is meant to fail the build when a WAF shadow rule flips from Count to Block, and it could
+      # not have.
+      #
+      # Pinned to the misc shard, the negative-filter catch-all, so this runs exactly once rather
+      # than once per matrix leg.
+      #
+      # `--dir` rather than a path argument: a bare `vitest run infra/` is a SUBSTRING filter, so
+      # it also collects packages/database/src/models/infra/**, whose model tests need that
+      # package's own vitest setup and fail under the root config (30 files, 16 failures). The
+      # preview gate's path glob is anchored against the same trap.
+      #
+      # `pnpm exec`, not `pnpm vitest`: the latter resolves as a recursive script and errors with
+      # "Command vitest not found" even though vitest is a root devDependency.
+      #
+      # A directory with no test files exits non-zero, so moving or renaming these files reddens
+      # CI instead of quietly reporting success - which is the failure mode this step exists to
+      # end.
+      - name: Run root-level tests (outside pnpm workspaces)
+        if: matrix.shard.name == 'misc'
+        run: |
+          pnpm exec vitest run --dir infra
+          pnpm exec vitest run --dir scripts/codemods
+        env:
+          CI: true
+          VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+
   # Aggregate gate for the sharded test matrix. Branch protection requires a
   # status check literally named "Run Tests"; the matrix above reports per-shard
   # names ("Run Tests (client)", …), so this job re-exposes the exact required

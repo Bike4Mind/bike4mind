@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { IUserDocument } from '@bike4mind/common';
 import { Button, Checkbox, Input, Modal, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy';
@@ -6,7 +7,7 @@ import { toast } from 'sonner';
 import DestructiveActionHelp from '@client/app/components/help/DestructiveActionHelp';
 
 interface SpicyUserActionsProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
   handleDeleteUser: (userId: string) => Promise<void>;

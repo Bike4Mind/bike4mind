@@ -85,6 +85,22 @@ describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts a datalake:<slug> entitlement update (#1669), same as the create route', async () => {
+    repo.update.mockResolvedValue({ id: 'r1', domain: 'partner.com', entitlements: ['datalake:acme-legal'] });
+    const { req, res } = makeReqRes('PUT', { body: { entitlements: ['datalake:acme-legal'] } });
+    await handlers.put(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(repo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'r1', entitlements: ['datalake:acme-legal'] })
+    );
+  });
+
+  it('rejects a malformed datalake: key (empty slug) with a 400 and never writes', async () => {
+    const { req, res } = makeReqRes('PUT', { body: { entitlements: ['datalake:'] } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/unknown entitlement key/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when the row was deleted between check and write', async () => {
     repo.update.mockResolvedValue(null);
     const { req, res } = makeReqRes('PUT', { body: { enabled: true } });

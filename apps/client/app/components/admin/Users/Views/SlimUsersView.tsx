@@ -1,7 +1,7 @@
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
 import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useGetRecentActivities } from '@client/app/hooks/data/user';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { Box, Button, Card, Grid, LinearProgress, Stack, Tooltip, Typography } from '@mui/joy';
 import prettyBytes from 'pretty-bytes';
@@ -13,12 +13,12 @@ import UserIdChip from '../UserIdChip';
 import { computeStoragePercent } from './storageUtils';
 
 interface SlimUsersViewProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
   index: number;
 }
 
 interface SlimUsersContainerProps {
-  users: WithOrgRef<IUserDocument>[];
+  users: AdminUserListItem[];
 }
 
 /** Header and row share these widths; they must be edited together or the table skews. */
@@ -35,7 +35,7 @@ const COLUMN_WIDTHS = {
 
 const ELLIPSIS_SX = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
-const StorageCell: React.FC<{ user: WithOrgRef<IUserDocument> }> = ({ user }) => {
+const StorageCell: React.FC<{ user: AdminUserListItem }> = ({ user }) => {
   const storageLimitBytes = user.storageLimit * 1024 * 1024;
   const storagePercent = computeStoragePercent(user.currentStorageSize, user.storageLimit);
   // Below 1% a percentage reads as "no data"; show the raw size so the cell stays meaningful.

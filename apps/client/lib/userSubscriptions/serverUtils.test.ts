@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', async () => {
     organizationRepository: {
       findById: vi.fn(),
       findByStripeCustomerId: vi.fn(),
+      update: vi.fn().mockResolvedValue(undefined),
     },
     creditTransactionRepository: { findByPaymentIntentId: vi.fn().mockResolvedValue(null) },
     withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
@@ -235,6 +236,80 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
 
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
     expect(subscriptionRepository.flipAdminGrantToStripe).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('already has an active Stripe subscription'));
+  });
+});
+
+describe('handleOrganizationSubscriptionInvoice - seat sync on initial purchase', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(null);
+    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([]);
+  });
+
+  it('writes organization.seats to the purchased quantity for an existing org (regression: seats stuck at default)', async () => {
+    // The org starts at the schema default of 10; the checkout was for 4 seats.
+    // Before the fix, the existing-org subscription_create path granted credits and
+    // created the Subscription row but never touched organization.seats.
+    (organizationRepository.findById as any).mockResolvedValue({ id: 'org_seats', name: 'Acme', users: [], seats: 10 });
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+        organizationId: 'org_seats',
+      } as any,
+      logger
+    );
+
+    expect(organizationRepository.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'org_seats', seats: 4 }));
+  });
+
+  it('does not rewrite seats when they already match the purchased quantity (idempotent on retry)', async () => {
+    (organizationRepository.findById as any).mockResolvedValue({ id: 'org_seats', name: 'Acme', users: [], seats: 4 });
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+        organizationId: 'org_seats',
+      } as any,
+      logger
+    );
+
+    expect(organizationRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite seats when a different active Stripe subscription exists (refused duplicate)', async () => {
+    // Double-checkout race: a first Stripe sub (quantity 12) is already active when a
+    // second subscription_create (the buildSubscription() 4-seat sub) arrives. The
+    // handler refuses to create the duplicate, so it must NOT adopt the refused sub's
+    // quantity into organization.seats.
+    (organizationRepository.findById as any).mockResolvedValue({ id: 'org_dup', name: 'Acme', users: [], seats: 12 });
+    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+      { id: 's_first', source: SubscriptionSource.Stripe, subscriptionId: 'sub_first', quantity: 12 },
+    ]);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+        organizationId: 'org_dup',
+      } as any,
+      logger
+    );
+
+    expect(organizationRepository.update).not.toHaveBeenCalled();
+    expect(subscriptionRepository.create).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('already has an active Stripe subscription'));
   });
 });

@@ -23,6 +23,7 @@ import { mcpServerKeys } from '@client/app/hooks/data/mcpServers';
 import { useUser } from '@client/app/contexts/UserContext';
 import GitHubNotificationsSection from './GitHubNotificationsSection';
 import { api } from '@client/app/contexts/ApiContext';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 interface GitHubIntegrationProps {
   userId: string;
@@ -488,7 +489,7 @@ const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
                 <Button
                   variant="outlined"
                   color="neutral"
-                  onClick={() => window.open('https://github.com/settings/connections/applications', '_blank')}
+                  onClick={() => openInNewTab('https://github.com/settings/connections/applications')}
                   size="sm"
                 >
                   Manage on GitHub

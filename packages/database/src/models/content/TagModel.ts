@@ -148,15 +148,10 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     }
   }
 
-  async findByNameAndUserId(name: string, userId: string) {
-    const result = await this.fileTagModel.findOne({ name, userId });
-    return result?.toJSON() || null;
-  }
-
   /**
-   * findByNameAndUserId under the shared collision rule (see common/utils/tagName): trimmed and case
-   * folded. Every path that mints a tag document checks this first, so one user cannot end up with
-   * two names differing only by case.
+   * Find a tag by name and user id under the shared collision rule (see common/utils/tagName):
+   * trimmed and case folded. Every path that mints a tag document checks this first, so one user
+   * cannot end up with two names differing only by case.
    *
    * Legacy data can still hold such a pair, so ordered oldest-first rather than left to whatever the
    * scan returns: findOrCreateByNameAndUserId resolves its upsert onto the document this picks, and
