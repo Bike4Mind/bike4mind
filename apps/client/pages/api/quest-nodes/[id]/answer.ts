@@ -27,8 +27,13 @@ import { NextApiRequest, NextApiResponse } from 'next';
  * legible failure if one ever does - NOT a cap: truncating is the exact bug this
  * endpoint exists to fix, so an oversized reply is withheld whole and the user
  * is pointed at the notebook instead.
+ *
+ * Measured in BYTES, because the limit it protects is in bytes. A character
+ * budget would let a reply of mostly CJK or emoji - three to four UTF-8 bytes
+ * apiece - pass the guard at a third of its apparent size and then fail in
+ * exactly the opaque way the guard exists to prevent.
  */
-const MAX_DELIVERABLE_ANSWER_CHARS = 4_000_000;
+const MAX_DELIVERABLE_ANSWER_BYTES = 4_000_000;
 
 const handler = baseApi()
   .use(requireUser)
@@ -60,7 +65,7 @@ const handler = baseApi()
       ? await agentExecutionRepository.findAnswerByExecutionId(executionId, req.user.id)
       : null;
 
-    const tooLarge = (stored?.length ?? 0) > MAX_DELIVERABLE_ANSWER_CHARS;
+    const tooLarge = stored !== null && Buffer.byteLength(stored, 'utf8') > MAX_DELIVERABLE_ANSWER_BYTES;
 
     respond(res, QuestNodeAnswerResponseSchema, {
       nodeId: node.id,

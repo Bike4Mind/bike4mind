@@ -114,4 +114,32 @@ describe('GET /api/quest-nodes/[id]/answer', () => {
     expect(body.answer).toHaveLength(4_000_000);
     expect(body.unavailableReason).toBeNull();
   });
+
+  // The limit is on the serialised response, so it has to be counted in bytes.
+  // A character budget would wave this through at a third of its real size and
+  // let it fail opaquely downstream - the failure the guard exists to prevent.
+  it('measures an oversized multi-byte reply by bytes, not characters', async () => {
+    // Well under a 4,000,000-CHARACTER budget; ~4.5MB of UTF-8.
+    const cjk = '\u6f22'.repeat(1_500_001);
+    mockRefs.storedAnswer = cjk;
+
+    expect(cjk.length).toBeLessThan(4_000_000);
+    expect(Buffer.byteLength(cjk, 'utf8')).toBeGreaterThan(4_000_000);
+
+    const body = await get({ id: 'node-1', executionId: 'exec-1' });
+
+    expect(body.answer).toBeNull();
+    expect(body.unavailableReason).toBe('too_large');
+  });
+
+  it('ships a multi-byte reply whose byte length fits', async () => {
+    // 1,000,000 chars x 3 bytes = 3MB, inside the byte budget.
+    const cjk = '\u6f22'.repeat(1_000_000);
+    mockRefs.storedAnswer = cjk;
+
+    const body = await get({ id: 'node-1', executionId: 'exec-1' });
+
+    expect(body.answer).toBe(cjk);
+    expect(body.unavailableReason).toBeNull();
+  });
 });
