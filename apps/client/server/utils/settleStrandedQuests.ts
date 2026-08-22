@@ -1,4 +1,5 @@
 import { questRepository } from '@bike4mind/database';
+import type { ILogger } from '@bike4mind/observability';
 import { ABANDONED_REPLY, terminalRecoveryFor } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
@@ -22,18 +23,19 @@ export interface SettleResult {
  * reach these: it only considers quests that reached `running`, and a run that
  * died before streaming sits at `pending`, invisible to it.
  *
- * MUST STAY WIRED INTO EVERY EXECUTION-TERMINATING PATH. Three call it today -
+ * MUST STAY WIRED INTO EVERY EXECUTION-TERMINATING PATH. Four call it today -
  * the abandoned-sweep cron, the admin cleanup endpoint, and the reactive
- * stale-active sweep. A fourth that forgets re-opens the same eternal spinner.
+ * stale-active sweep in both dispatchers (WebSocket start, QuestMaster node
+ * runner). A fifth that forgets re-opens the same eternal spinner.
  *
  * Best-effort by design: settling must never fail its caller, whose primary job
  * (releasing execution slots) has already succeeded by the time this runs.
  */
 export async function settleStrandedQuests(
   executionIds: string[],
-  // Structural rather than `Logger`: callers pass either the class (static
-  // methods) or a per-service instance, and both satisfy this.
-  logger: { warn: (...args: unknown[]) => unknown; error: (...args: unknown[]) => unknown },
+  // A subset rather than `Logger`: callers pass either the class (static methods)
+  // or a per-service instance, and both satisfy this.
+  logger: Pick<ILogger, 'warn' | 'error'>,
   logPrefix: string
 ): Promise<SettleResult> {
   if (executionIds.length === 0) return { settled: 0, failed: false };

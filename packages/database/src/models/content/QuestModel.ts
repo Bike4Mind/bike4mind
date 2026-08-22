@@ -867,9 +867,7 @@ export const questRepository = new QuestRepository(Quest);
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
  * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
- * projection in the query above still has to list the same fields by hand - a
- * field read here but not projected reads as absent, and a run that produced
- * that content would then be stamped as a total failure.
+ * projection in the query above still has to list the same fields by hand.
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,

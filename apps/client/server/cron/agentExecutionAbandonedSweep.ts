@@ -45,17 +45,18 @@ export async function handler() {
   // (regression introduced misclassification), so we emit even the zero case.
   await emitMetric(CLOUDWATCH_NAMESPACE, 'AbandonedSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
 
+  // No early return on an empty sweep: every metric below has to report its zero
+  // case for the same reason the heartbeat does - operators watch for data points
+  // stopping, and a quiet hour must look different from a broken cron.
+  const marked = await agentExecutionRepository.markAbandoned(staleIds);
   if (staleIds.length === 0) {
     logger.info('[AgentExecutionAbandonedSweep] No stale executions found');
-    await emitMetric(CLOUDWATCH_NAMESPACE, 'MarkedAbandoned', 0, { Stage: stage }, StandardUnit.Count);
-    return { status: 'OK', marked: 0 };
+  } else {
+    logger.warn('[AgentExecutionAbandonedSweep] Marked abandoned', {
+      candidates: staleIds.length,
+      marked: marked.length,
+    });
   }
-
-  const marked = await agentExecutionRepository.markAbandoned(staleIds);
-  logger.warn('[AgentExecutionAbandonedSweep] Marked abandoned', {
-    candidates: staleIds.length,
-    marked: marked.length,
-  });
   await emitMetric(CLOUDWATCH_NAMESPACE, 'MarkedAbandoned', marked.length, { Stage: stage }, StandardUnit.Count);
 
   const quests = await settleStrandedQuests(

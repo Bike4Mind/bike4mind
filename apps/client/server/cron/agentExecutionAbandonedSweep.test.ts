@@ -81,7 +81,11 @@ describe('agentExecutionAbandonedSweep - handler', () => {
   it('reports zero settled when the sweep found nothing', async () => {
     const result = await handler();
 
-    expect(result).toMatchObject({ status: 'OK', marked: 0 });
+    expect(result).toMatchObject({ status: 'OK', marked: 0, questsSettled: 0 });
     expect(updates).toEqual([]);
+    // A quiet hour still emits both settle metrics: a gap in the data is how a
+    // broken cron looks, so it must not also be how a clean run looks.
+    expect(metrics).toContainEqual({ name: 'StrandedQuestsSettled', value: 0 });
+    expect(metrics).toContainEqual({ name: 'StrandedQuestSettleFailures', value: 0 });
   });
 });
