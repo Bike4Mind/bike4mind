@@ -10,6 +10,14 @@ const mockNavigate = vi.fn();
 let searchValue: Record<string, unknown> = {};
 let mockUser: Record<string, unknown> | null = { id: 'u1', name: 'Test User', isAdmin: false };
 let mockPublishedArtifacts: unknown[] = [];
+/** listMyPublishedArtifacts returns a page envelope; the profile screen reads `total`. */
+const asPage = (rows: unknown[]) => ({
+  artifacts: rows,
+  total: rows.length,
+  limit: 1,
+  skip: 0,
+  facets: { kind: {}, visibility: {}, gate: {}, comments: 0 },
+});
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
@@ -41,7 +49,7 @@ vi.mock('@client/app/components/help', () => ({
 }));
 
 vi.mock('@client/app/utils/publishApi', () => ({
-  listMyPublishedArtifacts: () => Promise.resolve(mockPublishedArtifacts),
+  listMyPublishedArtifacts: () => Promise.resolve(asPage(mockPublishedArtifacts)),
 }));
 
 // next/dynamic + static tab content are irrelevant to the strip itself; stub them

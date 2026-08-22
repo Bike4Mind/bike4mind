@@ -26,7 +26,7 @@
  *    already gone. "Serve stale" is not available. Every refusal here is a member the caller must
  *    report, never one it may quietly drop.
  */
-import { isConvergencePausedNote } from './chunking';
+import { isChunkRebuildPending, isConvergencePausedNote } from './chunking';
 
 /**
  * Why a member of a convergeable lake was NOT rewritten. Every skipped member lands in exactly one
@@ -98,6 +98,8 @@ export type ConvergenceMemberInput = {
   error?: string | null;
   /** Read only to detect `CONVERGENCE_PAUSED_NOTE` - see `isMemberIndexingInFlight`. */
   notes?: string | null;
+  /** Set while a passage rebuild is outstanding (#1939) - see `isMemberIndexingInFlight`. */
+  chunkRebuildRequestedAt?: Date | string | null;
   /** Largest chunk's `charLength`; `null` until the #1665 backfill reaches the file. */
   maxChunkCharLength?: number | null;
   /** Effective chunk target the file's chunks were built at (#1662); `null` on legacy files. */
@@ -125,8 +127,7 @@ export type ConvergenceCandidate = {
 };
 
 export type ConvergenceMemberDecision =
-  | ({ converge: true } & ConvergenceCandidate)
-  | { converge: false; fabFileId: string; reason: ConvergenceSkipReason };
+  ({ converge: true } & ConvergenceCandidate) | { converge: false; fabFileId: string; reason: ConvergenceSkipReason };
 
 export type LakeConvergencePlan = {
   /** Members to rewrite, worst-first. */
@@ -185,10 +186,18 @@ export function isMemberIndexingInFlight(member: {
   vectorizedChunkCount?: number | null;
   error?: string | null;
   notes?: string | null;
+  chunkRebuildRequestedAt?: Date | string | null;
 }): boolean {
   const settledByFailure = typeof member.error === 'string' && member.error.length > 0;
   const settledByKillSwitch = isConvergencePausedNote(member.notes);
   if (settledByFailure || settledByKillSwitch) return false;
+  // A REQUESTED-but-uncommitted rebuild (#1939) is in flight by the same argument as an unfinished
+  // vectorize, and it is the only arm that can fire on a CHUNKLESS member: the reset that stamps it
+  // zeroes `chunkCount` and `vectorizedChunkCount` together, so the count comparison below reads
+  // 0 < 0 and would call it settled. Checked AFTER the two settled arms deliberately - `error` and
+  // the paused note both describe a rebuild that has STOPPED, and a stopped rebuild whose stamp was
+  // never cleared must not read as one still running.
+  if (isChunkRebuildPending(member.chunkRebuildRequestedAt)) return true;
   // A null count predates the field; treat it as settled so legacy files stay gradable.
   return typeof member.vectorizedChunkCount === 'number' && member.vectorizedChunkCount < member.chunkCount;
 }
@@ -294,7 +303,14 @@ export function planLakeConvergence(
   // content - but a member whose passages a HALTED WAVE removed is chunkless for the opposite
   // reason, and dropping it here is what let it vanish from every surface at once (it also leaves
   // health's denominator, which filters the same way). Kept, and graded as the violation it is.
-  const gradable = members.filter(m => m.chunkCount > 0 || isConvergencePausedNote(m.notes));
+  //
+  // Same for a member with a rebuild outstanding (#1939): chunkless because a wave took its passages
+  // and has not put them back yet. It grades `indexingInFlight`, not as a violation - the wave that
+  // reset it is presumed to still be running - so it is REPORTED in the skip tally rather than
+  // re-rewritten underneath a worker that is about to commit.
+  const gradable = members.filter(
+    m => m.chunkCount > 0 || isConvergencePausedNote(m.notes) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+  );
   const skipped: Record<ConvergenceSkipReason, number> = {
     conformant: 0,
     unmeasured: 0,

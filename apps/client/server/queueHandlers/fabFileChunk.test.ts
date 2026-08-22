@@ -40,7 +40,7 @@ const h = vi.hoisted(() => {
     prepareFabFileChunks: vi.fn(async (...args: unknown[]) => ({ args })),
     commitFabFileChunks: vi.fn(async (prepared: unknown) =>
       chunkFabfile(...((prepared as PreparedStub | undefined)?.args ?? []))
-      ),
+    ),
     findAccessibleById: vi.fn(),
     markFailedIfNotAlready: vi.fn(),
     updateFileStatus: vi.fn(),
@@ -770,10 +770,18 @@ describe('fabFileChunk handler - convergence kill switch', () => {
   // Without this the file sits at chunkCount:0 with no error - a shape indistinguishable from an
   // image or a pending upload, which is how QA's stranded document fell out of health's denominator,
   // out of the convergence plan and past the retrieval withhold all at once.
-  it('marks the file so every reader can tell "passages deleted" from "never had any"', async () => {
+  // The marker and the clear of the pending-rebuild stamp go in ONE `$set` (#1939), so the file can
+  // never be both "rebuilding, returns on its own" and "halted, needs an administrator" - and so the
+  // rebuild door's stale-pending arm does not offer a second repair for a file its paused arm
+  // already selects.
+  it('upgrades the pending-rebuild stamp to the paused marker in a single write', async () => {
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).toHaveBeenCalledWith({ id: 'ff1', notes: PAUSED_CHUNK_NOTE });
+    expect(h.fabFileUpdate).toHaveBeenCalledWith({
+      id: 'ff1',
+      notes: PAUSED_CHUNK_NOTE,
+      chunkRebuildRequestedAt: null,
+    });
   });
 
   // A transient failure must not cost the marker, so the write is retried in-process before the

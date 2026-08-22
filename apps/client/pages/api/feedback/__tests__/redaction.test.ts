@@ -78,7 +78,6 @@ vi.mock('@bike4mind/utils', () => ({
 
 vi.mock('@server/utils/config', () => ({
   Config: { STAGE: 'production' },
-  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
@@ -136,9 +135,9 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     await mockRefs.postHandler!(req, res);
 
     expect(mockPostFeedbackToSlack).toHaveBeenCalled();
-    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][6] as string;
-    expect(slackPromptMetaArg).not.toContain('PRIVATE TOOL OUTPUT');
-    expect(slackPromptMetaArg).toContain('web_search');
+    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][6];
+    expect(JSON.stringify(slackPromptMetaArg)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(slackPromptMetaArg)).toContain('web_search');
   });
 
   it('does not send returnValue to email', async () => {

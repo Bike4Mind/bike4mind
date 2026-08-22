@@ -21,7 +21,6 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@server/utils/config', () => ({
   Config: { STAGE: 'production' },
-  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 vi.mock('@server/utils/cloudwatch', () => ({
@@ -98,6 +97,30 @@ describe('resolveFeedbackEmailRoute', () => {
       kind: 'send',
       recipients: ['c@x.com', 'd@x.com'],
       stageClass: 'nonprod',
+    });
+  });
+
+  it('a self-host stage with singleEnvironmentInstall sends via the prod list, not the non-prod one', () => {
+    expect(resolveFeedbackEmailRoute('selfhost', { FeedbackReceiveEmail: prodEmail }, true)).toEqual({
+      kind: 'send',
+      recipients: [prodEmail],
+      stageClass: 'nonprod',
+    });
+  });
+
+  it('a self-host stage with singleEnvironmentInstall and no prod list skips no_recipients, not nonprod_unconfigured', () => {
+    expect(resolveFeedbackEmailRoute('selfhost', {}, true)).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'no_recipients',
+    });
+  });
+
+  it('singleEnvironmentInstall defaults to false, leaving hosted non-prod behavior unchanged', () => {
+    expect(resolveFeedbackEmailRoute('selfhost', { FeedbackReceiveEmail: prodEmail })).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'nonprod_unconfigured',
     });
   });
 });

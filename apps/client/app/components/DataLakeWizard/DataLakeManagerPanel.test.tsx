@@ -17,8 +17,8 @@ const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 // Stable spy (not the shared `mutation` stub, which mints a fresh vi.fn per call) so the tests
 // below can assert WHAT the convergence action sent - specifically that `confirm: true` only ever
 // leaves the dialog.
-const convergeMutate = vi.fn(
-  (_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.()
+const convergeMutate = vi.fn((_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) =>
+  opts?.onSuccess?.()
 );
 // Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
 // empty-section rendering.
@@ -151,6 +151,10 @@ vi.mock('./DataLakeArticlePanel', () => ({
 vi.mock('./DataLakeSettingsModal', () => ({
   DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
     lake ? <div data-testid="mock-settings">{lake.name}</div> : null,
+}));
+vi.mock('./FallbackLakeSettingsModal', () => ({
+  FallbackLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
+    lake ? <div data-testid="mock-fallback-settings">{lake.name}</div> : null,
 }));
 // The public catalog has its own suite; here we only assert the manager routes to it.
 vi.mock('./DataLakeDiscoverPanel', () => ({
@@ -702,6 +706,49 @@ describe('DataLakeManagerPanel - canRebuild is narrower than canManage (fallback
 
     expect(screen.getByTestId('datalake-rebuild-passages-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - canManageSettings gates the fallback-lake settings editor', () => {
+  it('shows the fallback Settings button (not the DB-lake one) for an admin, and opens the narrower modal', async () => {
+    useGetDataLakes.mockReturnValue({
+      data: [{ ...fallbackLakeAsAdmin, canManageSettings: true }],
+      isLoading: false,
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+    expect(screen.queryByTestId('datalake-settings-btn-opti-knowledge')).toBeNull();
+
+    const fallbackSettingsBtn = screen.getByTestId('datalake-fallback-settings-btn-opti-knowledge');
+    await user.click(fallbackSettingsBtn);
+
+    expect(screen.getByTestId('mock-fallback-settings')).toHaveTextContent('Optimization Knowledge Base');
+  });
+
+  it('hides the fallback Settings button for a non-admin on the same lake (canManageSettings false)', async () => {
+    useGetDataLakes.mockReturnValue({
+      data: [{ ...fallbackLakeAsAdmin, canManageSettings: false }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    await screen.findByTestId('datalake-manager-lake-opti-knowledge');
+    fireEvent.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+
+    expect(await screen.findByTestId('datalake-manager-nav')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-fallback-settings-btn-opti-knowledge')).toBeNull();
+  });
+
+  it('does NOT show the fallback Settings button on a DB lake the caller manages (it already has the full editor)', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-fallback-settings-btn-mine')).toBeNull();
   });
 });
 

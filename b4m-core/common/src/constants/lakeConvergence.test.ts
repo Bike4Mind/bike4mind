@@ -4,6 +4,7 @@ import {
   BULK_CHANGE_MIN_MEMBERS,
   decideMemberConvergence,
   isConvergeablePolicy,
+  isMemberIndexingInFlight,
   planLakeConvergence,
   requiresBulkChangeConfirmation,
   type ConvergenceMemberInput,
@@ -83,8 +84,9 @@ describe('decideMemberConvergence', () => {
   // The same overshoot IS a violation while the stamp disagrees: that rewrite is the one that both
   // repairs the target and writes the stamp deciding it next time.
   it('still converges an overshooting member whose stamped target has not reached the policy yet', () => {
-    expect(decideMemberConvergence(member({ chunkedPassageTokenTarget: 2100, maxChunkCharLength: 5000 }), policy))
-      .toMatchObject({ converge: true });
+    expect(
+      decideMemberConvergence(member({ chunkedPassageTokenTarget: 2100, maxChunkCharLength: 5000 }), policy)
+    ).toMatchObject({ converge: true });
   });
 
   // Two configured targets that both exceed the model window clamp to the same effective limit, and
@@ -115,8 +117,9 @@ describe('decideMemberConvergence', () => {
   });
 
   it('waits for a member whose vectorization has not settled', () => {
-    expect(decideMemberConvergence(member({ vectorizedChunkCount: 3, chunkedPassageTokenTarget: 2100 }), policy))
-      .toMatchObject({ converge: false, reason: 'indexingInFlight' });
+    expect(
+      decideMemberConvergence(member({ vectorizedChunkCount: 3, chunkedPassageTokenTarget: 2100 }), policy)
+    ).toMatchObject({ converge: false, reason: 'indexingInFlight' });
   });
 
   // The kill switch abandons a vectorize by writing this note and clearing isVectorizing; it never
@@ -132,8 +135,9 @@ describe('decideMemberConvergence', () => {
   });
 
   it('treats a null vector rollup (predating the field) as settled', () => {
-    expect(decideMemberConvergence(member({ vectorizedChunkCount: null, chunkedPassageTokenTarget: 2100 }), policy))
-      .toMatchObject({ converge: true });
+    expect(
+      decideMemberConvergence(member({ vectorizedChunkCount: null, chunkedPassageTokenTarget: 2100 }), policy)
+    ).toMatchObject({ converge: true });
   });
 
   // The state QA reached by pausing mid-wave: the producer had already deleted this member's
@@ -143,10 +147,53 @@ describe('decideMemberConvergence', () => {
   it('converges a member whose passages a halted wave removed, rather than reading it as conformant', () => {
     expect(
       decideMemberConvergence(
-        member({ chunkCount: 0, vectorizedChunkCount: 0, maxChunkCharLength: null, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+        member({
+          chunkCount: 0,
+          vectorizedChunkCount: 0,
+          maxChunkCharLength: null,
+          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        }),
         policy
       )
     ).toMatchObject({ converge: true, passagesRemoved: true });
+  });
+
+  // #1939. The reset that takes a member's passages stamps chunkRebuildRequestedAt in the same write,
+  // so this shape - chunkless, no error, no note - is a rebuild in progress rather than an image.
+  // It must NOT read as `passagesRemoved`: that is the halted state, and grading an ordinary wave's
+  // own members as damaged would re-reset every one of them under the worker about to commit.
+  it('reports a member with a rebuild outstanding as in flight, not as passages-removed', () => {
+    expect(
+      decideMemberConvergence(
+        member({
+          chunkCount: 0,
+          vectorizedChunkCount: 0,
+          maxChunkCharLength: null,
+          notes: '',
+          chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+        }),
+        policy
+      )
+    ).toMatchObject({ converge: false, reason: 'indexingInFlight' });
+  });
+
+  // A rebuild that STOPPED is not one still running. Both settled markers outrank the stamp, so a
+  // stamp the halt never cleared cannot park the member in `indexingInFlight` forever - the state
+  // that would hide it from the plan that repairs it.
+  it('lets the paused marker and a terminal error outrank a leftover pending stamp', () => {
+    const stranded = {
+      chunkCount: 0,
+      vectorizedChunkCount: 0,
+      maxChunkCharLength: null,
+      chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+    };
+    expect(
+      decideMemberConvergence(member({ ...stranded, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }), policy)
+    ).toMatchObject({ converge: true, passagesRemoved: true });
+    expect(decideMemberConvergence(member({ ...stranded, error: 'boom' }), policy)).toMatchObject({
+      converge: false,
+      reason: 'previouslyFailed',
+    });
   });
 
   // A failed read is not a "no". Neither "rewrite it" nor "it is fine" is honest here.
@@ -209,7 +256,12 @@ describe('planLakeConvergence', () => {
     const overshooting = (fabFileId: string, maxChunkCharLength: number) =>
       member({ fabFileId, maxChunkCharLength, chunkedPassageTokenTarget: null });
     const plan = planLakeConvergence(
-      [overshooting('small', 4000), overshooting('huge', 40000), overshooting('b-tie', 9000), overshooting('a-tie', 9000)],
+      [
+        overshooting('small', 4000),
+        overshooting('huge', 40000),
+        overshooting('b-tie', 9000),
+        overshooting('a-tie', 9000),
+      ],
       policy
     );
 
@@ -237,6 +289,18 @@ describe('planLakeConvergence', () => {
     });
     expect(plan.candidates).toHaveLength(0);
     expect(plan.changeShare).toBe(0);
+  });
+
+  // Dropping it here is what let a rebuild that was never enqueued vanish from the plan that would
+  // have re-driven it - the same hole the paused marker's own arm closes, reached without a marker.
+  it('grades a member with a rebuild outstanding instead of excluding it as chunkless', () => {
+    const plan = planLakeConvergence(
+      [member({ fabFileId: 'rebuilding', chunkCount: 0, chunkRebuildRequestedAt: new Date() })],
+      policy
+    );
+
+    expect(plan.membersConsidered).toBe(1);
+    expect(plan.skipped.indexingInFlight).toBe(1);
   });
 
   it('reports a zero share for a lake with no gradable members rather than dividing by zero', () => {
@@ -274,5 +338,39 @@ describe('requiresBulkChangeConfirmation (constraint 4)', () => {
 
   it('does not fire when there is nothing to converge', () => {
     expect(requiresBulkChangeConfirmation(planOf(0, 40), 0)).toBe(false);
+  });
+});
+
+// The predicate three surfaces share - health's `vectorizationSettled`, convergence's skip reason and
+// the retrieval withhold all read it, so a disagreement here is a disagreement between them.
+describe('isMemberIndexingInFlight', () => {
+  const base = { chunkCount: 8, vectorizedChunkCount: 8, error: null, notes: null };
+
+  it('is settled when the vector rollup has caught up', () => {
+    expect(isMemberIndexingInFlight(base)).toBe(false);
+  });
+
+  it('is in flight while the vector rollup is short', () => {
+    expect(isMemberIndexingInFlight({ ...base, vectorizedChunkCount: 3 })).toBe(true);
+  });
+
+  // The count comparison cannot see this one: the reset zeroes both counts together, so 0 < 0 reads
+  // as settled and the member would grade as a plain chunkless image.
+  it('is in flight for a CHUNKLESS member carrying a pending-rebuild stamp', () => {
+    expect(
+      isMemberIndexingInFlight({ chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date() })
+    ).toBe(true);
+  });
+
+  it('is settled when a stopped rebuild left its stamp behind', () => {
+    const stamped = { chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date() };
+    expect(isMemberIndexingInFlight({ ...stamped, error: 'boom' })).toBe(false);
+    expect(isMemberIndexingInFlight({ ...stamped, notes: CONVERGENCE_PAUSED_CHUNK_NOTE })).toBe(false);
+    expect(isMemberIndexingInFlight({ ...stamped, notes: CONVERGENCE_PAUSED_NOTE })).toBe(false);
+  });
+
+  it('treats an absent stamp as no rebuild outstanding', () => {
+    expect(isMemberIndexingInFlight({ ...base, chunkRebuildRequestedAt: null })).toBe(false);
+    expect(isMemberIndexingInFlight({ ...base, chunkRebuildRequestedAt: undefined })).toBe(false);
   });
 });

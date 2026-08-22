@@ -17,11 +17,7 @@ import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fa
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
-import {
-  dispatchWithLogger,
-  MARK_PAUSED_MAX_ATTEMPTS,
-  MARK_PAUSED_RETRY_DELAY_MS,
-} from '@server/queueHandlers/utils';
+import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import {
   finalizeBatchIfComplete,
   isBatchComplete,
@@ -61,12 +57,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // short-circuits with zero I/O.
   //
   // Dropping the message is NOT the whole job. By the time this runs, the producer has already reset
-  // the wave's chunk state, so the file sits at chunkCount 0 with no error - and that shape is
-  // indistinguishable from an image or a pending upload, which is how it fell out of health's
-  // denominator, out of the convergence plan, out of the retrieval withhold and past the rescue
-  // sweep's own filter, all at once. So mark it before returning: `CONVERGENCE_PAUSED_CHUNK_NOTE` is
-  // what every one of those readers keys on to tell "its passages were deleted" from "it never had
-  // any". Mirrors what the vectorize handler already does for its half of the same switch.
+  // the wave's chunk state, so the file sits at chunkCount 0 with no error. The reset stamps
+  // `chunkRebuildRequestedAt` (#1939), so that state is not invisible - but it reads as "rebuilding,
+  // returns on its own", which is now false: nothing will rebuild this file until an administrator
+  // lifts the switch. So upgrade the stamp to `CONVERGENCE_PAUSED_CHUNK_NOTE`, the marker every
+  // reader keys on to say "halted, needs intervention". Mirrors what the vectorize handler already
+  // does for its half of the same switch.
   if (
     await isConvergenceHalted(
       { origin, lakeId },
@@ -78,11 +74,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
-    // Retried in-process, then FAILED to SQS rather than acked. Losing this write loses the ONE
-    // signal that tells "its passages were deleted" from "it never had any" - and the producer has
-    // already deleted them, so acking a lost marker strands the file invisibly with nothing left to
-    // retry it. The in-process attempts handle the realistic case (a pool timeout, a stepdown, a
-    // blip); the throw handles the rest.
+    // Retried in-process, then FAILED to SQS rather than acked. Losing this write loses the
+    // distinction between "halted, needs an administrator" and "rebuilding, returns on its own" -
+    // and it is the second that every reader would go on believing, indefinitely. Kept a hard
+    // failure rather than a best-effort ack now that the state is visible either way: the in-process
+    // attempts handle the realistic case (a pool timeout, a stepdown, a blip), the throw handles the
+    // rest, and a redelivery is the only thing that can still repair the label.
     //
     // Throwing is safe and bounded, which is why it beats acking here:
     //  - Nothing destructive has run in this branch, so a redelivery is idempotent - it re-reads the
@@ -91,23 +88,34 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //  - It cannot spin: fabFileChunkQueue sets `dlq: { retry: 3 }` (infra/queues.ts), so this is at
     //    most three receives before the message lands in fabFileChunkQueueDLQ - which is already in
     //    DLQ_DESCRIPTORS and dlqRegistry, so it alarms and is replayable from admin. A permanently
-    //    invisible file becomes a bounded retry and then a visible operational signal.
+    //    mislabelled file becomes a bounded retry and then a visible operational signal.
     //
     // Note the 60-minute visibility timeout on that queue: a redelivery is an hour away, so this
-    // guarantees eventual correctness, NOT a short window. Closing the window itself needs the
-    // marker to be atomic with the reset that creates the state, which is a separate change - the
-    // producer cannot reuse THIS marker for that, because a file merely awaiting a normal rebuild
-    // would then read to every reader as permanently paused.
+    // guarantees eventual correctness, NOT a short window. The window itself is closed by
+    // `chunkRebuildRequestedAt` (#1939), which `resetChunkStateByIds` stamps atomically with the
+    // reset - so this write is an UPGRADE of a state that is already visible, not the one thing
+    // standing between the file and invisibility. That is why losing it is now survivable: the file
+    // keeps reading as "rebuild in flight" (mislabelled, since nothing is going to rebuild it until
+    // the switch comes off) rather than as an image.
+    //
+    // The stamp is cleared in the SAME `$set` as the note, so the two states can never both be
+    // present: this file is paused, not pending. Clearing it here rather than leaving it also stops
+    // the "Rebuild passages" door's stale-pending arm from double-counting a file its paused arm
+    // already selects.
     for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
       try {
-        await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_CHUNK_NOTE });
+        await fabFileRepository.update({
+          id: fabFileId,
+          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+          chunkRebuildRequestedAt: null,
+        });
         break;
       } catch (err) {
         if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
           logger.error(
             `[convergenceKillSwitch] could not mark ${fabFileId} as paused mid-rechunk after ` +
               `${MARK_PAUSED_MAX_ATTEMPTS} attempts; failing the delivery so SQS retries rather than ` +
-              `stranding the file invisibly: ${err}`
+              `leaving it reported as a rebuild that will finish on its own: ${err}`
           );
           throw err;
         }

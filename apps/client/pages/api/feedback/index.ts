@@ -1,5 +1,6 @@
 import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
 import {
+  classifyStage,
   FeedbackEvents,
   FeedbackStatus,
   IOrganizationDocument,
@@ -23,12 +24,13 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
-  recordFeedbackDeliverySkipped,
+  buildFeedbackDeliverySkippedMetrics,
+  emitFeedbackDeliveryMetrics,
   ALARM_WORTHY_SKIP_REASONS,
 } from '@server/utils/cloudwatch';
 import mongoose from 'mongoose';
@@ -69,14 +71,19 @@ type FeedbackEmailRoute =
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
  * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
  * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production for the same reason as
+ * resolveFeedbackSlackRoute: one environment, no separate non-prod recipient list to leak into.
+ * `stageClass` itself stays the true classifyStage() result for metrics/logs.
  */
 export function resolveFeedbackEmailRoute(
   stage: string | undefined,
-  settings: Record<string, string>
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
 ): FeedbackEmailRoute {
   const stageClass = classifyStage(stage);
 
-  if (stageClass === 'production') {
+  if (stageClass === 'production' || singleEnvironmentInstall) {
     const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmail', settings));
     return recipients.length > 0
       ? { kind: 'send', recipients, stageClass }
@@ -232,7 +239,12 @@ const handler = baseApi()
 
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
-    // recorded here since it never even calls into postFeedbackToSlack.
+    // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
+    // email 'disabled'/'no_recipients' skips) into one batched PutMetricData call rather than one
+    // per channel - on a fresh install with both channels off by default, that's the difference
+    // between one CloudWatch call and two per feedback submission.
+    const disabledChannelMetrics: ReturnType<typeof buildFeedbackDeliverySkippedMetrics> = [];
+
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
@@ -243,22 +255,28 @@ const handler = baseApi()
         newFeedback.userEmail ?? '',
         newFeedback.userId,
         truncatedContent,
-        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+        promptMetaForExternalEgress
       );
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('slack', stageClass, 'disabled', Config.STAGE)
+      );
     }
 
     let email: FeedbackChannelDelivery;
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
-    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings);
+    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, 'disabled', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', emailRoute.stageClass, 'disabled', Config.STAGE)
+      );
     } else if (emailRoute.kind === 'skip') {
       email = { outcome: 'skipped', reason: emailRoute.reason };
-      await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE)
+      );
     } else {
       const feedbackEmails = emailRoute.recipients;
       console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
@@ -436,6 +454,10 @@ const handler = baseApi()
       // return success with a rejected entry that nothing in this repo currently checks for, and
       // SMTP delivery itself happens in a separate, uninstrumented subsystem.
       email = succeeded > 0 ? { outcome: 'delivered' } : { outcome: 'failed', reason: 'error' };
+    }
+
+    if (disabledChannelMetrics.length > 0) {
+      await emitFeedbackDeliveryMetrics(disabledChannelMetrics);
     }
 
     const delivery: FeedbackDeliveryResult = {

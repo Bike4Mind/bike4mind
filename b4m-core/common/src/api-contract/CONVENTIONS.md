@@ -76,9 +76,48 @@ response - a greppable escape hatch with a written reason, not a way to skip the
 quietly. The only current use is `executeTool`'s 500, where a tool that ran but failed
 returns the full `ToolExecutionResponse` (`success: false`).
 
-> **Known divergence (not yet fixed).** `errorHandler.ts` adds an undocumented `name`
-> field to every error body, so the runtime currently sends a superset of the documented
-> envelope. Tracked separately; see [What is not gated yet](#what-is-not-gated-yet).
+**On the `name` field.** `apps/client/server/middlewares/errorHandler.ts` adds `name` -
+the thrower's error *class* (`NotFoundError`, `UnprocessableEntityError`) - to every error
+body it serves, which is every route, not just the contracted ones. That is an internal
+implementation detail on a public wire, and it is going away.
+
+It is **deprecated, sunset 2026-12-01**, and documented in the envelope until then.
+Neither of the two obvious moves is right on its own:
+
+- Removing it outright today would be a silent removal, which section 7 forbids -
+  "undocumented legacy routes still count as published if they are reachable", and the
+  same reasoning covers a reachable field. An audit found no consumer in `apps/client`,
+  `packages/cli` (`extractServerMessage` reads `error` then `message`), the premium
+  overlays, or the generated client - which was never going to carry it, since
+  `ErrorResponse` never declared it. External callers cannot be audited from here, so the
+  window exists for them.
+- Documenting it *permanently* would be worse than either: it promotes a class name we
+  rename at will into public API we then owe compatibility on. So it carries
+  `deprecated: true` and a sunset in its description, not a plain field entry.
+
+Deprecate-then-remove is the combination that works: the envelope is honest **now**, and
+the field still leaves. Branch on the HTTP status, not on `name`. On the sunset date drop
+it from `errorHandler.ts`, `ApiErrorSchema`, and `ErrorResponse` together.
+
+Note that this reaches past contracts that name `ApiErrorSchema` directly. `errorHandler`
+serves every *thrown* error body regardless of which schema the contract declared for that
+status, so a bespoke error schema (`InsufficientCreditsErrorSchema`,
+`ttsErrorResponseSchema`) would omit a field the wire carries. Those derive from
+`ApiErrorSchema` via `.extend()` rather than re-declaring `error`/`request_id`, which is
+also what makes the sunset a single edit. Write a bespoke error schema from scratch only
+when the body is `res.status(...).json(...)`-ed rather than thrown and so never passes
+through the middleware - `ttsResponseTooLargeSchema` is the one such case, and says so.
+
+**[gated]** Now that the runtime and the spec agree, the middleware is pinned to the
+envelope: `errorHandler.test.ts` asserts every key `errorHandler` adds is one
+`ApiErrorSchema` declares - across all three of its branches, including the `HTTPError`
+one that spreads `additionalInfo` (the endpoint's own typed members are excluded by key,
+since those are its contract's concern). So a new undocumented field fails CI, and it
+fails again if `name` is dropped from only some of the three places above. `ApiErrorSchema`
+is the plain twin of `ErrorResponse` (the OpenAPI layer is generate-time only, so
+`apps/client` cannot import the component); `openapi/errorEnvelopeParity.test.ts` keeps the
+two copies from drifting, and pins `name`'s published `deprecated: true` and sunset date so
+the deprecation cannot quietly decay into a plain documented field.
 
 ### Status codes for shared conditions
 
@@ -261,7 +300,6 @@ mistakes "CI passed" for "conventions met":
 |---|---|
 | A condition maps to the status this guide gives it | The gate checks only that a status is in the allowed *set*. Nothing checks that "no provider key configured" is the `503` the table says - and `/api/ai/tts` returns `401` for it today. Not structurally derivable: the condition lives in handler control flow, not the contract. |
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |
-| Error bodies carry no undocumented keys | `errorHandler.ts` adds `name` to every body, including internal routes. Removing it is a behavioural change well outside the contract layer. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |
 | One `errorCode` vocabulary | The TTS codes are not in the shared union yet. |
 | `202` + job resource for unbounded work | Not structurally detectable - it is a design review question. |

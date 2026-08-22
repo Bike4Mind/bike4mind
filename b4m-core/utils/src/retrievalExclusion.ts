@@ -1,4 +1,4 @@
-import { isConvergencePausedNote } from '@bike4mind/common';
+import { isChunkRebuildPending, isConvergencePausedNote } from '@bike4mind/common';
 import { escapeRegex } from './escapeRegex';
 
 /**
@@ -81,7 +81,12 @@ export function buildFilenameMarkerRegex(markers?: string[]): RegExp | null {
  * of the best-effort DB pre-filter. Fail-closed by design.
  */
 export function isRetrievalExcluded(
-  file: { fileName?: string | null; vectorized?: boolean; notes?: string | null },
+  file: {
+    fileName?: string | null;
+    vectorized?: boolean;
+    notes?: string | null;
+    chunkRebuildRequestedAt?: Date | string | null;
+  },
   opts: RetrievalExclusionOptions
 ): boolean {
   // The `vectorizedOnly` arm is exempted for files the convergence kill switch stalled, and the
@@ -100,7 +105,14 @@ export function isRetrievalExcluded(
   //
   // Filename-marker exclusion is deliberately NOT exempted below: that one says the surface must
   // never retrieve or NAME this document, which outranks reporting a hole in it.
-  const stalledByConvergence = isConvergencePausedNote(file.notes);
+  //
+  // A REQUESTED-but-uncommitted rebuild (#1939) is exempted on the same argument and closes the
+  // larger hole: the reset writes `vectorized: false` and clears `notes` in one write, so between
+  // that write and the consumer's marker there is no note to key on and the file was dropped here -
+  // upstream of the withhold - for the whole window. On a producer that died before its sends, that
+  // window never ends.
+  const stalledByConvergence =
+    isConvergencePausedNote(file.notes) || isChunkRebuildPending(file.chunkRebuildRequestedAt);
   if (opts.vectorizedOnly && !file.vectorized && !stalledByConvergence) return true;
   const re = buildFilenameMarkerRegex(opts.excludeFilenameMarkers);
   return !!re && re.test((file.fileName ?? '').toLowerCase());
@@ -113,7 +125,12 @@ export function isRetrievalExcluded(
  * `fileNameLower` field being populated (see isRetrievalExcluded).
  */
 export function filterRetrievalExcluded<
-  T extends { fileName?: string | null; vectorized?: boolean; notes?: string | null },
+  T extends {
+    fileName?: string | null;
+    vectorized?: boolean;
+    notes?: string | null;
+    chunkRebuildRequestedAt?: Date | string | null;
+  },
 >(files: T[], opts: RetrievalExclusionOptions): T[] {
   if (!opts.vectorizedOnly && normalizeExclusionMarkers(opts.excludeFilenameMarkers).length === 0) {
     return files;

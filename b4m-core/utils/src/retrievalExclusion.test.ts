@@ -89,6 +89,17 @@ describe('isRetrievalExcluded', () => {
     expect(filterRetrievalExcluded([vectorizePaused], { vectorizedOnly: true })).toEqual([vectorizePaused]);
   });
 
+  // #1939, and the wider hole of the three: the reset writes `vectorized: false` and clears `notes`
+  // in ONE write, so for the whole window between it and the consumer's marker there is no note for
+  // the arms above to match. On a producer that died before its sends, that window never ends.
+  it('keeps a file with a rebuild outstanding, which carries no note to key on', () => {
+    const rebuilding = { fileName: 'Report.pdf', vectorized: false, notes: '', chunkRebuildRequestedAt: new Date() };
+    expect(isRetrievalExcluded(rebuilding, { vectorizedOnly: true })).toBe(false);
+    expect(filterRetrievalExcluded([rebuilding], { vectorizedOnly: true })).toEqual([rebuilding]);
+    // Without the stamp it is an ordinary unvectorized file again, and still excluded.
+    expect(isRetrievalExcluded({ ...rebuilding, chunkRebuildRequestedAt: null }, { vectorizedOnly: true })).toBe(true);
+  });
+
   it('combines both rules (either triggers exclusion)', () => {
     const opts = { excludeFilenameMarkers: ['MARK'], vectorizedOnly: true };
     expect(isRetrievalExcluded({ fileName: 'MARK - x.pdf', vectorized: true }, opts)).toBe(true); // marker

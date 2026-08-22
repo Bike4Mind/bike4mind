@@ -75,6 +75,16 @@ export type FeedbackDeliveryChannel = 'slack' | 'email';
 /** 'production' is the only real-production signal (Resource.App.stage === 'production'); every other stage is 'nonprod'. */
 export type FeedbackDeliveryStageClass = 'production' | 'nonprod';
 
+/**
+ * Binary production/non-production bucket for a raw stage string. Pure so callers that need to
+ * unit-test stage-dependent routing/dimensioning can pass an arbitrary stage without mocking the
+ * SST-secret-loading module that owns the real deploy stage. Single source of truth for callers
+ * that used to each repeat `stage === 'production'` themselves.
+ */
+export function classifyStage(stage: string | undefined): FeedbackDeliveryStageClass {
+  return stage === 'production' ? 'production' : 'nonprod';
+}
+
 export type FeedbackDeliverySkipReason = 'disabled' | 'no_recipients' | 'unconfigured_webhook' | 'nonprod_unconfigured';
 
 export interface FeedbackChannelDelivery {

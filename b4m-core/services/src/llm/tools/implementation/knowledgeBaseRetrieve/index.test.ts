@@ -600,6 +600,170 @@ describe('retrieve_knowledge_content zero-chunk wording for inlined attachments 
   });
 });
 
+describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
+  it('records attempted:true, outcome:ok even when a matched file has no stored text (zero case)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo([]);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    await runById(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records attempted:true, outcome:ok when content is retrieved', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Current Protocol.pdf' })
+    );
+
+    await runById(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when retrieval throws, instead of leaving retrieval byte-identical to never-attempted', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('An error occurred while retrieving document content');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:no_lakes when the agent kbScope is empty (#1971 review)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [] } });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'anything' })) as string;
+
+    expect(out).toContain('No documents found matching your request');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'no_lakes',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when Path B (tag/query search) runs to completion and matches no documents (#1971 review)', async () => {
+    // Distinct from and broader than the retrievedFiles.length===0 case above: this is Path B's
+    // OWN zero case (the search itself matched nothing), not a matched-file-with-no-stored-text
+    // case - previously silent.
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'nothing matches this' })) as string;
+
+    expect(out).toContain('No documents found matching');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when the fabfiles repository is not available at all (#1971 second review)', async () => {
+    const ctx = makeContext({ db: {} as never });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('not available at this time');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when the fabfilechunks paged text reader is not wired (#1971 second review)', async () => {
+    const ctx = makeContext({
+      db: { fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() }, fabfilechunks: {} } as never,
+    });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('chunk reader unavailable');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when an out-of-scope file_id is rejected before any DB lookup (#1971 second review)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: ['some-other-file'] } });
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:ok when Path A (direct file_id) resolves to nothing after owned/shared checks run (#1971 second review)', async () => {
+    // Distinct from the out-of-scope case above: this is the UNSCOPED owned/shared branch
+    // running to completion (both lookups execute) and legitimately finding no accessible file.
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+});
+
 /**
  * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
  * fails to advance. Both were added with the paging and neither would fail if it were deleted.

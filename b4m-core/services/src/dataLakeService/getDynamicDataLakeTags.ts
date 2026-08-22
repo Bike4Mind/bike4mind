@@ -5,6 +5,7 @@ import {
   toDataLakeConfig,
   type DataLakeMembershipScope,
   type IDataLakeRepository,
+  type IFallbackLakeSettingsRepository,
   type IOrganizationRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -29,6 +30,13 @@ export interface DataLakeAccessContext {
      * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).
      */
     organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;
+    /**
+     * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
+     * IFallbackLakeSetting). Used only by getDataLakePrompts' registry-candidate branch; absent
+     * means zero registry lakes ever contribute a prompt, matching every other optional adapter
+     * here (degrade to "this lever does nothing" rather than throw).
+     */
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
   };
   /**
    * The caller. Membership is resolved internally from `id` via `db.organizations` - there is

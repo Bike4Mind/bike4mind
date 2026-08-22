@@ -63,4 +63,18 @@ export const dataLakeKeys = {
    * spend under it would refetch spend on every unrelated lake mutation.
    */
   spend: (dataLakeId: string | null, days: number) => ['dataLakeSpend', dataLakeId, { days }] as const,
+  /**
+   * One lake's config-change history (GET /api/data-lakes/:id/config-history), #1769. Outside the
+   * `list` prefix for the same reason as `spend`: `list` is the invalidation prefix for renames and
+   * visibility changes, and those are exactly the writes that ADD a history row - so keying history
+   * under it would refetch the history of every lake on any lake edit. The one lake whose history a
+   * config write does invalidate is invalidated explicitly, by this key.
+   */
+  configHistory: (dataLakeId: string | null, limit?: number) =>
+    ['dataLakeConfigHistory', dataLakeId, { limit }] as const,
+  /** Invalidation prefix covering every `limit` variant of ONE lake's history - what a config write
+   *  invalidates, since a write adds a row to exactly one lake's history. */
+  configHistoryOf: (dataLakeId: string) => ['dataLakeConfigHistory', dataLakeId] as const,
+  /** Invalidation prefix covering every lake's config history. */
+  configHistoryRoot: ['dataLakeConfigHistory'] as const,
 };

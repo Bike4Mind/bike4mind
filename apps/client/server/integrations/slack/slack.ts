@@ -1,7 +1,7 @@
 import axios from 'axios';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { classifyStage, isPlaceholderValue } from '@bike4mind/common';
 import type {
   FeedbackDeliveryStageClass,
   FeedbackDeliverySkipReason,
@@ -10,6 +10,7 @@ import type {
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -53,7 +54,7 @@ type FeedbackSlackRoute =
 
 /**
  * Decides where feedback-to-Slack posts go for a given deploy stage, via the shared
- * classifyStage() (@server/utils/config) - the single source of truth for the
+ * classifyStage() (@bike4mind/common) - the single source of truth for the
  * production/non-production split, so a future stage rename touches one file.
  *
  * Non-production stages deliberately do NOT fall through resolveSlackWebhookUrl's chain: doing so
@@ -61,14 +62,19 @@ type FeedbackSlackRoute =
  * stage-leak bug this resolver exists to close (a deployed Lambda's NODE_ENV commonly reads
  * 'production' independent of the actual deploy stage, since nothing in infra/ sets it per stage,
  * so the old check could not reliably separate stages).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production - one environment, its
+ * own settings store, no shared production channel to leak into - without relabeling `stageClass`
+ * itself, so metrics/logs still report the install's real (non-production) stage classification.
  */
 export function resolveFeedbackSlackRoute(
   stage: string | undefined,
-  settings: Record<string, string>
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
 ): FeedbackSlackRoute {
   const stageClass: FeedbackDeliveryStageClass = classifyStage(stage);
 
-  if (stageClass === 'production') {
+  if (stageClass === 'production' || singleEnvironmentInstall) {
     const webhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);
     return webhookUrl
       ? { kind: 'post', webhookUrl, stageClass }
@@ -113,11 +119,11 @@ export async function postFeedbackToSlack(
   userEmail: string,
   userId: string,
   content: string,
-  promptMeta: string
+  promptMeta?: FeedbackPromptMetaInput | null
 ): Promise<FeedbackChannelDelivery> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const route = resolveFeedbackSlackRoute(Config.STAGE, settings);
+    const route = resolveFeedbackSlackRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
 
     if (route.kind === 'skip') {
       // 'nonprod_unconfigured' is the expected default until an operator opts a stage in - warn,
@@ -137,8 +143,16 @@ export async function postFeedbackToSlack(
     // Prefix non-prod posts with the stage name so a mis-pointed non-prod webhook is self-evident
     // in the receiving channel.
     const stagePrefix = route.stageClass === 'nonprod' ? `*[${Config.STAGE}]*\n` : '';
-    const message = `${stagePrefix}*Type:* ${type}\n*User Details:* ${organization} - ${username} (ID: ${userId})\n*User Email:* ${userEmail}\n*Feedback:* ${content}
-    \n*Prompt Meta:* ${promptMeta}`;
+    const message = buildFeedbackSlackMessage({
+      stagePrefix,
+      type,
+      organization,
+      username,
+      userEmail,
+      userId,
+      content,
+      promptMeta,
+    });
 
     try {
       await axios.post(

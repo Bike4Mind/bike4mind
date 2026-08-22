@@ -76,6 +76,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
         if (!context.db.fabfiles) {
           context.logger.error('❌ Knowledge Retrieve: fabfiles repository not available');
+          // Nothing below this line can run without fabfiles, so this is a genuine failure,
+          // not an abstain (mirrors the same guard in knowledgeBaseSearch).
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base retrieval is not available at this time.';
         }
 
@@ -84,6 +91,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         const chunkRepo = context.db.fabfilechunks;
         if (!chunkRepo?.findTextsByFabFileId || !chunkRepo?.countByFabFileId) {
           context.logger.error('❌ Knowledge Retrieve: fabfilechunks paged text reader not available');
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'Knowledge base retrieval is not available at this time (chunk reader unavailable).';
         }
 
@@ -101,6 +113,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         const notFoundMsg = (id: string) =>
           `No document found with ID "${id}". The file may not exist or you may not have access to it. Try using search_knowledge_base to find the correct file ID.`;
         if (scope && scope.fileIds.length === 0) {
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: {
+                attempted: true,
+                outcome: 'no_lakes',
+                surfaces: ['knowledgeBaseRetrieve'],
+                dataLakeTags: [],
+              },
+            },
+          } as any);
           return file_id ? notFoundMsg(file_id) : 'No documents found matching your request in your knowledge base.';
         }
 
@@ -123,6 +145,19 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               // getDynamicDataLakeAccess) is unreachable on this branch. Scope membership IS
               // the authorization - the agent owner curated these files for this audience.
               if (!scope.fileIds.includes(file_id)) {
+                // 'ok' not 'no_lakes': this is a single-file miss, not a "no lakes in scope"
+                // surface-wide state - the notFoundMsg wording is unchanged either way, so
+                // recording this server-side telemetry write creates no existence-oracle leak.
+                await context.statusUpdate({
+                  promptMeta: {
+                    retrieval: {
+                      attempted: true,
+                      outcome: 'ok',
+                      surfaces: ['knowledgeBaseRetrieve'],
+                      dataLakeTags: [],
+                    },
+                  },
+                } as any);
                 return notFoundMsg(file_id);
               }
               const scopedFile = await context.db.fabfiles.findById(file_id);
@@ -166,6 +201,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             }
 
             if (files.length === 0) {
+              // Ran to completion (owned/shared/scoped access checks all executed) and legitimately
+              // resolved to nothing - the mirror-image of the Path B zero-match case below, not a
+              // "never attempted" state (#1971 review).
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+                },
+              } as any);
               return notFoundMsg(file_id);
             }
           }
@@ -230,6 +273,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const inlinedNote = inlinedCount
                 ? ` ${inlinedCount} file(s) attached to this conversation may not be indexed for search yet - if so, their content was already included directly in the conversation above; answer from that instead of reporting them as inaccessible.`
                 : '';
+              // Ran to completion (the search itself succeeded) and legitimately found no
+              // matching documents - must be distinguishable from "never asked" (#1867 review).
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+                },
+              } as any);
               return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
@@ -349,6 +399,21 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           if (retrievedFiles.length === 0) {
+            // Ran to completion (documents were located) and legitimately found no stored text -
+            // must be distinguishable from "never asked" (#1867). No prior statusUpdate call
+            // exists on this branch; dataLakeTags is left empty rather than resolved synchronously
+            // - see the audit-write comment below on why dynamicAccess() is deliberately deferred
+            // off this path.
+            await context.statusUpdate({
+              promptMeta: {
+                retrieval: {
+                  attempted: true,
+                  outcome: 'ok',
+                  surfaces: ['knowledgeBaseRetrieve'],
+                  dataLakeTags: [],
+                },
+              },
+            } as any);
             // A file already inlined into this turn's prompt (attached but still chunking) has its
             // content in front of the model regardless of this zero-chunk result - say so explicitly
             // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
@@ -464,17 +529,24 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             };
           });
 
-          if (citables.length > 0) {
-            await context.statusUpdate(
-              {
-                promptMeta: {
-                  citables,
+          // citables mirrors retrievedFiles 1:1 and is therefore always non-empty here (the
+          // retrievedFiles.length === 0 case returns above, before this point). retrieval is
+          // recorded unconditionally rather than gated on citables.length for that reason.
+          await context.statusUpdate(
+            {
+              promptMeta: {
+                citables,
+                retrieval: {
+                  attempted: true,
+                  outcome: 'ok',
+                  surfaces: ['knowledgeBaseRetrieve'],
+                  dataLakeTags: [],
                 },
-              } as any,
-              'Knowledge base content retrieved'
-            );
-            context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
-          }
+              },
+            } as any,
+            'Knowledge base content retrieved'
+          );
+          context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
 
           // This channel returns WHOLE documents (up to ABSOLUTE_MAX_CHARS) and is reachable
           // without a prior search, so the delimiter matters more here than on the search path.
@@ -495,6 +567,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           return prependRetrievedLakePrompts(context, result, datalakeTags, injectedLakeTags);
         } catch (error) {
           context.logger.error('❌ Knowledge Retrieve: Error during retrieval:', error);
+          // A retrieval that threw must not be byte-identical to one never attempted (#1867).
+          await context.statusUpdate({
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
+            },
+          } as any);
           return 'An error occurred while retrieving document content. Please try again.';
         }
       },

@@ -30,6 +30,20 @@ export interface OptionalSteps {
   taxonomy: boolean;
 }
 
+/**
+ * A Google Drive folder picked during CREATE, held until the lake it will feed exists.
+ *
+ * The wizard has no lake id to connect to while it is still collecting, so the selection is
+ * carried here and the connect fires on commit (see useCreateLakeFromDrive for the fileless
+ * case, useBatchUpload for files + Drive). Keeping it in wizard state is what makes abandoning
+ * the wizard leave nothing behind - nothing has been created yet. Never set in append mode:
+ * there the lake already exists, so DriveConnectAction connects immediately.
+ */
+export interface PendingDriveFolder {
+  driveFolderId: string;
+  folderName?: string;
+}
+
 export interface DataLakeFormValues {
   name: string;
   description: string;
@@ -61,6 +75,13 @@ export interface UploadProgress {
   /** Always a human-friendly, translated message - never raw zod/validator text. */
   errorMessage?: string;
   errorKind?: UploadErrorKind;
+  /**
+   * Outcome of the Drive-only commit's own rollback (useCreateLakeFromDrive archives the lake it
+   * just created when the Drive connect is refused). 'failed' means the archive call itself failed,
+   * so the lake is still live in the user's list - the Failed screen must not claim otherwise.
+   * Undefined when no rollback was attempted (the upload path, or a create that never succeeded).
+   */
+  driveRollback?: 'archived' | 'failed';
   currentBatchId?: string;
   /**
    * Background AI-tag suggestion phase, pushed over the same batch-progress
@@ -116,6 +137,7 @@ const freshSession = () => ({
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null as WizardTargetLake | null,
+  pendingDriveFolder: null as PendingDriveFolder | null,
 });
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -155,6 +177,8 @@ interface DataLakeWizardStore {
   hashingProgress: { total: number; completed: number; status: 'idle' | 'hashing' | 'done' };
   /** Non-null when appending to an existing lake (vs creating a new one). */
   targetLake: WizardTargetLake | null;
+  /** Drive folder chosen during create, connected on commit once the lake has an id. */
+  pendingDriveFolder: PendingDriveFolder | null;
   /** Drives the Data Lakes management panel (list + lifecycle), distinct from the wizard. */
   isManagerOpen: boolean;
   /** Which manager tab to show on open: the caller's own lakes, or the public discover catalog. */
@@ -177,6 +201,7 @@ interface DataLakeWizardStore {
   // Source step
   setFiles: (files: File[]) => void;
   setOptionalStep: (key: keyof OptionalSteps, enabled: boolean) => void;
+  setPendingDriveFolder: (folder: PendingDriveFolder | null) => void;
 
   // Preview step
   toggleFolderExclusion: (path: string) => void;
@@ -218,6 +243,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null,
+  pendingDriveFolder: null,
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
@@ -263,6 +289,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   },
 
   setOptionalStep: (key, enabled) => set(state => ({ optionalSteps: { ...state.optionalSteps, [key]: enabled } })),
+
+  setPendingDriveFolder: folder => set({ pendingDriveFolder: folder }),
 
   // ── Preview Step ────────────────────────────────────────────────────────
 
