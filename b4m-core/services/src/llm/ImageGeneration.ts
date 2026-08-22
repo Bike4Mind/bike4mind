@@ -854,6 +854,7 @@ export class ImageGenerationService {
         if (base64Image) {
           const preparedImage = base64Image;
           Logger.globalInstance.debug(`[DEBUG] Gemini edit: using existing image input`, {
+            model,
             n,
             aspect_ratio,
             output_format,
@@ -861,6 +862,7 @@ export class ImageGenerationService {
           });
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
+              model: model as any,
               aspect_ratio,
               output_format,
               safety_tolerance,

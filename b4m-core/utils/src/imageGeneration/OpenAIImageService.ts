@@ -206,6 +206,10 @@ export class OpenAIImageService extends AIImageService {
 
           // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array), prompt
           // Do not pass any other parameters (size, response_format, etc.)
+          Logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
+            model: editModel,
+            prompt: `${prompt.substring(0, 100)}...`,
+          });
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
             image: [imageFile],
@@ -215,15 +219,18 @@ export class OpenAIImageService extends AIImageService {
           // Legacy models (DALL-E 2) use the variation endpoint
 
           const { style, quality, model, ...opts } = openaiOptions; // Remove unsupported params for variations
+          const variationSize = ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
+            '256x256' | '512x512' | '1024x1024';
 
+          Logger.log('OpenAI image generation request (variation endpoint):', { ...opts, size: variationSize });
           result = await openai.images.createVariation({
             ...opts,
             image: imageFile,
-            size: ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
-              '256x256' | '512x512' | '1024x1024',
+            size: variationSize,
           });
         }
       } else {
+        Logger.log('OpenAI image generation request:', { prompt: `${prompt.substring(0, 100)}...`, ...openaiOptions });
         result = await openai.images.generate({
           prompt,
           ...openaiOptions,
@@ -339,6 +346,14 @@ export class OpenAIImageService extends AIImageService {
 
       // IMPORTANT: GPT-Image models (1, 1.5, 1-mini) only support: model, image (array), prompt
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
+      Logger.log('OpenAI image edit request:', {
+        model: editModel,
+        prompt: `${prompt.substring(0, 100)}...`,
+        hasMask: !!maskFile,
+        n,
+        size,
+        response_format,
+      });
       const response = await openai.images.edit(
         isGPTImageModel(editModel)
           ? {
