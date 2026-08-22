@@ -927,7 +927,7 @@ describe('AgentExecutionRepository', () => {
       );
 
       const swept = await agentExecutionRepository.cleanupStaleActive(userId, 20 * 60 * 1000);
-      expect(swept).toBe(0);
+      expect(swept).toEqual([]);
 
       const after = await agentExecutionRepository.findById(parent.id);
       expect(after?.status).toBe('awaiting_dag_children');
@@ -1051,9 +1051,9 @@ describe('AgentExecutionRepository', () => {
         { $set: { updatedAt: longAgo } }
       );
 
-      const count = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
+      const ids = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
 
-      expect(count).toBe(1);
+      expect(ids).toEqual([stale.id]);
       const after = await AgentExecutionModel.findById(stale.id);
       expect(after?.status).toBe('aborted');
       expect(after?.failureReason).toBeUndefined();

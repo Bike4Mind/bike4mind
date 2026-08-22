@@ -1028,8 +1028,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * (~10-30s per step, ~5-15 min for max_thorough runs) but short enough
    * that an abandoned run unblocks the next try within the same session.
    *
-   * Returns the number of executions cleaned up so the dispatch handler
-   * can log it for diagnostics.
+   * Returns the ids of the swept executions so callers can settle the quests
+   * they strand; the dispatch handler logs the count for diagnostics.
    *
    * Writes `status: 'aborted'` rather than `failed`/`failureReason: 'abandoned'`
    * intentionally: consumers (e.g. `IterationStream.tsx`, child-observation
