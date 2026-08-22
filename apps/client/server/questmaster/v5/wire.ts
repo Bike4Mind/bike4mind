@@ -23,6 +23,12 @@ export const QuestGraphWireSchema = z.object({
   sessionId: z.string().optional(),
   notebookId: z.string().optional(),
   state: z.enum(GRAPH_STATE_VALUES),
+  /**
+   * Why the graph is in that state, when it needs saying - which budget stopped
+   * it, that it stalled, that it finished with failures. Null for the ordinary
+   * cases (a quest the user paused by hand, a clean completion).
+   */
+  stateReason: z.string().nullable().optional(),
   visibility: z.enum(['private', 'shared', 'public']),
   rootNodeIds: z.array(z.string()),
   budget: z.object({
@@ -113,6 +119,7 @@ export function toQuestGraphWire(graph: IQuestGraphDocument): QuestGraphWire {
     sessionId: graph.sessionId,
     notebookId: graph.notebookId,
     state: graph.state,
+    stateReason: graph.stateReason ?? null,
     visibility: graph.visibility,
     rootNodeIds: graph.rootNodeIds,
     budget: {

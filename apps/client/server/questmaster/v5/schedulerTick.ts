@@ -12,7 +12,12 @@ import type { GraphState, NodeStatus, QuestGraphBudget } from '@bike4mind/common
 export type TickDecision =
   | { action: 'idle'; reason: string }
   | { action: 'dispatch'; nodeIds: string[] }
-  | { action: 'complete' }
+  /**
+   * `failedCount` is on the decision, not left for the view to re-derive: a
+   * graph whose every task failed is finished, but reporting it as a plain
+   * `completed` chip is a wrong signal rather than a neutral one.
+   */
+  | { action: 'complete'; failedCount: number }
   | { action: 'pause'; reason: string };
 
 /** The slice of a node the scheduler reasons about. */
@@ -74,23 +79,49 @@ export function planSchedulerTick(args: {
 
   // Nothing running and nothing ready. Either the graph is done, or it is stuck.
   const unfinished = tasks.filter(n => !isTerminal(n.status));
-  if (unfinished.length === 0) return { action: 'complete' };
+  if (unfinished.length === 0) {
+    return { action: 'complete', failedCount: tasks.filter(n => n.status === 'failed').length };
+  }
 
-  // Unfinished work that can never become ready - almost always a failed
-  // dependency upstream. Pausing beats idling forever, because a paused graph
-  // says so and an idle one just looks slow.
-  return {
-    action: 'pause',
-    reason: `${unfinished.length} node(s) can no longer become ready - check for a failed dependency`,
-  };
+  // Unfinished work that can never become ready. Pausing beats idling forever,
+  // because a paused graph says so and an idle one just looks slow.
+  //
+  // The reason names the actual blocker. "Check for a failed dependency" was
+  // the only explanation offered, which sent the reader hunting for a failure
+  // that may never have happened - a task waiting on a childless spine, or on a
+  // node from another graph, blocks the same way with nothing failed anywhere.
+  return { action: 'pause', reason: stallReason(unfinished, statusById) };
+}
+
+/** Why the unfinished work can no longer become ready, in the user's terms. */
+function stallReason(unfinished: readonly SchedulableNode[], statusById: Map<string, NodeStatus>): string {
+  const blockers = new Set<string>();
+  for (const node of unfinished) {
+    for (const dep of node.dependsOn) {
+      const status = statusById.get(dep);
+      if (status === undefined) blockers.add('a dependency that no longer exists');
+      else if (status === 'failed') blockers.add('a failed dependency');
+      else if (!isTerminal(status)) blockers.add('a dependency that never finished');
+    }
+  }
+
+  const count = `${unfinished.length} node(s) can no longer become ready`;
+  if (blockers.size === 0) return `${count} - nothing is left to unblock them`;
+  return `${count} - waiting on ${[...blockers].join(', ')}`;
 }
 
 /**
  * Spine nodes whose work is finished, so a phase heading reflects its phase.
  *
  * Spines are never dispatched, so nothing else would ever move them off
- * `pending` and the graph would read as permanently unfinished. A spine with no
- * children is left alone: it has no work to be finished.
+ * `pending` and the graph would read as permanently unfinished.
+ *
+ * A CHILDLESS spine counts as finished. It has no work to wait for, and leaving
+ * it `pending` made it a permanent blocker: `isNodeReady` requires every
+ * dependency to be `completed` or `skipped`, so any task listing a childless
+ * spine in `dependsOn` could never become ready, and the graph paused citing a
+ * dependency failure that had not happened. The shape is reachable by hand today
+ * - `nodes.ts` validates that a dependency exists, not what kind it is.
  */
 export function spineNodesToComplete(nodes: readonly (SchedulableNode & { parentId?: string | null })[]): string[] {
   const childrenBySpine = new Map<string, SchedulableNode[]>();
@@ -104,8 +135,8 @@ export function spineNodesToComplete(nodes: readonly (SchedulableNode & { parent
   return nodes
     .filter(n => n.kind === 'spine' && !isTerminal(n.status))
     .filter(spine => {
-      const children = childrenBySpine.get(spine.id);
-      return Boolean(children?.length) && children!.every(c => isTerminal(c.status));
+      const children = childrenBySpine.get(spine.id) ?? [];
+      return children.every(c => isTerminal(c.status));
     })
     .map(spine => spine.id);
 }

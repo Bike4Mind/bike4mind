@@ -9,6 +9,7 @@ const addMutate = vi.fn();
 let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
 let graphState = 'draft';
+let graphStateReason: string | null = null;
 const stateMutate = vi.fn();
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
@@ -26,7 +27,9 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 }));
 vi.mock('@client/app/hooks/data/questGraphs', () => ({
   useQuestGraphs: () => ({ data: { graphs: [{ id: 'g1', goal: 'Ship it' }] } }),
-  useQuestGraph: () => ({ data: { graph: { id: 'g1', goal: 'Ship it', state: graphState }, nodes } }),
+  useQuestGraph: () => ({
+    data: { graph: { id: 'g1', goal: 'Ship it', state: graphState, stateReason: graphStateReason }, nodes },
+  }),
   useCreateQuestGraph: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAddQuestNode: () => ({ mutateAsync: addMutate, isPending: false }),
   useRunQuestNode: () => ({ mutateAsync: runMutate, isPending: false }),
@@ -71,6 +74,7 @@ describe('QuestGraphView', () => {
     addMutate.mockReset().mockResolvedValue({ node: makeNode({ id: 'n2' }) });
     currentModel = 'claude-opus-5';
     graphState = 'draft';
+    graphStateReason = null;
     stateMutate.mockReset().mockResolvedValue({ graph: { id: 'g1', goal: 'Ship it', state: 'active' }, nodes: [] });
     nodes = [];
   });
@@ -112,6 +116,48 @@ describe('QuestGraphView', () => {
 
     expect(stateMutate).not.toHaveBeenCalled();
     expect(await screen.findByTestId('questmaster-v5-error')).toHaveTextContent('Pick a model first');
+  });
+
+  // The scheduler computes a careful reason ("credit budget spent (x/y)", what a
+  // stall is waiting on) and it used to reach only a server log - so a budget
+  // stop and a stall rendered the same bare chip as a hand-paused quest.
+  it('shows why the scheduler paused the quest', () => {
+    graphState = 'paused';
+    graphStateReason = 'credit budget spent (100/100)';
+    nodes = [makeNode({ id: 'n1', status: 'pending' })];
+
+    renderView();
+    selectGraph();
+
+    expect(screen.getByTestId('questmaster-v5-graph-state-reason')).toHaveTextContent('credit budget spent (100/100)');
+  });
+
+  it('says nothing extra about a quest the user paused by hand', () => {
+    graphState = 'paused';
+    graphStateReason = null;
+    nodes = [makeNode({ id: 'n1', status: 'pending' })];
+
+    renderView();
+    selectGraph();
+
+    // The chip is there, so the panel rendered - the reason simply has nothing
+    // to say, rather than the assertion passing because nothing rendered.
+    expect(screen.getByTestId('questmaster-v5-graph-state-chip')).toHaveTextContent('paused');
+    expect(screen.queryByTestId('questmaster-v5-graph-state-reason')).not.toBeInTheDocument();
+  });
+
+  // A graph whose every task failed IS complete, but a green chip over wholesale
+  // failure is a wrong signal rather than a neutral one.
+  it('does not render a completion containing failures as a clean success', () => {
+    graphState = 'completed';
+    graphStateReason = 'finished with 2 failed task(s)';
+    nodes = [makeNode({ id: 'n1', status: 'failed' })];
+
+    renderView();
+    selectGraph();
+
+    expect(screen.getByTestId('questmaster-v5-graph-state-reason')).toHaveTextContent('2 failed task(s)');
+    expect(screen.getByTestId('questmaster-v5-graph-state-chip')).toHaveTextContent('completed');
   });
 
   it('shows the graph state and hides the control once completed', () => {

@@ -36,6 +36,8 @@ const QuestGraphSchema = new Schema<IQuestGraph>(
       maxCredits: { type: Number, required: false, min: 0 },
       maxWallClockMs: { type: Number, required: false, min: 0 },
     },
+    rollingStartedAt: { type: Date, required: false, default: null },
+    stateReason: { type: String, required: false, default: null, maxlength: 500 },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -182,8 +184,17 @@ class QuestGraphRepository extends BaseRepository<IQuestGraphDocument> implement
     return this.questGraphModel.find({ userId }).sort({ updatedAt: -1 });
   }
 
-  async updateState(id: string, state: GraphState): Promise<IQuestGraphDocument | null> {
-    return this.questGraphModel.findByIdAndUpdate(id, { $set: { state } }, { new: true });
+  async updateState(
+    id: string,
+    state: GraphState,
+    opts?: { reason?: string | null }
+  ): Promise<IQuestGraphDocument | null> {
+    const update: Record<string, unknown> = { state, stateReason: opts?.reason ?? null };
+    // Entering `active` starts a fresh rolling stretch. The wall-clock budget
+    // reads this, so a resumed quest is measured from the resume rather than
+    // from the oldest run in its history - which it could never get back under.
+    if (state === 'active') update.rollingStartedAt = new Date();
+    return this.questGraphModel.findByIdAndUpdate(id, { $set: update }, { new: true });
   }
 
   async addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null> {

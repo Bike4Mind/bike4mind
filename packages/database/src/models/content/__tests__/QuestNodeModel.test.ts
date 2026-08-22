@@ -190,6 +190,39 @@ describe('QuestGraph / QuestNode model', () => {
     expect(ready.map(n => n.id)).toContain(gated.id);
   });
 
+  // The wall-clock budget reads `rollingStartedAt`, so entering `active` has to
+  // restamp it. Measured from the oldest run in the graph's history instead, a
+  // quest with a manual run from days ago was over budget the instant Run quest
+  // was pressed, and a wall-clock pause could never be resumed.
+  it('updateState stamps a fresh rolling start when a graph is activated', async () => {
+    const graph = await makeGraph();
+    const before = Date.now();
+
+    const activated = await questGraphRepository.updateState(graph.id, 'active');
+
+    expect(activated?.state).toBe('active');
+    expect(activated?.rollingStartedAt?.getTime()).toBeGreaterThanOrEqual(before - 1000);
+  });
+
+  it('updateState records why a graph stopped, and clears it on restart', async () => {
+    const graph = await makeGraph();
+
+    const paused = await questGraphRepository.updateState(graph.id, 'paused', {
+      reason: 'credit budget spent (100/100)',
+    });
+    expect(paused?.stateReason).toBe('credit budget spent (100/100)');
+
+    // Restarting must not leave the previous stretch's explanation on the chip.
+    const restarted = await questGraphRepository.updateState(graph.id, 'active');
+    expect(restarted?.stateReason).toBeNull();
+  });
+
+  it('updateState leaves no reason when none is given', async () => {
+    const graph = await makeGraph();
+    const completed = await questGraphRepository.updateState(graph.id, 'completed');
+    expect(completed?.stateReason).toBeNull();
+  });
+
   it('claimForRun moves a runnable node to in_progress and stamps startedAt', async () => {
     const graph = await makeGraph();
     const node = await makeNode(graph.id);

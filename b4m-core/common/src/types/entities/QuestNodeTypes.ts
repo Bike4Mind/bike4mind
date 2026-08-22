@@ -55,6 +55,22 @@ export interface IQuestGraph {
   state: GraphState;
   visibility: 'private' | 'shared' | 'public';
   budget: QuestGraphBudget;
+  /**
+   * When the CURRENT rolling stretch began - stamped each time the graph enters
+   * `active`. The wall-clock budget is measured against this, not against the
+   * oldest node the graph has ever run: a quest with a manual run from days ago
+   * would otherwise be over budget the instant someone pressed Run quest, and
+   * could never be resumed because elapsed time only grows.
+   */
+  rollingStartedAt?: Date | null;
+  /**
+   * Why the graph is in its current state, when that needs saying: which budget
+   * stopped it, that it stalled, or that it finished with failures. The
+   * scheduler computes these carefully and they used to go only to a server log,
+   * leaving the user a bare `paused` chip identical to one they paused by hand.
+   * Cleared whenever the graph is started again.
+   */
+  stateReason?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -122,7 +138,14 @@ export interface QuestNodeStatusExtra {
 export interface IQuestGraphRepository extends IBaseRepository<IQuestGraphDocument> {
   createGraph(input: QuestGraphCreateInput): Promise<IQuestGraphDocument>;
   findByUserId(userId: string): Promise<IQuestGraphDocument[]>;
-  updateState(id: string, state: GraphState): Promise<IQuestGraphDocument | null>;
+  /**
+   * Move a graph to a new state, optionally recording why.
+   *
+   * Entering `active` stamps a fresh `rollingStartedAt` and clears any previous
+   * `stateReason`, so a resumed quest is measured and explained from this
+   * stretch rather than the last one.
+   */
+  updateState(id: string, state: GraphState, opts?: { reason?: string | null }): Promise<IQuestGraphDocument | null>;
   addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null>;
   softDelete(id: string): Promise<void>;
 }

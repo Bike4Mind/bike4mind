@@ -75,6 +75,11 @@ export default function QuestGraphView() {
 
   const graphState = detail.data?.graph.state;
   const isRolling = graphState === 'active';
+  // Why the scheduler stopped, when it has something to say. The decision
+  // computes this carefully ("credit budget spent (x/y)", what a stall is
+  // waiting on) and it used to reach only a server log, leaving the user a chip
+  // identical to a quest they paused themselves.
+  const stateReason = detail.data?.graph.stateReason ?? null;
 
   const handleToggleRolling = async () => {
     setError(null);
@@ -173,7 +178,18 @@ export default function QuestGraphView() {
                 <Chip
                   size="sm"
                   variant="soft"
-                  color={isRolling ? 'primary' : graphState === 'completed' ? 'success' : 'neutral'}
+                  // A completion carrying a reason is a completion WITH FAILURES,
+                  // so it must not read as an unqualified green success.
+                  color={
+                    isRolling
+                      ? 'primary'
+                      : graphState === 'completed'
+                        ? stateReason
+                          ? 'warning'
+                          : 'success'
+                        : 'neutral'
+                  }
+                  title={stateReason ?? undefined}
                   data-testid="questmaster-v5-graph-state-chip"
                 >
                   {graphState}
@@ -191,6 +207,16 @@ export default function QuestGraphView() {
                 </Button>
               )}
             </Stack>
+
+            {stateReason && (
+              <Typography
+                level="body-xs"
+                sx={{ mb: 1, color: 'text.tertiary' }}
+                data-testid="questmaster-v5-graph-state-reason"
+              >
+                {stateReason}
+              </Typography>
+            )}
 
             <Stack spacing={1} data-testid="questmaster-v5-node-list">
               {nodes.map(node => (

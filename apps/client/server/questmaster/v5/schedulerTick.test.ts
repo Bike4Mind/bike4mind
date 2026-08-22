@@ -61,12 +61,24 @@ describe('planSchedulerTick', () => {
   });
 
   it('completes when every task is terminal', () => {
-    expect(tick([task('a', 'completed'), task('b', 'skipped'), task('c', 'failed')])).toEqual({ action: 'complete' });
+    expect(tick([task('a', 'completed'), task('b', 'skipped'), task('c', 'failed')])).toEqual({
+      action: 'complete',
+      failedCount: 1,
+    });
   });
 
   // A spine sitting at `pending` must not make a finished graph look unfinished.
   it('completes even though spine nodes are not terminal', () => {
-    expect(tick([spine('s1'), task('a', 'completed')])).toEqual({ action: 'complete' });
+    expect(tick([spine('s1'), task('a', 'completed')])).toEqual({ action: 'complete', failedCount: 0 });
+  });
+
+  // `failed` is terminal, so a graph whose every task failed IS finished - but
+  // reporting it as a plain completion made the view render a green chip over
+  // wholesale failure. The count travels on the decision so the caller can say
+  // so, rather than re-deriving it and drifting.
+  it('reports how many tasks failed in a completion', () => {
+    expect(tick([task('a', 'failed'), task('b', 'failed')])).toEqual({ action: 'complete', failedCount: 2 });
+    expect(tick([task('a', 'completed')])).toEqual({ action: 'complete', failedCount: 0 });
   });
 
   // The stall case: a failed dependency means the dependent can never become
@@ -75,6 +87,17 @@ describe('planSchedulerTick', () => {
     const decision = tick([task('a', 'failed'), task('b', 'pending', ['a'])]);
     expect(decision).toMatchObject({ action: 'pause' });
     expect((decision as { reason: string }).reason).toContain('failed dependency');
+  });
+
+  // The reason has to name the actual blocker. "Check for a failed dependency"
+  // was the only explanation on offer, which sent the reader hunting for a
+  // failure that had not happened.
+  it('names a missing dependency rather than blaming a failure', () => {
+    const decision = tick([task('b', 'pending', ['gone'])]);
+    expect(decision).toMatchObject({ action: 'pause' });
+    const { reason } = decision as { reason: string };
+    expect(reason).toContain('no longer exists');
+    expect(reason).not.toContain('failed');
   });
 
   describe('budgets', () => {
@@ -142,8 +165,19 @@ describe('spineNodesToComplete', () => {
     expect(spineNodesToComplete(nodes)).toEqual([]);
   });
 
-  it('leaves a childless spine alone - it has no work to finish', () => {
-    expect(spineNodesToComplete([spine('s1')])).toEqual([]);
+  // A childless spine has no work to wait for, so it counts as finished. Leaving
+  // it `pending` made it a permanent blocker: isNodeReady requires every
+  // dependency to be completed or skipped, so a task depending on one could
+  // never become ready and the graph paused citing a failure that never happened.
+  it('completes a childless spine - it has no work to wait for', () => {
+    expect(spineNodesToComplete([spine('s1')])).toEqual(['s1']);
+  });
+
+  it('unblocks a task that depends on a childless spine', () => {
+    // Before: 's1' stayed pending, 'a' could never be ready, and the graph
+    // paused blaming a failed dependency.
+    const rolled = spineNodesToComplete([spine('s1'), task('a', 'pending', ['s1'])]);
+    expect(rolled).toEqual(['s1']);
   });
 
   it('does not re-complete a spine that is already terminal', () => {
