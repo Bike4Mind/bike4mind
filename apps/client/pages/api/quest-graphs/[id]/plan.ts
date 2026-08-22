@@ -15,7 +15,11 @@ import { z } from 'zod';
 
 // Each call is one billable LLM completion, so this is tighter than the
 // graph-editing routes and matches the node-run limit.
-const planRateLimit = rateLimit({ limit: 20, windowMs: 60000 });
+//
+// `bucket` is required here: this is a dynamic route, and without it the key
+// embeds the graph id, making the limit 20/min PER GRAPH - so creating N graphs
+// would buy 20N plan completions a minute.
+const planRateLimit = rateLimit({ limit: 20, windowMs: 60000, bucket: 'quest-graphs/[id]/plan' });
 
 const PlanSchema = z.object({ model: z.string().min(1) });
 

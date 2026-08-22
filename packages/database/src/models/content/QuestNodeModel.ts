@@ -36,6 +36,7 @@ const QuestGraphSchema = new Schema<IQuestGraph>(
       maxCredits: { type: Number, required: false, min: 0 },
       maxWallClockMs: { type: Number, required: false, min: 0 },
     },
+    planningStartedAt: { type: Date, required: false, default: null },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -125,9 +126,15 @@ export function hasCycle(edges: Map<string, string[]>): boolean {
  * than re-implementing it and drifting.
  */
 export function isNodeReady(
-  node: Pick<IQuestNode, 'status' | 'dependsOn'>,
+  node: Pick<IQuestNode, 'status' | 'dependsOn' | 'kind'>,
   statusById: Map<string, NodeStatus>
 ): boolean {
+  // A spine is a phase heading, not work. Dispatching one would bill a model to
+  // restate an objective, and a fresh spine (`pending`, no dependencies) is
+  // otherwise the MOST runnable node in a generated plan - so the "never
+  // executed" contract has to be enforced in the predicate, not just documented
+  // where plans are built.
+  if (node.kind === 'spine') return false;
   if (node.status !== 'pending' && node.status !== 'ready') return false;
   return dependenciesSatisfied(node, statusById);
 }
@@ -144,9 +151,12 @@ export function isNodeReady(
  * except editing it, which is the opposite of what the retry support is for.
  */
 export function isNodeRunnable(
-  node: Pick<IQuestNode, 'status' | 'dependsOn'>,
+  node: Pick<IQuestNode, 'status' | 'dependsOn' | 'kind'>,
   statusById: Map<string, NodeStatus>
 ): boolean {
+  // Same spine exclusion as isNodeReady: no surface, human or scheduler, gets
+  // to dispatch a phase heading.
+  if (node.kind === 'spine') return false;
   if (!(RUNNABLE_NODE_STATUS_VALUES as readonly string[]).includes(node.status)) return false;
   return dependenciesSatisfied(node, statusById);
 }
@@ -188,6 +198,33 @@ class QuestGraphRepository extends BaseRepository<IQuestGraphDocument> implement
 
   async addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null> {
     return this.questGraphModel.findByIdAndUpdate(graphId, { $addToSet: { rootNodeIds: nodeId } }, { new: true });
+  }
+
+  async claimForPlanning(id: string, staleAfterMs: number): Promise<IQuestGraphDocument | null> {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    // The filter IS the lock: Mongo matches and $sets in one atomic operation,
+    // so of two concurrent plan requests exactly one claims the graph. Held
+    // across the LLM call, which is why an expired claim can be stolen - a
+    // Lambda that died mid-plan must not wedge the graph permanently.
+    const staleBefore = new Date(Date.now() - staleAfterMs);
+    return this.questGraphModel.findOneAndUpdate(
+      {
+        _id: convertId(id),
+        deletedAt: null,
+        $or: [
+          { planningStartedAt: null },
+          { planningStartedAt: { $exists: false } },
+          { planningStartedAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { planningStartedAt: new Date() } },
+      { new: true }
+    );
+  }
+
+  async releasePlanningClaim(id: string): Promise<void> {
+    if (!mongoose.Types.ObjectId.isValid(id)) return;
+    await this.questGraphModel.updateOne({ _id: convertId(id) }, { $set: { planningStartedAt: null } });
   }
 
   async softDelete(id: string): Promise<void> {
@@ -311,8 +348,12 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
     // `deletedAt: null` is explicit because softDeletePlugin only hooks
     // find/findOne - a findOneAndUpdate would otherwise happily claim a
     // soft-deleted node.
+    // `kind` is part of the lock, not just a caller-side check: this is the one
+    // write that turns a node into a billable run, so a spine being
+    // undispatchable is enforced where it cannot be bypassed by a caller that
+    // forgot to ask isNodeRunnable first.
     return this.questNodeModel.findOneAndUpdate(
-      { _id: convertId(id), status: { $in: RUNNABLE_NODE_STATUS_VALUES }, deletedAt: null },
+      { _id: convertId(id), status: { $in: RUNNABLE_NODE_STATUS_VALUES }, kind: { $ne: 'spine' }, deletedAt: null },
       { $set: { status: 'in_progress', startedAt: new Date() } },
       { new: true }
     );

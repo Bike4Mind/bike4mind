@@ -55,6 +55,13 @@ export interface IQuestGraph {
   state: GraphState;
   visibility: 'private' | 'shared' | 'public';
   budget: QuestGraphBudget;
+  /**
+   * Set while a plan generation holds this graph, cleared when it settles.
+   * Planning is a read-then-write across a slow LLM call, so this is the lock
+   * that stops two concurrent generations writing two interleaved plans into
+   * one graph - a state the empty-graph guard then refuses to re-plan.
+   */
+  planningStartedAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -124,6 +131,17 @@ export interface IQuestGraphRepository extends IBaseRepository<IQuestGraphDocume
   findByUserId(userId: string): Promise<IQuestGraphDocument[]>;
   updateState(id: string, state: GraphState): Promise<IQuestGraphDocument | null>;
   addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null>;
+  /**
+   * Atomically take the planning lock on a graph. Returns null when another
+   * generation already holds it, so the loser refuses instead of writing a
+   * second plan into the same graph.
+   *
+   * A claim older than `staleAfterMs` is stolen: the holder was a Lambda that
+   * died mid-plan, and without expiry the graph would be unplannable forever.
+   */
+  claimForPlanning(id: string, staleAfterMs: number): Promise<IQuestGraphDocument | null>;
+  /** Release the planning lock, whether the plan succeeded or failed. */
+  releasePlanningClaim(id: string): Promise<void>;
   softDelete(id: string): Promise<void>;
 }
 

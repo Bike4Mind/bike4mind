@@ -39,6 +39,13 @@ const handler = baseApi()
     const input = RunNodeSchema.parse(req.body);
     const { node, graph } = await requireOwnedNode(id, req.user.id);
 
+    // A spine is a phase heading, not work; running one would bill a model to
+    // restate an objective. `claimForRun` refuses it too, but that refusal
+    // reads "already running, or has completed" - which is not what happened.
+    if (node.kind === 'spine') {
+      throw new BadRequestError('This is a phase heading, not a task - only tasks can be run');
+    }
+
     // Dependency gating is enforced here, not just surfaced in the UI: running
     // a node whose inputs have not been produced yet burns credits on a run
     // that cannot succeed. Phase 2's scheduler picks from the same predicate.

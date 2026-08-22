@@ -15,7 +15,19 @@ export interface RecordSessionOperationalUsageArgs {
   userId?: string;
   /** Preloaded user doc, if the caller already fetched it - avoids a redundant read. */
   user?: IUserDocument;
-  sessionId: string;
+  /**
+   * The session the call was made on behalf of, when there is one. Optional
+   * because not every operational call belongs to a session - a QuestMaster plan
+   * is generated for a graph, which may have no session yet.
+   */
+  sessionId?: string;
+  /**
+   * App-level correlation id for the spend. Defaults to `sessionId`, which is
+   * what the four session handlers want; a caller working on another record
+   * (e.g. a quest graph) passes its own id so the UsageEvent points at the
+   * thing that actually incurred the cost.
+   */
+  requestId?: string;
   modelId: string;
   modelInfo: ModelInfo;
   /** Token usage reported by the LLM callback; some backends leave it undefined. */
@@ -26,9 +38,10 @@ export interface RecordSessionOperationalUsageArgs {
 }
 
 /**
- * Record a UsageEvent for an operational-model call made on a session's behalf (auto-naming,
- * summarization, tagging, context summarization). Resolves the owner (user + org) from the
- * session's user and hands off to the shared recorder, which decides billed-vs-recorded-only.
+ * Record a UsageEvent for an operational-model call made on a user's behalf (auto-naming,
+ * summarization, tagging, context summarization, QuestMaster plan generation). Resolves the
+ * owner (user + org) and hands off to the shared recorder, which decides
+ * billed-vs-recorded-only.
  *
  * Best-effort: any failure is swallowed with a warning so it can never break the non-critical
  * background handler it measures. Skips silently when the owner or token usage is unknown -
@@ -40,6 +53,14 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
   const ownerId = args.user?.id ?? userId;
   if (!ownerId) {
     logger.debug('[recordSessionOperationalUsage] no user on session; skipping usage record');
+    return;
+  }
+
+  // Correlation id for the UsageEvent. Session handlers pass neither and get the
+  // session; a graph-scoped caller passes its own.
+  const requestId = args.requestId ?? sessionId;
+  if (!requestId) {
+    logger.debug('[recordSessionOperationalUsage] no requestId or sessionId; skipping usage record');
     return;
   }
 
@@ -64,7 +85,7 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
 
     await recordOperationalUsage(
       {
-        requestId: sessionId,
+        requestId,
         user,
         organization,
         sessionId,

@@ -22,29 +22,41 @@ describe('isNodeReady', () => {
   const statuses = (entries: [string, string][]) => new Map(entries) as Map<string, never>;
 
   it('is ready when pending with no dependencies', () => {
-    expect(isNodeReady({ status: 'pending', dependsOn: [] }, statuses([]))).toBe(true);
+    expect(isNodeReady({ status: 'pending', dependsOn: [], kind: 'task' }, statuses([]))).toBe(true);
   });
 
   it('is not ready while a dependency is unfinished', () => {
-    expect(isNodeReady({ status: 'pending', dependsOn: ['a'] }, statuses([['a', 'in_progress']]))).toBe(false);
+    expect(isNodeReady({ status: 'pending', dependsOn: ['a'], kind: 'task' }, statuses([['a', 'in_progress']]))).toBe(
+      false
+    );
   });
 
   // A skipped dependency has to satisfy readiness, or deliberately dropping one
   // node would permanently wedge everything downstream of it.
   it('treats a skipped dependency as satisfied', () => {
-    expect(isNodeReady({ status: 'pending', dependsOn: ['a'] }, statuses([['a', 'skipped']]))).toBe(true);
+    expect(isNodeReady({ status: 'pending', dependsOn: ['a'], kind: 'task' }, statuses([['a', 'skipped']]))).toBe(true);
   });
 
   it('is not ready once the node itself has moved past pending/ready', () => {
     for (const status of ['in_progress', 'completed', 'failed', 'needs_review', 'blocked', 'skipped'] as const) {
-      expect(isNodeReady({ status, dependsOn: [] }, statuses([]))).toBe(false);
+      expect(isNodeReady({ status, dependsOn: [], kind: 'task' }, statuses([]))).toBe(false);
     }
   });
 
   // A dependency id with no entry in the map (deleted node, or an id from
   // another graph) must read as unsatisfied, not silently as done.
   it('is not ready when a dependency is unknown', () => {
-    expect(isNodeReady({ status: 'pending', dependsOn: ['ghost'] }, statuses([]))).toBe(false);
+    expect(isNodeReady({ status: 'pending', dependsOn: ['ghost'], kind: 'task' }, statuses([]))).toBe(false);
+  });
+
+  // A spine is a phase heading, not work. Without this it is the MOST ready node
+  // in a generated plan - pending, no dependencies - so the scheduler would bill
+  // a model to restate an objective.
+  it('never reports a spine as ready, however satisfied it looks', () => {
+    expect(isNodeReady({ status: 'pending', dependsOn: [], kind: 'spine' }, statuses([]))).toBe(false);
+    expect(isNodeReady({ status: 'ready', dependsOn: [], kind: 'spine' }, statuses([]))).toBe(false);
+    // Same shape as a task, which IS ready - the kind is the only difference.
+    expect(isNodeReady({ status: 'pending', dependsOn: [], kind: 'task' }, statuses([]))).toBe(true);
   });
 });
 
@@ -55,18 +67,31 @@ describe('isNodeRunnable', () => {
   // node is retryable by hand (claimForRun accepts it), and gating the button on
   // readiness left it with no way back except editing the node.
   it('allows a manual retry of a failed node', () => {
-    expect(isNodeRunnable({ status: 'failed', dependsOn: [] }, statuses([]))).toBe(true);
-    expect(isNodeReady({ status: 'failed', dependsOn: [] }, statuses([]))).toBe(false);
+    expect(isNodeRunnable({ status: 'failed', dependsOn: [], kind: 'task' }, statuses([]))).toBe(true);
+    expect(isNodeReady({ status: 'failed', dependsOn: [], kind: 'task' }, statuses([]))).toBe(false);
   });
 
   it('still refuses a node that is already running or done', () => {
-    expect(isNodeRunnable({ status: 'in_progress', dependsOn: [] }, statuses([]))).toBe(false);
-    expect(isNodeRunnable({ status: 'completed', dependsOn: [] }, statuses([]))).toBe(false);
+    expect(isNodeRunnable({ status: 'in_progress', dependsOn: [], kind: 'task' }, statuses([]))).toBe(false);
+    expect(isNodeRunnable({ status: 'completed', dependsOn: [], kind: 'task' }, statuses([]))).toBe(false);
   });
 
   it('still honours unmet dependencies', () => {
-    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'] }, statuses([['a', 'in_progress']]))).toBe(false);
-    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'] }, statuses([['a', 'completed']]))).toBe(true);
+    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'], kind: 'task' }, statuses([['a', 'in_progress']]))).toBe(
+      false
+    );
+    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'], kind: 'task' }, statuses([['a', 'completed']]))).toBe(
+      true
+    );
+  });
+
+  // The Run button's predicate has to exclude spines too, or the UI offers a Run
+  // affordance on a phase heading that claimForRun will then refuse.
+  it('never reports a spine as runnable', () => {
+    for (const status of ['pending', 'ready', 'blocked', 'needs_review', 'failed'] as const) {
+      expect(isNodeRunnable({ status, dependsOn: [], kind: 'spine' }, statuses([]))).toBe(false);
+      expect(isNodeRunnable({ status, dependsOn: [], kind: 'task' }, statuses([]))).toBe(true);
+    }
   });
 });
 
@@ -190,6 +215,31 @@ describe('QuestGraph / QuestNode model', () => {
     expect(ready.map(n => n.id)).toContain(gated.id);
   });
 
+  // The claim filter is the last line of defence on the spine contract: every
+  // caller-side check can be forgotten, this one cannot be bypassed.
+  it('claimForRun refuses a spine node outright', async () => {
+    const graph = await makeGraph();
+    const spine = await makeNode(graph.id, { kind: 'spine' });
+
+    expect(await questNodeRepository.claimForRun(spine.id)).toBeNull();
+
+    // Untouched - not claimed and rolled back, never claimed at all.
+    const after = await questNodeRepository.getNode(spine.id);
+    expect(after?.status).toBe('pending');
+    expect(after?.startedAt).toBeUndefined();
+  });
+
+  it('computeReadyNodes never offers a spine, only its tasks', async () => {
+    const graph = await makeGraph();
+    const spine = await makeNode(graph.id, { kind: 'spine' });
+    const task = await makeNode(graph.id, { parentId: spine.id });
+
+    const ready = await questNodeRepository.computeReadyNodes(graph.id);
+
+    expect(ready.map(n => n.id)).toContain(task.id);
+    expect(ready.map(n => n.id)).not.toContain(spine.id);
+  });
+
   it('claimForRun moves a runnable node to in_progress and stamps startedAt', async () => {
     const graph = await makeGraph();
     const node = await makeNode(graph.id);
@@ -267,5 +317,47 @@ describe('QuestGraph / QuestNode model', () => {
 
     const graphs = await questGraphRepository.findByUserId('owner');
     expect(graphs.map(g => g.id)).toEqual([mine.id]);
+  });
+
+  // The lock that stops two concurrent plan generations writing two interleaved
+  // plans into one graph - the failure the empty-graph guard cannot recover from.
+  describe('claimForPlanning', () => {
+    const STALE_MS = 180_000;
+
+    it('lets exactly one of two concurrent claims win', async () => {
+      const graph = await makeGraph();
+
+      const [a, b] = await Promise.all([
+        questGraphRepository.claimForPlanning(graph.id, STALE_MS),
+        questGraphRepository.claimForPlanning(graph.id, STALE_MS),
+      ]);
+
+      expect([a, b].filter(Boolean)).toHaveLength(1);
+    });
+
+    it('refuses while a fresh claim is held, and allows again once released', async () => {
+      const graph = await makeGraph();
+
+      expect(await questGraphRepository.claimForPlanning(graph.id, STALE_MS)).not.toBeNull();
+      expect(await questGraphRepository.claimForPlanning(graph.id, STALE_MS)).toBeNull();
+
+      await questGraphRepository.releasePlanningClaim(graph.id);
+
+      expect(await questGraphRepository.claimForPlanning(graph.id, STALE_MS)).not.toBeNull();
+    });
+
+    // A Lambda that died mid-plan holds the claim forever otherwise, and the graph
+    // becomes permanently unplannable with no surface to clear it.
+    it('steals a claim older than the stale window', async () => {
+      const graph = await makeGraph();
+      await questGraphRepository.claimForPlanning(graph.id, STALE_MS);
+
+      // Zero window: any existing claim is already stale.
+      expect(await questGraphRepository.claimForPlanning(graph.id, 0)).not.toBeNull();
+    });
+
+    it('returns null for an id that is not an ObjectId rather than throwing', async () => {
+      expect(await questGraphRepository.claimForPlanning('not-an-id', STALE_MS)).toBeNull();
+    });
   });
 });
