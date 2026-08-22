@@ -1,5 +1,6 @@
 import {
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
   IUserDocument,
   IUserRepository,
   IFabFileRepository,
@@ -48,6 +49,10 @@ interface ResearchTaskProcessAdapters {
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
     users: Pick<IUserRepository, 'findById'>;
     adminSettings: IAdminSettingsRepository;
+    // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
+    // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
+    // per-org/owner/lake override silently does nothing on this door.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
     researchDatas: IResearchDataRepository;
     taskSchedules: ITaskScheduleRepository;
     apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndType' | 'findByUserIdAndTypes'>;

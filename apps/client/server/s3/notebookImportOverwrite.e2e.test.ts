@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * Guards the invariant this handler exists for: importing an export NEVER rewrites messages that
@@ -31,11 +35,11 @@ const USER = 'import-owner';
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 60000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 60000);
+});
 afterEach(async () => {
   await Promise.all([Quest.deleteMany({}, { hardDelete: true }), Session.deleteMany({}, { hardDelete: true })]);
 });
@@ -143,7 +147,7 @@ describe('notebook import does not overwrite existing messages', () => {
     // Nothing partial lands: bulkWrite is ordered and every id collides on the first op.
     expect(await Quest.countDocuments({ sessionId })).toBe(5);
     expect(await Quest.countDocuments({})).toBe(5);
-  }, 60000);
+  });
 
   it('copies messages into a new notebook rather than moving them', async () => {
     const { sessionId, ids } = await seedNotebook('Shared Name', 5);
@@ -162,7 +166,7 @@ describe('notebook import does not overwrite existing messages', () => {
     expect(await Quest.countDocuments({ sessionId })).toBe(5);
     // 5 originals + 5 copies; a move would leave the total at 5.
     expect(await Quest.countDocuments({})).toBe(10);
-  }, 60000);
+  });
 
   it('replaces rather than collides when overwriting an existing notebook', async () => {
     const { sessionId, ids } = await seedNotebook('Shared Name', 5);
@@ -182,7 +186,7 @@ describe('notebook import does not overwrite existing messages', () => {
     expect(result.errors).toEqual([]);
     expect(await Quest.countDocuments({ sessionId })).toBe(5);
     expect(await Quest.countDocuments({})).toBe(5);
-  }, 60000);
+  });
 
   it('updates the existing notebook metadata when overwriting', async () => {
     const { sessionId, ids } = await seedNotebook('Same Name', 2);
@@ -204,7 +208,7 @@ describe('notebook import does not overwrite existing messages', () => {
     expect(result.errors).toEqual([]);
     const after = await Session.findById(sessionId);
     expect(after?.lastUpdated?.toISOString()).toBe('2027-03-04T05:06:07.000Z');
-  }, 60000);
+  });
 
   it('imports a message whose prompt is empty, as the exporter emits', async () => {
     const { ids } = await seedNotebook('Shared Name', 2);
@@ -223,5 +227,5 @@ describe('notebook import does not overwrite existing messages', () => {
 
     expect(result.errors).toEqual([]);
     expect(await Quest.countDocuments({ prompt: '' })).toBe(1);
-  }, 60000);
+  });
 });

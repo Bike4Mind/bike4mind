@@ -62,6 +62,17 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
   'delete',
   'restore',
   /**
+   * The phase-2 hard delete, recorded when the purge is ACCEPTED rather than when the sweep
+   * finishes (#1744). Deliberately NOT folded into `delete`: that verb is the recoverable phase-1
+   * soft delete, and an audit trail that cannot distinguish the reversible request from the
+   * irreversible one is telling the same lie the `status` field used to.
+   *
+   * This is also the ONLY audit record a purge leaves. `cleanupDeletedDataLake` records nothing,
+   * and it deletes the lake, its files, chunks, batches and grants - but never this collection, so
+   * an accept-time event is what survives to say the operation was requested at all.
+   */
+  'purge',
+  /**
    * The draft -> active flip driven by `activateIfDraft` (a tag edit, a file toggle, a batch
    * completion). Always records under the `system` RUNG, whoever triggered it: nothing authorized
    * it, because `activateIfDraft` runs no authorization check at all. The PRINCIPAL is a different
@@ -234,17 +245,18 @@ export interface ILakeConfigChangeEvent {
   principalKind: LakeConfigChangePrincipalKind;
   principalId: string;
   /**
-   * Set when a system/agent principal acted for a human, so the human stays findable.
+   * Set when a key/agent principal acted for a human, so the human stays findable without
+   * conflating the two identities in `principalId`.
    *
-   * RESERVED, and never populated today - by anything, on either audit model. The read side
-   * (`ILakeAccessEvent`) declares and persists the identical field and has no producer for it
-   * either; the vocabulary is mirrored deliberately so the two collections cannot drift, and
-   * dropping it here alone would break that parity without fixing the read side. `ManageActor`
-   * carries no on-behalf-of identity to thread, so populating it is a change to the actor
-   * contract, not to this model.
+   * POPULATED on both halves of the trail. The read side has resolved it since #1663 - see
+   * `resolveAuditPrincipal`, spread into `recordLakeAccessEvent` by every lake-read route, which
+   * records an API-key read under the KEY's id with the key's owner here. The config side resolves
+   * it the same way, from the same helper, at the four config-write routes: `ManageActor` carries an
+   * optional `auditPrincipal` the routes attach, so a key-driven reconfiguration is no longer
+   * recorded as though the owning human performed it by hand.
    *
-   * The consequence to know when PR 3 renders these rows: this field is `undefined` on every
-   * event written today, so a history view must not give it a column of its own yet.
+   * Absent for an ordinary session write (the human IS `principalId`) and for a `system` write that
+   * no principal drove, so a consumer must still treat it as optional.
    */
   onBehalfOfUserId?: string;
   /**
@@ -280,7 +292,7 @@ export interface ILakeConfigChangeEventDocument extends ILakeConfigChangeEvent, 
 export interface RecordLakeConfigChangeInput {
   principalKind: LakeConfigChangePrincipalKind;
   principalId: string;
-  /** Reserved; no producer sets it today - see the note on `ILakeConfigChangeEvent`. */
+  /** The human a key/agent acted for; see the note on `ILakeConfigChangeEvent`. */
   onBehalfOfUserId?: string;
   organizationId?: string;
   dataLakeId: string;
@@ -291,6 +303,20 @@ export interface RecordLakeConfigChangeInput {
    * to the floor inside `record()` regardless of what is passed here. */
   retentionDays?: number;
 }
+
+/**
+ * A principal resolved by a ROUTE, for an audited write it is about to drive. Derived from the event
+ * input rather than re-declared, so the two cannot drift.
+ *
+ * Exists because `baseApi()` admits either a session or a `b4m_live_` API key: the acting `userId`
+ * alone cannot distinguish a human editing in the app from a key acting on their behalf, and only the
+ * route can tell them apart. Lives in common (not services) because the route that resolves it and
+ * the service that records it sit on opposite sides of that boundary.
+ */
+export type LakeAuditPrincipal = Pick<
+  RecordLakeConfigChangeInput,
+  'principalKind' | 'principalId' | 'onBehalfOfUserId'
+>;
 
 /**
  * Read/append only by construction: no update or delete is exposed, matching the access event's

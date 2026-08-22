@@ -34,6 +34,7 @@ import {
   isGPTImageModel,
   isGPTImage2Model,
   isKontextModel as isKontextImageModel,
+  EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 
@@ -52,19 +53,6 @@ interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
 }
-
-// Models that support image editing
-// FLUX-PRO-FILL now auto-generates masks server-side for chat-based editing.
-// All Gemini image models support editing, so derive that portion from
-// GEMINI_IMAGE_MODELS to keep this in sync as new Gemini models are added.
-const EDIT_SUPPORTED_MODELS = [
-  ImageModels.GPT_IMAGE_1,
-  ImageModels.GPT_IMAGE_1_5,
-  ImageModels.GPT_IMAGE_1_MINI,
-  ImageModels.GPT_IMAGE_2,
-  ImageModels.FLUX_PRO_FILL,
-  ...GEMINI_IMAGE_MODELS,
-];
 
 // Always defaults to GPT_IMAGE_2 for best chat-based editing experience (no mask required)
 const getDefaultEditModel = (generationModel: string): ModelName => {
@@ -693,7 +681,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                   data-testid="edit-model-select"
                 >
-                  {EDIT_SUPPORTED_MODELS.map(modelId => {
+                  {EDIT_SUPPORTED_IMAGE_MODELS.map(modelId => {
                     const modelInfo = modelInfoRepo?.find(m => m.id === modelId);
                     const isMaskRequired = modelId === ImageModels.FLUX_PRO_FILL;
                     return (

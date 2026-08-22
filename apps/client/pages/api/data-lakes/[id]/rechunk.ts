@@ -83,6 +83,18 @@ const handler = baseApi()
       // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
       // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
+      //
+      // NO `chunkSize` on purpose, unlike /converge which sends `policy.requiredTarget`. This door
+      // restores RETRIEVABILITY and is deliberately policy-independent: it has to work on a lake with
+      // no declared target, and a member can belong to several lakes that want different sizes. Making
+      // it lake-specific would turn it into a second cross-lake write path - and unlike /converge this
+      // route has no cross-lake conflict check, so two lakes would rewrite the same file at each
+      // other's target on alternate clicks, the oscillation /converge refuses members to prevent.
+      //
+      // The visible cost, which is intended: on a lake that DOES declare a target, repaired files come
+      // back searchable but off-policy, so health dips right after a successful repair until Converge
+      // is run once. Documented for owners in knowledge-management.md. Retrieval first, conformance
+      // second - a wrong-sized searchable file still answers; an unsearchable one does not.
       const results = await Promise.allSettled(
         resetIds.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: userById.get(id)! }))
       );

@@ -8,6 +8,7 @@ import { deleteDataLake } from './deleteDataLake';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import { removeFileFromDataLake } from './removeFileFromDataLake';
 
 /**
  * The config-change event, from the SERVICE side: which write paths emit one, what they put in it,
@@ -461,6 +462,7 @@ describe('lifecycle services', () => {
       update: echoUpdate(existing),
       setStats: vi.fn(),
       activateIfDraft: vi.fn().mockResolvedValue(false),
+      claimRestoring: vi.fn().mockResolvedValue(true),
       find: vi.fn().mockResolvedValue([]),
       claimFilesArchivedAt: vi.fn().mockResolvedValue(new Date()),
       claimFilesDeletedAt: vi.fn().mockResolvedValue(new Date()),
@@ -699,5 +701,54 @@ describe('recomputeLakeStats - the unattributed draft -> active flip', () => {
     const [change] = audit.only().changes;
     expect(change).toMatchObject({ field: 'status', after: 'active' });
     expect('before' in change).toBe(false);
+  });
+});
+/**
+ * The FOURTH `recomputeLakeStats` call site. The audit-loss-logging fix originally reached
+ * archive/unarchive/restore and stopped there, which is the same fix-completeness miss this series
+ * has hit before: the bug is not in the call that was fixed, it is in the siblings nobody swept.
+ *
+ * This one is not mere parity either - removing a file still runs `activateIfDraft`, so it really
+ * can emit an `auto-activate` row, and an audit-write failure here without a logger falls all the
+ * way through to a bare console.error that no alert is keyed on.
+ */
+describe('removeFileFromDataLake - audit-loss logging on the stats recompute', () => {
+  const removeDb = (audit: ReturnType<typeof auditSpy>) => ({
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'draft' })),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn().mockResolvedValue(true),
+    },
+    fabFiles: {
+      // tags are {name} objects, and userId must equal the LAKE'S creator - removeFileFromLake
+      // anchors membership on the lake's owner, not on the acting user.
+      findById: vi.fn().mockResolvedValue({ id: 'f1', tags: [{ name: 'datalake:lake' }], userId: 'owner' }),
+      pullTagsByFabFileId: vi.fn().mockResolvedValue(undefined),
+      // Non-zero on purpose: recomputeLakeStats only reaches activateIfDraft when files REMAIN,
+      // so a lake emptied by the removal would never exercise the audit path this pins.
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 10, totalChunkedChars: 5 }),
+    },
+    dataLakeAccessGrants: noGrants,
+    ...audit.db,
+  });
+
+  it('forwards its logger, so a failed audit write is reported at error rather than swallowed', async () => {
+    const audit = auditSpy();
+    audit.record.mockRejectedValueOnce(new Error('mongo is down'));
+    const error = vi.fn();
+
+    await removeFileFromDataLake(owner, 'lake1', 'f1', { db: removeDb(audit), logger: { error } });
+
+    // The write still succeeds - audit loss must never fail the user's action - but it is now LOUD.
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalled();
+  });
+
+  it('still completes the removal when no logger is wired at all', async () => {
+    // The adapter field is optional, so a caller that has not threaded one must not crash.
+    const audit = auditSpy();
+    await expect(removeFileFromDataLake(owner, 'lake1', 'f1', { db: removeDb(audit) })).resolves.toMatchObject({
+      success: true,
+    });
   });
 });

@@ -1,12 +1,14 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   User,
+  adminSettingsRepository,
   changeStorageSize,
   dataLakeRepository,
   dataLakeBatchRepository,
   fabFileChunkRepository,
   fabFileRepository,
   orgGoogleDriveConnectionRepository,
+  scopedSettingsRepository,
   sessionRepository,
   userRepository,
   withTransaction,
@@ -19,6 +21,7 @@ import {
   matchesTagPrefixArm,
   type IUserDocument,
 } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -593,6 +596,42 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
           status: 'connected',
           lastPolledAt: new Date(),
+        });
+        return;
+      }
+
+      // The admission contract (#1680) for the lake this sync is JOINING every candidate into. This
+      // door resolves its lake server-side and stamps the meta-tag itself (below), and it creates its
+      // FabFiles through the manager's direct `FabFile.create` rather than
+      // `fabFileService.createFabFile` - so neither the meta-tag chokepoint nor the service gate ever
+      // sees it. Structurally the same unwired door `generate-presigned-urls-batch` needed its own
+      // explicit call for.
+      //
+      // Once per sync, before the batch: the lake and the owner-to-be are the same for every
+      // candidate, so a refusal is a property of the connection, not of any one file. No FabFile
+      // exists yet, so the subject is the owner-to-be and the gate predicts from THEIR chunk policy.
+      // It sits after the reconcile's removals on purpose - a file gone from the folder is retired
+      // whether or not the lake will accept new content, exactly as on the zero-candidate return.
+      //
+      // A refusal is DETERMINISTIC - retrying re-reads the same lever and the same policy - so it is
+      // recorded as guidance and returned cleanly rather than rethrown into an SQS retry that would
+      // spin to the DLQ. Same treatment as the candidate cap above.
+      try {
+        await dataLakeService.assertLakeAdmission([lake], [{ userId: connection.connectedBy }], {
+          db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+          logger,
+        });
+      } catch (admissionError) {
+        if (!(admissionError instanceof BadRequestError)) throw admissionError;
+        logger.warn('[driveLakeIngest] data lake refused this content at admission; refusing the sync', {
+          connectionId,
+          dataLakeId: lake.id,
+          candidates: candidates.length,
+        });
+        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+          status: 'connected',
+          lastPolledAt: new Date(),
+          lastError: admissionError.message,
         });
         return;
       }

@@ -35,6 +35,19 @@ registerToolGearObserver();
  *   Call logger.updateMetadata({ handler: 'handlerName', ...domainFields })
  *   early in the handler to attach structured context to all subsequent logs.
  */
+/**
+ * Retry policy for writing a convergence kill-switch marker (`CONVERGENCE_PAUSED_NOTE` /
+ * `CONVERGENCE_PAUSED_CHUNK_NOTE`) before failing the delivery. Shared by the chunk and vectorize
+ * handlers so the two arms of one switch cannot drift on how hard they try.
+ *
+ * Bounded and short on purpose: the handler has already decided to do no work and holds no lease.
+ * Exhausting these THROWS rather than acking - see either call site for why that is the safe
+ * direction, and for the `dlq: { retry: 3 }` bound that stops it spinning.
+ */
+export const MARK_PAUSED_MAX_ATTEMPTS = 3;
+/** Linear backoff base, in ms, for MARK_PAUSED_MAX_ATTEMPTS. */
+export const MARK_PAUSED_RETRY_DELAY_MS = 150;
+
 export const dispatchWithLogger = <T = void>(
   handler: (event: SQSEvent, context: Context, logger: Logger) => Promise<T>
 ) => {

@@ -24,6 +24,7 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '../constants/knowledgeBaseSearch';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -504,6 +505,41 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
     expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
     expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
     expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
+});
+
+describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
+  // Same drift class as forcedRetrievalCharBudget above: before this setting existed,
+  // KB_SEARCH_DEFAULT_RESULTS was a hand-copied literal (5) local to the tool's own file. Both now
+  // import KB_SEARCH_DEFAULT_RESULTS_DEFAULT from the same constants module, so this pins that the
+  // setting's default cannot silently diverge from the coded fallback a settings outage returns to.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchDefaultResults.defaultValue).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+  });
+
+  it('is platform-only: declares no scope, unlike its sibling dataLakeSearchMaxFiles/MaxChunks', () => {
+    // Deliberate, not an oversight - see the setting's own description. This path reads the
+    // setting directly rather than through the scoped-settings resolver, so a settableAt block
+    // here would be inert at best.
+    expect(settingsMap.kbSearchDefaultResults.scope).toBeUndefined();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(undefined)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+  });
+
+  it('rejects a value below the declared floor at write time', () => {
+    expect(settingsMap.kbSearchDefaultResults.min).toBe(1);
+    expect(() => settingsMap.kbSearchDefaultResults.schema.parse(0)).toThrow();
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(1)).toBe(1);
+  });
+
+  it('rejects a value above the tool ceiling at write time', () => {
+    // Without this, an admin could store a default above KB_SEARCH_MAX_RESULTS (10) that the tool
+    // would then clamp down on every call, making the stored value silently misleading.
+    expect(settingsMap.kbSearchDefaultResults.max).toBe(10);
+    expect(() => settingsMap.kbSearchDefaultResults.schema.parse(11)).toThrow();
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(10)).toBe(10);
   });
 });
 

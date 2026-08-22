@@ -6,12 +6,35 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
 
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
- * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
+ * states (archiving/restoring/deleting/purging) that exist to drive UI and make a crashed
  * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
  * holds its first member file (see `activateIfDraft` below), and unconditionally when an
  * archived or deleted lake is restored, which is how an empty lake can end up active.
+ *
+ * `purging` is the one transitional state that is NOT recoverable by retrying the same action:
+ * it is claimed the moment a phase-2 hard delete is ACCEPTED (#1744), before the background
+ * sweep runs, so that `listDeletedDataLakes` stops offering Restore on a lake whose
+ * destruction is already irreversible. Everything else that reads `status` must treat it as
+ * "going away", never as a lake to act on.
  */
-export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
+export const DATA_LAKE_STATUSES = [
+  'draft',
+  'active',
+  'archiving',
+  'archived',
+  'restoring',
+  'deleting',
+  'deleted',
+  'purging',
+] as const;
+
+/**
+ * Derived from the constant above, NOT a parallel union: the mongoose enum imports that same
+ * constant, so a status added here reaches the schema by construction. A hand-maintained second
+ * list would type-check either way (an annotation proves each entry is valid, never that all are
+ * present) and then reject the write at runtime.
+ */
+export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
@@ -395,6 +418,35 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
   /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
   claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
+  /**
+   * Claim `deleted -> purging` at the moment a phase-2 hard delete is ACCEPTED (#1744). Returns
+   * whether THIS caller won; a loser must refuse the purge and must NOT enqueue a sweep.
+   *
+   * The status test lives in the FILTER for the same reason as `activateIfDraft`, and here it is
+   * load-bearing rather than defensive: every write in this area is read-then-write (the route
+   * pre-checks a lake it fetched, `restoreDeletedDataLake` reads then writes), so a plain `$set`
+   * would let a restore that read `deleted` before this claim write its terminal `active` after
+   * it. The sweep would then fail its guard and be swallowed as permanently-invalid - the exact
+   * abandonment #1744 exists to remove, just through a narrower window.
+   */
+  claimPurging(id: string): Promise<boolean>;
+  /**
+   * Enter `restoring` from a soft-deleted lake, claimed rather than set so it cannot overwrite a
+   * `purging` accepted between the caller's status read and this write - the mirror of the race
+   * `claimPurging` closes from the other side. Re-entrant from `restoring` itself, so a crashed
+   * prior attempt can still be retried. Returns whether this caller may proceed.
+   */
+  claimRestoring(id: string): Promise<boolean>;
+  /**
+   * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
+   * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
+   * on `purging` so it can never resurrect a lake that some other transition has since moved.
+   *
+   * ONLY safe for a sweep that failed BEFORE destroying anything. `cleanupDeletedDataLake` throws
+   * `BadRequestError` exclusively from its two entry guards, which is what makes the consumer's
+   * use of this correct; a partially-swept lake must stay `purging` and be recovered by DLQ replay.
+   */
+  releasePurgingToDeleted(id: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
@@ -780,4 +832,61 @@ export interface IDataLakeSpendResponse {
   tierMultiplier: number;
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
   ledger: ILakeUsageSummary;
+}
+
+/**
+ * Overlay store for a STATIC (registry) data lake's admin-settable session defaults. A fallback
+ * lake has no backing document (see `isFallbackLake`), so it has nowhere to persist an override -
+ * this collection is that home, keyed by the registry lake's `id` rather than a Mongo `_id`
+ * relationship. Deliberately NOT a `ScopedSetting` row: these are lake CONTENT (the same fields a
+ * DB lake stores directly on its document), not a resolved operational lever, and every consumer
+ * reads them off a lake object rather than through the scoped-settings resolver.
+ *
+ * `groundingMode` (Phase 0), `preferredSystemPromptId` (Phase 1) and `systemPrompt` (Phase 2) all
+ * live here. `systemPrompt` is injected free text, so it is gated on a NARROWER trust rule than
+ * the other two: `isTrustedForInjection` (getDataLakePrompts.ts) treats a registry lake as trusted
+ * ONLY when it is org-scoped and the caller is a member of that org - the same rule an ordinary
+ * DB lake's org arm already applies, never wider. A gateless/global registry lake's systemPrompt
+ * is stored here but never injected (deliberately - see that rule's doc comment for why unbounded
+ * cross-tenant injection was rejected as an option). `preferredSystemPromptId` carries no such
+ * risk: it is an id reference re-validated against the session-activatable allowlist at every
+ * write AND read boundary (see `isSessionActivatablePromptId`), never injected text itself.
+ */
+export interface IFallbackLakeSetting extends IMongoDocument {
+  /** The registry lake's `id` (a human slug, never an ObjectId hex string - see `isFallbackLake`). */
+  lakeId: string;
+  /** Absent means "use the coded default" - mirrors how a DB lake treats an unset groundingMode. */
+  groundingMode?: DataLakeGroundingMode;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). Absent (never an
+   * empty-string stand-in) means "no preferred prompt". NOTE the `''` clear sentinel is stored
+   * VERBATIM rather than translated to absent - `setFields` filters only `undefined` - so a cleared
+   * binding persists as `''`. Every reader treats it as unset (truthiness, or `.trim()`), which is
+   * why the two spellings are interchangeable downstream; do not assume the row holds only absent.
+   */
+  preferredSystemPromptId?: string;
+  /**
+   * Per-lake system prompt (see IDataLake.systemPrompt). Stored for EVERY registry lake regardless
+   * of scope - `isTrustedForInjection` is what decides whether it is ever actually injected, not
+   * this storage layer, so an admin can set it ahead of a lake being re-scoped to an org without
+   * losing the value. Absent (never an empty-string stand-in) means unset, matching the DB-lake
+   * convention that a blank/whitespace-only prompt reads as absent.
+   */
+  systemPrompt?: string;
+}
+
+export interface IFallbackLakeSettingsRepository extends IBaseRepository<IFallbackLakeSetting> {
+  findByLakeId: (lakeId: string) => Promise<IFallbackLakeSetting | null>;
+  /** Batch read for the manager list, which renders every accessible fallback lake in one response. */
+  findByLakeIds: (lakeIds: string[]) => Promise<IFallbackLakeSetting[]>;
+  /**
+   * Upsert-by-lakeId: a fallback lake has no document to attach this row to via the base `create`.
+   * Only the keys actually present in `fields` are written - an omitted field leaves its stored
+   * value alone (mirrors `updateDataLake`'s "omitted -> unchanged" semantics), so a caller that
+   * sets only `groundingMode` cannot accidentally clear a previously-set `preferredSystemPromptId`.
+   */
+  setFields: (
+    lakeId: string,
+    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>>
+  ) => Promise<IFallbackLakeSetting>;
 }

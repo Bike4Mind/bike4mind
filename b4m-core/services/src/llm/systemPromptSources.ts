@@ -49,13 +49,16 @@ export type PromptSourceId =
  */
 export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'dateContext',
-  'extraContext',
   'artifactEmission',
   'helpCenter',
   'abstention',
   'viewRegistry',
   'toolPrompt',
   'agentDetection',
+  // Moved behind the admin/hardcoded block above: this is `origin: 'user'` content that
+  // varies per request, and in front of that block it split the deployment-wide shareable
+  // prefix (see SHAREABLE_PREFIX_SOURCES) down to dateContext alone.
+  'extraContext',
   'questMaster',
   'organizationPrompt',
   'sessionPrompt',
@@ -266,6 +269,45 @@ export const PROMPT_SOURCE_METADATA: Record<
   urls: { origin: 'user', name: 'url_content' },
   attachedFiles: { origin: 'user', name: 'attached_files' },
 };
+
+/**
+ * The leading run of sources whose text is identical for every caller on this deployment -
+ * `origin` of `hardcoded` or `admin`. Anything `user`/`session`/`org`/`project` ends the run,
+ * because a prompt cache matches on a PREFIX: one per-caller block in front of shared content
+ * makes that content unshareable.
+ *
+ * Derived from PROMPT_SOURCE_ORDER rather than hand-listed, so reordering a source cannot
+ * silently widen or narrow the shared region. Note the run must be CONTIGUOUS from the start:
+ * `recentImages` is also `hardcoded`, but it sits behind per-user content and so is not part
+ * of any shareable prefix.
+ */
+export const SHAREABLE_PREFIX_SOURCES: PromptSourceId[] = (() => {
+  const shareable: PromptSourceId[] = [];
+  for (const source of PROMPT_SOURCE_ORDER) {
+    const origin = PROMPT_SOURCE_METADATA[source].origin;
+    if (origin !== 'hardcoded' && origin !== 'admin') break;
+    shareable.push(source);
+  }
+  return shareable;
+})();
+
+/**
+ * Mark the end of the shareable prefix as a cache breakpoint, so the deployment-wide block
+ * is cached (and read back) independently of the per-caller content behind it. Measured on
+ * Bedrock: without this, a caller whose tail differs re-writes the whole prefix (6510 written,
+ * 0 read); with it, the same caller reads the shared head and writes only its own tail.
+ *
+ * Mutates in place: `systemPromptPriorities` and the delivered-message set in
+ * ChatCompletionProcess are keyed by message REFERENCE, so replacing the object would
+ * silently detach both.
+ *
+ * No-op when nothing shareable survived the gates (e.g. a promptMode that strips the admin
+ * block), rather than marking an arbitrary message.
+ */
+export function markShareablePrefixBoundary(tagged: TaggedSystemMessage[]): void {
+  const lastShareable = tagged.filter(t => SHAREABLE_PREFIX_SOURCES.includes(t.source)).at(-1);
+  if (lastShareable) lastShareable.message.cache = true;
+}
 
 /** The canonical telemetry row shape; sourced from common so the two cannot drift. */
 export type SystemPromptDetail = z.infer<typeof SystemPromptDetailSchema>;

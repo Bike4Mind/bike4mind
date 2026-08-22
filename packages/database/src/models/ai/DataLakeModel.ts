@@ -22,18 +22,9 @@ import {
   TAXONOMY_ATTENTION_STATUSES,
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
+  DATA_LAKE_STATUSES,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
-
-const DATA_LAKE_STATUSES: DataLakeStatus[] = [
-  'draft',
-  'active',
-  'archiving',
-  'archived',
-  'restoring',
-  'deleting',
-  'deleted',
-];
 
 // --- Data Lake Schema ---
 
@@ -95,7 +86,7 @@ const DataLakeSchema = new mongoose.Schema(
     // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
     // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
     auditQueryTextEnabled: { type: Boolean, default: false },
-    status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
+    status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
@@ -537,6 +528,37 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (claimed) return claimed.filesDeletedAt ?? null;
     const holder = await this.dataLakeModel.findById(id);
     return holder?.filesDeletedAt ?? null;
+  }
+
+  async claimPurging(id: string): Promise<boolean> {
+    // Conditional on 'deleted' in the FILTER, never on a status the caller read earlier: the
+    // lifecycle route pre-checks a lake document it fetched before this call, so a restore landing
+    // in that gap must make this claim LOSE rather than be overwritten by it. A plain $set here
+    // would reintroduce #1744 - the restore's terminal 'active' write would clobber 'purging', the
+    // sweep would fail its guard, and the consumer would swallow the purge with a WARN.
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'deleted' }, { $set: { status: 'purging' } });
+    return res.modifiedCount === 1;
+  }
+
+  async claimRestoring(id: string): Promise<boolean> {
+    // 'restoring' is admitted alongside 'deleted' so a crashed prior restore can re-enter, matching
+    // the guard in restoreDeletedDataLake. What the filter EXCLUDES is the point: a lake that went
+    // 'purging' after the caller read it is no longer restorable, and this is where that is
+    // enforced atomically rather than against a stale copy of the document.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['deleted', 'restoring'] } },
+      { $set: { status: 'restoring' } }
+    );
+    // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
+    // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
+    return res.matchedCount === 1;
+  }
+
+  async releasePurgingToDeleted(id: string): Promise<boolean> {
+    // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
+    // 'purging' may be released, so this can never resurrect one another transition has moved on.
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'purging' }, { $set: { status: 'deleted' } });
+    return res.modifiedCount === 1;
   }
 
   async claimFilesArchivedAt(id: string, at: Date): Promise<Date | null> {

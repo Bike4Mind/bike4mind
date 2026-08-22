@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { KnowledgeType, Permission } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   DataLakeModel,
   FabFile,
@@ -14,6 +14,10 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * End-to-end guard, against REAL Mongo rather than a mock, for a file whose ONLY lake membership
@@ -39,11 +43,11 @@ beforeAll(async () => {
   const editor = await User.create({ username: 'shared-editor', name: 'Editor' });
   ownerId = owner.id as string;
   editorId = editor.id as string;
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 afterEach(async () => {
   await FabFile.deleteMany({});
   await DataLakeModel.deleteMany({});
@@ -100,7 +104,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.fileCount).toBe(1);
-  }, 30000);
+  });
 
   it('preserves membership on a whole-array drop regardless of manage rights', async () => {
     await makeLake();
@@ -115,7 +119,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
-  }, 30000);
+  });
 
   // A prefix-arm JOIN needs no manage-rights gate on the membership itself (the read-side
   // predicate grants it purely on the tag), but recomputeLakeStats's activation side effect
@@ -137,7 +141,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
     expect(persistedLake?.fileCount).toBe(1);
-  }, 30000);
+  });
 
   it('publishes a draft lake when the OWNER triggers the same join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
@@ -153,7 +157,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('active');
     expect(persistedLake?.fileCount).toBe(1);
-  }, 30000);
+  });
 });
 
 describe('toggleTags against real Mongo', () => {
@@ -178,7 +182,7 @@ describe('toggleTags against real Mongo', () => {
     expect(persistedFile?.tags ?? []).toEqual([]);
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.fileCount).toBe(0);
-  }, 30000);
+  });
 
   it('refuses a shared editor who is not the lake creator, persisting nothing in the batch', async () => {
     await makeLake();
@@ -201,7 +205,7 @@ describe('toggleTags against real Mongo', () => {
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
-  }, 30000);
+  });
 
   it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
@@ -223,5 +227,5 @@ describe('toggleTags against real Mongo', () => {
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
     expect(persistedLake?.fileCount).toBe(1);
-  }, 30000);
+  });
 });

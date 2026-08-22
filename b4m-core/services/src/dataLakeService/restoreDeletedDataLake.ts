@@ -17,7 +17,7 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimRestoring'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -58,13 +58,27 @@ export const restoreDeletedDataLake = async (
   if (!canManageLake(existing, actor, grants)) {
     throw new BadRequestError('You do not have permission to restore this data lake');
   }
+  // 'purging' gets its own refusal, ahead of the general status check, because the generic message
+  // would read as a transient state problem when it is in fact permanent: the purge has been
+  // accepted and its sweep is irreversible (#1744). Before this, restore accepted any 'deleted'
+  // lake including one already purge-accepted, and SUCCEEDED - either abandoning the purge (the
+  // sweep's guard threw and the consumer swallowed it) or being silently undone by it.
+  if (existing.status === 'purging') {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be restored');
+  }
   // Allow re-entry from the transitional 'restoring' state so a crashed prior attempt
   // can be retried (the dedup + undelete + recompute below are idempotent).
   if (existing.status !== 'deleted' && existing.status !== 'restoring') {
     throw new BadRequestError(`Cannot restore a data lake in '${existing.status}' status`);
   }
 
-  await db.dataLakes.update({ id: dataLakeId, status: 'restoring' });
+  // Conditional on the statuses the guard above admitted, NOT a blind $set: the check ran against a
+  // document read moments ago, so a purge accepted in that gap must make this LOSE rather than be
+  // overwritten. Losing here means the same refusal the guard would have given - see claimPurging.
+  const entered = await db.dataLakes.claimRestoring(dataLakeId);
+  if (!entered) {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be restored');
+  }
 
   // Dedup: a LIVE (non-deleted, non-archived) file with the same hash means it was
   // re-uploaded while the lake was deleted - keep the live copy, leave the deleted
@@ -125,7 +139,11 @@ export const restoreDeletedDataLake = async (
       { db, logger }
     );
   }
-  await recomputeLakeStats(existing, { db });
+  // Logger forwarded for parity with every other recompute call, not because an audit row is
+  // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's
+  // draft/null window, so the recompute cannot emit an auto-activate event. Passing it anyway costs
+  // nothing and saves the next reader re-deriving that.
+  await recomputeLakeStats(existing, { db, logger });
 
   return { restoredCount, skippedDuplicates };
 };

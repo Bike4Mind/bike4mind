@@ -22,10 +22,12 @@ import {
   getSettingsMap,
   getSettingsValue,
   getSettingsByNames,
+  DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
+  resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
   type ApiKeyTable,
@@ -203,7 +205,28 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // to disable in an emergency without a redeploy.
   const responseFormatEnabled = (process.env.B4M_FEATURE_RESPONSE_FORMAT ?? 'true') === 'true';
 
-  const maxTokens = options?.maxTokens ?? 4096;
+  // Sized by the same rule as ChatCompletionProcess rather than a local constant.
+  // This path used to hardcode `?? 4096`, which silently starved every
+  // reasons-inside-the-output-budget model: adaptive Anthropic thinking is spent
+  // *within* max_tokens, so a 4096 ceiling let reasoning consume the budget and cut
+  // the visible answer mid-sentence. The fallback is DEFAULT_OUTPUT_MAX_TOKENS (4096),
+  // so models that do not reason inside the budget are unaffected.
+  const maxTokens = modelInfo
+    ? resolveOutputMaxTokens({
+        requested: options?.maxTokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        // The declared cap clamps the resolved budget. Passed through as-is: the type says
+        // `number`, but that is only a claim about catalog data, and a row that omits it
+        // reaches here for real (the embed route's own integration fixture did). No `??`
+        // here on purpose - resolveOutputMaxTokens absorbs an absent cap itself, so the
+        // two call sites cannot drift on what an unknown cap means. The remaining hole is
+        // upstream: toModelInfo substitutes a *derived* 4096 that then clamps an adaptive
+        // model as though the row had declared it, which has to be closed there where
+        // declared and derived are still tellable apart.
+        modelMaxOutputTokens: modelInfo.max_tokens,
+      })
+    : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
   // executeTools: false means the backend never calls toolFn - it only reads
   // toolSchema. The placeholder satisfies the type contract without changing
@@ -258,10 +281,36 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let reservedCredits = 0;
 
   if (enforceCredits && modelInfo) {
-    // Estimate cost based on input message length + maxTokens for output
+    // Estimate cost based on input message length + expected output.
+    //
+    // The basis is the caller's own budget when they named one, and DEFAULT_OUTPUT_MAX_TOKENS
+    // when they did not - i.e. exactly what this path reserved against before the ceiling
+    // became model-sized. An explicit budget MUST size its own hold: the reservation is
+    // atomically deducted and is also what isMemberCreditCapExceeded below is checked
+    // against, so estimating a large explicit request at 4096 would let a member clear an
+    // administrator-configured per-member cap in a single turn.
+    //
+    // Deliberately not the resolved ceiling for the absent case: that is now up to 64K on an
+    // adaptive reasoner and a ceiling-sized hold rejects short prompts outright for anyone
+    // near their balance. Settlement further down trues the ledger up to actual usage, so the
+    // estimate only needs to stay a sane guard. Clamped by `maxTokens` either way, since the
+    // model cannot emit past its own cap.
     const estimatedInputTokens = estimateInputTokens(messages);
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, maxTokens);
+    const estimatedOutputTokens = Math.min(maxTokens, options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
+
+    // Rail the money path independently of whatever sized it. A non-finite estimate must
+    // never reach the two writes below: incrementCredits would hand Mongoose `NaN` and fail
+    // mid-stream as an opaque cast error, and isMemberCreditCapExceeded compares with `>`,
+    // which answers false for NaN and waves an over-cap request straight through. Both are
+    // silent, so this fails loudly at the seam instead of trusting the arithmetic upstream.
+    if (!Number.isFinite(reservedCredits) || reservedCredits < 0) {
+      throw new Error(
+        `[CLI_CREDITS] Refusing to reserve a non-finite credit estimate (${reservedCredits}) for model "${model}". ` +
+          `input=${estimatedInputTokens} output=${estimatedOutputTokens} maxTokens=${maxTokens} usd=${estimatedUsdCost}`
+      );
+    }
 
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
 
@@ -307,12 +356,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
+  // and re-emitted on the final settlement event below, so a client that only inspects
+  // the last event still learns the reply was truncated.
+  let finalStopReason: string | undefined;
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
+    if (info?.stopReason) finalStopReason = info.stopReason;
 
     if (info?.inputTokens || info?.outputTokens) {
       logger?.debug?.(
@@ -435,6 +489,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       cacheCreationInputTokens: finalCacheCreationTokens || undefined,
       creditsUsed: finalCredits,
       usdCost: finalUsdCost,
+      stopReason: finalStopReason,
     });
   } else {
     logger?.warn?.('[CLI_CREDITS] Cannot send credits - modelInfo is undefined');

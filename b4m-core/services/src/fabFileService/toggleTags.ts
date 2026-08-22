@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import {
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
   IFileTagRepository,
+  IScopedSettingsRepository,
   IUserDocument,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -15,6 +17,7 @@ import { canManageLake } from '../dataLakeService/manageRule';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
+import { assertLakeAdmission } from '../dataLakeService/lakeAdmissionGate';
 import {
   findPrefixArmChanges,
   loadPrefixArmCandidateLakes,
@@ -39,6 +42,12 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
     // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
+    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+    // door cannot quietly opt out of the contract by omitting it; the gate itself still reads
+    // nothing unless a lake being JOINED declares a required passage size. `scopedSettings` is
+    // optional - without it the lever resolves to its platform value rather than failing.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -77,9 +86,10 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
  * had just pulled. Stored casing survives in both directions - the name to remove is resolved
  * from the document, and a new name is written as the caller spelled it rather than lowercased.
  *
- * The accessibility check is all-or-nothing and runs before any write, but the writes themselves
- * are not transactional: if one file fails mid-batch, the files already written stay written.
- * Every write is idempotent, so retrying the same call converges rather than double-applying.
+ * The accessibility check, the prefix-arm manage gate and the admission contract (#1680) are all
+ * all-or-nothing and run before any write, but the writes themselves are not transactional: if one
+ * file fails mid-batch, the files already written stay written. Every write is idempotent, so
+ * retrying the same call converges rather than double-applying.
  */
 export const toggleTags = async (userId: string, params: unknown, { db, logger }: FabFileToggleTagsAdapters) => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
@@ -173,6 +183,26 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
         assertLakeWritable(lake);
       }
     }
+
+    // The admission contract (#1680) for the OTHER membership signal. A prefix-arm join makes a
+    // file a member with no `datalake:*` meta-tag involved, so gating only the meta-tag path would
+    // leave half the door open. Run in this same all-or-nothing pre-write pass as the leave gate
+    // above: the writes below are concurrent, so refusing mid-batch would leave some files written.
+    // Only JOINS are graded - a leave is never refused for a contract the file is exiting.
+    //
+    // ONE CALL PER FILE, deliberately: `assertLakeAdmission` grades every member it is handed
+    // against every lake it is handed, so flattening this into a single call would check file A
+    // against a lake only file B is joining and invent violations that do not exist. Do not
+    // "optimize" it into one call without first grouping files by an identical join set.
+    for (const file of fabFiles) {
+      const joins = prefixJoinsByFile.get(file.id);
+      if (!joins) continue;
+      await assertLakeAdmission(
+        joins.map(({ lake }) => lake),
+        [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],
+        { db, logger }
+      );
+    }
   }
 
   const touchedTags = new Set<string>();
@@ -211,6 +241,37 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     return pending;
   };
 
+  // The admission contract (#1680) for the meta-tag arm, in the same all-or-nothing pre-write pass
+  // the prefix-arm gate above uses and for the same reason: files are toggled CONCURRENTLY below,
+  // so a refusal raised next to the write would leave earlier files already joined behind a throw
+  // that reads to the caller as "nothing happened".
+  //
+  // Hoisting cannot disagree with `toggleLakeMembership` about which toggles are joins: that
+  // function decides direction from `storedTagNames(file)` - the same pre-write snapshot read here,
+  // never re-read - and `tags` is deduped, so no tag flips direction mid-request. Only JOINS are
+  // graded; a leave is never refused for a contract the file is exiting.
+  //
+  // ONE CALL PER FILE, deliberately: `assertLakeAdmission` grades every member it is handed against
+  // every lake it is handed, so flattening this would check file A against a lake only file B is
+  // joining and invent violations that do not exist.
+  if (tags.some(isDataLakeTag)) {
+    for (const file of fabFiles) {
+      const currentNames = storedTagNames(file);
+      const joiningLakes: MembershipLake[] = [];
+      for (const tag of tags) {
+        if (!isDataLakeTag(tag)) continue;
+        const lake = await resolveLake(tag);
+        if (!currentNames.includes(lake.datalakeTag)) joiningLakes.push(lake);
+      }
+      if (joiningLakes.length === 0) continue;
+      await assertLakeAdmission(
+        joiningLakes,
+        [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],
+        { db, logger }
+      );
+    }
+  }
+
   const toggleLakeMembership = async (file: IFabFileDocument, tag: string): Promise<void> => {
     const lake = await resolveLake(tag);
     // Direction is decided on an EXACT match of the lake's canonical meta-tag - the same test
@@ -221,6 +282,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     // stamped.
     const isMember = storedTagNames(file).includes(lake.datalakeTag);
     if (!isMember) {
+      // This branch, and only this branch, makes the file a MEMBER - but the admission contract
+      // (#1680) it must satisfy is graded in the pre-write pass above, not here, so a refusal cannot
+      // land after earlier files in the batch have already joined. This function stays write-only.
       await addFileToLake(actor, lake, file.id, { db });
     } else {
       try {

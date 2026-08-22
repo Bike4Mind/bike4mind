@@ -4,6 +4,7 @@ import {
   ISessionRepository,
   IUserRepository,
   PromptMeta,
+  rebindPromptMetaSession,
   redactPromptMetaForViewer,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
@@ -69,10 +70,17 @@ export const cloneSession = async (
     messagesToClone.map(async ({ id, promptMeta, ...messageData }) => {
       await db.chatHistories.create({
         ...messageData,
+        // The clone is a NEW session owned by the caller, so promptMeta.session must name it -
+        // create() requires session.{id,userId} and databaseSearcher scopes deep research's quest
+        // search by session.userId. See rebindPromptMetaSession.
+        //
         // redactPromptMetaForViewer's generic re-derives functionCalls via Omit<>, which produces
         // a structurally-identical but nominally distinct type from the zod-inferred PromptMeta
         // here - TS can't reconcile the two through the generic, so this cast bridges them.
-        promptMeta: (redactPromptMetaForViewer(promptMeta, isOwner) ?? undefined) as PromptMeta | undefined,
+        promptMeta: rebindPromptMetaSession(redactPromptMetaForViewer(promptMeta, isOwner) as PromptMeta | undefined, {
+          sessionId: clonedSession.id,
+          userId,
+        }),
         sessionId: clonedSession.id,
       });
     })

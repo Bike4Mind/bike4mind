@@ -74,6 +74,52 @@ export type IDataLakeAccessGrant = z.infer<typeof DataLakeAccessGrant>;
 
 export interface IDataLakeAccessGrantDocument extends IDataLakeAccessGrant, IMongoDocument {}
 
+/**
+ * One user a lake's ownership may be transferred TO - the option set behind the transfer picker.
+ * Resolved live from the owning organization's membership; never stored.
+ */
+export interface LakeOwnershipCandidate {
+  userId: string;
+  /** Display name, best-effort (name, else username). Absent when the user record carries neither. */
+  name?: string;
+  /**
+   * The candidate's email. Present here - unlike in the access view, which deliberately withholds it -
+   * because every candidate is a member of the lake's OWN organization rather than an arbitrary
+   * cross-tenant principal, and it is what tells two teammates with the same display name apart in a
+   * picker that hands over ownership.
+   */
+  email?: string;
+}
+
+/**
+ * The transfer-ownership option set for one lake, as resolved for one asking actor.
+ *
+ * `scope` is what a caller must branch on to explain an EMPTY list, which has two very different
+ * causes that a bare count cannot distinguish:
+ *  - `'personal'` - the lake belongs to no organization, so there is no membership relation to
+ *    enumerate and none is invented (a global user search is a user-enumeration surface, not a
+ *    picker). The path is to move the lake into an organization first.
+ *  - `'organization'` with no candidates - the org genuinely has nobody else eligible to receive it.
+ */
+export interface LakeOwnershipCandidateList {
+  scope: 'organization' | 'personal';
+  candidates: LakeOwnershipCandidate[];
+  /** The owning organization's name, for the UI's explanatory copy. Absent for a personal lake. */
+  organizationName?: string;
+  /**
+   * The lake's content gate, when it has one. Carried so a transfer confirmation can SAY that
+   * ownership bypasses it: `classifyLakeAccess` returns on the owner arm before the requirement arm
+   * ever runs, so a new owner reads the whole lake whether or not they hold the tag/entitlement, and
+   * the candidate set is deliberately unfiltered by it (owning a lake grants its own access). The
+   * transfer is still allowed - this is the disclosure that keeps it a deliberate choice rather than
+   * a silent one. Absent for an ungated lake.
+   */
+  gate?: {
+    requiredUserTag?: string;
+    requiredEntitlement?: string;
+  };
+}
+
 export interface IDataLakeAccessGrantRepository extends IBaseRepository<IDataLakeAccessGrantDocument> {
   /**
    * Every grant on a lake - the "who can reach this lake" answer that motivates the relation.

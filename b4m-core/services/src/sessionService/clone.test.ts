@@ -70,6 +70,34 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(clonedFunctionCalls[0]).toMatchObject({ id: 'call-1', name: 'web_search' });
   });
 
+  // Same store invariant the fork 500 exposed, plus the search-scoping half: a clone made by a
+  // share holder becomes THEIR session, so promptMeta.session must name the clone and the cloner -
+  // databaseSearcher.ts scopes deep research's internal quest search by promptMeta.session.userId.
+  it('rebinds promptMeta.session to the clone and its new owner', async () => {
+    const { db, created } = makeAdapters('owner-1');
+    db.chatHistories.findAllBySessionId.mockResolvedValueOnce([
+      {
+        id: 'msg-1',
+        sessionId: 'session-1',
+        promptMeta: { session: { id: 'session-1', userId: 'owner-1', projectId: 'project-1' } },
+      },
+      { id: 'msg-2', sessionId: 'session-1', promptMeta: { warnings: ['partial coverage'] } },
+      { id: 'msg-3', sessionId: 'session-1', prompt: 'no promptMeta at all' },
+    ]);
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(created[0].promptMeta).toEqual({
+      session: { id: 'cloned-session-1', userId: 'caller-1', projectId: 'project-1' },
+    });
+    expect(created[1].promptMeta).toEqual({
+      warnings: ['partial coverage'],
+      session: { id: 'cloned-session-1', userId: 'caller-1' },
+    });
+    // Nothing to rebind: a quest with no promptMeta must not be given one.
+    expect(created[2].promptMeta).toBeUndefined();
+  });
+
   it('keeps returnValue/error when the caller owns the session being cloned', async () => {
     const { db, created } = makeAdapters('caller-1');
 
