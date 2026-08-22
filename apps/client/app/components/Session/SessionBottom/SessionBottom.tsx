@@ -293,8 +293,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const { data: sessionAgents = [] } = useGetSessionAgents(effectiveSessionId);
   // Deliberately not defaulted to []: a literal default mints a fresh array on
-  // every render until the query resolves, which would defeat the memo below
-  // during exactly the window where it matters most (first typing on a cold page).
+  // every render until the query resolves, defeating the memo below during
+  // exactly the window that matters (first typing on a cold page).
   const { data: availableAgents } = useGetAgents();
 
   // Get chat history for the current session
@@ -304,18 +304,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Combine session agents and workBench agents for display
   const displayAgents = currentSessionId ? sessionAgents : workBenchAgents;
 
-  // Prepare data for LexicalChatInput.
-  //
-  // Memoised because the identity travels a long way: it becomes the mention
-  // plugin's `items`, and lexical-beautiful-mentions' lookup effect reacts to
-  // that identity by calling setResults([]) - a fresh array, so React can never
-  // dedupe it as an unchanged value. A new array per render therefore schedules
-  // an un-bailable update on every render, which keeps React's nested-update
-  // chain from ever settling. The chain is what eventually trips "Maximum update
-  // depth exceeded", reported from whichever setState happens to be the 51st
-  // link (in practice lexical's placeholder listener, which runs twice per
-  // editor commit). Unstable `items` also makes the plugin re-register its nine
-  // lexical commands on every render.
+  // Prepare data for LexicalChatInput. Memoised because the identity becomes the
+  // mention plugin's `items`, where a new array per render drives an un-bailable
+  // update storm - see the note at `mentionItems` in LexicalChatInput.tsx.
   const lexicalAgents = useMemo(
     () =>
       (availableAgents ?? []).map(agent => ({

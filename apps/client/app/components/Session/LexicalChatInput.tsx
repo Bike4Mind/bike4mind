@@ -581,12 +581,16 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
       [agents]
     );
 
-    // The plugin's lookup effect keys on the `items` identity and answers with
-    // setResults([]) - a fresh array React cannot dedupe - so an inline object
-    // literal here schedules an un-bailable update on every render. That is what
-    // keeps React's nested-update chain alive until something trips "Maximum
-    // update depth exceeded". It also re-registers the plugin's nine lexical
-    // commands each render.
+    // Canonical note on why this identity matters (referenced from SessionBottom).
+    //
+    // lexical-beautiful-mentions' lookup effect keys on `items` and answers with
+    // setResults([]) - a fresh array, so React can never bail out on an unchanged
+    // value. An inline object literal here therefore schedules an un-bailable
+    // update on EVERY render, which keeps React's cumulative nested-update chain
+    // from ever settling until some unrelated setState trips "Maximum update depth
+    // exceeded". Unstable `items` also re-registers the plugin's ten lexical
+    // commands per render: `items` is not in that effect's dep array, but it feeds
+    // a `triggers = useMemo(..., [props.triggers, items])` that is.
     const mentionItems = useMemo(() => ({ '@': agentMentionItems }), [agentMentionItems]);
 
     // Stable identity: EditorRefPlugin keys its effect on this callback.
