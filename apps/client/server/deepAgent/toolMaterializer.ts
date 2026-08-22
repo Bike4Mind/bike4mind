@@ -11,6 +11,7 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  fallbackLakeSettingsRepository,
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   organizationRepository,
@@ -90,6 +91,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.

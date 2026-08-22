@@ -15,6 +15,7 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
 import type { CostInput } from '../imageCostCalculator/types';
@@ -200,7 +201,7 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 /**
  * Apply a partial status-update change set onto the live quest object.
  *
- * Most fields are overwritten wholesale via Object.assign, but three fields
+ * Most fields are overwritten wholesale via Object.assign, but four fields
  * accrete across a single turn and MUST merge instead of overwrite:
  *   - promptMeta.citables: accreted by web_search / knowledge retrieval; merged
  *     and deduped by stable identity (id, then url, then title) to avoid duplicate
@@ -214,6 +215,12 @@ function resolveToolStatus(toolName: string, data: any): string | null {
  *     request down to just the last call's image. Merge-append with dedup;
  *     onToolFinish dedup-appends the same paths, so this stays idempotent for a
  *     single call.
+ *   - promptMeta.retrieval: the forced/lake-memory arm (ChatCompletionFeatures)
+ *     writes this directly, before any tool call, and a tool's own retrieval
+ *     write must merge onto it rather than replace it wholesale - otherwise a
+ *     zero-result knowledge_base_search after a successful lake-memory recall
+ *     (or vice versa) would silently erase the other's outcome. See
+ *     mergeRetrievalSummary (retrievalSummaryMerge.ts) for the merge policy.
  *
  * Mutates `quest` in place.
  */
@@ -233,6 +240,7 @@ export function applyQuestStatusChanges(
       return true;
     });
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
+    const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = {
       ...quest.promptMeta,
       ...changedPromptMeta,
@@ -240,6 +248,9 @@ export function applyQuestStatusChanges(
       // Omit the key entirely when neither side has warnings, so an untouched quest is not
       // given an empty array it never had.
       ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
+      // Explicit override, not left to the spread above: an incoming write here must MERGE onto
+      // an existing forced-arm value, never replace it (see the docblock above).
+      ...(mergedRetrieval ? { retrieval: mergedRetrieval } : {}),
     };
   } else if (changedPromptMeta) {
     quest.promptMeta = changedPromptMeta;

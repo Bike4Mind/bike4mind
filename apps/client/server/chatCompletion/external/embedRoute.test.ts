@@ -89,6 +89,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   dataLakeRepository: {},
+  fallbackLakeSettingsRepository: {},
   lakeAccessEventRepository: {},
 }));
 

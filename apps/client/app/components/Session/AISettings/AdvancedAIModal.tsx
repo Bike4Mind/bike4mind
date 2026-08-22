@@ -496,7 +496,7 @@ const ResetButton: React.FC<{
       width: undefined,
       height: undefined,
       aspect_ratio: undefined,
-      output_format: isImageModel(model) ? 'jpeg' : undefined,
+      output_format: isImageModel(model) ? 'png' : undefined,
       prompt_upsampling: supportsPromptUpsampling(model) ? false : undefined,
       safety_tolerance: isBflImageModel(model) ? BFL_SAFETY_TOLERANCE.DEFAULT : undefined,
     });
@@ -1283,11 +1283,13 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 </>
               )}
 
-              {/* Not BFL-only: GeminiImageService maps prompt_upsampling to Google's `enhancePrompt`,
-                so the Nano Banana models support it too. Safety Tolerance above stays BFL-gated - it
-                is a BFL API parameter with no Gemini equivalent. Last row on purpose: the only toggle
-                among the dropdowns and inputs, so it reads as an addendum rather than interrupting
-                the column of matching controls. */}
+              {/* Not BFL-only: shown for Gemini (Nano Banana) models too for UI-grouping reasons, but
+                it's currently a no-op there - GeminiImageService deliberately never forwards this to
+                Google's API, which rejects the field outright. Do not "fix" that by re-adding a
+                Gemini enhancePrompt mapping without confirming Google's API accepts it. Safety
+                Tolerance above stays BFL-gated - it is a BFL API parameter with no Gemini
+                equivalent. Last row on purpose: the only toggle among the dropdowns and inputs, so
+                it reads as an addendum rather than interrupting the column of matching controls. */}
               {supportsPromptUpsampling(model) && (
                 <SettingsRow label="Prompt Upsampling" tooltip={FIELD_TOOLTIPS.promptEnhancement}>
                   {/* The toggle is narrower than the inputs and selects, so it sits in a box of the
@@ -1803,7 +1805,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       {
         label: 'Output Format',
         type: 'select' as const,
-        value: (output_format ?? 'jpeg') as 'jpeg' | 'png',
+        value: (output_format ?? 'png') as 'jpeg' | 'png',
         onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
         options: [
           { value: 'jpeg', label: 'JPEG' },

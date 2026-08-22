@@ -41,6 +41,7 @@ import {
   AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
   CitableSource,
   OpenAIEmbeddingModel,
   ImageModerationIncident,
@@ -99,6 +100,7 @@ import {
 } from './ChatCompletionProcess';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
+import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
 
 interface DatabaseAdapters {
   sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'>;
@@ -172,6 +174,13 @@ interface DatabaseAdapters {
     IDataLakeRepository,
     'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
   >;
+  /**
+   * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
+   * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch,
+   * reached from KnowledgeRetrievalFeature; absent means zero registry lakes ever contribute an
+   * injected prompt on the forced-retrieval path.
+   */
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
   /**
    * Audit-trail repo for images blocked by the image_generation/edit_image tools'
    * moderation gate. Optional - the gate itself is unconditional (the tools
@@ -664,6 +673,22 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     const query = message?.trim();
     if (!query || !this.chatCompletion.recallLakeMemory) return [];
 
+    // Retrieval is "attempted" from here on - there is a query and the feature is active. Every
+    // exit below records a specific outcome so a zero-belief turn is distinguishable from one
+    // where retrieval never ran (see RetrievalSummarySchema in promptMeta.ts). Captured in an
+    // outer-scoped variable, not read from a local inside the try, because the catch below must
+    // report whichever lakes were resolved even if recall itself is what threw.
+    let attemptedDataLakeTags: string[] = [];
+    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+        attempted: true,
+        outcome,
+        surfaces: ['lake-memory'],
+        dataLakeTags,
+      });
+    };
+
     try {
       // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
       // spans exactly the lakes this user may read - the offer and the read can't disagree.
@@ -680,7 +705,13 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // today), so it falls back to the full entitled set, same as forced retrieval.
       const dataLakeTags =
         this.retrievalTags.length > 0 ? entitledTags.filter(tag => this.retrievalTags.includes(tag)) : entitledTags;
-      if (dataLakeTags.length === 0) return [];
+      attemptedDataLakeTags = dataLakeTags;
+      if (dataLakeTags.length === 0) {
+        // The single most common real answer to "why did I get nothing from my lake": the user
+        // has no entitled/selected lake in scope for this turn.
+        recordRetrieval('no_lakes', []);
+        return [];
+      }
 
       const beliefs = await this.chatCompletion.recallLakeMemory({
         userId: this.user.id,
@@ -688,13 +719,19 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
       });
-      if (beliefs.length === 0) return [];
+      if (beliefs.length === 0) {
+        // A legitimate zero: recall ran to completion and found nothing. This is the case the
+        // whole feature exists to make distinguishable from "never asked".
+        recordRetrieval('ok', dataLakeTags);
+        return [];
+      }
 
       // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
       // independent of whether the model then also called the knowledge tools.
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.context = quest.promptMeta.context ?? {};
       quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
+      recordRetrieval('ok', dataLakeTags);
 
       this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
       // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
@@ -703,6 +740,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
+      // A retrieval that threw must not be byte-identical to one never attempted - record it
+      // before the swallow below, with whichever lakes were resolved (possibly none, if
+      // resolveEntitlementKeys itself is what threw).
+      recordRetrieval('failed', attemptedDataLakeTags);
       this.logger.warn(
         '🌊 Lake memory: recall failed; proceeding without the hot card for this turn: ' +
           (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
@@ -1669,7 +1710,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // must not be sent to re-embed a document that is already re-embedding.
       reasons.push(
         `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
-          'their previous passages no longer exist and their new ones are not searchable yet; they return on their own'
+          'their passages are being replaced and the replacements are not searchable yet; they return on their own'
       );
     }
     if (coverage.chunksSkippedDimMismatch > 0) {
