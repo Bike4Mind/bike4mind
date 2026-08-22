@@ -5,6 +5,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
+  fallbackLakeSettingsRepository,
   projectRepository,
   sessionRepository,
   userRepository,
@@ -47,7 +48,13 @@ const handler = baseApi().post(
     if (body.dataLakeId) {
       const ctx = await toAccessContext(req);
       const lake = await dataLakeService.assertLakeAccess(String(body.dataLakeId), ctx, {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          // Merges a static lake's admin-set groundingMode override in, so resolveLakeSessionDefaults
+          // below (which reads `lake.groundingMode` off this return value) actually sees it.
+          fallbackLakeSettings: fallbackLakeSettingsRepository,
+        },
       });
       const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
       createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;

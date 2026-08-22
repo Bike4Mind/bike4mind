@@ -1,10 +1,12 @@
 import { adminSettingsRepository, lakeConfigChangeEventRepository } from '@bike4mind/database';
 
 /**
- * The audit half of every lake CONFIG-write service's `db` adapters, in one place so the four
- * routes that drive those services cannot drift into wiring three of them and forgetting the
- * fourth - which would be invisible, since the services treat both repositories as optional and
- * silently record nothing when they are absent (see LakeConfigAuditAdapters).
+ * The audit half of every lake CONFIG-write service's `db` adapters, in one place so no route that
+ * drives those services can drift into wiring the write but not the audit - which would be
+ * invisible, since the services treat both repositories as optional and silently record nothing
+ * when they are absent (see LakeConfigAuditAdapters). Deliberately states no route COUNT: every
+ * audited write path spreads this, and a hand-maintained tally here went stale by five without
+ * anyone noticing.
  *
  * `adminSettings` is here because it is what makes the retention lever provably READ on the path
  * it governs, per the epic's levers rule. Omitting it would still produce events, just always at

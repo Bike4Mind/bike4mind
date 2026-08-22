@@ -2,9 +2,15 @@ import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepos
 import { NotFoundError } from '@bike4mind/utils';
 import { removeFileFromLake, type MembershipActor } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
-interface RemoveFileFromDataLakeAdapters {
-  db: {
+interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
+  // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
+  // rather than merely spread at the route because the type is the only place the requirement is
+  // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
+  // at the call site is never checked against this shape and dropping it still compiles. The route
+  // test is what actually catches that; this keeps the contract honest for a reader.
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
@@ -81,7 +87,7 @@ export const removeFileFromDataLake = async (
   actor: MembershipActor,
   dataLakeId: string,
   fabFileId: string,
-  { db }: RemoveFileFromDataLakeAdapters
+  { db, logger }: RemoveFileFromDataLakeAdapters
 ): Promise<{ success: true; fileCount: number; totalSizeBytes: number }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -90,6 +96,6 @@ export const removeFileFromDataLake = async (
 
   await removeFileFromLake(actor, lake, fabFileId, { db });
 
-  const stats = await recomputeLakeStats(lake, { db });
+  const stats = await recomputeLakeStats(lake, { db, logger });
   return { success: true, ...stats };
 };

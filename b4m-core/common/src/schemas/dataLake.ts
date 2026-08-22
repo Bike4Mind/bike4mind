@@ -9,6 +9,11 @@ import {
   MIN_DATA_LAKE_SLUG_LENGTH,
   MAX_DATA_LAKE_SLUG_LENGTH,
   DATA_LAKE_SLUG_REGEX,
+  MAX_TAXONOMY_TAGS,
+  MAX_TAXONOMY_TAG_SUFFIX_LENGTH,
+  MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
+  MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
+  MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
@@ -140,6 +145,24 @@ export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdata
   keyof UpdateDataLakeRequestInputType
 >;
 
+// A STATIC (registry) lake has no document, so it cannot go through UpdateDataLakeRequestInput /
+// updateDataLake - only its admin-settable overlay (see IFallbackLakeSetting) is writable, and only
+// the fields that overlay actually stores. Deliberately narrower than the DB-lake schema: no name,
+// description, or gate fields, since a fallback lake's identity is config, not editable metadata.
+export const UpdateFallbackLakeSettingsRequestInput = z.object({
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // Same shape and sentinel as UpdateDataLakeRequestInput's field above - kept deliberately
+  // identical so the two write paths cannot silently diverge on what a crafted body may contain.
+  // The session-activatable ALLOWLIST check is enforced at the write route (apps/client), same as
+  // the DB-lake path; this schema is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Same field, uncapped, as UpdateDataLakeRequestInput's above. Storage is unconditional - which
+  // registry lakes actually get this INJECTED is isTrustedForInjection's decision (org-scoped
+  // only, getDataLakePrompts.ts), not a write-time restriction, so an admin can set this ahead of
+  // a lake being scoped to an org without the value being rejected or silently dropped.
+  systemPrompt: z.string().optional(),
+});
+export type UpdateFallbackLakeSettingsRequestInputType = z.infer<typeof UpdateFallbackLakeSettingsRequestInput>;
 /**
  * `purging` is deliberately absent from `status`. It is transitional and past the point of no
  * return, so a lake in it is on its way out and is never something a caller should filter for.
@@ -214,18 +237,20 @@ export type BatchPresignedUrlRequestInputType = z.infer<typeof BatchPresignedUrl
 // each originalName against the batch's actual stored suggestions, so these bounds are a
 // second, independent layer rather than the only protection.
 const TaxonomyTagInput = z.object({
-  suffix: z.string().min(1).max(100),
-  originalName: z.string().min(1).max(150),
+  suffix: z.string().min(1).max(MAX_TAXONOMY_TAG_SUFFIX_LENGTH),
+  originalName: z.string().min(1).max(MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH),
   strength: z.number().min(0).max(1),
   source: z.enum(['folder', 'ai']),
-  matchingFolders: z.array(z.string().max(512)).max(100),
+  matchingFolders: z
+    .array(z.string().max(MAX_TAXONOMY_MATCHING_FOLDER_LENGTH))
+    .max(MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG),
   deleted: z.boolean(),
 });
 
 export const ApplyTaxonomyRequestInput = z.object({
   /** The reviewed/edited tag list to apply (already filtered to non-deleted by the caller, or
    * filtered here - deleted entries are simply skipped since they carry no tag to write). */
-  tags: z.array(TaxonomyTagInput).max(100),
+  tags: z.array(TaxonomyTagInput).max(MAX_TAXONOMY_TAGS),
 });
 export type ApplyTaxonomyRequestInputType = z.infer<typeof ApplyTaxonomyRequestInput>;
 
