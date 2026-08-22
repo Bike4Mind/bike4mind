@@ -18,8 +18,8 @@
  * Enabled: production + dev
  */
 
-import { connectDB, agentExecutionRepository, questRepository } from '@bike4mind/database';
-import { ABANDONED_REPLY, terminalRecoveryFor } from '@server/chatCompletion/questTimeoutRecovery';
+import { connectDB, agentExecutionRepository } from '@bike4mind/database';
+import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
@@ -58,45 +58,21 @@ export async function handler() {
   });
   await emitMetric(CLOUDWATCH_NAMESPACE, 'MarkedAbandoned', marked.length, { Stage: stage }, StandardUnit.Count);
 
-  const strandedQuests = await settleStrandedQuests(marked.map(m => m.id));
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'StrandedQuestsSettled', strandedQuests, { Stage: stage }, StandardUnit.Count);
+  const quests = await settleStrandedQuests(
+    marked.map(m => m.id),
+    logger,
+    '[AgentExecutionAbandonedSweep]'
+  );
+  await emitMetric(CLOUDWATCH_NAMESPACE, 'StrandedQuestsSettled', quests.settled, { Stage: stage }, StandardUnit.Count);
+  // Emitted separately so a crashed settle pass is visible on the dashboard: it
+  // and a legitimate no-op both settle 0, and only this tells them apart.
+  await emitMetric(
+    CLOUDWATCH_NAMESPACE,
+    'StrandedQuestSettleFailures',
+    quests.failed ? 1 : 0,
+    { Stage: stage },
+    StandardUnit.Count
+  );
 
-  return { status: 'OK', marked: marked.length, questsSettled: strandedQuests };
-}
-
-/**
- * Give a terminal state to the quests left behind by the executions this sweep
- * just killed.
- *
- * `markAbandoned` writes only the AgentExecution, so before this the bubble kept
- * its non-terminal status forever: the run was dead but the UI still presented
- * it as working, with no error and nothing to retry. The liveness-based recovery
- * (`resolveQuestTimeoutRecovery`) cannot reach these because it only considers
- * quests that reached `running` - a run that died before streaming sits at
- * `pending` and is invisible to it.
- *
- * Best-effort by design: a quest that fails to settle must not fail the sweep,
- * whose primary job (releasing execution slots) has already succeeded by now.
- */
-export async function settleStrandedQuests(executionIds: string[]): Promise<number> {
-  if (executionIds.length === 0) return 0;
-
-  let settled = 0;
-  try {
-    const stranded = await questRepository.findUnfinishedByAgentExecutionIds(executionIds);
-    for (const quest of stranded) {
-      try {
-        await questRepository.update({ id: quest.id, ...terminalRecoveryFor(quest, ABANDONED_REPLY) });
-        settled += 1;
-      } catch (err) {
-        logger.warn('[AgentExecutionAbandonedSweep] Failed to settle stranded quest', { questId: quest.id, err });
-      }
-    }
-    if (settled > 0) {
-      logger.warn('[AgentExecutionAbandonedSweep] Settled stranded quests', { stranded: stranded.length, settled });
-    }
-  } catch (err) {
-    logger.error('[AgentExecutionAbandonedSweep] Stranded-quest settle pass failed', { err });
-  }
-  return settled;
+  return { status: 'OK', marked: marked.length, questsSettled: quests.settled };
 }

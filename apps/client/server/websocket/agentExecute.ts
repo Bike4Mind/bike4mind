@@ -27,6 +27,7 @@ import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapsh
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
+import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
@@ -334,8 +335,12 @@ async function handleStart(
   if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
     lastSweptAtByUser.set(userId, now);
-    if (swept > 0) {
-      logger.info('[Start] Swept stale active executions before count', { userId, swept });
+    if (swept.length > 0) {
+      logger.info('[Start] Swept stale active executions before count', { userId, swept: swept.length });
+      // These executions are now `aborted`, which is terminal - the hourly
+      // abandoned-sweep can never see them again, so this is the only chance to
+      // settle the bubbles they leave behind.
+      await settleStrandedQuests(swept, logger, '[Start]');
     }
   }
 

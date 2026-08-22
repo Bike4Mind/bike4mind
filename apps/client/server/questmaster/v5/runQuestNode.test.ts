@@ -97,7 +97,7 @@ const graph = (over: Partial<IQuestGraphDocument> = {}): IQuestGraphDocument =>
 describe('runQuestNode memory gating', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    cleanupStaleActive.mockResolvedValue(undefined);
+    cleanupStaleActive.mockResolvedValue([]);
     countActiveByUserId.mockResolvedValue(0);
     claimForRun.mockResolvedValue(node({ status: 'in_progress' }));
     questCreate.mockResolvedValue({ id: 'q1' });

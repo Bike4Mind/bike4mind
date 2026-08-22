@@ -1,5 +1,5 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
+import { IChatHistoryItem, IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -735,6 +735,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
 
   /**
    * Quests still showing as in-flight for the given agent executions.
+   * Shape is `UnfinishedQuestView`, declared below the class.
    *
    * Used by the abandoned sweep to find bubbles stranded by an execution it just
    * terminated: the execution reaches a terminal status but nothing else writes
@@ -747,31 +748,18 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * `running`) is still claiming to be live. Terminal quests are excluded rather
    * than re-patched so a natural completion racing the sweep always wins.
    */
-  async findUnfinishedByAgentExecutionIds(
-    agentExecutionIds: string[]
-  ): Promise<Array<{ id: string; reply?: string; replies?: string[]; images?: string[]; videos?: string[] }>> {
+  async findUnfinishedByAgentExecutionIds(agentExecutionIds: string[]): Promise<UnfinishedQuestView[]> {
     if (agentExecutionIds.length === 0) return [];
+    // MUST STAY IN SYNC with `QuestContentView` in questTimeoutRecovery.ts: a
+    // content field the decision reads but this does not project reads as
+    // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
       .find(
         { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: ['done', 'stopped'] } },
-        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1 }
+        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
       )
-      .lean<
-        Array<{
-          _id: mongoose.Types.ObjectId;
-          reply?: string;
-          replies?: string[];
-          images?: string[];
-          videos?: string[];
-        }>
-      >();
-    return docs.map(d => ({
-      id: d._id.toString(),
-      reply: d.reply,
-      replies: d.replies,
-      images: d.images,
-      videos: d.videos,
-    }));
+      .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
   }
 
   /**
@@ -873,3 +861,17 @@ function initializeQuestModel() {
 export const Quest = initializeQuestModel();
 
 export const questRepository = new QuestRepository(Quest);
+
+/**
+ * Content fields the stranded-quest settle reads, plus the id it writes back to.
+ *
+ * Picked from `IChatHistoryItem` rather than restated so this and
+ * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
+ * projection in the query above still has to list the same fields by hand - a
+ * field read here but not projected reads as absent, and a run that produced
+ * that content would then be stamped as a total failure.
+ */
+export type UnfinishedQuestView = { id: string } & Pick<
+  IChatHistoryItem,
+  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;

@@ -1038,14 +1038,23 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * (`markAbandoned`) is the one that needs explicit classification because
    * an operator inspecting the doc needs to tell a sweep from a real failure.
    */
-  async cleanupStaleActive(userId: string, maxAgeMs: number): Promise<number> {
+  async cleanupStaleActive(userId: string, maxAgeMs: number): Promise<string[]> {
     const cutoff = new Date(Date.now() - maxAgeMs);
-    const result = await this.model.updateMany(
-      {
-        userId,
-        status: { $in: this.sweepableStatuses },
-        updatedAt: { $lt: cutoff },
-      },
+    const filter = {
+      userId,
+      status: { $in: this.sweepableStatuses },
+      updatedAt: { $lt: cutoff },
+    };
+    // Ids are read BEFORE the write because callers have to settle the quests
+    // these executions leave behind, and `aborted` is terminal: once written,
+    // the doc falls out of `sweepableStatuses` and no later sweep can find it
+    // again. Without the ids here, the bubble is stranded permanently.
+    const doomed = await this.model.find(filter, { _id: 1 }).lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    if (doomed.length === 0) return [];
+
+    const ids = doomed.map(d => d._id.toString());
+    await this.model.updateMany(
+      { ...filter, _id: { $in: doomed.map(d => d._id) } },
       {
         $set: {
           status: 'aborted',
@@ -1057,13 +1066,17 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         },
       }
     );
-    return result.modifiedCount ?? 0;
+    // The status guard is re-applied above, so an execution that completed
+    // naturally between the read and the write keeps its own terminal state.
+    // Such an id still comes back here, which is harmless: the quest settle
+    // skips quests that are already terminal.
+    return ids;
   }
 
   /** @deprecated Use `cleanupStaleActive` instead - kept as a thin alias
    *  during the transition so any caller landing between commits keeps
    *  working. Remove once nothing references it. */
-  async cleanupStaleAwaitingPermission(userId: string, maxAgeMs: number): Promise<number> {
+  async cleanupStaleAwaitingPermission(userId: string, maxAgeMs: number): Promise<string[]> {
     return this.cleanupStaleActive(userId, maxAgeMs);
   }
 

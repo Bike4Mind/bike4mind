@@ -13,9 +13,10 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 export const QUEST_TIMEOUT_THRESHOLD_MS = 120_000;
 
 /** The subset of a quest the recovery decision reads. */
-export type QuestTimeoutView = Pick<IChatHistoryItem, 'status' | 'reply' | 'replies' | 'images' | 'videos'> & {
-  updatedAt: Date | string | number;
-};
+export type QuestTimeoutView = Pick<IChatHistoryItem, 'status'> &
+  QuestContentView & {
+    updatedAt: Date | string | number;
+  };
 
 /**
  * The recovery decision for a possibly-stuck quest:
@@ -40,10 +41,26 @@ export const ABANDONED_REPLY =
   'This request was ended because the run was abandoned before it produced a response. Please try again.';
 
 /** The subset of a quest the terminal-patch decision reads. */
-export type QuestContentView = Pick<IChatHistoryItem, 'reply' | 'replies' | 'images' | 'videos'>;
+export type QuestContentView = Pick<
+  IChatHistoryItem,
+  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;
 
+/**
+ * `structuredReplies` / `toolResults` count as content. A tool-heavy run can
+ * produce a fully renderable answer (notebook cells, tool output) while leaving
+ * `reply`, `replies`, `images` and `videos` all empty, and calling that "nothing
+ * to show" stamps an error message next to work the user can actually see.
+ */
 function hasRenderableContent(quest: QuestContentView): boolean {
-  return Boolean(quest.reply || quest.replies?.some(r => r) || quest.images?.length || quest.videos?.length);
+  return Boolean(
+    quest.reply ||
+    quest.replies?.some(r => r) ||
+    quest.images?.length ||
+    quest.videos?.length ||
+    quest.structuredReplies?.length ||
+    quest.toolResults?.length
+  );
 }
 
 /**
