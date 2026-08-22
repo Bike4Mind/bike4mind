@@ -368,7 +368,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     claudeMessageId: { type: String, required: false },
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
-    prompt: { type: String, required: true },
+    // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
+    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
+    // could therefore never protect the write that omits it; it only fired on create(), the copy
+    // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
+    // notebook. Same reasoning as promptMeta.session (see rebindPromptMetaSession), one field over.
+    // Note `prompt ?? ''` is not an alternative: Mongoose's `required` on a String rejects '' too.
+    prompt: { type: String, required: false },
     fabFileIds: { type: [String], required: false },
     agentIds: { type: [String], required: false },
     reply: { type: String, required: false },
