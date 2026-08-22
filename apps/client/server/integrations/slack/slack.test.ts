@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
 // Mock the SST-backed Config so the test never touches `Resource`.
 vi.mock('@server/utils/config', () => ({
   Config: mocks.config,
-  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
 }));
 
 vi.mock('axios', () => ({
@@ -34,17 +33,16 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-// Match the canonical helper from @bike4mind/common (same approach as mailer/index.test.ts).
-vi.mock('@bike4mind/common', () => ({
-  isPlaceholderValue: (value: string | undefined | null) => {
-    if (!value) return true;
-    const normalized = value.trim().toLowerCase();
-    return normalized === 'my-secret-placeholder-value' || normalized === 'not-configured';
-  },
-}));
-
 vi.mock('@bike4mind/observability', () => ({
   Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+}));
+
+// feedbackMessage.ts pulls escapeSlackText from the real @bike4mind/services barrel, which
+// transitively imports @bike4mind/common (creditService etc.) - loading that against the partial
+// @bike4mind/common mock above breaks on missing exports it never needed otherwise. Stub with the
+// same escaping behavior instead; the real implementation is covered directly in feedbackMessage.test.ts.
+vi.mock('@bike4mind/services', () => ({
+  escapeSlackText: (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 }));
 
 vi.mock('@server/utils/cloudwatch', () => ({
@@ -173,10 +171,34 @@ describe('resolveFeedbackSlackRoute', () => {
       reason: 'nonprod_unconfigured',
     });
   });
+
+  it('a self-host stage with singleEnvironmentInstall posts via the prod webhook, not the non-prod one', () => {
+    expect(resolveFeedbackSlackRoute('selfhost', { SlackFeedbackWebhookUrl: feedbackUrl }, true)).toEqual({
+      kind: 'post',
+      webhookUrl: feedbackUrl,
+      stageClass: 'nonprod',
+    });
+  });
+
+  it('a self-host stage with singleEnvironmentInstall and no prod webhook skips unconfigured_webhook, not nonprod_unconfigured', () => {
+    expect(resolveFeedbackSlackRoute('selfhost', {}, true)).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'unconfigured_webhook',
+    });
+  });
+
+  it('singleEnvironmentInstall defaults to false, leaving hosted non-prod behavior unchanged', () => {
+    expect(resolveFeedbackSlackRoute('selfhost', { SlackFeedbackWebhookUrl: feedbackUrl })).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'nonprod_unconfigured',
+    });
+  });
 });
 
 describe('postFeedbackToSlack', () => {
-  const args = ['Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', 'No prompt meta'] as const;
+  const args = ['Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', undefined] as const;
 
   beforeEach(() => {
     mocks.config.STAGE = 'production';
@@ -221,6 +243,25 @@ describe('postFeedbackToSlack', () => {
     expect(mocks.post).not.toHaveBeenCalled();
     expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured', 'pr-1234');
     expect(result).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
+  });
+
+  it('posts via the prod webhook on a self-host install (B4M_SELF_HOST=true) even though its stage classifies nonprod', async () => {
+    const previousSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    mocks.config.STAGE = 'selfhost';
+    try {
+      mocks.getSettingsMap.mockResolvedValue({
+        SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+      });
+      const result = await postFeedbackToSlack(...args);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      const [url] = mocks.post.mock.calls[0];
+      expect(url).toBe('https://hooks.slack.com/services/feedback');
+      expect(recordFeedbackDeliverySuccess).toHaveBeenCalledWith('slack', 'nonprod');
+      expect(result).toEqual({ outcome: 'delivered' });
+    } finally {
+      process.env.B4M_SELF_HOST = previousSelfHost;
+    }
   });
 
   it('records a skip with unconfigured_webhook when production has no webhook configured', async () => {
@@ -282,15 +323,29 @@ describe('postFeedbackToSlack', () => {
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
-  it('the non-prod stage marker never touches the redacted Prompt Meta section', async () => {
+  it('the non-prod stage marker never touches the Prompt Meta summary, and no owner-only field leaks through', async () => {
     mocks.config.STAGE = 'pr-1234';
     mocks.getSettingsMap.mockResolvedValue({
       SlackNonProdFeedbackWebhookUrl: 'https://hooks.slack.com/services/nonprod',
     });
-    await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', 'REDACTED_BLOB');
+    // A caller that failed to redact still can't leak returnValue through the summary -
+    // buildPromptMetaSummary's read allowlist doesn't read that field at all.
+    await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', {
+      functionCalls: [{ name: 'web_search', returnValue: 'PRIVATE TOOL OUTPUT' } as { name?: string }],
+    });
     const [, body] = mocks.post.mock.calls[0];
     const promptMetaSection = body.text.split('*Prompt Meta:*')[1];
-    expect(promptMetaSection).toContain('REDACTED_BLOB');
+    expect(promptMetaSection).toContain('web_search');
+    expect(promptMetaSection).not.toContain('PRIVATE TOOL OUTPUT');
     expect(promptMetaSection).not.toContain('[pr-1234]');
+  });
+
+  it('escapes Slack mrkdwn special characters in every user-influenced field, not just content', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    const injected = '<https://evil.example/|Open record>';
+    await postFeedbackToSlack(injected, injected, injected, injected, injected, injected, undefined);
+    const [, body] = mocks.post.mock.calls[0];
+    expect(body.text).not.toContain(injected);
+    expect(body.text).toContain('&lt;https://evil.example/|Open record&gt;');
   });
 });

@@ -138,6 +138,7 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  markShareablePrefixBoundary,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
@@ -161,7 +162,11 @@ import {
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
+import {
+  buildAlwaysOnFloorDetails,
+  buildInjectedBlockDetails,
+  sortDetailsByDeliveryOrder,
+} from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
 import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
@@ -2715,6 +2720,12 @@ export class ChatCompletionProcess {
         attachedFiles: fabMessages,
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the
+      // promptMode filter so the boundary lands on a block that actually ships. Unconditional
+      // by design: `IMessage.cache` only DECLARES a breakpoint - each backend decides whether
+      // to translate it (Anthropic-family does, the others ignore it per the field's contract),
+      // and the cacheStrategy built later in this method still governs the other breakpoints.
+      markShareablePrefixBoundary(admittedContextMessages);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3069,6 +3080,9 @@ export class ChatCompletionProcess {
         } catch (injectedDetailsError) {
           logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
         }
+        // Sorted once, after every batch has landed, so the persisted array reads in the order the
+        // model sees the blocks rather than the order the three helpers happened to run.
+        systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       }
 
@@ -4410,20 +4424,31 @@ export class ChatCompletionProcess {
         // keeps the capped cache-read discount and never bills cache creation,
         // exactly the pre-provider-basis behavior. The bases never blend.
         //
-        // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
-        // Anthropic-family adapters - the direct Anthropic adapter and
-        // Claude-on-Bedrock (bedrockBackend/base.ts) - whose input_tokens EXCLUDE
-        // cached tokens. OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache
-        // and must not forward cache counts here without also subtracting them
-        // from input.
+        // Disjoint-fields assumption: whatever an adapter forwards as
+        // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
+        // adapters (the direct Anthropic adapter and Claude-on-Bedrock,
+        // bedrockBackend/base.ts) get this for free - their input_tokens already exclude
+        // cached tokens. Providers that report prompt tokens INCLUSIVE of cache
+        // (OpenAI, Moonshot) subtract in the adapter before forwarding, via each
+        // backend's splitCachedInput. An adapter that forwards without subtracting
+        // double-bills the cached portion here; one that forwards nothing bills every
+        // cache hit at the full input rate.
         //
         // NOTE: the provider input (uncached tail) drives getTextModelCost's
         // pricing-tier selection. Every model today publishes a single tier, so
         // this is exact; if tiered pricing lands, a heavily-cached prompt could
         // select a cheaper tier for its cache volume - revisit tier selection then.
-        const hasProviderUsage = (actualTokenUsage?.inputTokens ?? 0) > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
+        // Summed across all three input components, not just the uncached tail: on a
+        // fully-cached prompt the provider legitimately reports 0 uncached input, and
+        // reading that as "nothing reported" would drop the row onto the local estimate
+        // and discard the very discount that zeroed it.
+        const providerInputTokens =
+          (actualTokenUsage?.inputTokens ?? 0) +
+          (actualTokenUsage?.cacheReadInputTokens ?? 0) +
+          (actualTokenUsage?.cacheCreationInputTokens ?? 0);
+        const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? actualTokenUsage.inputTokens! : inputTokens;
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)

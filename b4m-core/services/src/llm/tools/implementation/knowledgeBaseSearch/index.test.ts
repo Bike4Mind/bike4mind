@@ -35,7 +35,8 @@ vi.mock('../../../../apiKeyService', () => ({
 
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
-import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS, KB_SEARCH_DEFAULT_RESULTS } from './index';
+import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS } from './index';
+import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '@bike4mind/common';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
@@ -1762,6 +1763,188 @@ describe('search_knowledge_base access-event audit', () => {
  * Asserted on the tool OUTPUT, never on an internal variable: the output is what costs tokens, and a
  * test reading the clamped local would still pass if a consumer went back to the raw param.
  */
+
+describe('search_knowledge_base retrieval summary (#1867)', () => {
+  it('records attempted:true, outcome:ok on the keyword arm with no hits (the zero case)', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      db: { fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) } } as never,
+    });
+
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: ['datalake:x'],
+    });
+  });
+
+  it('records attempted:true, outcome:ok on the keyword arm when it finds results', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: ['datalake:x'],
+    });
+  });
+
+  it('records outcome:failed when the search throws, instead of leaving retrieval byte-identical to never-attempted', async () => {
+    getDynamicDataLakeAccessMock.mockRejectedValue(new Error('lake access resolution down'));
+    const ctx = makeContext();
+
+    const out = await run(ctx);
+
+    expect(out).toContain('An error occurred while searching your knowledge base');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed when the fabfiles repository is not available at all (#1971 review)', async () => {
+    const ctx = makeContext({ db: {} as never });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('not available at this time');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:no_lakes when the agent kbScope is empty (#1971 review)', async () => {
+    const ctx = makeContext({ kbScope: { fileIds: [] } });
+
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
+      attempted: true,
+      outcome: 'no_lakes',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed from the semantic arm even though the keyword arm succeeds right after (#1971 review)', async () => {
+    // This tool call emits TWO raw statusUpdate writes here (the semantic catch's 'failed', then
+    // the keyword arm's own 'ok' on its hit) - this test only proves the 'failed' write happens
+    // at all, which previously it did not. Whether the merged QUEST STATE survives as 'failed'
+    // despite the later 'ok' is mergeRetrievalSummary's job and is covered independently in
+    // ToolBuilder.applyQuestStatusChanges.test.ts's outcome-priority tests.
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'k', fileName: 'Keyword doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('Keyword doc.pdf');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievals = calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+    expect(retrievals).toContainEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records outcome:failed from the scoped semantic arm even though the scoped keyword arm succeeds right after (#1971 review)', async () => {
+    fileScopedSemanticSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      kbScope: { fileIds: ['a'] },
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'a', fileName: 'Scoped doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('Scoped doc.pdf');
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const retrievals = calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+    expect(retrievals).toContainEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['knowledgeBaseSearch'],
+      dataLakeTags: [],
+    });
+  });
+});
+
 describe('search_knowledge_base max_results clamp (#1757)', () => {
   const scan = {
     truncated: false,
@@ -1996,16 +2179,117 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       // Number('lots') is NaN: slice(0, NaN) is empty AND Math.max(NaN, 6) sent NaN to the engine.
       const out = await runWith({ max_results: 'lots' });
 
-      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
       expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(6);
     });
 
     it('treats null as unset rather than as zero', async () => {
-      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
     });
 
     it('keeps the documented default when the param is omitted entirely', async () => {
-      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+  });
+
+  /**
+   * kbSearchDefaultResults (#1831): the default above is now an operator lever, not a hardcoded
+   * literal. Mirrors forcedRetrievalCharBudget's own resolver contract in
+   * ChatCompletionFeatures.ts - unset/unusable/outage all fall back to the coded default, a
+   * configured value is honored, and it never overrides an explicit model-supplied max_results.
+   */
+  describe('operator-configurable default (kbSearchDefaultResults, #1831)', () => {
+    function contextWithConfiguredDefault(configured: unknown): {
+      context: ToolContext;
+      getSettingsValue: ReturnType<typeof vi.fn>;
+    } {
+      const getSettingsValue = vi.fn(async (key: string) =>
+        key === 'kbSearchDefaultResults' ? configured : 'text-embedding-ada-002'
+      );
+      const context = semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+      return { context, getSettingsValue };
+    }
+
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(100),
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+      // Otherwise an earlier test's warn call in this block satisfies a later
+      // toHaveBeenCalledWith assertion even when that later case never calls warn itself.
+      clampLogger.warn.mockClear();
+    });
+
+    it('serves the configured count when max_results is omitted', async () => {
+      const { context } = contextWithConfiguredDefault(8);
+      expect(passageCount(await runWith({}, context))).toBe(8);
+    });
+
+    it('does not override an explicit model-supplied max_results', async () => {
+      const { context } = contextWithConfiguredDefault(8);
+      expect(passageCount(await runWith({ max_results: 3 }, context))).toBe(3);
+    });
+
+    it('falls back to the coded default when the setting is unset', async () => {
+      const { context } = contextWithConfiguredDefault(undefined);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+
+    it('falls back to the coded default and warns when the stored value is unusable', async () => {
+      const { context } = contextWithConfiguredDefault('not-a-number');
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      expect(clampLogger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchDefaultResults'));
+    });
+
+    it('falls back to the coded default and warns when the settings read throws (outage)', async () => {
+      // Only kbSearchDefaultResults is unavailable - defaultEmbeddingModel still resolves, so the
+      // semantic arm runs and this isolates the outage to the setting under test.
+      const getSettingsValue = vi.fn(async (key: string) =>
+        key === 'kbSearchDefaultResults' ? Promise.reject(new Error('outage')) : 'text-embedding-ada-002'
+      );
+      const context = semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      // The resolver's own catch block warns with (message, err) - two arguments, matching
+      // resolveForcedRetrievalCharBudget's shape - unlike positiveIntOr's single-argument warn
+      // the "unusable value" test above exercises.
+      expect(clampLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('kbSearchDefaultResults'),
+        expect.anything()
+      );
+    });
+
+    it('resolves the setting once per completion, not once per search call', async () => {
+      const { context, getSettingsValue } = contextWithConfiguredDefault(7);
+      const tool = knowledgeBaseSearchTool.implementation(context, undefined);
+      await tool.toolFn({ query: 'first' });
+      await tool.toolFn({ query: 'second' });
+      const kbCalls = getSettingsValue.mock.calls.filter(([key]) => key === 'kbSearchDefaultResults');
+      expect(kbCalls.length).toBe(1);
+    });
+
+    it('clamps a stored default above the tool ceiling', async () => {
+      // A row written before the setting's own max:10 existed, or by any path other than the
+      // admin form, is not re-validated on read - clampMaxResults must not trust it verbatim.
+      const { context } = contextWithConfiguredDefault(99);
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
     });
   });
 });

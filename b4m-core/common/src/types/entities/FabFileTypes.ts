@@ -219,6 +219,22 @@ export interface IFabFile {
    */
   chunkedPassageTokenTarget?: number;
   /**
+   * When a passage REBUILD was requested for this file, stamped by `resetChunkStateByIds` in the
+   * same write that clears the chunk rollups (#1939). `null`/absent means no rebuild is outstanding.
+   *
+   * The reset and the queue send are two operations, so without this the gap between them carries no
+   * marker at all: `chunkCount: 0`, `error: null`, `notes: ''` is the shape of an image or a
+   * still-uploading row, and the file drops out of health, convergence and the retrieval withhold at
+   * once. Cleared by `commitFabFileChunks` when the rebuild lands, and UPGRADED to
+   * `CONVERGENCE_PAUSED_CHUNK_NOTE` by the chunk handler when the kill switch halts it instead - see
+   * `isChunkRebuildPending` for why a pending rebuild must not simply pre-write that marker.
+   *
+   * `null` rather than undefined for the same reason as `extractedCharCount`: the repository's `$set`
+   * strips undefined, which would leave a stale stamp in place.
+   */
+  chunkRebuildRequestedAt?: Date | null;
+
+  /**
    * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
    * satisfy (#1662); `null`/absent means no conflict. A report, not a failure: the file stays
    * chunked at its owner-altitude policy. Cleared when a re-chunk or membership change resolves it.
@@ -924,6 +940,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       // Third terminal-stall input, same keep-in-sync rule as the two above: the convergence kill
       // switch stalls a file via `notes` (CONVERGENCE_PAUSED_NOTE) without ever setting `error`.
       notes: string | null;
+      // Fourth in-flight input, same keep-in-sync rule: a file whose passages a wave just reset is
+      // chunkless with no error and no note, so this stamp is the only thing that tells "rebuilding"
+      // from "never had passages" (#1939).
+      chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
@@ -958,6 +978,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       vectorizedChunkCount: number | null;
       error: string | null;
       notes: string | null;
+      /** See findDataLakeHealthMembers - the pending-rebuild stamp is an in-flight input here too. */
+      chunkRebuildRequestedAt: Date | null;
       maxChunkCharLength: number | null;
       chunkedPassageTokenTarget: number | null;
     }>
@@ -997,7 +1019,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to
    * "Rebuild passages", the one affordance an owner would actually reach for to repair them. They
    * are identified by CONVERGENCE_PAUSED_CHUNK_NOTE, the same marker health, convergence and the
-   * retrieval withhold key on. Same in-flight exclusion as `findChunkedFilesByScope`.
+   * retrieval withhold key on, OR by a `chunkRebuildRequestedAt` stamp older than
+   * REBUILD_PENDING_STALE_MS - a rebuild nothing ever committed, which is what a producer killed
+   * between the reset and the sends leaves behind (#1939). Same in-flight exclusion as
+   * `findChunkedFilesByScope`.
    */
   findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
@@ -1010,6 +1035,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Preconditioned on `isChunking: {$ne: true}`: the reset WRITES isChunking:false, so without it a
    * reset would release a live worker's lease and let a second worker into chunkFabfile's
    * delete-then-insert. Returns the ids actually reset, so the caller enqueues exactly what changed.
+   *
+   * Stamps `chunkRebuildRequestedAt` in the SAME write (#1939), so the state this creates is never
+   * unmarked: the send that follows can fail, and the producer can die before it, without leaving a
+   * chunkless file that no reader can tell from an image.
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
   /**

@@ -154,6 +154,52 @@ export const CONVERGENCE_PAUSED_CHUNK_NOTE =
   'rebuilt when convergence resumes.';
 
 /**
+ * `FabFile.chunkRebuildRequestedAt`: stamped by `resetChunkStateByIds` in the SAME write that
+ * clears a file's chunk rollups, so "this file's passages are being rebuilt" can never be lost the
+ * way the pair of steps that creates the state can be. The reset and the queue send are two
+ * operations - kill the producer between them, or lose the consumer's marker write, and the file
+ * sits at `chunkCount: 0` with `error: null` and `notes: ''`, a shape indistinguishable from an
+ * image or a still-uploading row. It then drops out of lake health's denominator, out of the
+ * convergence plan and out of the retrieval withhold at the same moment: every rollup says its
+ * passages are gone, and nothing reports it.
+ *
+ * Deliberately NOT `CONVERGENCE_PAUSED_CHUNK_NOTE` pre-written by the producer, which is the obvious
+ * fix and the wrong one: that marker means "halted, needs an administrator", so a file awaiting an
+ * ORDINARY rebuild would read to every reader as permanently paused for the whole rebuild - search
+ * would tell readers it does not return on its own, health would hard-fail P3, and "Rebuild
+ * passages" would offer to repair a file that is already repairing. A flag that cries wolf on the
+ * normal path is worse than the rare window it closes.
+ *
+ * So the two facts are distinct states, and the consumer UPGRADES one to the other: pending means
+ * "in flight, returns on its own", the paused note means "halted, needs intervention". A LOST
+ * upgrade therefore degrades to mislabelled-but-visible rather than invisible, which is the trade
+ * this field exists to make - invisibility is the real harm, labelling is secondary.
+ *
+ * A dedicated field rather than a third `notes` string on purpose: `notes` already carries two
+ * unrelated facts (the user's own note / NO_EXTRACTABLE_TEXT, and the kill-switch markers), so every
+ * writer of it clobbers the others.
+ *
+ * Cleared by `commitFabFileChunks` (the rebuild landed) and by the chunk handler's pause write (the
+ * rebuild was halted instead). A file carrying `error` is settled regardless - see
+ * `isMemberIndexingInFlight`, which is where the precedence between these three lives.
+ */
+export function isChunkRebuildPending(requestedAt?: Date | string | null): boolean {
+  return requestedAt !== null && requestedAt !== undefined && requestedAt !== '';
+}
+
+/**
+ * How long a pending rebuild may go uncommitted before the "Rebuild passages" door treats it as
+ * STRANDED and offers to re-drive it. Only the datastore read uses this - the pure evaluators have
+ * no clock and deliberately keep grading such a file as in-flight rather than guessing.
+ *
+ * Derived from the chunk queue's 60-minute visibility timeout (infra/queues.ts): one redelivery is
+ * an hour away, so anything under that would offer a repair for a message that is merely waiting.
+ * Two timeouts is past the point where a live delivery explains the silence, and still well inside
+ * the `dlq: { retry: 3 }` budget, so the door opens before the message would reach the DLQ.
+ */
+export const REBUILD_PENDING_STALE_MS = 2 * 60 * 60_000;
+
+/**
  * Whether a file's `notes` marks it as stalled by the convergence kill switch, by either arm.
  * THE predicate every reader uses, so adding a third stall marker reaches health, convergence and
  * retrieval without three separate string comparisons drifting apart.

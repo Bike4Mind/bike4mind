@@ -12,6 +12,7 @@ import {
   IUserRepository,
   IProjectRepository,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
   ISkillRepository,
   ImageModerationIncident,
   IUsageEventRepository,
@@ -93,6 +94,12 @@ export interface ToolContext {
       IDataLakeRepository,
       'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
     >;
+    /**
+     * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
+     * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch;
+     * absent means zero registry lakes ever contribute an injected prompt.
+     */
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
     /** Optional skill repository - present when the host wires `/api/skills`. Used by the `skill` LLM tool. */
     skills?: Pick<ISkillRepository, 'findAccessibleByNameForUser' | 'listAccessibleInvocableForUser'>;
     /**
