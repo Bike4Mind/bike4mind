@@ -3,8 +3,9 @@ import type { ILogger } from '@bike4mind/observability';
 import { ABANDONED_REPLY, terminalRecoveryFor } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
- * Outcome of a settle pass. `failed: true` distinguishes a crashed pass from a
- * legitimate "nothing was stranded" - both settle 0, and a caller emitting a
+ * Outcome of a settle pass. `failed: true` distinguishes a pass that could not
+ * do its job - the read crashed, or at least one quest write was dropped - from
+ * a legitimate "nothing was stranded". Both settle 0, and a caller emitting a
  * bare count could not tell them apart on a dashboard.
  */
 export interface SettleResult {
@@ -41,22 +42,32 @@ export async function settleStrandedQuests(
   if (executionIds.length === 0) return { settled: 0, failed: false };
 
   let settled = 0;
+  let failures = 0;
   try {
     const stranded = await questRepository.findUnfinishedByAgentExecutionIds(executionIds);
     for (const quest of stranded) {
       try {
-        await questRepository.update({ id: quest.id, ...terminalRecoveryFor(quest, ABANDONED_REPLY) });
-        settled += 1;
+        // Conditional on the quest still being unfinished, because this loop
+        // writes one quest per round trip: a natural completion can land
+        // between the read above and this write, and an unconditional patch
+        // would replace its real answer with the abandoned-run error.
+        const applied = await questRepository.settleIfUnfinished(quest.id, terminalRecoveryFor(quest, ABANDONED_REPLY));
+        if (applied) settled += 1;
       } catch (err) {
+        // Counted, not just logged. The execution is already terminal, so no
+        // later sweep revisits it: a dropped write strands that bubble for
+        // good, and reporting the pass as clean would hide it from the alarm
+        // that exists to catch exactly this.
+        failures += 1;
         logger.warn(`${logPrefix} Failed to settle stranded quest`, { questId: quest.id, err });
       }
     }
-    if (settled > 0) {
-      logger.warn(`${logPrefix} Settled stranded quests`, { stranded: stranded.length, settled });
+    if (settled > 0 || failures > 0) {
+      logger.warn(`${logPrefix} Settled stranded quests`, { stranded: stranded.length, settled, failures });
     }
   } catch (err) {
     logger.error(`${logPrefix} Stranded-quest settle pass failed`, { err });
     return { settled, failed: true };
   }
-  return { settled, failed: false };
+  return { settled, failed: failures > 0 };
 }

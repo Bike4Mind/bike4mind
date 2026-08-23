@@ -27,9 +27,9 @@ vi.mock('@bike4mind/database', () => ({
         .filter(q => ids.includes(q.agentExecutionId) && !TERMINAL.includes(q.status))
         .map(({ agentExecutionId: _a, status: _s, ...content }) => content)
     ),
-    update: vi.fn(async (patch: { id: string }) => {
-      updates.push(patch);
-      return patch;
+    settleIfUnfinished: vi.fn(async (id: string, patch: Record<string, unknown>) => {
+      updates.push({ id, ...patch });
+      return true;
     }),
   },
 }));

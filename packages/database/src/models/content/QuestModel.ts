@@ -598,6 +598,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
   }
 );
 
+/**
+ * The statuses that mean a quest will never be written to again. Anything else
+ * (`pending`, `running`) is still claiming to be live, and is what a settle pass
+ * is allowed to take over. Shared by the two halves of that pass so its read and
+ * its write cannot drift on what "unfinished" means.
+ */
+const TERMINAL_QUEST_STATUSES = ['done', 'stopped'];
+
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
 
@@ -755,11 +763,30 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
       .find(
-        { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: ['done', 'stopped'] } },
+        { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: TERMINAL_QUEST_STATUSES } },
         { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
       )
       .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
+  }
+
+  /**
+   * Write a terminal patch to a quest only while it is still unfinished, and
+   * report whether a document actually matched.
+   *
+   * The status predicate is the atomic half of the settle pass. Candidates are
+   * read in one query and written one at a time, so a natural completion can
+   * land in the gap; an `_id`-only write (`BaseRepository.update`) would then
+   * overwrite a real answer with the abandoned-run error. Callers count only
+   * the writes that matched, so a quest that finished in that window is
+   * reported as not settled rather than as settled.
+   */
+  async settleIfUnfinished(
+    id: string,
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply'>>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
+    return result.matchedCount > 0;
   }
 
   /**

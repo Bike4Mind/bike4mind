@@ -51,6 +51,13 @@ export type QuestContentView = Pick<
  * produce a fully renderable answer (notebook cells, tool output) while leaving
  * `reply`, `replies`, `images` and `videos` all empty, and calling that "nothing
  * to show" stamps an error message next to work the user can actually see.
+ *
+ * Every field is tested for content rather than for presence, because the two
+ * failure modes are not symmetric. Mistaking content for emptiness replaces a
+ * real answer with an error; mistaking emptiness for content produces a
+ * terminal bubble with neither an answer nor an error - the silent blank the
+ * abandoned-run message exists to prevent. An assistant turn carrying no
+ * content blocks and a tool result with an empty body both render nothing.
  */
 function hasRenderableContent(quest: QuestContentView): boolean {
   return Boolean(
@@ -58,8 +65,8 @@ function hasRenderableContent(quest: QuestContentView): boolean {
     quest.replies?.some(r => r) ||
     quest.images?.length ||
     quest.videos?.length ||
-    quest.structuredReplies?.length ||
-    quest.toolResults?.length
+    quest.structuredReplies?.some(sr => sr?.content?.length) ||
+    quest.toolResults?.some(t => t?.content)
   );
 }
 
