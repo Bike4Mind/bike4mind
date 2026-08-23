@@ -37,6 +37,8 @@ const questCreate = vi.fn();
 const questUpdateOne = vi.fn();
 const questDeleteOne = vi.fn();
 const lambdaSend = vi.fn();
+const findUnfinishedByAgentExecutionIds = vi.fn();
+const settleIfUnfinished = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   agentExecutionRepository: {
@@ -49,6 +51,10 @@ vi.mock('@bike4mind/database', () => ({
     claimForRun: (...a: unknown[]) => claimForRun(...a),
     setExecution: (...a: unknown[]) => setExecution(...a),
     updateStatus: (...a: unknown[]) => updateStatus(...a),
+  },
+  questRepository: {
+    findUnfinishedByAgentExecutionIds: (...a: unknown[]) => findUnfinishedByAgentExecutionIds(...a),
+    settleIfUnfinished: (...a: unknown[]) => settleIfUnfinished(...a),
   },
   Quest: {
     create: (...a: unknown[]) => questCreate(...a),
@@ -71,6 +77,7 @@ vi.mock('sst', () => ({
 }));
 
 const { runQuestNode } = await import('./runQuestNode');
+const { ABANDONED_REPLY } = await import('@server/chatCompletion/questTimeoutRecovery');
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 
@@ -123,5 +130,45 @@ describe('runQuestNode memory gating', () => {
     await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
 
     expect(create.mock.calls[0][0].enableMementos).toBe(false);
+  });
+});
+
+describe('runQuestNode stale sweep', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanupStaleActive.mockResolvedValue([]);
+    countActiveByUserId.mockResolvedValue(0);
+    claimForRun.mockResolvedValue(node({ status: 'in_progress' }));
+    questCreate.mockResolvedValue({ id: 'q1' });
+    create.mockResolvedValue({ id: 'exec-1' });
+    questUpdateOne.mockResolvedValue(undefined);
+    setExecution.mockResolvedValue(node({ status: 'in_progress', execution: { agentExecutionId: 'exec-1' } }));
+    lambdaSend.mockResolvedValue(undefined);
+    findUnfinishedByAgentExecutionIds.mockResolvedValue([]);
+    settleIfUnfinished.mockResolvedValue(true);
+  });
+
+  // Guards the wiring, not the helper. The sweep writes `aborted`, which is
+  // terminal, so the hourly cron can never revisit these executions: if this
+  // dispatch path stops settling, the bubbles it strands spin forever and
+  // nothing else in the system can reach them.
+  it('settles the bubbles behind the executions its sweep aborts', async () => {
+    cleanupStaleActive.mockResolvedValue(['stale-1', 'stale-2']);
+    findUnfinishedByAgentExecutionIds.mockResolvedValue([{ id: 'stranded-q' }]);
+
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+
+    expect(findUnfinishedByAgentExecutionIds).toHaveBeenCalledWith(['stale-1', 'stale-2']);
+    expect(settleIfUnfinished).toHaveBeenCalledWith('stranded-q', {
+      status: 'done',
+      type: 'error',
+      reply: ABANDONED_REPLY,
+    });
+  });
+
+  it('does not touch quests when the sweep found nothing', async () => {
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+
+    expect(findUnfinishedByAgentExecutionIds).not.toHaveBeenCalled();
   });
 });
