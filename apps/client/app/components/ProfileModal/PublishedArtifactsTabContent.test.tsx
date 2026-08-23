@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
+import { PUBLISH_TAGS_MAX } from '@bike4mind/common';
 
 const {
   mockList,
@@ -612,6 +613,7 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
     const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
     return listCalls[listCalls.length - 1];
   };
+  const tagged = { ...bundleRow, tags: ['ionq', 'weekly'] };
 
   it('says so when a tag is REJECTED rather than rewritten', async () => {
     // A rewrite (IonQ -> ionq) is self-explanatory. A drop - over-long, or past the cap - left the
@@ -650,8 +652,26 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
   });
 
   it('keeps the tag vocabulary out of the list invalidation prefix', async () => {
-    // It is backed by a scan of another collection, so a visibility toggle or a delete must not
-    // refetch it - only a tag edit can change it.
+    // It is backed by a scan of another collection, so a mutation that CANNOT change the vocabulary
+    // must not refetch it, even though it invalidates the list the row came from.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockList.mockResolvedValue(page([sourcedRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-3');
+    const before = mockVocabCalls.length;
+
+    expandRow('pub-3');
+    fireEvent.click(screen.getByTestId('published-artifact-refresh-pub-3'));
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalled());
+
+    expect(mockVocabCalls.length).toBe(before);
+    confirm.mockRestore();
+  });
+
+  it("refreshes the vocabulary after a DELETE, which takes that row's tags out of the counts", async () => {
+    // Only a tag edit invalidated it, but deleting the only artifact carrying a label removes it
+    // from the counts too - and autocomplete kept offering it for up to the 5-minute staleTime.
+    mockList.mockResolvedValue(page([tagged]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
     const before = mockVocabCalls.length;
@@ -661,8 +681,99 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
     fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Artifact deleted'));
 
-    // Delete invalidates the list prefix; the vocabulary must not ride along on it.
-    expect(mockVocabCalls.length).toBe(before);
+    await waitFor(() => expect(mockVocabCalls.length).toBeGreaterThan(before));
     confirm.mockRestore();
+  });
+
+  it('stays SILENT when a tag is only deduped, rather than blaming its length', async () => {
+    // MUI compares options with ===, so typing `IonQ` beside an existing `ionq` chip appends the
+    // case variant and the normalizer then dedupes it. The old check fired on any shortening, so an
+    // owner got "Tags can be at most 40 characters" about a four-character tag.
+    mockList.mockResolvedValue(page([tagged]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const input = screen.getByTestId('published-artifact-tag-input-pub-1');
+    fireEvent.change(input, { target: { value: 'IonQ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockUpdateTags).not.toHaveBeenCalled());
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  it('stays SILENT when the entry is only whitespace', async () => {
+    // Enter over a stray space is a slip, not an error worth a red toast - and it is not a length
+    // problem, which is what the length comparison used to call it.
+    mockList.mockResolvedValue(page([{ ...bundleRow, tags: [] }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const input = screen.getByTestId('published-artifact-tag-input-pub-1');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockUpdateTags).not.toHaveBeenCalled());
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  it('names the CAP when the entry is one tag too many', async () => {
+    // Distinct from the length message: nothing about this tag is wrong, there is just no room.
+    const full = Array.from({ length: PUBLISH_TAGS_MAX }, (_, i) => `t${i}`);
+    mockList.mockResolvedValue(page([{ ...bundleRow, tags: full }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const input = screen.getByTestId('published-artifact-tag-input-pub-1');
+    fireEvent.change(input, { target: { value: 'one-more' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+    expect(String(mockToastError.mock.calls[0][0])).toMatch(/Up to 20 tags/i);
+  });
+
+  it('keeps the first tag when a second is added before the list refetches', async () => {
+    // The PATCH is a full replace computed off the row's `tags`, and the input re-enables when the
+    // mutation settles rather than when the refetch lands. Within that one round trip the second
+    // edit computed off the pre-write array and sent the first tag's absence as the new list.
+    // Only the FIRST load resolves; the refetch the write triggers stays IN FLIGHT, which is the
+    // window the bug lived in. Letting it resolve against a static pre-write fixture would answer
+    // the second edit with stale rows and the test would pass whatever the code does.
+    let loads = 0;
+    mockList.mockImplementation((q: { facets?: boolean } = {}) => {
+      if (q.facets) return Promise.resolve(page([]));
+      loads += 1;
+      return loads === 1 ? Promise.resolve(page([{ ...bundleRow, tags: [] }])) : new Promise(() => {});
+    });
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    const input = screen.getByTestId('published-artifact-tag-input-pub-1');
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mockUpdateTags).toHaveBeenCalledWith('pub-1', ['alpha']));
+
+    fireEvent.change(input, { target: { value: 'beta' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockUpdateTags).toHaveBeenCalledTimes(2));
+    expect(mockUpdateTags.mock.calls[1]).toEqual(['pub-1', ['alpha', 'beta']]);
+  });
+
+  it('offers a toolbar chip for a tag whose name collides with an Object prototype key', async () => {
+    // facets.tag is a plain object built by reduce, so `facets.tag['constructor']` is a function
+    // rather than undefined: the merge was skipped and Object.entries did not list it either, so
+    // selecting that tag from a row left no per-facet control to turn the selection back off.
+    mockList.mockResolvedValue(page([{ ...bundleRow, tags: ['constructor'] }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-tag-pub-1-constructor');
+
+    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-1-constructor'));
+
+    await waitFor(() => expect(lastQuery().tag).toBe('constructor'));
+    expect(screen.getByTestId('published-artifacts-facet-tag-constructor')).not.toBeNull();
   });
 });

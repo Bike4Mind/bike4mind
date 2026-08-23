@@ -48,11 +48,12 @@ import {
   refreshPublishedFromSource,
   type ManagedArtifact,
   type ManagedListFacets,
+  type ManagedListPage,
   updatePublishedTags,
   fetchMyTagVocabulary,
 } from '@client/app/utils/publishApi';
 import { ArtifactCover } from '@client/app/components/common/ArtifactCover';
-import { normalizePublishTags, PUBLISH_TAGS_MAX, PUBLISH_TAG_MAX_LENGTH } from '@bike4mind/common';
+import { normalizePublishTag, normalizePublishTags, PUBLISH_TAGS_MAX, PUBLISH_TAG_MAX_LENGTH } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
 import { downloadData } from '@client/app/utils/download';
@@ -186,10 +187,11 @@ export default function PublishedArtifactsTabContent() {
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
 
   // The caller's own tag vocabulary, for autocomplete. Deliberately OUTSIDE the
-  // ['published-artifacts','mine'] prefix: under it, every visibility toggle, comment switch and
-  // delete refetched it too, and it is the one query backed by a scan of another collection. Only a
-  // tag edit can change it, so only the tag mutation invalidates it - and a staleTime keeps
-  // reopening the tab from re-running it.
+  // ['published-artifacts','mine'] prefix: under it, every visibility toggle and comment switch
+  // refetched it too, and it is the one query backed by a scan of another collection. The two
+  // mutations that CAN change it - a tag edit, and a delete, which takes that artifact's tags out
+  // of the counts with it - invalidate it explicitly; a staleTime keeps reopening the tab from
+  // re-running it.
   const { data: tagVocabulary = [] } = useQuery({
     queryKey: ['publish-tag-vocabulary'] as const,
     queryFn: fetchMyTagVocabulary,
@@ -232,13 +234,30 @@ export default function PublishedArtifactsTabContent() {
   });
   const tagsMut = useMutation({
     mutationFn: (v: { publicId: string; tags: string[] }) => updatePublishedTags(v.publicId, v.tags),
+    // Patch the cached rows immediately. The PATCH is a full replace computed off `a.tags`, and
+    // `busy` tracks the mutation but not the list refetch, so the input re-enables while the cache
+    // is still pre-write: typing a second tag inside that one round trip sent the first one's
+    // absence as the new list and silently dropped it, under a "Tags updated" toast. Because the
+    // cache is corrected here rather than by the refetch, `busy` settling on the mutation is now
+    // harmless - do not "fix" it back into a dependency on refetch timing.
+    onMutate: v => {
+      qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
+        prev
+          ? { ...prev, artifacts: prev.artifacts.map(a => (a.publicId === v.publicId ? { ...a, tags: v.tags } : a)) }
+          : prev
+      );
+    },
     onSuccess: () => {
       toast.success('Tags updated');
       invalidate();
-      // The only mutation that can grow or shrink the vocabulary, so the only one that refreshes it.
       void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
     },
-    onError: (e: unknown) => toast.error(apiError(e, 'Failed to update tags')),
+    // Resync rather than restoring a snapshot: the server is the truth about what is stored, and
+    // the toast already says the write did not land.
+    onError: (e: unknown) => {
+      toast.error(apiError(e, 'Failed to update tags'));
+      invalidate();
+    },
   });
   const deleteMut = useMutation({
     // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
@@ -252,6 +271,10 @@ export default function PublishedArtifactsTabContent() {
       // resetting skip on a filter change, applied to the mutation that can shrink the set.
       if (v.wasLastOnPage) setSkip(cur => Math.max(0, cur - PAGE_SIZE));
       invalidate();
+      // A delete takes that artifact's tags out of the vocabulary counts, so the suggestions have
+      // to be refreshed too - otherwise deleting the last artifact carrying a label keeps offering
+      // it for up to the staleTime.
+      void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
   });
@@ -399,8 +422,11 @@ export default function PublishedArtifactsTabContent() {
                 capped at the top 24, but a row chip can select ANY tag the artifact has - and
                 without this there is no per-facet control to turn that selection back off, only the
                 global Clear. */}
+            {/* hasOwn, not `=== undefined`: facets.tag is a plain object built by reduce, so a tag
+                named `constructor` is never undefined there and the merge would be skipped - and
+                Object.entries would not list it either, leaving that selection with no chip. */}
             {Object.entries(
-              filters.tag && facets.tag[filters.tag] === undefined ? { [filters.tag]: 0, ...facets.tag } : facets.tag
+              filters.tag && !Object.hasOwn(facets.tag, filters.tag) ? { [filters.tag]: 0, ...facets.tag } : facets.tag
             ).map(([tag, n]) => (
               <Chip
                 key={`tag-${tag}`}
@@ -659,12 +685,24 @@ export default function PublishedArtifactsTabContent() {
                         // rewritten, which made the equality check below see no change: no write, no
                         // toast, and the chip just disappeared on the next render. Rewrites are
                         // self-explanatory; drops have to be said out loud or the field reads broken.
-                        if (tags.length < entered.length) {
-                          toast.error(
-                            entered.length > PUBLISH_TAGS_MAX
-                              ? `Up to ${PUBLISH_TAGS_MAX} tags per artifact`
-                              : `Tags can be at most ${PUBLISH_TAG_MAX_LENGTH} characters`
-                          );
+                        //
+                        // The REASON comes from the entries, not from `tags.length < entered.length`
+                        // - that is true of any shortening, dedupe and blank-drop included. MUI
+                        // compares options with ===, so typing `IonQ` beside an existing `ionq` chip
+                        // appends the variant and the normalizer then dedupes it: the old check
+                        // reported a length problem about a four-character tag. Blanks and duplicates
+                        // stay SILENT, for the same reason a rewrite does - they explain themselves.
+                        const normalizedEach = entered.map(normalizePublishTag);
+                        const tooLong = normalizedEach.some(t => t.length > PUBLISH_TAG_MAX_LENGTH);
+                        const overCap =
+                          new Set(normalizedEach.filter(t => t && t.length <= PUBLISH_TAG_MAX_LENGTH)).size >
+                          PUBLISH_TAGS_MAX;
+                        // Over-long wins when both hold: it points at a specific bad token, where
+                        // the cap message can only restate the limit.
+                        if (tooLong) {
+                          toast.error(`Tags can be at most ${PUBLISH_TAG_MAX_LENGTH} characters`);
+                        } else if (overCap) {
+                          toast.error(`Up to ${PUBLISH_TAGS_MAX} tags per artifact`);
                         }
                         const current = a.tags ?? [];
                         if (tags.length === current.length && tags.every((t, i) => t === current[i])) return;
