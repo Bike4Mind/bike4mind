@@ -37,9 +37,14 @@ function hash32(input: string): number {
  * too few buckets: at 12 hues x 8 angles = 96 combinations, forty artifacts collide on roughly eight
  * pairs (birthday), so the eye finds the wrong row.
  *
- * 24 hues x 3 saturations x 3 lightnesses x 8 angles = 1,728 gives about 0.45 expected collisions at
- * forty and stays under one pair into the low hundreds. Hues still come off a fixed wheel, and the
- * saturation/lightness steps are narrow, so covers remain a set rather than a colour test card.
+ * 24 hues x 3 saturations x 3 lightnesses x 8 angles reaches all 1,728 combinations, but NOT
+ * uniformly, and the birthday sum is over the distribution rather than the count. The axes are not
+ * independent: `h % 24` is not a bit range (24 = 8 x 3, so it shares `h mod 3` with the saturation
+ * index). Enumerating the tuple over the whole uint32 range gives an effective space of 1,535
+ * (1/sum of squared probabilities), which is 0.51 expected colliding pairs at forty artifacts and
+ * crosses one pair around fifty-six. Ample, and worth stating as the real number rather than the
+ * headline 1,728. Hues still come off a fixed wheel, and the saturation/lightness steps are narrow,
+ * so covers remain a set rather than a colour test card.
  */
 const HUE_STEPS = 24;
 const HUE_OFFSET = 205; // start at the app's blue and walk around from there
@@ -54,15 +59,22 @@ const LIGHTNESSES = [28, 34, 40];
  */
 export function coverGradient(publicId: string): string {
   const h = hash32(publicId);
-  // Independent bit ranges per axis, so two ids in the same hue bucket are still unlikely to share
-  // saturation, lightness and angle as well.
+  // A different slice of the hash per axis, so two ids in the same hue bucket are still unlikely to
+  // share saturation, lightness and angle as well. (Hue reads the low end arithmetically rather
+  // than as a bit range, which is why it is not fully independent of the others - see above.)
+  //
+  // UNSIGNED shifts throughout: hash32 returns the full uint32 range, and `>>` coerces to Int32, so
+  // any hash with the top bit set shifted negative, `% 3` yielded 0/-1/-2, and SATURATIONS[-1] came
+  // back undefined. One invalid colour stop invalidates the whole linear-gradient(), which
+  // invalidates `background`, which the parser drops - so ~44% of ids rendered the empty frame this
+  // component exists to prevent.
   const hue = (HUE_OFFSET + (h % HUE_STEPS) * (360 / HUE_STEPS)) % 360;
-  const sat = SATURATIONS[(h >> 5) % SATURATIONS.length];
-  const light = LIGHTNESSES[(h >> 11) % LIGHTNESSES.length];
+  const sat = SATURATIONS[(h >>> 5) % SATURATIONS.length];
+  const light = LIGHTNESSES[(h >>> 11) % LIGHTNESSES.length];
   // Second hue is a near-neighbour, so the gradient reads as one considered swatch rather than two
   // unrelated colours meeting in the middle.
   const hue2 = (hue + 24) % 360;
-  const angle = 20 + ((h >> 17) % 8) * 20;
+  const angle = 20 + ((h >>> 17) % 8) * 20;
   return `linear-gradient(${angle}deg, hsl(${hue} ${sat}% ${light}%), hsl(${hue2} ${sat - 4}% ${light - 12}%))`;
 }
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -46,16 +47,32 @@ describe('coverGradient', () => {
     expect(collidingPairs).toBeLessThan(6);
   });
 
+  it('emits a VALID gradient for every id in the real publicId format', () => {
+    // The shipped version indexed the bands with `>>`, which coerces to Int32 - and hash32 returns
+    // the full uint32 range, so any hash with the top bit set shifted negative, SATURATIONS[-1] was
+    // undefined, and the second stop's `sat - 4` was NaN. One invalid colour stop invalidates the
+    // whole linear-gradient(), which invalidates the `background` declaration, which the parser
+    // drops: those rows rendered the empty frame this component exists to prevent, at ~44% of ids.
+    //
+    // GENERATED ids, not fixtures, because both fixtures in this file were themselves broken cases -
+    // which is how it got through review.
+    const ids = Array.from({ length: 500 }, () => randomUUID().replace(/-/g, '').slice(0, 12));
+    const broken = ids.map(coverGradient).filter(g => /undefined|NaN/.test(g));
+    expect(broken).toEqual([]);
+  });
+
   it('stays within the app register rather than roaming the whole colour wheel', () => {
     // Fixed narrow saturation/lightness bands are what keep a library of covers reading as a set.
+    // No `if (m)` skip: a malformed stop failed the match and was silently passed over, so this
+    // assertion used to hold over the survivors while 44% of ids produced no gradient at all.
     const sats = new Set<string>();
     const lights = new Set<string>();
     for (let i = 0; i < 200; i++) {
-      const m = coverGradient(`pub_${i}`).match(/hsl\(\d+(?:\.\d+)? (\d+)% (\d+)%\)/);
-      if (m) {
-        sats.add(m[1]);
-        lights.add(m[2]);
-      }
+      const gradient = coverGradient(`pub_${i}`);
+      const m = gradient.match(/hsl\(\d+(?:\.\d+)? (\d+)% (\d+)%\)/);
+      expect(m, gradient).not.toBeNull();
+      sats.add(m![1]);
+      lights.add(m![2]);
     }
     expect(sats.size).toBeLessThanOrEqual(3);
     expect(lights.size).toBeLessThanOrEqual(3);
