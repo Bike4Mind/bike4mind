@@ -239,8 +239,12 @@ PublishedArtifactSchema.index({ 'source.artifactId': 1, ownerId: 1, deletedAt: 1
 PublishedArtifactSchema.index({ publishedAt: -1 }); // recency
 PublishedArtifactSchema.index({ moderationStatus: 1, reportCount: -1 }); // admin moderation queue
 PublishedArtifactSchema.index({ tier: 1, scopeId: 1, deletedAt: 1 }); // org-scope quota aggregation
-// Multikey over tags[], leading with ownerId because both consumers are owner-scoped: the
-// management tab's tag filter and the tag-vocabulary lookup that feeds its autocomplete.
+// Multikey over tags[] for the management tab's tag filter, which is owner-scoped - hence the
+// ownerId prefix. Its rows+total query applies the filter in a LEADING $match for exactly this
+// reason; a narrowing inside a $facet sub-pipeline cannot reach an index at all.
+// NOT for the tag-vocabulary lookup: that one matches { ownerId, deletedAt } with no tag predicate,
+// which { ownerId: 1, deletedAt: 1 } above serves - and serves better, since deletedAt there does
+// not sit behind a multikey field.
 PublishedArtifactSchema.index({ ownerId: 1, tags: 1, deletedAt: 1 });
 
 PublishedArtifactSchema.virtual('isDeleted').get(function () {

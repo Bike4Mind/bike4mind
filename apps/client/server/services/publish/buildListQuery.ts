@@ -5,13 +5,15 @@ import { normalizePublishTag, type PublishSourceKind, type PublishVisibility } f
  * behaviour that decides what an owner sees is testable without a database.
  *
  * Kept separate from buildListVisibilityFilter, which answers a different question: that one is
- * the AUTHORIZATION clause (what may this caller see at all) and runs as the pipeline's FIRST
- * $match stage. This one is the caller's own narrowing, and runs as a separate, later $match
- * inside each $facet branch - the two are never combined into a single object. Sequential $match
- * stages can only narrow further, so the effect is the same as an $and, but a reader looking for
- * a merge point will not find one.
+ * the AUTHORIZATION clause (what may this caller see at all), this one is the caller's own
+ * narrowing. The list route COMBINES them into a single leading $match, because Mongo will not use
+ * an index inside a $facet sub-pipeline and the narrowing has to be somewhere an index can serve it.
  *
- * Either way this must never be able to WIDEN the authorized set: it only ever adds constraints.
+ * That merge is an `$and` of the two objects, never a spread, and the reason is this module's one
+ * invariant: narrowing must never be able to WIDEN the authorized set. A spread is collision-free
+ * today, but the collision it would one day hide is a key here overwriting the visibility clause -
+ * exactly that failure. `$and` makes it structurally impossible, and the planner flattens a
+ * top-level `$and`, so nothing is paid for it.
  */
 
 export interface ListQueryParams {

@@ -78,6 +78,7 @@ function makePublicArtifactRow() {
     publicId: 'pub-1',
     title: 'My Artifact',
     description: 'desc',
+    tags: ['ionq', 'weekly'],
     visibility: 'public',
     commentPolicy: 'none',
     embedOrigins: undefined,
@@ -127,6 +128,15 @@ describe('GET public artifact - response scoping', () => {
       expect(leaked in artifact).toBe(false);
     }
     expect(JSON.stringify(artifact)).not.toContain('artifacts/pub-1/');
+  });
+
+  it('exposes tags to a non-owner, matching what the list route already projects', async () => {
+    // Deliberate: tags are metadata in the same class as title and description, both already on
+    // this path, and the list endpoint's non-`mine` branch has always projected them - so the two
+    // reads disagreed. The OWNER-SCOPED property belongs to the vocabulary endpoint, not to tags on
+    // an artifact document.
+    const res = await getArtifact({ id: 'someone-else', isAdmin: false });
+    expect(res._getJSONData().artifact.tags).toEqual(['ionq', 'weekly']);
   });
 
   it('returns only public display fields to an anonymous viewer', async () => {

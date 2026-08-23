@@ -71,10 +71,19 @@ function canManage(artifact: { ownerId: string }, user: { id: string; isAdmin?: 
 // display fields. Everything else -- ownerId, lastPublishedBy, storageKeyPrefix,
 // moderation internals (reportCount/takedownReason/deletedBy/moderationStatus),
 // source, tier/scopeId/slug, manifest/renderedBody, etc. -- is owner/admin-only.
+//
+// `tags` travels to public viewers DELIBERATELY, matching what the list route already projects on
+// its non-`mine` branch: they are artifact metadata in the same class as title and description,
+// which are on this path too, and a public browse surface will want to filter on them. So an owner
+// labelling a public artifact is publishing that label - nothing in the tag editor claims
+// otherwise, and it must not start to. (The owner-scoped property belongs to the VOCABULARY
+// endpoint, GET /api/publish/tags, which reads only the caller's own id; it never described tags on
+// an artifact document.)
 const PUBLIC_ARTIFACT_FIELDS = [
   'publicId',
   'title',
   'description',
+  'tags',
   'visibility',
   'commentPolicy',
   'embedOrigins',
