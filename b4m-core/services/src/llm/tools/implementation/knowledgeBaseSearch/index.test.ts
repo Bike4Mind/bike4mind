@@ -47,6 +47,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
     userId: 'u1',
     user: { id: 'u1', groups: [] } as never,
     sessionId: 's1',
+    questId: 'q1',
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     retrievalFilter: { excludeFilenameMarkers: ['MARK'], vectorizedOnly: true },
@@ -1457,6 +1458,10 @@ describe('search_knowledge_base access-event audit', () => {
         fileIds: ['f1'],
         surface: 'chat-kb-search',
         queryText: 'retired notes',
+        // #1867 turn linkage: the keyword arm has no similarity score, so `scores` is
+        // deliberately absent here (not asserted) - see the semantic-arm test below for that.
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });
@@ -1564,6 +1569,11 @@ describe('search_knowledge_base access-event audit', () => {
         chunkIds: ['c1'],
         fileIds: ['f1'],
         surface: 'chat-kb-search',
+        // #1867 similarity scores + turn linkage: semantic arm has a real per-chunk score
+        // (0.81 from the mocked result above), index-aligned with chunkIds.
+        scores: [0.81],
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });

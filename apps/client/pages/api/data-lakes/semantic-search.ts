@@ -341,6 +341,7 @@ const handler = baseApi()
             organizationId: normalizeId(req.user.organizationId),
             resolvedLakeIds,
             chunkIds: search.results.map(r => r.chunkId),
+            scores: search.results.map(r => r.score),
             fileIds: [...new Set(search.results.map(r => r.fileId))],
             surface: 'data-lake-semantic-search',
             queryText: query,

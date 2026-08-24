@@ -1720,6 +1720,16 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         chunkIds: ['chA1'],
         surface: 'forced-retrieval',
         queryText: 'pto policy',
+        // #1867 turn linkage + similarity scores: quest is a direct method param here, so
+        // zero new plumbing was needed - questId/sessionId come straight from it.
+        questId: 'quest1',
+        sessionId: 'session1',
+        // Pinned to the exact cosine, not expect.any(Number): the query embedding and chA1's
+        // vector are both [1, 0], so this is 1 by construction. A loose matcher here would pass
+        // for a wrong chunk's score or a rank index, which is the misattribution the
+        // scores/chunkIds alignment exists to prevent - this is the only forced-retrieval
+        // assertion that can fail on it.
+        scores: [1],
       })
     );
   });

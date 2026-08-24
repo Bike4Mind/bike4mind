@@ -85,6 +85,7 @@ import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/service
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
@@ -1023,6 +1024,10 @@ async function processExecution(
           organizationId: execution.organizationId,
           sessionId: execution.sessionId,
           questId: execution.questId,
+          // Inherited alongside `questId` so a child's own audit rows can join to the turn its
+          // parent belongs to. Distinct from `questId` above, which means different things per
+          // dispatch lineage and must never be read as a Quest id (#1867).
+          linkedQuestId: execution.linkedQuestId,
           query: info.task,
           model: info.model,
           approvedTools: [] as string[],
@@ -1258,6 +1263,8 @@ async function processExecution(
         organizationId: execution.organizationId,
         sessionId: execution.sessionId,
         questId: execution.questId,
+        // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
+        linkedQuestId: execution.linkedQuestId,
         spawnedByExecutionId: executionId,
       },
       logger,
@@ -1427,6 +1434,10 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
+      questId: resolveExecutionQuestId({
+        startPayloadQuestId: startPayload?.questId,
+        executionLinkedQuestId: execution.linkedQuestId,
+      }),
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -2959,6 +2970,11 @@ async function processSubagentDispatch(
       onToolStart: async () => {},
       onToolFinish: async () => {},
       sessionId: child.sessionId,
+      // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
+      // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
+      // a lake-access row - but wired now so the native-tool path anticipated below does not
+      // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
+      questId: child.linkedQuestId,
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: child.model,

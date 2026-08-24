@@ -38,12 +38,14 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    questId,
   }: {
     db: ToolContext['db'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+    questId?: ToolContext['questId'];
   },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
@@ -70,6 +72,7 @@ export const generateTools = (
     userId,
     user,
     sessionId,
+    questId,
     logger,
     db,
     storage,
