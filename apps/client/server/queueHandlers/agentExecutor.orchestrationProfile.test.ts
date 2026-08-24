@@ -243,8 +243,29 @@ describe('pickEffectiveEnabledTools', () => {
     isSynthetic: true,
   };
 
-  it('returns the payload set when non-empty', () => {
-    expect(pickEffectiveEnabledTools(['file_read'], profile)).toEqual(['file_read']);
+  it('narrows the profile to the tools the payload names', () => {
+    expect(pickEffectiveEnabledTools(['web_search'], profile)).toEqual(['web_search']);
+  });
+
+  // Was "returns the payload set when non-empty". A payload that replaced the whitelist made the
+  // whitelist meaningless: a curated profile collapsed to whatever the caller happened to name,
+  // losing the tools its loop runs on.
+  it('does not let the payload add a tool the profile does not allow', () => {
+    expect(pickEffectiveEnabledTools(['web_search', 'file_read'], profile)).toEqual(['web_search']);
+  });
+
+  it('falls back to the profile when the payload names nothing it allows, rather than leaving the run toolless', () => {
+    expect(pickEffectiveEnabledTools(['file_read'], profile)).toEqual(['web_search', 'coordinate_task']);
+  });
+
+  it('passes the payload through when the profile declares no ceiling', () => {
+    const unrestricted: ResolvedOrchestrationProfile = { ...profile, allowedTools: [] };
+    expect(pickEffectiveEnabledTools(['file_read'], unrestricted)).toEqual(['file_read']);
+  });
+
+  it('ignores the payload entirely for a profile whose toolset is exclusive', () => {
+    const exclusive: ResolvedOrchestrationProfile = { ...profile, toolsetIsExclusive: true };
+    expect(pickEffectiveEnabledTools(['web_search'], exclusive)).toEqual(['web_search', 'coordinate_task']);
   });
 
   it('falls through to the profile when payload is undefined', () => {

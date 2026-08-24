@@ -42,6 +42,16 @@ export interface ResolvedOrchestrationProfile {
   /** Whether this profile was synthesized from admin defaults (vs sourced from a persisted IAgent). */
   isSynthetic: boolean;
   /**
+   * Whether `allowedTools` IS the run's toolbelt rather than a ceiling the caller may narrow.
+   *
+   * A surface that authors its own profile is picking the toolset deliberately -- the loop only
+   * works if every tool in the walk is present -- and the client already tells the user as much
+   * ("your tool selection was replaced by the agent toolset") when the router upgrades a chat
+   * send. Left false for admin-default and persisted-agent profiles, where the caller's payload
+   * is a legitimate per-run narrowing.
+   */
+  toolsetIsExclusive?: boolean;
+  /**
    * Persona system prompt for the agent (#agent-mode-persona). Sourced from a
    * persisted IAgent's `systemPrompt` / `personality` via `buildAgentPersonaPrompt`.
    * `undefined` for synthetic (agentless) profiles, which have no persona.
@@ -153,8 +163,36 @@ export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
   profile: ResolvedOrchestrationProfile
 ): string[] {
-  const chosen = payloadEnabledTools && payloadEnabledTools.length > 0 ? payloadEnabledTools : profile.allowedTools;
+  const chosen = pickBeforeDenials(payloadEnabledTools, profile);
   if (profile.deniedTools.length === 0) return chosen;
   const denied = new Set(profile.deniedTools);
   return chosen.filter(t => !denied.has(t));
+}
+
+/**
+ * The payload may NARROW a profile's toolbelt; it may never widen it, and it cannot touch an
+ * exclusive one.
+ *
+ * The payload used to replace `allowedTools` outright whenever it was non-empty, which made a
+ * profile's whitelist mean nothing the moment a caller shipped a list of its own: a curated
+ * surface profile got collapsed to whatever the chat composer's tool selection happened to name,
+ * silently dropping the tools its loop depends on. An empty `allowedTools` still means "no
+ * ceiling" (see `resolveTopLevelProfile`, where it is the fallback when neither the agent nor
+ * admin defaults name any), so a payload passes through untouched there.
+ */
+function pickBeforeDenials(
+  payloadEnabledTools: string[] | undefined,
+  profile: ResolvedOrchestrationProfile
+): string[] {
+  const ceiling = profile.allowedTools;
+  // The chat dispatch path ships [] when the caller has no override, so empty means "use profile".
+  if (!payloadEnabledTools || payloadEnabledTools.length === 0) return ceiling;
+  if (profile.toolsetIsExclusive) return ceiling;
+  if (ceiling.length === 0) return payloadEnabledTools;
+  const allowed = new Set(ceiling);
+  const narrowed = payloadEnabledTools.filter(t => allowed.has(t));
+  // A payload naming nothing the profile permits is not a request for a toolless agent - it is a
+  // payload that does not apply to this profile. Falling back to the ceiling keeps the run able to
+  // act at all, which an empty toolbelt never is.
+  return narrowed.length > 0 ? narrowed : ceiling;
 }
