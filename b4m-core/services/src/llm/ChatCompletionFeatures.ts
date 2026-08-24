@@ -445,6 +445,7 @@ export type ChatCompletionContext = Pick<
   | 'logger'
   | 'entitlementKeys'
   | 'resolveEntitlementKeys'
+  | 'personalCorpusOnly'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -1850,6 +1851,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // itself if it genuinely needs the library alongside the attachment.
     if (quest.fabFileIds && quest.fabFileIds.length > 0) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
+      return [];
+    }
+
+    // Same rule as the per-turn skip above, at SESSION altitude: when everything attached to this
+    // notebook is a personal file rather than lake content, the question is about those documents
+    // and grounding against every reachable lake is what put an unrelated product's documents into
+    // a user's answer. See `personalCorpusOnly` for why it keys on lake membership and not on an
+    // empty `retrievalTags`. A lake session keeps grounding: its attachments ARE lake-tagged. The
+    // model can still call search_knowledge_base itself if it needs the library.
+    if (this.chatCompletion.personalCorpusOnly) {
+      this.logger.log('🔒 Forced retrieval: skipped (session corpus is personal files, not lake content)');
       return [];
     }
 

@@ -754,6 +754,22 @@ export class ChatCompletionProcess {
    * NEVER set from cached static options - it is a per-request, per-user value.
    */
   public entitlementKeys: string[] = [];
+  /**
+   * True when everything attached to this session is a PERSONAL file - nothing that belongs to a
+   * data lake the caller can reach. The signal for "this notebook is about its own uploads, not the
+   * curated library", read by KnowledgeRetrievalFeature to skip forced retrieval.
+   *
+   * Keyed on lake MEMBERSHIP rather than on `retrievalTags` being empty, which is the weaker test it
+   * replaced: attaching a lake file to an EXISTING session goes through sessionService.update, which
+   * derives no tags (only create does), so an empty tag list cannot distinguish a personal upload
+   * from a lake file-click and the weaker test would cut lake browsing off from its own lake.
+   * Monotone by construction - it can only ever withhold retrieval from a session where nothing
+   * attached belongs to any reachable lake.
+   *
+   * Defaults false so an unresolvable lake lookup keeps today's behavior instead of silently
+   * suppressing retrieval (fail toward grounding, mirroring the tool-offer gate below).
+   */
+  public personalCorpusOnly = false;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -1578,6 +1594,26 @@ export class ChatCompletionProcess {
       // is the array reference handed to buildTools, so splice the result back in place rather
       // than reassigning the binding.
       //
+      // Resolved here because this is where `attachedKnowledgeFiles` is already in hand. The lake
+      // lookup is memoized (accessibleDataLakeAccessMemo) and degrades to empty tags, so an empty
+      // set is treated as "cannot judge" rather than as "belongs to no lake" - otherwise a transient
+      // failure would read as personal-only and suppress retrieval.
+      const accessibleLakeTags = hasAnyAttachment
+        ? new Set((await this.getAccessibleDataLakeAccess()).dataLakeTags)
+        : new Set<string>();
+      // Keying this on lake MEMBERSHIP is what makes the corpus-defer path safe without a further
+      // gate: resolveCorpusInlinePlan only ever defers a `lakeTagged` file, against this same
+      // accessible-tag set, so a personal-only corpus has nothing deferrable and cannot be stranded
+      // by a raised CorpusRetrievalMinInlineTokensPerDoc. Change this predicate away from lake
+      // membership and that gate has to be added there.
+      this.personalCorpusOnly =
+        hasAnyAttachment &&
+        attachedKnowledgeFiles !== null &&
+        accessibleLakeTags.size > 0 &&
+        (session.retrievalTags?.length ?? 0) === 0 &&
+        session.corpusGroundingMode !== 'retrieve' &&
+        attachedKnowledgeFiles.every(f => !(f.tags ?? []).some(t => accessibleLakeTags.has(t.name)));
+
       // "Attached knowledge" for the offer means the caller has an attachment the tool can
       // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
       // content already inlined by processFabFilesServer, so offering the tool for it can only
