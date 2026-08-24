@@ -412,7 +412,7 @@ export default function DataLakeChatTree({
 
   return (
     // The chrome's file rows wire their own onClick straight to onViewFile, so TreeView's
-    // per-row callback is unused here (it exists for the page tree) and gets a no-op.
+    // per-row callback is unused here (the manager nav and Viewer use it) and gets a no-op.
     <DataLakeTreeView
       tree={tree}
       articles={articles}
