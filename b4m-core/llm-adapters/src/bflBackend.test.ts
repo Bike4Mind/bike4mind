@@ -4,20 +4,21 @@ import { BFLBackend } from './bflBackend';
 
 describe('BFLBackend.getModelInfo', () => {
   it('never leads a description with another model name', async () => {
-    // The catalog seed and every picker surface read these strings verbatim, and a
-    // description shifted onto the neighbouring entry reads as a plausible blurb
-    // rather than as a bug - it also makes the picker's description search
-    // (ModelSelection.tsx) match the wrong model. Asserting the leading
-    // '<Model Name> - ' segment names its own row is what catches the shift.
-    // The same rule holds across collectStaticCatalogModels() if it is ever wanted
-    // catalog-wide; scoped here to keep this a table-only unit test.
+    // Kept alongside the table it guards even though
+    // packages/database/src/seeds/modelDescriptionAttribution.test.ts holds the same
+    // invariant over every backend: that one reads the BUILT adapter dist, so it cannot
+    // fail on a source edit here until the package is rebuilt. This is the fast local
+    // signal; that one is the coverage.
     const models = await new BFLBackend('test-key').getModelInfo();
-    const owners = new Map(models.map(model => [model.name, model.id]));
+    const names = new Set(models.map(model => model.name).filter(Boolean));
 
     const misattributed = models.flatMap(model => {
-      const [prefix] = (model.description ?? '').split(' - ', 1);
-      const owner = owners.get(prefix.trim());
-      return owner && owner !== model.id ? [{ id: model.id, describes: owner }] : [];
+      const description = model.description ?? '';
+      const separator = description.indexOf(' - ');
+      if (separator < 0) return [];
+      const leadsWith = description.slice(0, separator).trim();
+      if (!names.has(leadsWith) || leadsWith === model.name) return [];
+      return [{ id: model.id, name: model.name, leadsWith }];
     });
 
     expect(misattributed).toEqual([]);

@@ -37,7 +37,7 @@ Once the model generates your image, you can view, download, or edit the result.
 - **Quality options**: Standard or HD
 - **Sizes**: 1024x1024, 1024x1536, 1536x1024
 
-#### Flux (BlackForest Labs)
+#### Flux (Black Forest Labs)
 - **FLUX Pro 1.1**: Professional quality standard generation
 - **FLUX Pro Ultra**: Premium quality with custom aspect ratios
 - **FLUX Kontext**: Transform existing images based on prompts
@@ -141,7 +141,7 @@ Check your credit balance in Profile > Credit Analytics.
 
 - Make sure you have an image model selected (use the model picker and filter by Image Models)
 - Check you have sufficient credits
-- Verify you have API keys configured for the image provider (OpenAI or BlackForest Labs)
+- Verify you have API keys configured for the image provider (OpenAI or Black Forest Labs)
 - Try a simpler prompt first
 
 ### Poor Quality Results
