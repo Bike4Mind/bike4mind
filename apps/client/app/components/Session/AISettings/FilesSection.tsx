@@ -199,9 +199,14 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
           setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
 
           // /api/files/reprocess has cleared the flags server-side; mirror that rather than
-          // claiming completion. The real end state arrives over update_file_chunk_vector_status.
+          // claiming completion. Nothing reconciles this panel in-session: it has no
+          // update_file_chunk_vector_status subscriber, and the workbench store is zustand, so the
+          // hook's ['fabFiles'] invalidation cannot reach it either - the row stays pending until a
+          // remount or session switch rehydrates it (SessionsContext's knowledgeIds effect).
+          // isChunking is what the disabled predicates below read, so setting it keeps the button
+          // from re-arming mid-rebuild; a second click would be a second real reset + re-embed.
           const markPending = (f: IFabFileDocument) =>
-            f.id === file.id ? { ...f, vectorized: false, chunked: false } : f;
+            f.id === file.id ? { ...f, vectorized: false, chunked: false, isChunking: true } : f;
 
           if (isSystemFile) {
             // For system files, first manually update the cache data
@@ -224,7 +229,10 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                 queryKey: ['fab-file', file.id],
                 exact: false,
               });
-            }, 1500); // 1.5 second delay to allow server to process the file
+              // Vestigial under these semantics: at t+1.5s the row can only re-confirm the reset
+              // this handler just mirrored, never observe completion. Kept because the refetch is
+              // harmless and picking up the real end state needs the deferred subscriber instead.
+            }, 1500);
           } else if (currentSessionId) {
             setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(markPending));
           }

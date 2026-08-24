@@ -12,6 +12,7 @@ const mockChunkMutate = vi.fn();
 const mockReprocessMutate = vi.fn();
 const { mockToastSuccess } = vi.hoisted(() => ({ mockToastSuccess: vi.fn() }));
 const mockSetWorkBenchFiles = vi.fn();
+const { mockSetQueriesData } = vi.hoisted(() => ({ mockSetQueriesData: vi.fn() }));
 
 let messageFiles: IFabFileDocument[] = [];
 let workBenchFiles: IFabFileDocument[] = [];
@@ -53,7 +54,9 @@ vi.mock('@client/app/hooks/useEmbeddingMismatchStatus', () => ({
   useEmbeddingMismatchStatus: () => ({ hasEmbeddingMismatch: () => false }),
 }));
 vi.mock('@client/app/components/Knowledge/KnowledgeViewer', () => ({ setKnowledgeViewer: vi.fn() }));
-vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueriesData: mockSetQueriesData }),
+}));
 vi.mock('@client/app/hooks/useSessionLayout', () => ({
   default: (sel: (s: unknown) => unknown) => sel({ pendingMessageFiles: [], recentArtifacts: [] }),
   setSessionLayout: vi.fn(),
@@ -190,10 +193,33 @@ describe('FilesSection message-scoped files', () => {
     expect(mockToastSuccess.mock.calls[0][0]).toMatch(/Re-processing/);
     expect(mockToastSuccess.mock.calls[0][0]).not.toMatch(/Successfully reprocessed/);
 
-    // The optimistic write must not claim the rebuild finished under the current model.
+    // The optimistic write must not claim the rebuild finished under the current model, and must
+    // land in the current session's bucket - a wrong key would write pending state nowhere visible.
     expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][0]).toBe('s1');
     const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
     expect(updated[0]).toMatchObject({ chunked: false, vectorized: false });
+    expect(updated[0].embeddingModel).toBe('model-a');
+    // Feeds the row's disabled predicate, so the button cannot re-arm mid-rebuild and buy a
+    // second real reset + re-embed on a stray click.
+    expect(updated[0].isChunking).toBe(true);
+  });
+
+  it('marks a system-scoped file pending in the system-prompt-files cache', () => {
+    settingsValues.defaultEmbeddingModel = 'model-b';
+    systemFiles = [
+      { ...fab('sys1', 'policy.pdf'), embeddingModel: 'model-a', chunked: true, vectorized: true } as IFabFileDocument,
+    ];
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-system-sys1'));
+    mockReprocessMutate.mock.calls[0][1].onSuccess();
+
+    // System files go through the react-query cache, not the workbench store.
+    expect(mockSetWorkBenchFiles).not.toHaveBeenCalled();
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    const updated = mockSetQueriesData.mock.calls[0][1](systemFiles);
+    expect(updated[0]).toMatchObject({ chunked: false, vectorized: false, isChunking: true });
     expect(updated[0].embeddingModel).toBe('model-a');
   });
 

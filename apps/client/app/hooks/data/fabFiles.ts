@@ -220,8 +220,10 @@ export function useChunkFile(options: { onSuccess?: () => void } = {}) {
  * (e.g. re-embedding under a new embedding model) actually happen. Chunk size is not sent - the
  * rebuild inherits the owner-altitude DefaultChunkSize policy resolved server-side.
  *
- * A 200 is only the queue ack, not a finished rebuild; the real state arrives over the
- * update_file_chunk_vector_status websocket message.
+ * A 200 is only the queue ack, not a finished rebuild. The ['fabFiles'] invalidation below picks
+ * the end state up for react-query consumers; a caller holding files somewhere else (e.g. the
+ * zustand workbench store) is not reconciled by it and needs its own update_file_chunk_vector_status
+ * subscriber, which no caller has yet.
  */
 export function useReprocessFile() {
   const queryClient = useQueryClient();
