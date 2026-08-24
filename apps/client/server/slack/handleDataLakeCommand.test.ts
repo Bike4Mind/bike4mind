@@ -199,6 +199,24 @@ describe('handleDataLakeCommand', () => {
         expect(reply).not.toContain('Org-less Notes');
       });
 
+      it('drops a slug whose WINNING lake is unwritable, even when a lower-priority one is writable', async () => {
+        // findBySlug takes the own-org lake by priority alone and never falls back when it turns
+        // out to be unwritable, so `add` would refuse this slug outright. Printing the org-less
+        // lake because it happens to be writable would name a lake the command never targets.
+        listDataLakes.mockResolvedValue([
+          { slug: 'notes', name: 'My Org-less Notes', canManage: true },
+          { slug: 'notes', name: 'Read-only Org Notes', canManage: false, organizationId: 'org-a' },
+        ]);
+
+        buildSlackAccessContext.mockResolvedValue({ ...adminCtx, isAdmin: false });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: false } }));
+
+        expect(printedSlugs(reply)).not.toContain('notes');
+        expect(reply).not.toContain('My Org-less Notes');
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
       it('never prints a slug `add` cannot resolve (listed implies addable)', async () => {
         const catalog = [
           { slug: 'personal', name: 'Personal', canManage: true },
@@ -207,10 +225,13 @@ describe('handleDataLakeCommand', () => {
           { slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
           { slug: 'notes', name: 'Org-less Notes', canManage: true },
           { slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
+          // Deliberately NOT uniformly writable: the winning lake for `shared` is unwritable, so
+          // `add` refuses the slug and the guard must see the reply omit it rather than print the
+          // writable org-less one. A catalog with canManage: true everywhere cannot catch that.
+          { slug: 'shared', name: 'Writable Org-less Shared', canManage: true },
+          { slug: 'shared', name: 'Read-only Org Shared', canManage: false, organizationId: 'org-a' },
         ];
         listDataLakes.mockResolvedValue(catalog);
-
-        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
 
         // Mirrors DataLakeModel.findBySlug: an own-org match first (lowest org id), then the
         // org-less fallback. If that rule changes, this guard is what catches the divergence.
@@ -221,12 +242,26 @@ describe('handleDataLakeCommand', () => {
           return own[0] ?? catalog.find(l => l.slug === slug && !l.organizationId) ?? null;
         };
 
-        const slugs = printedSlugs(reply);
-        expect(slugs.length).toBeGreaterThan(0);
-        for (const slug of slugs) {
-          const resolved = findBySlug(slug);
-          expect(resolved, `add to \`${slug}\` would be refused`).not.toBeNull();
-          expect(reply).toContain(resolved!.name);
+        // Both actors, because the write gate differs: an admin is granted outright on any
+        // non-registry lake, so an admin-only run cannot see an unwritable winner at all.
+        for (const isAdmin of [true, false]) {
+          buildSlackAccessContext.mockResolvedValue({ ...adminCtx, isAdmin });
+
+          const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin } }));
+
+          const slugs = printedSlugs(reply);
+          expect(slugs.length, `no rows printed for isAdmin=${isAdmin}`).toBeGreaterThan(0);
+          for (const slug of slugs) {
+            const resolved = findBySlug(slug);
+            expect(resolved, `add to \`${slug}\` would be refused`).not.toBeNull();
+            expect(reply).toContain(resolved!.name);
+            // `add` gates the lake findBySlug returned, with no retry against a same-slug sibling,
+            // so a printed slug whose winner fails that gate is a promise the command breaks.
+            // No registry lakes in this catalog, so the admin arm of isWritable is just isAdmin.
+            expect(resolved!.canManage || isAdmin, `add to \`${slug}\` resolves a lake this caller cannot write`).toBe(
+              true
+            );
+          }
         }
       });
     });
