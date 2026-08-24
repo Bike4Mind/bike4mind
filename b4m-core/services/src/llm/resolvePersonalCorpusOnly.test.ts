@@ -13,6 +13,7 @@ const base = {
   accessibleLakeTags: LAKES,
   retrievalTags: undefined as string[] | undefined,
   corpusGroundingMode: undefined as string | undefined,
+  lakeReachableAttachments: 0 as number | null,
 };
 
 describe('resolvePersonalCorpusOnly', () => {
@@ -74,6 +75,20 @@ describe('resolvePersonalCorpusOnly', () => {
 
   it("is false when the lake's grounding mode makes the tool the intended reader", () => {
     expect(resolvePersonalCorpusOnly({ ...base, corpusGroundingMode: 'retrieve' })).toBe(false);
+  });
+
+  /**
+   * The organization-lake case again, from the other side: here the ownership reader DID resolve
+   * every id (so the count guard passes), but the lake arm reports the files are lake content. That
+   * happens when a member owns some files and the lake also claims them, and it is the clause that
+   * makes the classification authoritative rather than reader-dependent.
+   */
+  it('is FALSE when the lake arm reports attached lake content, whatever the other reader saw', () => {
+    expect(resolvePersonalCorpusOnly({ ...base, lakeReachableAttachments: 1 })).toBe(false);
+  });
+
+  it('is FALSE when lake reachability could not be determined', () => {
+    expect(resolvePersonalCorpusOnly({ ...base, lakeReachableAttachments: null })).toBe(false);
   });
 
   it('is false with nothing attached', () => {

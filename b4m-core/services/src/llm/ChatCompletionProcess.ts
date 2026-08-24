@@ -945,6 +945,50 @@ export class ChatCompletionProcess {
    * (both call sites do); a future caller passing a different subset would silently get the
    * first call's cached result instead of its own.
    */
+  /**
+   * How many of `ids` are reachable AS LAKE CONTENT by this caller.
+   *
+   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`, whose CASL scope has
+   * no lake arm: an organization lake widens reach through the lake creator's identity, so a member
+   * attaching a teammate's lake file is invisible to an ownership/share-based reader. Classifying a
+   * corpus as "personal" off that reader alone is how such a session lost its grounding.
+   *
+   * Uses the ownership-OR-lake arm (`includeShared` with the resolved lake args and NO
+   * `skipOwnership`), so it is permission-correct: `restrictToFileIds` bounds it to the requested
+   * ids and `buildOwnershipConditions` still has to admit each one. Returns `null` when it cannot
+   * tell, which callers must treat as "cannot judge".
+   */
+  private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
+    if (ids.length === 0) return 0;
+    try {
+      const access = await this.getAccessibleDataLakeAccess();
+      if (access.dataLakeTags.length === 0) return null;
+      const res = await this.db.fabfiles!.search(
+        this.user.id,
+        '',
+        { tags: [], shared: false, restrictToFileIds: ids },
+        { page: 1, limit: ids.length },
+        { by: 'fileName', direction: 'asc' },
+        {
+          textSearch: false,
+          includeShared: true,
+          userGroups: this.user.groups || [],
+          dataLakeTags: access.dataLakeTags,
+          dataLakeTagPrefixes: access.dataLakeTagPrefixes,
+          scopedTagPrefixes: access.scopedTagPrefixes,
+          restrictToDataLake: true,
+          excludeContent: true,
+        } as never
+      );
+      return res.data.length;
+    } catch (err) {
+      this.logger.warn(
+        `[knowledge] lake-reachability check failed; treating the corpus as unclassifiable: ${(err as Error)?.message}`
+      );
+      return null;
+    }
+  }
+
   private async getAttachedKnowledgeFiles(ids: string[]): Promise<IFabFileDocument[] | null> {
     if (this.attachedKnowledgeFilesMemo === undefined) {
       try {
@@ -1614,6 +1658,10 @@ export class ChatCompletionProcess {
         accessibleLakeTags,
         retrievalTags: session.retrievalTags,
         corpusGroundingMode: session.corpusGroundingMode,
+        // Asked through the lake arm, because the reader above cannot see lake-membership files.
+        lakeReachableAttachments: hasAnyAttachment
+          ? await this.countLakeReachableAttachments(session.knowledgeIds ?? [])
+          : 0,
       });
       // Ids come from the already-CASL-filtered lookup, never from session.knowledgeIds directly.
       this.personalCorpusFileIds = this.personalCorpusOnly ? (attachedKnowledgeFiles ?? []).map(f => f.id) : [];
