@@ -42,13 +42,13 @@ export interface ResolvedOrchestrationProfile {
   /** Whether this profile was synthesized from admin defaults (vs sourced from a persisted IAgent). */
   isSynthetic: boolean;
   /**
-   * Whether `allowedTools` IS the run's toolbelt rather than a ceiling the caller may narrow.
+   * Whether `allowedTools` IS the run's toolbelt rather than a default the payload may replace.
    *
    * A surface that authors its own profile is picking the toolset deliberately -- the loop only
    * works if every tool in the walk is present -- and the client already tells the user as much
    * ("your tool selection was replaced by the agent toolset") when the router upgrades a chat
    * send. Left false for admin-default and persisted-agent profiles, where the caller's payload
-   * is a legitimate per-run narrowing.
+   * (a briefcase override, a quest node's scoped toolset) legitimately takes precedence.
    */
   toolsetIsExclusive?: boolean;
   /**
@@ -151,9 +151,14 @@ export function pickEffectiveMaxIterations(
 }
 
 /**
- * Pick the effective tool whitelist - payload override beats profile default,
- * but the profile's `deniedTools` ALWAYS wins as a final subtraction so an
- * admin denylist can't be bypassed by shipping `enabledTools` in the payload.
+ * Pick the effective tool whitelist. A non-empty payload beats the profile default - the
+ * briefcase-override contract (`resolveDispatchTools` on the client) depends on a pinned
+ * selection surviving whatever profile the run resolves - EXCEPT for a profile whose
+ * `toolsetIsExclusive`: there the profile's toolset IS the toolbelt and the payload is
+ * ignored, which is the promise the client's "your tool selection was replaced by the
+ * agent toolset" banner already makes. The profile's `deniedTools` ALWAYS wins as a final
+ * subtraction so an admin denylist can't be bypassed by shipping `enabledTools` in the
+ * payload.
  *
  * An EMPTY payload array is treated as "use profile" rather than "explicitly
  * no tools" because the chat dispatch path can ship `[]` when no per-message
@@ -163,36 +168,9 @@ export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
   profile: ResolvedOrchestrationProfile
 ): string[] {
-  const chosen = pickBeforeDenials(payloadEnabledTools, profile);
+  const payloadApplies = payloadEnabledTools && payloadEnabledTools.length > 0 && !profile.toolsetIsExclusive;
+  const chosen = payloadApplies ? payloadEnabledTools : profile.allowedTools;
   if (profile.deniedTools.length === 0) return chosen;
   const denied = new Set(profile.deniedTools);
   return chosen.filter(t => !denied.has(t));
-}
-
-/**
- * The payload may NARROW a profile's toolbelt; it may never widen it, and it cannot touch an
- * exclusive one.
- *
- * The payload used to replace `allowedTools` outright whenever it was non-empty, which made a
- * profile's whitelist mean nothing the moment a caller shipped a list of its own: a curated
- * surface profile got collapsed to whatever the chat composer's tool selection happened to name,
- * silently dropping the tools its loop depends on. An empty `allowedTools` still means "no
- * ceiling" (see `resolveTopLevelProfile`, where it is the fallback when neither the agent nor
- * admin defaults name any), so a payload passes through untouched there.
- */
-function pickBeforeDenials(
-  payloadEnabledTools: string[] | undefined,
-  profile: ResolvedOrchestrationProfile
-): string[] {
-  const ceiling = profile.allowedTools;
-  // The chat dispatch path ships [] when the caller has no override, so empty means "use profile".
-  if (!payloadEnabledTools || payloadEnabledTools.length === 0) return ceiling;
-  if (profile.toolsetIsExclusive) return ceiling;
-  if (ceiling.length === 0) return payloadEnabledTools;
-  const allowed = new Set(ceiling);
-  const narrowed = payloadEnabledTools.filter(t => allowed.has(t));
-  // A payload naming nothing the profile permits is not a request for a toolless agent - it is a
-  // payload that does not apply to this profile. Falling back to the ceiling keeps the run able to
-  // act at all, which an empty toolbelt never is.
-  return narrowed.length > 0 ? narrowed : ceiling;
 }

@@ -939,9 +939,18 @@ async function processExecution(
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
+        toolsetIsExclusive: orchestrationProfile.toolsetIsExclusive ?? false,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
         isContinuation: !isNewExecution,
       });
+      // An exclusive toolset voids the payload's tool selection by design - but silently
+      // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
+      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+        logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
+          profileId: orchestrationProfile.id,
+          ignoredToolCount: startPayload.enabledTools.length,
+        });
+      }
     }
 
     // Build tools - per-request agent store (unified agent model).
