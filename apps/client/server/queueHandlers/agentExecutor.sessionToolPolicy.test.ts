@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   applySessionToolPolicy,
+  delegationOffer,
   runHasAttachments,
   DELEGATION_TOOLS,
   type SessionToolPolicyInput,
@@ -200,5 +201,56 @@ describe('runHasAttachments', () => {
     // Session knowledge alone counts: it is how a file attached to the notebook (rather than to
     // this message) reaches the agent, and it is the case that first surfaced this bug.
     expect(runHasAttachments({}, ['f1'])).toBe(true);
+  });
+});
+
+/**
+ * The two delegation tools are injected as OBJECTS in sharedToolBuilder, keyed on
+ * `deps.agentStore` / `deps.dagDispatcher` - `enabledTools` names never see them
+ * (issue #1829). So the only enforcement a profile's or session's denial can have
+ * is deciding these two dependency gates, which is what this helper does and what
+ * agentExecutor consumes when it builds toolDeps.
+ */
+describe('delegationOffer -- profile and session denials reach the dependency gates', () => {
+  it('offers both surfaces when nothing denies them', () => {
+    expect(delegationOffer({ profileDeniedTools: [], session: {} })).toEqual({
+      offerDelegate: true,
+      offerDag: true,
+    });
+  });
+
+  it('withholds both when the profile denies both (the optimizer profile)', () => {
+    expect(
+      delegationOffer({
+        profileDeniedTools: ['image_generation', 'delegate_to_agent', 'coordinate_task'],
+        session: {},
+      })
+    ).toEqual({ offerDelegate: false, offerDag: false });
+  });
+
+  it('can withhold DAG decomposition while keeping single-agent delegation', () => {
+    expect(delegationOffer({ profileDeniedTools: ['coordinate_task'], session: {} })).toEqual({
+      offerDelegate: true,
+      offerDag: false,
+    });
+  });
+
+  it('honors the session contract: disableUserIntegrations withholds both', () => {
+    expect(delegationOffer({ profileDeniedTools: [], session: { disableUserIntegrations: true } })).toEqual({
+      offerDelegate: false,
+      offerDag: false,
+    });
+  });
+
+  it('honors a session-level disabledTools entry', () => {
+    expect(
+      delegationOffer({ profileDeniedTools: [], session: { disabledTools: ['delegate_to_agent'] } })
+    ).toEqual({ offerDelegate: false, offerDag: true });
+  });
+
+  it('a denial of unrelated tools withholds nothing', () => {
+    expect(
+      delegationOffer({ profileDeniedTools: ['image_generation'], session: { disabledTools: ['web_search'] } })
+    ).toEqual({ offerDelegate: true, offerDag: true });
   });
 });
