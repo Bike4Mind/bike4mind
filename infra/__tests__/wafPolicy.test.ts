@@ -266,29 +266,57 @@ describe('wafPolicy', () => {
     });
   });
 
-  // A rate limit that matches the raw path is evadable. Verified against staging with
-  // curl --path-as-is: /./api/otc/send and //api/otc/send both reach the API and answer with
-  // application/json, while neither literally starts with "/api/", so a rule matching the
-  // untransformed path never counts them. NORMALIZE_PATH closes that; URL_DECODE does not,
-  // because the percent-encoded form (/%61pi/...) is routed to the SPA shell and never reaches
-  // an endpoint. Limits only - for an Allow or an exemption, an unrecognised path failing to
-  // match is the safe direction.
+  // The scope-down of a rate limit, whether asserted directly or negated with NotStatement.
+  // any: WAF statements nest differently per type; this reaches the ByteMatch in either shape.
+  function rateLimitByteMatch(rule: WafRule): any {
+    const scopeDown = (rule.Statement as any).RateBasedStatement?.ScopeDownStatement;
+    return scopeDown?.ByteMatchStatement ?? scopeDown?.NotStatement?.Statement?.ByteMatchStatement;
+  }
+
+  /** Every rate-based rule in a stage that narrows itself with a scope-down. */
+  function scopedRateLimits(stage: string): WafRule[] {
+    const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+    // any: see above
+    return rules.filter(r => (r.Statement as any).RateBasedStatement?.ScopeDownStatement);
+  }
+
+  // A rate limit that matches the raw path is evadable, and the ORDER of the transformations is
+  // the whole fix rather than their presence. They chain, each applied to the previous result, so
+  // NORMALIZE_PATH before URL_DECODE leaves nothing to normalize the decoded form: verified
+  // against staging with curl --path-as-is, /%2e/api/otc/send reaches the API with a 404
+  // application/json yet reduces to /./api/otc/send, which starts with neither /api/ nor
+  // /api/otc/send and is therefore counted by nothing. Decode, then normalize, then lowercase.
+  // Double encoding (/%252e/...) is served the SPA shell and never reaches an endpoint, so it is
+  // out of reach either way. Limits only: for an Allow or an exemption, a path that fails to
+  // match is the safe direction, which is why the exemptions keep NONE.
   describe('rate limit path matching', () => {
     for (const stage of ['dev', 'production']) {
-      it(`normalizes the path before matching in every ${stage} rate limit`, () => {
-        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
-
-        // any: RateBasedStatement scope-down shape is deeply nested and varies by statement type
-        const limits = rules.filter(r => (r.Statement as any).RateBasedStatement?.ScopeDownStatement);
+      it(`decodes before normalizing in every ${stage} rate limit`, () => {
+        const limits = scopedRateLimits(stage);
         expect(limits.length).toBeGreaterThan(0);
 
         for (const rule of limits) {
-          const byteMatch = (rule.Statement as any).RateBasedStatement.ScopeDownStatement.ByteMatchStatement;
-          const types = (byteMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type);
+          const byteMatch = rateLimitByteMatch(rule);
+          expect(byteMatch, `${rule.Name} scope-down must match on a path`).toBeDefined();
 
-          expect(types, `${rule.Name} must normalize the path`).toContain('NORMALIZE_PATH');
-          // NONE alongside real transformations is dead weight that reads as intent.
-          expect(types, `${rule.Name} should not carry a NONE transformation`).not.toContain('NONE');
+          const ordered = [...(byteMatch.TextTransformations ?? [])]
+            .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
+            .map((t: { Type: string }) => t.Type);
+
+          expect(ordered, `${rule.Name} must decode, then normalize, then lowercase`).toEqual([
+            'URL_DECODE',
+            'NORMALIZE_PATH',
+            'LOWERCASE',
+          ]);
+        }
+      });
+
+      it(`anchors every ${stage} rate limit to a URI path prefix`, () => {
+        for (const rule of scopedRateLimits(stage)) {
+          const byteMatch = rateLimitByteMatch(rule);
+
+          expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
+          expect(byteMatch.PositionalConstraint, `${rule.Name} must be prefix-anchored`).toBe('STARTS_WITH');
         }
       });
     }
@@ -311,6 +339,46 @@ describe('wafPolicy', () => {
 
       expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/image');
       expect(rateBased.Limit).toBeLessThan(staticLimit);
+    });
+
+    // Scoping api-rate-limit to /api/ left everything that is neither /api/ nor an asset with no
+    // ceiling, where the blanket rule had covered it. Next's rewrites run inside the server, so
+    // the WAF only sees the pre-rewrite URI: /p/* and /uc/* are unauthenticated Lambda
+    // invocations with an S3 fetch and no app-level limiter of their own.
+    it('keeps a default ceiling on everything that is not an asset', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const fallback = rules.find(r => r.Name === 'default-rate-limit');
+      expect(fallback, 'production needs a catch-all rate limit').toBeDefined();
+
+      // any: see above
+      const rateBased = (fallback!.Statement as any).RateBasedStatement;
+      const apiLimit = (rules.find(r => r.Name === 'api-rate-limit')!.Statement as any).RateBasedStatement.Limit;
+
+      // Negated: it applies to everything EXCEPT assets, which carry their own ceilings.
+      expect(rateBased.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString).toBe('/_next/');
+      // Above the API limit, so the specific rule is what bites on API traffic.
+      expect(rateBased.Limit).toBeGreaterThan(apiLimit);
+    });
+
+    // Nothing else pins this. #1893's parity guard deep-equals Statement only, so flipping a
+    // production limit to Count is invisible to every other test in this file. When these do go
+    // to Count for a first week of measurement, this assertion is what makes coming back to
+    // Block something the build demands rather than something someone remembers.
+    it('enforces, rather than counts, every production rate limit', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      // any: see above
+      const limits = rules.filter(r => (r.Statement as any).RateBasedStatement);
+      expect(limits.length).toBeGreaterThan(0);
+
+      for (const rule of limits) {
+        expect(rule.Action, `${rule.Name} must Block, not Count`).toEqual({ Block: {} });
+      }
     });
   });
 
@@ -362,7 +430,10 @@ describe('wafPolicy', () => {
 
       const rateBased = (assetRule.Statement as any).RateBasedStatement;
       expect(rateBased.Limit).toBe(50000);
-      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/static/');
+      // CloudFront routes the whole /_next/ prefix to the assets bucket, not just /_next/static/,
+      // so the carve-out covers the prefix. image-rate-limit sits behind this at a higher priority
+      // and is still reached while this rule is under its limit.
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/');
     });
 
     it('includes the ai-route-rate-limit rule at Priority 4', () => {

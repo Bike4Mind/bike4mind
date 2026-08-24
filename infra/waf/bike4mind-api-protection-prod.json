@@ -143,11 +143,11 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NORMALIZE_PATH"
+                  "Type": "URL_DECODE"
                 },
                 {
                   "Priority": 1,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 2,
@@ -185,11 +185,11 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NORMALIZE_PATH"
+                  "Type": "URL_DECODE"
                 },
                 {
                   "Priority": 1,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 2,
@@ -413,11 +413,11 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NORMALIZE_PATH"
+                  "Type": "URL_DECODE"
                 },
                 {
                   "Priority": 1,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 2,
@@ -448,18 +448,18 @@
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
             "ByteMatchStatement": {
-              "SearchString": "/_next/static/",
+              "SearchString": "/_next/",
               "FieldToMatch": {
                 "UriPath": {}
               },
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NORMALIZE_PATH"
+                  "Type": "URL_DECODE"
                 },
                 {
                   "Priority": 1,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 2,
@@ -497,11 +497,11 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NORMALIZE_PATH"
+                  "Type": "URL_DECODE"
                 },
                 {
                   "Priority": 1,
-                  "Type": "URL_DECODE"
+                  "Type": "NORMALIZE_PATH"
                 },
                 {
                   "Priority": 2,
@@ -520,6 +520,52 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "image-rate-limit"
+      }
+    },
+    {
+      "Name": "default-rate-limit",
+      "Priority": 14,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 5000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "NotStatement": {
+              "Statement": {
+                "ByteMatchStatement": {
+                  "SearchString": "/_next/",
+                  "FieldToMatch": {
+                    "UriPath": {}
+                  },
+                  "TextTransformations": [
+                    {
+                      "Priority": 0,
+                      "Type": "URL_DECODE"
+                    },
+                    {
+                      "Priority": 1,
+                      "Type": "NORMALIZE_PATH"
+                    },
+                    {
+                      "Priority": 2,
+                      "Type": "LOWERCASE"
+                    }
+                  ],
+                  "PositionalConstraint": "STARTS_WITH"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Action": {
+        "Block": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "default-rate-limit"
       }
     }
   ],
