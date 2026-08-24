@@ -118,7 +118,7 @@ export const createSession = async (
   const retrievalTags =
     rest.retrievalTags?.length || knowledgeIds.length === 0
       ? rest.retrievalTags
-      : (await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters)) || rest.retrievalTags;
+      : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],

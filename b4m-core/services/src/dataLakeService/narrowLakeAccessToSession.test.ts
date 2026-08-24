@@ -27,11 +27,29 @@ describe('narrowLakeAccessToSession', () => {
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:beta']);
   });
 
-  it('never promotes a dynamic lake prefix into the OPEN ownership-bypass bucket', () => {
+  it('keeps a retained dynamic lake prefix in its own bucket, never the OPEN one', () => {
     const out = narrowLakeAccessToSession(access(), ['datalake:beta']);
-    // beta is dynamic; its prefix belongs in scopedTagPrefixes and must stay there.
-    expect(out.dataLakeTagPrefixes).not.toContain('beta:');
+    // Only the second assertion carries weight: 'beta:' is never in the OPEN bucket to begin with,
+    // so asserting its absence there passes however the function behaves. Kept as a bucket-identity
+    // check, with the real OPEN-bucket filtering covered by the first test.
     expect(out.scopedTagPrefixes).toContain('beta:');
+    expect(out.dataLakeTagPrefixes).toEqual([]);
+  });
+
+  it('a dynamic lake sharing a retained registry lake prefix does not narrow it away (fail-safe)', () => {
+    // Prefixes match BY VALUE (see narrowLakeAccessToSession), so a colliding prefix survives on
+    // the retained lake's behalf. Subtractive still holds - nothing new is granted - but the
+    // narrowing is weaker than the lake list suggests. Pinning today's behavior deliberately.
+    const colliding: ResolvedLakeAccessSet = {
+      dataLakeTags: ['datalake:alpha', 'datalake:beta'],
+      dataLakeTagPrefixes: ['alpha:'],
+      scopedTagPrefixes: [],
+      lakes: [lake('alpha', 'registry'), { ...lake('beta', 'dynamic'), fileTagPrefix: 'alpha:' }],
+    } as ResolvedLakeAccessSet;
+    const out = narrowLakeAccessToSession(colliding, ['datalake:beta']);
+    expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:beta']);
+    // alpha: survives because retained beta claims the same prefix value.
+    expect(out.dataLakeTagPrefixes).toEqual(['alpha:']);
   });
 
   it('is purely subtractive - it can never add a tag or prefix the caller lacked', () => {
