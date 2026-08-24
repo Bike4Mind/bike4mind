@@ -9,6 +9,9 @@ const mockAdd = vi.fn().mockResolvedValue(undefined);
 const mockRemove = vi.fn().mockResolvedValue(undefined);
 const mockIsPending = vi.fn().mockReturnValue(false);
 const mockChunkMutate = vi.fn();
+const mockReprocessMutate = vi.fn();
+const { mockToastSuccess } = vi.hoisted(() => ({ mockToastSuccess: vi.fn() }));
+const mockSetWorkBenchFiles = vi.fn();
 
 let messageFiles: IFabFileDocument[] = [];
 let workBenchFiles: IFabFileDocument[] = [];
@@ -30,15 +33,22 @@ vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSessionId: 's1', currentSession: { id: 's1', userId: sessionUserId } }),
   useSystemPromptFiles: () => ({ systemFiles, globalSystemFileIds: [], userSystemFileIds: [] }),
-  useWorkBenchActions: () => ({ setWorkBenchFiles: vi.fn() }),
+  useWorkBenchActions: () => ({ setWorkBenchFiles: mockSetWorkBenchFiles }),
   useWorkBenchFiles: () => workBenchFiles,
 }));
 
+vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: vi.fn() } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: currentUserId } }) }));
 vi.mock('@client/app/hooks/useMessageFiles', () => ({ useMessageFiles: () => messageFiles }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: undefined }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: (key: string) => settingsValues[key] }));
-vi.mock('@client/app/hooks/data/fabFiles', () => ({ useChunkFile: () => ({ mutate: mockChunkMutate }) }));
+// useChunkFile stays mocked even though FilesSection no longer calls it, so a regression that
+// routes reprocess back through the non-resetting /api/files/chunk door fails on the assertion
+// below rather than on a missing-export error.
+vi.mock('@client/app/hooks/data/fabFiles', () => ({
+  useChunkFile: () => ({ mutate: mockChunkMutate }),
+  useReprocessFile: () => ({ mutate: mockReprocessMutate }),
+}));
 vi.mock('@client/app/hooks/useEmbeddingMismatchStatus', () => ({
   useEmbeddingMismatchStatus: () => ({ hasEmbeddingMismatch: () => false }),
 }));
@@ -148,9 +158,12 @@ describe('FilesSection message-scoped files', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('clamps a legacy above-ceiling DefaultChunkSize before reprocessing a mismatched file', () => {
-    // Reachable state settings.ts documents explicitly: a value stored before the ceiling shipped
-    // resolves at its stored size on this raw settings-fetch read, with no clamp of its own.
+  it('reprocesses a mismatched file through the state-resetting door, not the plain chunk call', () => {
+    // /api/files/chunk leaves chunked: true in place, so the queue handler's duplicate-delivery
+    // guard drops the message and the file is never re-embedded. Only /api/files/reprocess resets
+    // the flags first. No chunkSize goes with it: the rebuild inherits the owner-altitude
+    // DefaultChunkSize policy resolved server-side (this test previously asserted a clamped
+    // client-side chunkSize, which the reprocess door does not and should not accept).
     settingsValues.DefaultChunkSize = 5000;
     settingsValues.defaultEmbeddingModel = 'model-b';
     workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
@@ -158,8 +171,30 @@ describe('FilesSection message-scoped files', () => {
     renderPanel();
     fireEvent.click(screen.getByTestId('files-section-reprocess-btn-workbench-w1'));
 
-    expect(mockChunkMutate).toHaveBeenCalledOnce();
-    expect(mockChunkMutate.mock.calls[0][0]).toMatchObject({ fabFileId: 'w1', chunkSize: 1500 });
+    expect(mockChunkMutate).not.toHaveBeenCalled();
+    expect(mockReprocessMutate).toHaveBeenCalledOnce();
+    expect(mockReprocessMutate.mock.calls[0][0]).toBe('w1');
+  });
+
+  it('reports the rebuild as started and does not mark the file complete off the queue ack', () => {
+    settingsValues.defaultEmbeddingModel = 'model-b';
+    workBenchFiles = [
+      { ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', chunked: true, vectorized: true } as IFabFileDocument,
+    ];
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-workbench-w1'));
+    mockReprocessMutate.mock.calls[0][1].onSuccess();
+
+    expect(mockToastSuccess).toHaveBeenCalledOnce();
+    expect(mockToastSuccess.mock.calls[0][0]).toMatch(/Re-processing/);
+    expect(mockToastSuccess.mock.calls[0][0]).not.toMatch(/Successfully reprocessed/);
+
+    // The optimistic write must not claim the rebuild finished under the current model.
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
+    expect(updated[0]).toMatchObject({ chunked: false, vectorized: false });
+    expect(updated[0].embeddingModel).not.toBe('model-b');
   });
 
   it('renders distinct reprocess testids when the same file id appears in both lists', () => {
