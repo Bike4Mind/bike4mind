@@ -43,17 +43,27 @@ const BY_NAME = /getSourceQueueUrl\(\s*'([A-Za-z][A-Za-z0-9]*)'\s*\)/g;
 /** dlqRegistry's own table of queue names - see the second-source note below. */
 const DLQ_SOURCE_QUEUE = /sourceQueue:\s*'([A-Za-z][A-Za-z0-9]*)'/g;
 
+/** Directories never worth descending into. PRUNED during the walk rather than filtered after:
+ *  `readdirSync(recursive)` descends into node_modules before any filter can run, which took the
+ *  scan from milliseconds to ~17s per assertion and timed the suite out in CI. */
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '__tests__', '.git', '.turbo']);
+
 const shippableFiles = (): string[] => {
   const out: string[] = [];
+  const walk = (absDir: string, relDir: string): void => {
+    for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(join(absDir, entry.name), rel);
+      } else if (/\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name)) {
+        out.push(rel);
+      }
+    }
+  };
   for (const root of SCAN_ROOTS) {
     const abs = join(REPO_ROOT, root);
-    if (!existsSync(abs)) continue;
-    for (const rel of readdirSync(abs, { recursive: true }) as string[]) {
-      const file = join(root, String(rel));
-      if (!/\.tsx?$/.test(file)) continue;
-      if (/\.test\.|__tests__|[\\/]dist[\\/]|node_modules/.test(file)) continue;
-      out.push(file);
-    }
+    if (existsSync(abs)) walk(abs, root);
   }
   return out;
 };
