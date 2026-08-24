@@ -121,8 +121,9 @@ const preferredBySlug = (a: ListableLake, b: ListableLake): ListableLake => {
 
 /**
  * One row per slug. A slug is unique per org, so a collision means two lakes the caller can reach
- * under one name - print the one `add` would write to, or the reply names a lake the command does
- * not target.
+ * under one name - keep the one `add` would resolve, or the reply names a lake the command does not
+ * target. Runs over every ADDRESSABLE lake, before the write gate, because `findBySlug` resolves by
+ * org priority without consulting write access (see the note in `handleList`).
  */
 const dedupeBySlug = (lakes: ListableLake[]): ListableLake[] => {
   const bySlug = new Map<string, ListableLake>();
@@ -158,9 +159,13 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
     { ...ctx, isAdmin: false },
     { db: { dataLakes: params.deps.dataLakes } }
   );
-  // `isWritable` restores the manage LABEL that suppressing isAdmin also silenced in canManageLake.
-  // It re-labels an already-scoped row set and can never add a row to it.
-  const writable = dedupeBySlug(lakes.filter(lake => isWritable(lake, ctx) && isSlugAddressable(lake, ctx)));
+  // Order matters, and it mirrors `add`: resolve the slug's winning lake FIRST, then apply the write
+  // gate to that winner. `findBySlug` picks by org priority alone and never falls back when the lake
+  // it picked turns out to be unwritable, so gating before the dedupe would hide a higher-priority
+  // lake and print a slug `add` resolves elsewhere and refuses. `isWritable` also restores the
+  // manage LABEL that suppressing isAdmin silenced in canManageLake; it only ever removes rows.
+  const addressable = lakes.filter(lake => isSlugAddressable(lake, ctx));
+  const writable = dedupeBySlug(addressable).filter(lake => isWritable(lake, ctx));
 
   if (writable.length === 0) {
     return 'You cannot add to any data lakes yet. You can add to lakes you created, or ask an admin.';
