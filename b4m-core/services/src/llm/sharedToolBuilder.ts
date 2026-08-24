@@ -49,6 +49,8 @@ export interface ToolBuilderDeps {
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus file ids, forwarded to the tool context (see ToolContext.personalCorpusFileIds). */
   personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
+  /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
+  sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -290,6 +292,7 @@ export function buildSharedTools(
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
     personalCorpusFileIds,
+    sessionRetrievalTags,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -306,6 +309,7 @@ export function buildSharedTools(
       inlinedAttachmentIds,
       fullyInlinedAttachmentIds,
       personalCorpusFileIds,
+      sessionRetrievalTags,
       questId: callbacks.questId,
     },
     storage,

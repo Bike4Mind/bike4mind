@@ -184,6 +184,13 @@ export interface ToolContext {
    */
   personalCorpusFileIds?: string[];
   /**
+   * The session's lake scope (`session.retrievalTags`). Narrows the knowledge tools' owner-wide lake
+   * access to the lake(s) this session is FOR, so a session created for one lake stops searching
+   * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
+   * documents why the prefix buckets are filtered rather than rebuilt. Absent/empty = unscoped.
+   */
+  sessionRetrievalTags?: string[];
+  /**
    * FabFile ids attached to THIS session whose text was actually delivered into this turn's
    * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
    * silently dropped by `processFabFilesServer` - see `buildDataSources`'s

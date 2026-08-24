@@ -103,6 +103,8 @@ export interface ToolBuilderConfig {
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus file ids, forwarded to the tool context (see ToolContext.personalCorpusFileIds). */
   personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
+  /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
+  sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -699,6 +701,7 @@ export class ToolBuilder {
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         personalCorpusFileIds: this.deps.personalCorpusFileIds,
+        sessionRetrievalTags: this.deps.sessionRetrievalTags,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

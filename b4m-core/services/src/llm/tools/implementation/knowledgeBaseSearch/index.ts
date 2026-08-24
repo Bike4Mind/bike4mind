@@ -18,6 +18,7 @@ import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { narrowLakeAccessToSession } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
@@ -408,7 +409,13 @@ async function trySemanticKbSearch(
     if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled } = embedCtx;
 
-    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await getDynamicDataLakeAccess(context);
+    // Narrowed to the session's own lake(s) before anything is searched: without this, a session
+    // created FOR one lake still ranks passages from every lake its owner can reach. Subtractive
+    // only - see narrowLakeAccessToSession.
+    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = narrowLakeAccessToSession(
+      await getDynamicDataLakeAccess(context),
+      context.sessionRetrievalTags
+    );
     // No accessible data lake - keyword search owns the user's own files.
     if (dataLakeTags.length === 0) return NO_SEMANTIC_RESULT;
 
@@ -914,8 +921,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           } else {
             // Search files the user has access to (owned + shared + org-shared + data lake)
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } =
-              await getDynamicDataLakeAccess(context);
+            // Same narrowing as the semantic arm above - a fallback that re-widened to owner-wide
+            // lake access would undo the scope on exactly the turns semantic search found nothing.
+            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = narrowLakeAccessToSession(
+              await getDynamicDataLakeAccess(context),
+              context.sessionRetrievalTags
+            );
             keywordArmLakes = lakes;
             searchResults = await context.db.fabfiles.search(
               context.userId,

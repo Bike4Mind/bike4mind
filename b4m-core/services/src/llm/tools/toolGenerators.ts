@@ -39,6 +39,7 @@ export const generateTools = (
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
     personalCorpusFileIds,
+    sessionRetrievalTags,
     questId,
   }: {
     db: ToolContext['db'];
@@ -47,6 +48,7 @@ export const generateTools = (
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
     personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
+    sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
     questId?: ToolContext['questId'];
   },
   storage: BaseStorage,
@@ -92,6 +94,7 @@ export const generateTools = (
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
     personalCorpusFileIds,
+    sessionRetrievalTags,
     codeMinifier,
     availableModels,
     onToolLlmUsage,

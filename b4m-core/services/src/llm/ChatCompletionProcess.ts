@@ -2347,6 +2347,8 @@ export class ChatCompletionProcess {
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
         personalCorpusFileIds: this.personalCorpusFileIds,
+        // Narrows the knowledge tools' lake access to the lake this session is FOR.
+        sessionRetrievalTags: session.retrievalTags,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
