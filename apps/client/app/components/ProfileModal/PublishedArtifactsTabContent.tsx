@@ -285,6 +285,9 @@ export default function PublishedArtifactsTabContent() {
       // end of a now-shorter list: the page renders empty and - because `total` has dropped to a
       // single page - the pager disappears too, leaving no control to get back. Same reasoning as
       // resetting skip on a filter change, applied to the mutation that can shrink the set.
+      // Deliberately kept alongside the settle-driven clamp effect above (which corrects this same
+      // case a beat later from the real response): this fast path just avoids a visible flash of
+      // the empty-page copy on the common single-delete click.
       if (v.wasLastOnPage) setSkip(cur => Math.max(0, cur - PAGE_SIZE));
       invalidate();
       // A delete takes that artifact's tags out of the vocabulary counts, so the suggestions have
