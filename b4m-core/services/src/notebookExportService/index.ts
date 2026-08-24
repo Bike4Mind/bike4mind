@@ -374,9 +374,17 @@ export class NotebookExportService {
   private async exportArtifacts(artifactIds: string[], options: NotebookExportOptions): Promise<ExportedArtifact[]> {
     if (artifactIds.length === 0) return [];
 
+    // Artifact ids are `artifact_<ts>_<rand>`, not ObjectIds, so an `_id` query throws a CastError.
     const artifacts = await this.adapters.artifactRepository.find({
-      _id: { $in: artifactIds },
+      id: { $in: artifactIds },
     });
+
+    // Sessions can still hold references to artifacts that no longer exist; without this the
+    // export is quietly incomplete. Names them, since this fires once per notebook.
+    const unresolved = artifactIds.filter(id => !artifacts.some((a: ArtifactRow) => a.id === id));
+    if (unresolved.length > 0) {
+      this.adapters.logger.warn('Some artifacts could not be resolved', { unresolved });
+    }
 
     return artifacts.map((artifact: ArtifactRow) => ({
       id: artifact.id,
@@ -392,6 +400,9 @@ export class NotebookExportService {
   private async exportTools(toolIds: string[], options: NotebookExportOptions): Promise<ExportedTool[]> {
     if (toolIds.length === 0) return [];
 
+    // `_id` is correct here, unlike artifacts: tools and agents are ObjectId-keyed. Sessions
+    // imported before the id fix can still hold uuids that cast-throw - resilience tracked
+    // separately, not a reason to change the key.
     const tools = await this.adapters.toolRepository.find({
       _id: { $in: toolIds },
     });

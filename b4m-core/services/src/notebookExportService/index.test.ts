@@ -139,6 +139,20 @@ describe('notebook export', () => {
     expect(find.mock.calls.map(([, opts]) => opts?.skip)).toEqual([0, 100]);
   });
 
+  it('finds artifacts by their own id, not by _id', async () => {
+    // Artifact ids are not ObjectId-castable, so the real collection throws on an `_id` query.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      if (!query.id?.$in) {
+        throw new Error('CastError: Cast to ObjectId failed for value "artifact_1_probe" at path "_id"');
+      }
+      return query.id.$in.map(id => ({ id, title: 'My Chart', type: 'recharts' }));
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts.map((a: { id: string }) => a.id)).toEqual(['artifact-1']);
+  });
+
   it('names an artifact from its title, which is the field the entity actually has', async () => {
     const payload = await exportOnce({
       artifactRepository: {
