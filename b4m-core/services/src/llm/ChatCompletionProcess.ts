@@ -1928,6 +1928,9 @@ export class ChatCompletionProcess {
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
+        // A raw completion must carry the caller's message exactly once. On a session's first turn
+        // history otherwise retains the in-flight quest, which is then re-sent as the user prompt.
+        excludeCurrentPrompt: promptMode === 'raw',
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
