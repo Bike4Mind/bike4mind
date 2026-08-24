@@ -1100,3 +1100,23 @@ describe('retrieve_knowledge_content access-event audit', () => {
     expect(record).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Personal-corpus scoping reaches this tool too. It is AUTO-PAIRED with search_knowledge_base
+ * (addPairedTool in ChatCompletionProcess), so a session scoped to its own files offers this tool on
+ * every such turn - and while only search honoured the scope, this was a live path back to every
+ * lake the owner could reach.
+ */
+describe('retrieve_knowledge_content honours the personal-corpus scope', () => {
+  it('rejects an out-of-scope id with no DB lookup, exactly as kbScope does', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      personalCorpusFileIds: ['some-other-file'],
+    } as Partial<ToolContext>);
+
+    const out = await runById(ctx);
+
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+    expect(ctx.db.fabfiles!.findById).not.toHaveBeenCalled();
+  });
+});

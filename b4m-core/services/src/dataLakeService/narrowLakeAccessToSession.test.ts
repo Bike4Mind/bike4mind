@@ -72,3 +72,18 @@ describe('narrowLakeAccessToSession', () => {
     expect(narrowLakeAccessToSession(original, [])).toBe(original);
   });
 });
+
+describe('narrowLakeAccessToSession with non-lake retrievalTags', () => {
+  it('is a no-op when the session is scoped by a CONTENT tag, not a lake tag', () => {
+    // A curated surface scopes by course/content tag; those are a file-tag filter elsewhere. Matching
+    // them against lake identity would retain zero lakes and silently empty the tool's lake arms.
+    const original = access();
+    expect(narrowLakeAccessToSession(original, ['some-course-2026'])).toBe(original);
+    expect(narrowLakeAccessToSession(original, ['acme:'])).toBe(original);
+  });
+
+  it('still narrows on the lake subset when both kinds are present', () => {
+    const out = narrowLakeAccessToSession(access(), ['some-course-2026', 'datalake:beta']);
+    expect(out.dataLakeTags).toEqual(['datalake:beta']);
+  });
+});

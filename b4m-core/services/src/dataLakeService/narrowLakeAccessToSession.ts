@@ -1,4 +1,5 @@
 import type { getDynamicDataLakeAccess } from './getDynamicDataLakeTags';
+import { datalakeTagsFrom } from './getDataLakePrompts';
 
 /** The resolved access set `getDynamicDataLakeAccess` returns, narrowed by the function below. */
 export type ResolvedLakeAccessSet = Awaited<ReturnType<typeof getDynamicDataLakeAccess>>;
@@ -28,7 +29,18 @@ export function narrowLakeAccessToSession(
 ): ResolvedLakeAccessSet {
   if (!sessionRetrievalTags?.length) return access;
 
-  const wanted = new Set(sessionRetrievalTags);
+  // Only the `datalake:`-prefixed entries name a LAKE. `retrievalTags` is not universally lake
+  // identity: a curated surface may scope a session by a content tag instead (a course tag, a
+  // file-tag prefix), and those are consumed elsewhere as a plain tag filter on file tags. Matching
+  // them against `lake.datalakeTag` retains nothing, which would silently take a session that
+  // deliberately enabled the knowledge tool and leave its lake arms permanently empty.
+  //
+  // So a tag list carrying no lake identity means "no lake opinion" - the same no-op as an absent
+  // list - NOT "no lakes".
+  const lakeTags = datalakeTagsFrom(sessionRetrievalTags);
+  if (lakeTags.length === 0) return access;
+
+  const wanted = new Set(lakeTags);
   const retainedLakes = access.lakes.filter(lake => wanted.has(lake.datalakeTag));
   // Prefixes are matched by VALUE against the retained lakes, so a lake dropped from scope also
   // loses its prefix arm. Two lakes sharing a prefix is a pre-existing collision concern

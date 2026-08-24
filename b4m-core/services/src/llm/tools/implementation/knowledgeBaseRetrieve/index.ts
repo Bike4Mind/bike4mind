@@ -1,7 +1,9 @@
 import { ToolDefinition } from '../../base/types';
+import { resolveEffectiveKbScope } from '../../base/resolveEffectiveKbScope';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { narrowLakeAccessToSession } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
@@ -109,7 +111,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         // out-of-scope, excluded, and genuinely-missing ids: distinguishing them would be an
         // existence oracle for files outside the scope (tool params arrive from the
         // conversation, so an end-user can probe arbitrary ids through the model).
-        const scope = context.kbScope;
+        const scope = resolveEffectiveKbScope(context);
         const notFoundMsg = (id: string) =>
           `No document found with ID "${id}". The file may not exist or you may not have access to it. Try using search_knowledge_base to find the correct file ID.`;
         if (scope && scope.fileIds.length === 0) {
@@ -133,7 +135,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // makes whichever one runs first, plus the attribution step, share a single round trip
           // instead of each re-resolving it.
           let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
-          const dynamicAccess = () => (dynamicAccessPromise ??= getDynamicDataLakeAccess(context));
+          // Narrowed INSIDE the chain so the memo stays a Promise (it is shared by several later
+          // awaits) and so every consumer sees the session-scoped set, not the owner-wide one.
+          const dynamicAccess = () =>
+            (dynamicAccessPromise ??= getDynamicDataLakeAccess(context).then(access =>
+              narrowLakeAccessToSession(access, context.sessionRetrievalTags)
+            ));
 
           let files: IFabFileDocument[] = [];
 

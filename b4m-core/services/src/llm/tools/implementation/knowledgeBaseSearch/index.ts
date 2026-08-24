@@ -1,4 +1,5 @@
-import { KbScope, ToolContext, ToolDefinition } from '../../base/types';
+import { ToolContext, ToolDefinition } from '../../base/types';
+import { resolveEffectiveKbScope } from '../../base/resolveEffectiveKbScope';
 import {
   CitableSource,
   getEmbeddingModelCost,
@@ -812,17 +813,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
         // Agent-scoped KB restriction (see KbScope). An empty scope reads NOTHING - return
         // the generic no-results message before either arm runs, never fall back owner-wide.
-        // One effective scope from two sources, so every downstream branch that keys on `scope`
-        // (the semantic arm AND its keyword fallback) narrows together. Scoping only the semantic
-        // arm would let the keyword fallback re-widen to owner-wide lake access on the exact turns
-        // the semantic arm found nothing.
-        //
-        // kbScope wins when both are set: it is the stricter, fail-closed agent restriction. The
-        // personal-corpus source is normalized to `undefined` when empty rather than to an empty
-        // scope, because an empty scope means "read NOTHING" here - see personalCorpusFileIds.
-        const scope: KbScope | undefined =
-          context.kbScope ??
-          (context.personalCorpusFileIds?.length ? { fileIds: context.personalCorpusFileIds } : undefined);
+        // One effective scope from two sources - see resolveEffectiveKbScope. Every downstream
+        // branch that keys on `scope` (the semantic arm AND its keyword fallback) narrows together.
+        const scope = resolveEffectiveKbScope(context);
         if (scope && scope.fileIds.length === 0) {
           // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
           // empty-scope agent surface must read as a pure "nothing in scope" early return, not

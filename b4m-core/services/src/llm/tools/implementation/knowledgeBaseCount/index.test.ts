@@ -208,3 +208,14 @@ describe('count_knowledge_base', () => {
     expect(out).toContain('rather than guessing a number');
   });
 });
+
+describe('count_knowledge_base honours the personal-corpus scope', () => {
+  it('counts only the session corpus and never enumerates the owner lakes', async () => {
+    // Enumerating lakes here leaks their NAMES across a session's stated scope, which is a
+    // disclosure even when no document content is returned.
+    const ctx = makeContext({ personalCorpusFileIds: ['own1', 'own2'] } as never);
+    await run(ctx);
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+    expect(searchCalls(ctx)[0][2]).toMatchObject({ restrictToFileIds: ['own1', 'own2'] });
+  });
+});

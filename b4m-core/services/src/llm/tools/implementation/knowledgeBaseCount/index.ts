@@ -1,10 +1,12 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { resolveEffectiveKbScope } from '../../base/resolveEffectiveKbScope';
 import type { IFabFileRepository } from '@bike4mind/common';
 import {
   filterRetrievalExcluded,
   normalizeExclusionMarkers,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
+import { narrowLakeAccessToSession } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { getDynamicDataLakeAccess, type ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
@@ -128,7 +130,7 @@ export const knowledgeBaseCountTool: ToolDefinition = {
         // Agent-scoped KB restriction (see KbScope): the scope is the whole corpus this caller
         // can see, and owner-wide lake resolution must stay unreachable from here. Counted live
         // rather than as scope.fileIds.length so deleted or withheld files are not counted.
-        const scope = context.kbScope;
+        const scope = resolveEffectiveKbScope(context);
         if (scope) {
           if (scope.fileIds.length === 0) {
             return "This agent's knowledge base contains no documents.";
@@ -140,7 +142,12 @@ export const knowledgeBaseCountTool: ToolDefinition = {
           return `This agent's knowledge base contains ${describeCount(scoped)}.${REPORTING_NOTE}`;
         }
 
-        const { lakes } = await getDynamicDataLakeAccess(context);
+        // Narrowed to the session's lake: a session scoped to one lake must not enumerate, or name,
+        // every other lake its owner can reach.
+        const { lakes } = narrowLakeAccessToSession(
+          await getDynamicDataLakeAccess(context),
+          context.sessionRetrievalTags
+        );
 
         if (lakes.length === 0) {
           // No curated library, but the caller's own and shared files are still what
