@@ -158,6 +158,34 @@ describe('approveDataLakeProposal', () => {
     expect(recordAdmission).not.toHaveBeenCalled();
   });
 
+  // Both writes that follow the admission are best-effort, for the same reason the repo's own
+  // releaseClaim swallows 11000: a storage failure in the bookkeeping must not overwrite the answer
+  // the reviewer actually needs, in either direction.
+  it('reports the admission failure even when the compensating release also fails', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new Error('fetch failed');
+    });
+    const { deps, releaseClaim } = adapters({ admitSource });
+    releaseClaim.mockRejectedValue(new Error('replica set stepped down'));
+
+    // Not the storage error: the release exists to compensate for the admission failure, so masking
+    // it would leave the reviewer with a message about the compensation and none about the cause.
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow('fetch failed');
+  });
+
+  it('still reports success when only the admitted-file pointer fails to record', async () => {
+    const { deps, recordAdmission, admitSource } = adapters();
+    recordAdmission.mockRejectedValue(new Error('replica set stepped down'));
+
+    // The file is already tagged into the lake, so a 500 here would report a failure for work that
+    // succeeded - and the reviewer could not act on it, since a retry hits the already-reviewed
+    // guard. The missing pointer instead self-heals: the source re-proposes visibly.
+    const result = await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.fabFile.id).toBe('file-9');
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
   // A reviewer clicking Approve on a source whose page has since died used to be shown the raw
   // `Request failed with status code 404` - observed on a live walk. It names neither the cause (the
   // source, not their click) nor the consequence (nothing admitted, proposal still queued).

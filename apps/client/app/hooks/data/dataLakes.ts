@@ -1234,11 +1234,6 @@ export function useDataLakeProposals(
 }
 
 /**
- * Approve or decline one proposal. An approval admits the source into the lake through the ordinary
- * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
- * appears immediately, and its health badge stops reflecting a corpus that just changed.
- */
-/**
  * The server's own refusal text for a failed review decision, or a fallback.
  *
  * Shared by the toast and the card's inline alert so the two can never disagree about what went
@@ -1251,6 +1246,11 @@ export function reviewProposalFailureMessage(error: unknown): string {
   return refusal || 'Could not record that decision. Try again shortly.';
 }
 
+/**
+ * Approve or decline one proposal. An approval admits the source into the lake through the ordinary
+ * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
+ * appears immediately, and its health badge stops reflecting a corpus that just changed.
+ */
 export function useReviewDataLakeProposal(dataLakeId: string) {
   const queryClient = useQueryClient();
   return useMutation({

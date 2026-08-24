@@ -1,4 +1,9 @@
-import { adminSettingsRepository, dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  scopedSettingsRepository,
+} from '@bike4mind/database';
 import { User } from '@bike4mind/database/auth';
 import { FabFile } from '@bike4mind/database/content';
 import { fabFilesService } from '@bike4mind/services';
@@ -50,6 +55,12 @@ export function admitProposedSource(
         // authorization gate - so a curator passed the 403, had the proposal claimed to `approved`,
         // and was then refused the admission with a message retrying could never fix.
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        // Scoped-override store for the admission contract (#1680), on the same footing as the other
+        // two doors. Absent, BOTH of the contract's per-scope reads fall back to platform-only: the
+        // `EnforceLakeAdmission` lever loses every org/owner/lake override, and the gate's chunk-size
+        // prediction stops matching what the chunker will do for a reviewer holding an owner-scoped
+        // `DefaultChunkSize` - so content that violates the target can be admitted as compliant.
+        scopedSettings: scopedSettingsRepository,
       },
       storage: {
         upload: async (filepath, content, option) => {

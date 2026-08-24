@@ -171,11 +171,20 @@ export async function approveDataLakeProposal(
     // admitted - unreviewable and invisible in the pending queue. Put it back and let the caller
     // report the real failure. If this release itself fails the row stays approved-but-empty, which
     // is still preferable to the alternative ordering's duplicate admission.
-    await db.dataLakeProposals.releaseClaim(proposalId);
+    //
+    // Swallowed for the same reason `releaseClaim` swallows 11000 internally: this call exists to
+    // compensate for the admission failure, so letting its own rejection propagate would replace the
+    // one error worth reporting with a storage error about the compensation.
+    await db.dataLakeProposals.releaseClaim(proposalId).catch(() => {});
     throw asReviewerFacingAdmissionError(err);
   }
 
-  await db.dataLakeProposals.recordAdmission(proposalId, fabFile.id);
+  // The file has landed and carries the lake tag, so the approval SUCCEEDED - only the row's pointer
+  // to it is missing. Throwing here would report a failure the reviewer cannot act on (a retry hits
+  // the already-reviewed guard) for work that is already done, so the pointer is best-effort: a row
+  // left without `admittedFabFileId` reads as not-held and the source is simply re-proposed visibly
+  // (see the held-source check in `proposeDataLakeContent`).
+  await db.dataLakeProposals.recordAdmission(proposalId, fabFile.id).catch(() => {});
   return { proposal: { ...claimed, admittedFabFileId: fabFile.id }, fabFile };
 }
 

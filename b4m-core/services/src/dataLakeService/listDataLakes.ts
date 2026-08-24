@@ -207,14 +207,6 @@ const resolveFallbackSettings = async (
 };
 
 /**
- * The one place a list response may carry an editor-only field: the shared config, the caller's
- * manage flag, and `systemPrompt` ONLY when that flag holds. `toDataLakeConfig` has no actor and
- * so cannot carry it (see ManageableDataLakeConfig); the raw-document exits use the sibling
- * `redactLakeForActor` instead. A blank/whitespace prompt is treated as unset so the client
- * doesn't have to distinguish '' from absent, and the value is sent TRIMMED so seeding the editor
- * from this response and saving it back cannot rewrite stored padding the user never touched.
- */
-/**
  * Pending review counts for the lakes on this page, or an empty map when no proposal repo is wired.
  * One aggregate for the whole list - see the adapter's doc for why this is not per-lake.
  */
@@ -232,6 +224,14 @@ const pendingCountsFor = async (
   }
 };
 
+/**
+ * The one place a list response may carry an editor-only field: the shared config, the caller's
+ * manage flag, and `systemPrompt` ONLY when that flag holds. `toDataLakeConfig` has no actor and
+ * so cannot carry it (see ManageableDataLakeConfig); the raw-document exits use the sibling
+ * `redactLakeForActor` instead. A blank/whitespace prompt is treated as unset so the client
+ * doesn't have to distinguish '' from absent, and the value is sent TRIMMED so seeding the editor
+ * from this response and saving it back cannot rewrite stored padding the user never touched.
+ */
 const toManageableConfig = (
   dl: IDataLakeDocument,
   manageable: boolean,
@@ -359,17 +359,23 @@ export const listDataLakes = async (
   // content-scope resolver passes no `users` adapter and this resolves to an empty map).
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
-  const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
-  const dynamicConfigs = dynamicLakes.map(dl => {
-    const grants = grantsByLake.get(dl.id);
-    return toManageableConfig(
+  // Manage flags resolved BEFORE the queue-count aggregate so it spans only the lakes this caller may
+  // manage. `toManageableConfig` drops the count for the rest anyway, so narrowing the aggregate both
+  // saves the discarded work and keeps a count the caller must not see out of this function entirely.
+  const manageableById = new Map(dynamicLakes.map(dl => [dl.id, canManageLake(dl, ctx, grantsByLake.get(dl.id))]));
+  const pendingCounts = await pendingCountsFor(
+    dynamicLakes.filter(dl => manageableById.get(dl.id)),
+    db.dataLakeProposals
+  );
+  const dynamicConfigs = dynamicLakes.map(dl =>
+    toManageableConfig(
       dl,
-      canManageLake(dl, ctx, grants),
-      isEffectiveOwner(dl, ctx, grants),
+      manageableById.get(dl.id) ?? false,
+      isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]
-    );
-  });
+    )
+  );
 
   // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
