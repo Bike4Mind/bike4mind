@@ -206,13 +206,9 @@ export class GeminiImageService extends AIImageService {
       config.guidanceScale = options.guidance;
     }
 
-    if (options.prompt_upsampling !== undefined) {
-      config.enhancePrompt = options.prompt_upsampling;
-    }
-
-    if (options.seed !== null && options.seed !== undefined) {
-      config.seed = options.seed;
-    }
+    // Google's generateImages rejects the PRESENCE of enhancePrompt/seed on the Gemini API
+    // (see generateImagesConfigToMldev in @google/genai), so never set them here regardless
+    // of what a caller passes. BFL takes both; Gemini has no equivalent.
 
     const outputMimeType = this.resolveMimeType(options.output_format);
     if (outputMimeType) {

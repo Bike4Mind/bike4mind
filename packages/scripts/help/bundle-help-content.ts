@@ -6,7 +6,14 @@
  * for production serving. Uses real file copies (not symlinks) so content survives
  * Lambda deployment via OpenNext/SST.
  *
- * Only bundles files that are referenced in the help-index.json.
+ * Only bundles files that are referenced in the help-index.json, plus any media
+ * assets (images, GIFs, demo videos) those articles reference - copied with the
+ * same docs-root-relative path so relative references resolve under
+ * /help-content/ at runtime. Existence is validate-help-content.ts's job; its
+ * format and size rules (mediaPolicyError) are re-checked here as a second line
+ * of defense, because help:build runs the index and bundle steps WITHOUT
+ * help:validate - so nothing else stands between a bad asset and the deploy
+ * bundle at that point.
  *
  * Usage: pnpm --filter @bike4mind/scripts help:bundle-content
  */
@@ -15,6 +22,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { HelpIndex } from './types.js';
+import {
+  extractMarkdownLinks,
+  hasAssetExtension,
+  isExternal,
+  mediaPolicyError,
+  resolveAssetPath,
+} from './validate-help-content.js';
 
 // ES module compatibility
 const __filename = fileURLToPath(import.meta.url);
@@ -42,6 +56,15 @@ function copyFile(sourcePath: string, destPath: string): void {
   fs.copyFileSync(sourcePath, destPath);
 }
 
+/** Size in bytes, or undefined when the file can't be stat'd (mediaPolicyError treats that as a rejection). */
+function fileSize(absPath: string): number | undefined {
+  try {
+    return fs.statSync(absPath).size;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Check if dest is an up-to-date copy of source (not a symlink, same mtime).
  */
@@ -57,22 +80,32 @@ function isUpToDate(destPath: string, sourcePath: string): boolean {
   }
 }
 
+export interface BundleOptions {
+  /** Overridable roots for testing; default to the real repo locations. */
+  docsRoot?: string;
+  outputDir?: string;
+  indexPath?: string;
+}
+
 /**
  * Main bundle function
  */
-async function bundleHelpContent(): Promise<void> {
+export async function bundleHelpContent(opts: BundleOptions = {}): Promise<void> {
+  const docsRoot = opts.docsRoot ?? DOCS_ROOT;
+  const outputDir = opts.outputDir ?? OUTPUT_DIR;
+  const indexPath = opts.indexPath ?? INDEX_PATH;
+
   console.log('Bundling help content (file copies)...');
-  console.log(`Docs root: ${DOCS_ROOT}`);
-  console.log(`Output dir: ${OUTPUT_DIR}`);
-  console.log(`Index path: ${INDEX_PATH}`);
+  console.log(`Docs root: ${docsRoot}`);
+  console.log(`Output dir: ${outputDir}`);
+  console.log(`Index path: ${indexPath}`);
 
   // Read the help index to know which files to bundle
-  if (!fs.existsSync(INDEX_PATH)) {
-    console.error('Error: help-index.json not found. Run help:build-index first.');
-    process.exit(1);
+  if (!fs.existsSync(indexPath)) {
+    throw new Error('help-index.json not found. Run help:build-index first.');
   }
 
-  const indexContent = fs.readFileSync(INDEX_PATH, 'utf-8');
+  const indexContent = fs.readFileSync(indexPath, 'utf-8');
   const helpIndex: HelpIndex = JSON.parse(indexContent);
 
   // Get list of files to bundle from the index
@@ -81,8 +114,8 @@ async function bundleHelpContent(): Promise<void> {
   console.log(`Found ${filesToBundle.length} files in help index`);
 
   // Ensure output directory exists
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
   }
 
   // Track what files should exist in output
@@ -92,8 +125,8 @@ async function bundleHelpContent(): Promise<void> {
   let errorCount = 0;
 
   for (const file of filesToBundle) {
-    const sourcePath = path.join(DOCS_ROOT, file);
-    const destPath = path.join(OUTPUT_DIR, file);
+    const sourcePath = path.join(docsRoot, file);
+    const destPath = path.join(outputDir, file);
     expectedFiles.add(destPath);
 
     // Ensure destination directory exists
@@ -125,6 +158,58 @@ async function bundleHelpContent(): Promise<void> {
     }
   }
 
+  // Collect media/assets referenced by the bundled articles. Broken or escaping
+  // references are skipped silently here - the validator reports them as errors.
+  // Format/size violations are skipped loudly: this is the last gate before the
+  // file lands in the deploy bundle.
+  const assetRelPaths = new Set<string>();
+  for (const file of filesToBundle) {
+    const sourcePath = path.join(docsRoot, file);
+    if (!fs.existsSync(sourcePath)) continue;
+    const content = fs.readFileSync(sourcePath, 'utf-8');
+    for (const link of extractMarkdownLinks(content)) {
+      const pathPart = link.target.split('#')[0];
+      if (!pathPart || isExternal(pathPart)) continue;
+      if (!link.isImage && !hasAssetExtension(pathPart)) continue;
+      const absSource = resolveAssetPath(pathPart, path.dirname(sourcePath), docsRoot);
+      if (!absSource || !fs.existsSync(absSource)) continue;
+      const policyError = mediaPolicyError(pathPart, { isImage: link.isImage, readSize: () => fileSize(absSource) });
+      if (policyError) {
+        console.error(`Refusing to bundle asset referenced by ${file}: ${policyError}`);
+        errorCount++;
+        continue;
+      }
+      assetRelPaths.add(path.relative(docsRoot, absSource));
+    }
+  }
+
+  let assetCopiedCount = 0;
+  let assetSkippedCount = 0;
+  for (const relPath of assetRelPaths) {
+    const sourcePath = path.join(docsRoot, relPath);
+    const destPath = path.join(outputDir, relPath);
+    expectedFiles.add(destPath);
+
+    const destDir = path.dirname(destPath);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    if (isUpToDate(destPath, sourcePath)) {
+      assetSkippedCount++;
+      continue;
+    }
+
+    try {
+      copyFile(sourcePath, destPath);
+      assetCopiedCount++;
+      console.log(`  Copied asset: ${relPath}`);
+    } catch (error) {
+      console.error(`Error copying asset ${relPath}:`, error);
+      errorCount++;
+    }
+  }
+
   // Clean up stale files (files/symlinks that exist but aren't in the index)
   let removedCount = 0;
   function cleanupDirectory(dir: string): void {
@@ -147,16 +232,19 @@ async function bundleHelpContent(): Promise<void> {
       } else if (!expectedFiles.has(fullPath) && entry.name !== '.gitkeep') {
         fs.unlinkSync(fullPath);
         removedCount++;
-        console.log(`  Removed stale: ${path.relative(OUTPUT_DIR, fullPath)}`);
+        console.log(`  Removed stale: ${path.relative(outputDir, fullPath)}`);
       }
     }
   }
 
-  cleanupDirectory(OUTPUT_DIR);
+  cleanupDirectory(outputDir);
 
   console.log(`\nSummary:`);
   console.log(`  Copied: ${copiedCount} files`);
   console.log(`  Skipped: ${skippedCount} (already up-to-date)`);
+  console.log(
+    `  Assets: ${assetCopiedCount} copied, ${assetSkippedCount} up-to-date (${assetRelPaths.size} referenced)`
+  );
   console.log(`  Removed: ${removedCount} stale files`);
   if (errorCount > 0) {
     console.log(`  Errors: ${errorCount}`);
@@ -164,7 +252,10 @@ async function bundleHelpContent(): Promise<void> {
   console.log(`  Total: ${filesToBundle.length} files in index`);
 }
 
-bundleHelpContent().catch(error => {
-  console.error('Failed to bundle help content:', error);
-  process.exit(1);
-});
+// Only run when invoked directly (not when imported by tests)
+if (process.argv[1] && process.argv[1].endsWith('bundle-help-content.ts')) {
+  bundleHelpContent().catch(error => {
+    console.error('Failed to bundle help content:', error);
+    process.exit(1);
+  });
+}

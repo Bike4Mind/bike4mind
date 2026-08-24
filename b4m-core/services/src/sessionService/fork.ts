@@ -1,4 +1,10 @@
-import { IChatHistoryItemRepository, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IChatHistoryItemRepository,
+  IFabFileRepository,
+  ISessionRepository,
+  IUserRepository,
+  rebindPromptMetaSession,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
@@ -54,10 +60,13 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   );
 
   await Promise.all(
-    messagesToFork.map(async ({ id, ...messageData }) => {
+    messagesToFork.map(async ({ id, promptMeta, ...messageData }) => {
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,
+        // Not cosmetic: the store REQUIRES promptMeta.session.{id,userId} on create(), and quests
+        // carrying promptMeta with no session block exist on disk - see rebindPromptMetaSession.
+        promptMeta: rebindPromptMetaSession(promptMeta, { sessionId: newSession.id, userId }),
       });
     })
   );

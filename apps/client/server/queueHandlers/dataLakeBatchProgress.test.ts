@@ -260,7 +260,7 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
     expect(h.sendToClient).not.toHaveBeenCalled();
   });
 
-  it('swallows a failed revert-to-failed write instead of throwing (never blocks the caller)', async () => {
+  it('swallows a failed revert-to-failed write instead of throwing, but logs it (never blocks the caller, never silent)', async () => {
     h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
     h.setTaxonomyStatusIfActive
       .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
@@ -270,6 +270,7 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
       enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never)
     ).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
   });
 
   it('shares its rate-limit bucket with the manual reanalyze endpoint (same key format)', async () => {

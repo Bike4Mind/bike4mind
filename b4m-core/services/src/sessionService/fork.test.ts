@@ -47,6 +47,47 @@ describe('forkSession', () => {
     expect(created).toEqual([{ sessionId: 'fork-1', prompt: 'earlier' }]);
   });
 
+  // Prod 500: "Quest validation failed: promptMeta.session.userId: Path `session.userId` is
+  // required". Quests carrying promptMeta with no session block exist on disk (update() runs no
+  // validators, several writers materialize promptMeta from nothing), and create() - the copy
+  // path - does validate. See questPromptMetaSessionPersistence.test.ts for the store half.
+  it('supplies promptMeta.session when the source quest carries none', async () => {
+    const { db, created } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp.mockResolvedValueOnce([
+      { id: 'm0', sessionId: 'session-1', prompt: 'earlier', promptMeta: { warnings: ['partial coverage'] } },
+    ]);
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(created[0].promptMeta).toEqual({
+      warnings: ['partial coverage'],
+      session: { id: 'fork-1', userId: 'caller-1' },
+    });
+  });
+
+  // promptMeta.session.userId is the scoping key for deep research's internal quest search
+  // (databaseSearcher.ts), so a copy that keeps the source pointer is searchable from the wrong
+  // session and invisible from its own.
+  it('rebinds a copied promptMeta.session to the fork and its caller', async () => {
+    const { db, created } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp.mockResolvedValueOnce([
+      {
+        id: 'm0',
+        sessionId: 'session-1',
+        prompt: 'earlier',
+        promptMeta: { session: { id: 'session-1', userId: 'other-user', organizationId: 'org-1' } },
+      },
+    ]);
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(created[0].promptMeta).toEqual({
+      session: { id: 'fork-1', userId: 'caller-1', organizationId: 'org-1' },
+    });
+  });
+
   // findBySessionIdAndId returning null covers both "no such message" and "message belongs to a
   // different session" - the two are indistinguishable at this mocked layer (a real cross-session
   // pair is exercised at the repository level in QuestModel.findBySessionIdAndId.test.ts).

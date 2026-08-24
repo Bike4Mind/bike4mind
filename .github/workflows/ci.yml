@@ -416,8 +416,13 @@ jobs:
 
   # Tests run as a matrix of shards so wall time is the slowest shard, not the
   # serial sum. The heavy suites are isolated onto their own runners:
-  #   - client: the large apps/client suite (thousands of fast files) — alone so
-  #     it keeps the whole box for file parallelism.
+  #   - client: the large apps/client suite (thousands of fast unit files) - alone
+  #     so it keeps the whole box for file parallelism.
+  #   - client-integration: the SAME package and filter as `client`, selected onto
+  #     its real-Mongo `*.e2e.test.ts` files by a different script. apps/client is
+  #     therefore the one package that appears in two legs; the two lanes are
+  #     disjoint by construction (the unit lane excludes exactly the glob the
+  #     integration lane includes), so nothing runs twice and nothing is dropped.
   #   - services: by far the heaviest remaining package (test-file count and
   #     Mongo-backed setup cost), alone so it doesn't drag down a shared bucket.
   #   - cli-slack, data: hand-grouped buckets of the next-heaviest packages, kept
@@ -453,6 +458,18 @@ jobs:
           - name: client
             filter: '--filter @bike4mind/client'
             workers: ''
+          # The client package's ~20 real-Mongo suites (`*.e2e.test.ts`), split off
+          # the shard above. Each boots a mongod, and inline they pushed that job
+          # past `timeout-minutes` even on runs where the suite itself passed - the
+          # job was killed after the tests were green, so the signal was a coin
+          # flip rather than a result. Same package and filter as `client`; the
+          # `script` below is what selects the lane (see apps/client/vitest.config.mts).
+          # Capped workers: these contend for mongod ports, and createMongoServer's
+          # retry loop is the documented flake when too many start at once.
+          - name: client-integration
+            filter: '--filter @bike4mind/client'
+            workers: '2'
+            script: 'test:integration'
           - name: services
             filter: '--filter @bike4mind/services'
             workers: ''
@@ -551,8 +568,11 @@ jobs:
           pnpm --filter @bike4mind/database exec node -e
           "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
+      # `matrix.shard.script` is unset on every shard but client-integration, and an
+      # unset matrix value is the empty string here, so `||` falls back to the unit
+      # `test` script.
       - name: Run Tests (${{ matrix.shard.name }})
-        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} test
+        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} ${{ matrix.shard.script || 'test' }}
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}

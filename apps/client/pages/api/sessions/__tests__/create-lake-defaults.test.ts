@@ -39,6 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   projectRepository: {},
   sessionRepository: {},
   fabFileRepository: {},
+  fallbackLakeSettingsRepository: {},
   userRepository: {},
   activityRepository: {},
   User: { findByIdAndUpdate: h.findByIdAndUpdate },

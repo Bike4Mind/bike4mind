@@ -101,6 +101,15 @@ Check these in order, all of them visible in the plan the button reads:
   as far as convergence is concerned even though none of it is searchable. Repair is the rebuild
   door's job, not the policy door's.
 
+  **A file being rebuilt right now is a different state, and reads differently.** From the moment a
+  rebuild is requested until it lands, the file is reported as *re-indexing*: withheld from search
+  with the note that it returns on its own, counted in lake health as not-yet-measured rather than
+  failing, and skipped by convergence as already indexing. That is deliberately not the same report
+  as the paused state above - telling someone to call an administrator about a file that will be
+  back in a minute is how a real warning stops being read. If a rebuild is somehow never carried out
+  (the request was recorded but the work never ran), the file keeps reporting as re-indexing rather
+  than vanishing, and **Rebuild passages** picks it up once the request is a couple of hours old.
+
   **A rebuild restores searchability, not conformance.** "Rebuild passages" deliberately rebuilds at
   the owner's default passage size rather than the lake's declared target, because it has to work on
   any lake - including one with no policy at all - and because a file can belong to several lakes that
@@ -123,8 +132,10 @@ completes. The previous passages are deleted first, so there is nothing to fall 
 Retrieval does not hide this: while any in-scope file is being re-indexed, the result is explicitly
 marked **partial** rather than quietly answering from the rest of the lake. Searches - the knowledge
 tools and the semantic-search API - name the affected files; grounded chat turns report how many were
-withheld. The files return on their own once indexing completes - re-run the search then. Prefer to
-converge a lake outside the hours people are querying it.
+withheld. This starts the moment the rebuild is requested, not when the new passages are written, so
+there is no window in which a file is being rebuilt and nothing says so. The files return on their
+own once indexing completes - re-run the search then. Prefer to converge a lake outside the hours
+people are querying it.
 :::
 
 ### Vector Embeddings
@@ -167,6 +178,13 @@ the reachable-content figure needs a per-chunk character measurement that older 
 This is not the same as unhealthy: it means the measurement, not the content, is missing. New and
 re-ingested content is measured automatically. If a lake stays unmeasured, re-run indexing (or ask an
 administrator to run the char-length backfill) to populate it.
+
+A **partially** measured lake is usually just work in progress: every file whose passages are being
+rebuilt counts toward "how complete the picture is" without contributing a percentage, because its
+old passages are gone and its new ones are not written yet. That share should shrink on its own as
+the rebuilds land. If it does not - a file sits reported as re-indexing for hours - the rebuild was
+requested but never carried out; **Rebuild passages** offers those files again once the request is a
+couple of hours old, and running it re-drives them.
 :::
 
 ### The admission contract (enforcement)
