@@ -12,7 +12,8 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
+import { usableObjectIds } from '../utils/objectIds';
 import { projectService } from '..';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 
@@ -75,15 +76,22 @@ export const createSession = async (
 ) => {
   const { db } = adapters;
   const {
-    knowledgeIds = [],
+    knowledgeIds: rawKnowledgeIds = [],
     artifactIds = [],
-    agentIds = [],
+    agentIds: rawAgentIds = [],
     projectId,
     ...rest
   } = secureParameters(parameters, createSessionParametersSchema);
 
+  // Both arrays reference ObjectId-keyed collections; artifactIds does not. See usableObjectIds.
+  // NOTE: notebookImportService writes sessions through sessionRepository.create directly, so it
+  // does NOT pass through here - the read-side guards still carry rows it produces.
+  const knowledgeIds = usableObjectIds(rawKnowledgeIds, 'knowledge', Logger.globalInstance);
+  const agentIds = usableObjectIds(rawAgentIds, 'agent', Logger.globalInstance);
+
   // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
   // tags is authoritative, so derivation runs only for a file-seeded session that named neither.
+  // Derives from the filtered ids: an unusable one addresses no file, and fabFiles is _id-keyed.
   const retrievalTags =
     rest.retrievalTags?.length || knowledgeIds.length === 0
       ? rest.retrievalTags
