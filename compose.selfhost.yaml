@@ -119,6 +119,9 @@ services:
           [ -n "$$b" ] && mc mb -p "local/$$b" || true;
         done;
         [ -n "$$FAB_FILE_BUCKET" ] && mc event add "local/$$FAB_FILE_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
+        # Same webhook, second bucket: without it the LLM history import and the notebook
+        # import upload successfully and are then never processed.
+        [ -n "$$HISTORY_IMPORT_BUCKET" ] && mc event add "local/$$HISTORY_IMPORT_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
         { [ -n "$$PUBLISHED_ARTIFACTS_BUCKET" ] && { mc ilm rule ls "local/$$PUBLISHED_ARTIFACTS_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 --prefix "drafts/" "local/$$PUBLISHED_ARTIFACTS_BUCKET"; }; }; true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL

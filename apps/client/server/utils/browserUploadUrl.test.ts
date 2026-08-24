@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveBrowserAppFileUploadUrl, resolveBrowserUploadUrl } from './browserUploadUrl';
+import {
+  resolveBrowserAppFileUploadUrl,
+  resolveBrowserHistoryImportUploadUrl,
+  resolveBrowserUploadUrl,
+} from './browserUploadUrl';
 
 describe('resolveBrowserUploadUrl', () => {
   afterEach(() => {
@@ -48,5 +52,39 @@ describe('resolveBrowserAppFileUploadUrl', () => {
     delete process.env.B4M_SELF_HOST;
     const presigned = 'https://bucket.s3.us-east-2.amazonaws.com/logo.png?sig=x';
     expect(resolveBrowserAppFileUploadUrl('af1', presigned)).toBe(presigned);
+  });
+});
+
+describe('resolveBrowserHistoryImportUploadUrl', () => {
+  afterEach(() => {
+    delete process.env.B4M_SELF_HOST;
+  });
+
+  it('returns the same-origin proxy route in self-host, carrying only the source', () => {
+    // No file id and no storage key in the URL: the proxy recomputes the key from the
+    // authenticated user, because historyUploadComplete reads the owner OUT of that key.
+    process.env.B4M_SELF_HOST = 'true';
+    expect(
+      resolveBrowserHistoryImportUploadUrl('OpenAI', 'http://b4m-history.localhost:9000/u1/OpenAI/1.zip?sig=x')
+    ).toBe('/api/import-history/upload?source=OpenAI');
+  });
+
+  it('percent-encodes the source so it cannot smuggle extra query parameters', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    expect(resolveBrowserHistoryImportUploadUrl('a&b=c', 'http://x/y?sig=1')).toBe(
+      '/api/import-history/upload?source=a%26b%3Dc'
+    );
+  });
+
+  it('returns the direct S3 presigned URL when hosted', () => {
+    process.env.B4M_SELF_HOST = 'false';
+    const presigned = 'https://bucket.s3.us-east-2.amazonaws.com/u1/OpenAI/1.zip?sig=x';
+    expect(resolveBrowserHistoryImportUploadUrl('OpenAI', presigned)).toBe(presigned);
+  });
+
+  it('treats an unset B4M_SELF_HOST as hosted (returns the presign unchanged)', () => {
+    delete process.env.B4M_SELF_HOST;
+    const presigned = 'https://bucket.s3.us-east-2.amazonaws.com/u1/OpenAI/1.zip?sig=x';
+    expect(resolveBrowserHistoryImportUploadUrl('OpenAI', presigned)).toBe(presigned);
   });
 });
