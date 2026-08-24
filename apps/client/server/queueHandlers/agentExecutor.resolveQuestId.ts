@@ -7,11 +7,15 @@
  * checkpointed execution has no start payload, so it falls back to `linkedQuestId`, persisted on
  * the `AgentExecution` doc at the same dispatch time specifically so it survives that gap.
  *
- * MUST NEVER read `execution.questId` for this purpose: that field holds `cmd.questId` from the
- * client dispatch, which is actually the sessionId (a back-ref hack) - see its own doc comment on
- * `IAgentExecution`. A naive implementation that mirrors the `sessionId: execution.sessionId`
- * wiring one line above would silently write session ids into every agent-mode
- * `LakeAccessEvent.questId`, indistinguishable from a correct value without knowing this history.
+ * MUST NEVER read `execution.questId` for this purpose - not because it is always the wrong value,
+ * but because it is not reliably ANY one value: the WS client-dispatch lineage
+ * (`agentExecute.handleStart`) stores the sessionId there (a back-ref hack), while the QuestMaster
+ * V5 lineage (`runQuestNode.ts`) stores the real Quest id, and children inherit whichever their
+ * parent had. See `IAgentExecution.questId`'s own doc comment. A naive implementation that mirrors
+ * the `sessionId: execution.sessionId` wiring one line above would silently write session ids into
+ * agent-mode `LakeAccessEvent.questId` rows on the WS lineage, indistinguishable from a correct
+ * value without knowing this history - and "it's the real id on V5" is exactly the reasoning that
+ * would reintroduce it as a well-meant third fallback.
  *
  * Extracted as a pure helper, same reasoning as `resolveLatticeTools` in the sibling
  * `agentExecutor.latticeTools.ts` module: `processExecution` itself has no test harness, so this

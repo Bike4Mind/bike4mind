@@ -19,10 +19,11 @@ import { type MigrationFile } from './index';
  * index for exactly that kind of migration), so this is decided now rather than left for later.
  *
  * No createdAt companion, unlike this collection's other three indexes (principalKind+principalId,
- * resolvedLakeIds, organizationId): cardinality per questId is single-digit by construction (at
- * most one row per tool call, one call per surface per turn), unlike those three which can span
- * thousands of rows over the 450-day retention window - an in-memory sort after this index scan
- * is negligible.
+ * resolvedLakeIds, organizationId): rows per questId are bounded by the turn, at one row per
+ * content-returning tool call - single-digit in classic chat, ~25 in an agent run whose Quest
+ * spans a full ReAct loop (default maxIterations), more with parallel tool calls in an iteration.
+ * Still trivial to sort in memory, unlike those three which span thousands of rows over the
+ * 450-day retention window and genuinely need the companion key.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the
  * schema declares, so it also backfills any of this model's other declared indexes an environment

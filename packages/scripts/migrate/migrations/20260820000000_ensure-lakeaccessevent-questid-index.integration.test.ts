@@ -45,7 +45,7 @@ describe('ensure-lakeaccessevent-questid-index migration (real DB)', () => {
 
     idx = (await LakeAccessEventModel.collection.indexes()).find(i => i.name === INDEX_NAME);
     expect(idx).toBeDefined();
-    // sparse, not a plain index (fact 9 of the plan): most rows have no questId, and options
+    // sparse, not a plain index: most rows have no questId, and options
     // can't be changed after the fact without a coordinated drop-and-rebuild.
     expect(idx?.sparse).toBe(true);
   }, 30000);

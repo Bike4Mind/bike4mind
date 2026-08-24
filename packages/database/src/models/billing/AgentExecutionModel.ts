@@ -216,15 +216,29 @@ export interface IAgentExecution {
   userId: string;
   organizationId?: string;
   sessionId: string;
-  /** NOT the Quest id despite the name - this is `cmd.questId` from the client dispatch, which is
-   * actually the sessionId (a back-ref hack). See `linkedQuestId` for the real Quest id. */
+  /**
+   * MEANS DIFFERENT THINGS PER DISPATCH LINEAGE - never read it as a Quest id:
+   * - `agentExecute.handleStart` (WS client dispatch) writes `cmd.questId`, which is actually the
+   *   sessionId (a back-ref hack from the client - see that file's own comment refusing to fall
+   *   back to it for the Lambda payload).
+   * - `questmaster/v5/runQuestNode.ts` writes the REAL Quest id here instead.
+   * - Subagent and DAG children inherit whichever value their parent carried.
+   *
+   * Because the meaning depends on the creator, no consumer can safely interpret it. Use
+   * `linkedQuestId` below, which is unambiguous on every lineage. A backfill that assumed either
+   * meaning universally would corrupt the other lineage's rows.
+   */
   questId: string;
   /**
-   * The REAL Quest id created at dispatch time (`agentExecute.ts`'s `Quest.create`), persisted
-   * here so it survives a resumed/checkpointed Lambda invocation - the start payload only carries
-   * it on the first invocation. Used to link `LakeAccessEvent` audit rows back to this execution's
-   * turn (`ToolContext.questId`); never used for anything else. Absent when the dispatch-time
-   * Quest write failed (best-effort, logged, does not block dispatch).
+   * The REAL Quest id, unambiguous on every dispatch lineage. Written at execution-create time by
+   * `runQuestNode.ts`, and patched on just after create by `agentExecute.handleStart` (whose Quest
+   * is written after the execution doc, so it cannot set it inline). Inherited by subagent and DAG
+   * children. Survives a resumed/checkpointed Lambda invocation, where the start payload is absent
+   * - which is the whole reason it is persisted rather than only forwarded.
+   *
+   * Used to link `LakeAccessEvent` audit rows back to this execution's turn
+   * (`ToolContext.questId`); never used for anything else. Absent when the dispatch-time Quest
+   * write failed (best-effort, logged, does not block dispatch).
    */
   linkedQuestId?: string;
   query: string;

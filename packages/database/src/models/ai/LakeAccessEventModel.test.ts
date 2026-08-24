@@ -394,6 +394,14 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
         relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.test.ts')),
         relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.ts')),
         relFromRoot(path.resolve(__dirname, 'LakeAccessQueryTextModel.ts')),
+        // An index migration's integration test legitimately needs raw collection access: it
+        // asserts on `.indexes()` and resets state between cases, neither of which the repository
+        // exposes (nor should it - `record` is the only write verb by design). Declared here as an
+        // explicit exception rather than routed through `mongoose.connection.db` to dodge the
+        // pattern: evading a text guard leaves the same capability with none of the visibility,
+        // and it would decouple the collection name from the model. The guard's real subject is
+        // production code bypassing `record()` to mutate `expiresAt`; a migration test does not.
+        'packages/scripts/migrate/migrations/20260820000000_ensure-lakeaccessevent-questid-index.integration.test.ts',
       ]);
       // `git grep` only searches TRACKED files (no explicit node_modules/.git/dist skip-list
       // needed) and is dramatically faster than a synchronous fs walk of the whole monorepo -

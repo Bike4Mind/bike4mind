@@ -431,9 +431,10 @@ async function handleStart(
   //
   // Best-effort: a Quest write failure must not block dispatch - the user
   // already saw their prompt in the optimistic bubble, and the AgentExecution
-  // doc carries the query for the completion handler. Failures log and fall
-  // back to the legacy `cmd.questId` (sessionId-as-questId) for the Lambda
-  // payload, matching pre-fix behavior.
+  // doc carries the query for the completion handler. On failure the Lambda
+  // payload simply OMITS `questId` (see the explicit refusal to fall back to
+  // `cmd.questId` at the invoke below - that value is the sessionId and would
+  // mis-key the client's optimistic swap).
   let persistedQuestId: string | undefined;
   try {
     const quest = await Quest.create({

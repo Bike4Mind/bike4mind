@@ -81,9 +81,10 @@ export interface ToolContext {
    * same reason as `sessionId`, plus one agent-mode-specific case: an agent execution's real Quest
    * id is only known from the point `agentExecutor` resolves it (see the dispatch-time capture in
    * `agentExecute.ts` and its resume-path fallback) - a tool call before that point genuinely has
-   * none to supply. On the agent path, this must come from that resolved id, never from
-   * `AgentExecution.questId` (a differently-named field that actually holds the session id - a
-   * client back-ref hack, see `agentExecute.ts`'s own comment on it).
+   * none to supply. On the agent path this must come from that resolved id
+   * (`AgentExecution.linkedQuestId`), never from `AgentExecution.questId`, which holds different
+   * things depending on which dispatcher created the execution and so cannot be interpreted by any
+   * consumer - see its own doc comment.
    */
   questId?: string;
   logger: Logger;

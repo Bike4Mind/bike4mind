@@ -87,10 +87,13 @@ LakeAccessEventSchema.index({ principalKind: 1, principalId: 1, createdAt: -1 })
 // Multikey: "who read this lake?" - the core audit query.
 LakeAccessEventSchema.index({ resolvedLakeIds: 1, createdAt: -1 });
 LakeAccessEventSchema.index({ organizationId: 1, createdAt: -1 });
-// Single-field, no createdAt companion (unlike the three above): cardinality per questId is
-// single-digit by construction (at most one row per tool call, one call per surface per turn),
-// unlike resolvedLakeIds/organizationId/(principalKind,principalId) which can span thousands of
-// rows over the 450-day retention window - an in-memory sort after this index scan is negligible.
+// Single-field, no createdAt companion (unlike the three above): rows per questId are bounded by
+// the turn, at one row per content-returning tool call. That is single-digit in classic chat, but
+// in AGENT mode one dispatch-time Quest spans a whole ReAct run, so a 25-iteration execution
+// (the default maxIterations) searching each iteration lands ~25 rows under one questId - and
+// more if a single iteration issues parallel tool calls. Still trivial to sort in memory, which is
+// why the decision holds; contrast resolvedLakeIds/organizationId/(principalKind,principalId),
+// which span thousands of rows over the 450-day retention window and genuinely need the companion.
 // sparse: most rows have no questId (quest-less HTTP surfaces, pre-migration rows, an agent-mode
 // row before its execution has a linked Quest id) - a sparse index indexes only the linked ones.
 // Built via a migration, not relying on autoIndex's lazy cold-boot build - see the migration's
@@ -162,14 +165,20 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         resolvedLakeIds: input.resolvedLakeIds,
         returnedChunkIds: chunkIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
         returnedFileIds: fileIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
-        ...(scores ? { scores } : {}),
+        // `scores?.length`, not `scores` - an empty array is truthy, and persisting `scores: []`
+        // would defeat the `default: undefined` above that makes absent-vs-empty meaningful.
+        ...(scores?.length ? { scores } : {}),
         returnedChunkCount,
         returnedFileCount,
         identifiersTruncated,
         surface: input.surface,
         queryTextLogged,
-        questId: input.questId,
-        sessionId: input.sessionId,
+        // `|| undefined`, so an empty string is stored as absent rather than indexed: the questId
+        // index is sparse, and `''` would occupy it as a row that looks linked and joins to
+        // nothing. No caller produces `''` today - this keeps the field honest to this function's
+        // own contract that nothing is trusted from the caller.
+        questId: input.questId || undefined,
+        sessionId: input.sessionId || undefined,
         expiresAt,
       });
       return created.toJSON() as unknown as ILakeAccessEventDocument;

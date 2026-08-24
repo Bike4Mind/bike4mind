@@ -108,6 +108,13 @@ export interface ILakeAccessEvent {
    * file_id/tag lookup, a keyword/text-match arm) - distinguishes "no score concept for this
    * surface" from "ran, found nothing."
    *
+   * NOT COMPARABLE ACROSS ROWS, and not necessarily within one row: these are raw cosine
+   * similarities, and `semanticDataLakeSearch` merges an alternate-embedding-model ANN arm into
+   * the same top-K (see its own "Cross-model caveat" block), so one array can hold scores computed
+   * in two different vector spaces. Alignment to `returnedChunkIds` still holds - each score
+   * belongs to its own chunk - but a consumer must not average, threshold, or rank ACROSS rows,
+   * and should not present a bare "top match 0.71" as if the number were absolute.
+   *
    * DIAGNOSTIC JOIN KEY ONLY, same caution as `questId` below: must never be projected into the
    * manager-gated, cross-tenant-visible `LakeAccessView` (see `assembleLakeAccessView.ts` /
    * `LakeAccessHistoryEntry`) - it rides this event's own 450-day retention, not the shorter,
