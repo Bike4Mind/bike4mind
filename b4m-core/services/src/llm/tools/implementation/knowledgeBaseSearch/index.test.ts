@@ -2404,6 +2404,16 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       expect(clampLogger.log).toHaveBeenCalledWith(expect.stringContaining('relevance floor 0.50'));
     });
 
+    it('a relevance floor that empties the semantic arm reaches the MODEL via the keyword-arm fallback, not just a server log', async () => {
+      // The keyword arm is metadata-only, so formatSkipNotice(semantic.skipNotice) is the sole
+      // channel that still reaches the model on this path - a server-only log would leave the
+      // model reading a bare listing as "the knowledge base has nothing on this topic".
+      semanticDataLakeSearchMock.mockResolvedValue({ results: [], totalChunksSearched: 3, filesInScope: 3, scan });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
+      expect(out).toContain('Tell the user the knowledge base may be returning partial results');
+    });
+
     it('an org-rung override on kbSearchMinRelevancePct reaches minScore end-to-end', async () => {
       semanticDataLakeSearchMock.mockResolvedValue({ results: hits(3), totalChunksSearched: 3, filesInScope: 3, scan });
       const context = contextWithKbSettings(
@@ -2486,6 +2496,40 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const out = await runWith({}, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
       expect(passageCount(out)).toBe(2);
       expect(out).not.toContain('further relevant passage(s) matched but were not included');
+    });
+
+    it('droppedCount is computed against the ceiling the walk actually operated on, not the full retrieved set', async () => {
+      // An explicit max_results narrows the ceiling below the budget-widened topK, so
+      // search.results can hold more candidates than were ever admissible - the budget must only
+      // be blamed for what it itself withheld, not for the narrowing the model's own param caused.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(10),
+        totalChunksSearched: 10,
+        filesInScope: 10,
+        scan,
+      });
+      countTokensMock.mockResolvedValue(200); // 1 fits in 250; a 2nd would be 400 > 250
+      const out = await runWith({ max_results: 3 }, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
+      expect(passageCount(out)).toBe(1);
+      // Budget withheld 2 (of the 3 ever admissible under the explicit max_results=3 ceiling) -
+      // NOT 9 (of the full 10-hit retrieved set the widened topK fetched).
+      expect(out).toContain('2 further relevant passage(s) matched but were not included');
+      expect(out).not.toContain('9 further relevant passage(s)');
+    });
+
+    it('combined: a relevance floor and a token budget both apply to the same search', async () => {
+      // Stands in for a floor-thinned pool (5 of a wider corpus already cleared the threshold) -
+      // the mock can't simulate real minScore filtering, but the tool-level wiring under test
+      // (both knobs passed through and both bounding the same result set) does not depend on that.
+      semanticDataLakeSearchMock.mockResolvedValue({ results: hits(5), totalChunksSearched: 5, filesInScope: 5, scan });
+      countTokensMock.mockResolvedValue(80); // 3 fit in 250; a 4th would be 320 > 250
+      const out = await runWith(
+        {},
+        contextWithKbSettings({ kbSearchMinRelevancePct: '30', kbSearchResultTokenBudget: '250' })
+      );
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].minScore).toBeCloseTo(0.3);
+      expect(passageCount(out)).toBe(3);
+      expect(out).toContain('2 further relevant passage(s) matched but were not included');
     });
 
     it('the keyword (metadata-only) fallback keeps kbDefaultResults, not the token-widened ceiling - the two bounds diverge on purpose', async () => {

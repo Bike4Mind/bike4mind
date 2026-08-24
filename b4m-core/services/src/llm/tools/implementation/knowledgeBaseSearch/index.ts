@@ -147,6 +147,13 @@ function formatSemanticResults(
   );
 }
 
+/**
+ * The tool's return string is the ONLY channel the model reads (statusUpdate reaches the UI, not
+ * the conversation), so a comparability notice has to be part of it. Distinct from the scan note
+ * above: that one says how much of the corpus was REACHED, this says whether what was reached
+ * could be COMPARED. Phrased as an instruction because a bare fact tends to be paraphrased into a
+ * claim of completeness.
+ */
 function formatSkipNotice(skipNotice?: string | null): string {
   if (!skipNotice) return '';
   return `NOTE: ${skipNotice} Tell the user the knowledge base may be returning partial results.\n\n`;
@@ -156,20 +163,11 @@ function formatSkipNotice(skipNotice?: string | null): string {
  * Resolve the embedding model and provider keys the semantic paths need. Returns null when
  * any dep is missing/unconfigured (caller falls back to keyword search). Shared by the
  * unscoped and agent-scoped semantic arms so provider handling can never drift between them.
- *
- * `budgets` is resolved once per completion by the caller (see `resolveKbBudgets` and the
- * `budgetsPromise` cache in `knowledgeBaseSearchTool.implementation`) and threaded through here
- * rather than re-resolved per arm - a second settings round-trip for the same completion would buy
- * nothing, since both arms run against the same caller scope.
  */
-async function resolveEmbeddingContext(
-  context: ToolContext,
-  budgets: ResolvedSearchBudgets
-): Promise<{
+async function resolveEmbeddingContext(context: ToolContext): Promise<{
   embeddingModel: SupportedEmbeddingModel;
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
-  budgets: ResolvedSearchBudgets;
   vectorSearchEnabled: boolean;
 } | null> {
   const adminSettings = context.db.adminSettings;
@@ -206,7 +204,7 @@ async function resolveEmbeddingContext(
 
   const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
 
-  return { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled };
+  return { embeddingModel, provider, apiKeyTable, vectorSearchEnabled };
 }
 
 /**
@@ -391,7 +389,7 @@ async function trySemanticKbSearch(
     return NO_SEMANTIC_RESULT; // semantic deps not wired - use keyword
   }
   try {
-    const embedCtx = await resolveEmbeddingContext(context, budgets);
+    const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, vectorSearchEnabled } = embedCtx;
 
@@ -436,12 +434,19 @@ async function trySemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeSearchLimitations(search);
-    // No hits: the keyword arm answers, but it has to carry the notice with it. A nonzero relevance
-    // floor can be why - it can silently empty a set that would otherwise have weak hits, so say so
-    // here rather than leaving "thin corpus" and "threshold filtered everything" indistinguishable.
+    // No hits: the keyword arm answers next, but it returns metadata only - `formatSkipNotice`
+    // (called on that fallback path) is the ONLY channel that still reaches the model, so a
+    // relevance floor that emptied an otherwise-thin-but-nonempty result set has to fold into
+    // `skipNotice` here, not just a server log, or the model reads a bare metadata listing as
+    // "the knowledge base has nothing on this topic".
+    const floorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
+    const skipNotice =
+      describeSearchLimitations(search) ??
+      (floorEmptiedResults
+        ? 'a configured relevance threshold filtered out every candidate passage for this query'
+        : null);
     if (search.results.length === 0) {
-      if (budgets.kbMinRelevance > 0) {
+      if (floorEmptiedResults) {
         context.logger.log(
           `📚 [semantic] 0 results at relevance floor ${budgets.kbMinRelevance.toFixed(2)} (candidates existed above 0 but none cleared the floor)`
         );
@@ -456,8 +461,7 @@ async function trySemanticKbSearch(
     const bound = await boundPassagesByTokenBudget(search.results, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
-      // If pricing itself fails, fall back to the plain (non-widened) default rather than the
-      // budget-widened ceiling above - see boundPassagesByTokenBudget's own doc comment.
+      // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
       fallbackCount: clampMaxResults(bounds.rawMaxResults, bounds.defaultResults),
       maxChunkChars: budgets.maxChunkChars,
       tokenizer: getSharedTokenizer(context.logger),
@@ -474,7 +478,12 @@ async function trySemanticKbSearch(
     return {
       output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger, {
         budgetBound: bound.budgetBound,
-        droppedCount: search.results.length - ranked.length,
+        // Against `ceiling`, not the full retrieved set: `search.results` can hold up to
+        // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
+        // `ceiling` was never admissible in the first place (a model-supplied max_results
+        // narrows it below the widened topK) - attributing those to "the budget withheld them"
+        // overstates what the budget actually did.
+        droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
@@ -525,7 +534,7 @@ async function tryScopedSemanticKbSearch(
     return NO_SEMANTIC_RESULT;
   }
   try {
-    const embedCtx = await resolveEmbeddingContext(context, budgets);
+    const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, vectorSearchEnabled } = embedCtx;
 
@@ -555,9 +564,15 @@ async function tryScopedSemanticKbSearch(
     // double built from a partial result object.
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
-    const skipNotice = describeSearchLimitations(search);
+    // See the matching branch in trySemanticKbSearch above for why this folds into skipNotice.
+    const scopedFloorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
+    const skipNotice =
+      describeSearchLimitations(search) ??
+      (scopedFloorEmptiedResults
+        ? 'a configured relevance threshold filtered out every candidate passage for this query'
+        : null);
     if (search.results.length === 0) {
-      if (budgets.kbMinRelevance > 0) {
+      if (scopedFloorEmptiedResults) {
         context.logger.log(
           `📚 [semantic] 0 scoped results at relevance floor ${budgets.kbMinRelevance.toFixed(2)} (candidates existed above 0 but none cleared the floor)`
         );
@@ -568,8 +583,7 @@ async function tryScopedSemanticKbSearch(
     const bound = await boundPassagesByTokenBudget(search.results, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
-      // If pricing itself fails, fall back to the plain (non-widened) default rather than the
-      // budget-widened ceiling above - see boundPassagesByTokenBudget's own doc comment.
+      // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
       fallbackCount: clampMaxResults(bounds.rawMaxResults, bounds.defaultResults),
       maxChunkChars: budgets.maxChunkChars,
       tokenizer: getSharedTokenizer(context.logger),
@@ -582,7 +596,12 @@ async function tryScopedSemanticKbSearch(
     return {
       output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger, {
         budgetBound: bound.budgetBound,
-        droppedCount: search.results.length - ranked.length,
+        // Against `ceiling`, not the full retrieved set: `search.results` can hold up to
+        // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
+        // `ceiling` was never admissible in the first place (a model-supplied max_results
+        // narrows it below the widened topK) - attributing those to "the budget withheld them"
+        // overstates what the budget actually did.
+        droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,
       datalakeTags: [],
@@ -616,12 +635,13 @@ async function tryScopedSemanticKbSearch(
 export const KB_SEARCH_MAX_RESULTS = 10;
 
 /**
- * Safety floor on passages returned once a search actually found something: a search that finds
- * something must never come back with zero passages (see `boundByTokenBudget`'s "first passage
- * always admitted" rule) - the model would otherwise read an empty result as "the library holds
- * nothing on this topic" rather than "the budget cut it short".
+ * Passage-count floor `clampMaxResults` never goes below, once a search actually found something.
+ * Distinct from `boundByTokenBudget`'s own "first passage always admitted" rule, which enforces the
+ * same floor at the token-budget layer - the two mechanisms need their own copy of this floor
+ * because either is reachable without the other: an explicit `max_results` narrows straight through
+ * `clampMaxResults` and never reaches the token walk at all. No external consumer; not exported.
  */
-export const KB_SEARCH_MIN_RESULTS = 1;
+const KB_SEARCH_MIN_RESULTS = 1;
 
 /**
  * Candidate-pool floor for the ranker (was an unnamed inline `6` at both semantic call sites):
@@ -675,6 +695,12 @@ function clampMaxResults(raw: unknown, defaultResults: number): number {
 
 /** What each semantic arm needs to derive its own passage-count safety rail (#1955 item 3). */
 interface KbPassageBounds {
+  /**
+   * Unvalidated model-supplied `max_results`, straight from `params`. Every consumer
+   * (`resolvePassageCeiling`, and the `fallbackCount` clamp at both `boundPassagesByTokenBudget`
+   * call sites) clamps it via `clampMaxResults`/`resolvePassageCeiling` before use - there is no
+   * single choke point enforcing this anymore, so a new consumer must remember to clamp too.
+   */
   rawMaxResults: unknown;
   defaultResults: number;
 }

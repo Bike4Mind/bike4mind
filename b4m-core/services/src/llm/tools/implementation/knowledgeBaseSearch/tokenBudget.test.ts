@@ -142,6 +142,15 @@ describe('boundPassagesByTokenBudget', () => {
     expect(priced.startsWith('aaaaa')).toBe(true);
   });
 
+  it('prices only up to maxPassages, never the candidates beyond it that could not be served anyway', async () => {
+    const tokenizer = tokenizerOf(10);
+    const results = Array.from({ length: 10 }, (_, i) => hit({ chunkId: `c${i}` }));
+    await boundPassagesByTokenBudget(results, { tokenBudget: 1000, maxPassages: 3, maxChunkChars: 1000, tokenizer });
+    // Not 10: pricing the other 7 (up to 3 searches/turn, each capable of a budget-widened topK of
+    // 10 candidates) is pure waste when the ceiling caps the walk at 3 regardless.
+    expect(tokenizer.countTokens).toHaveBeenCalledTimes(3);
+  });
+
   it('bounds a mixed set of passage costs, reporting tokensUsed and budgetBound', async () => {
     const tokenizer = tokenizerOf([50, 50, 50]);
     const results = [hit({ chunkId: 'a' }), hit({ chunkId: 'b' }), hit({ chunkId: 'c' })];

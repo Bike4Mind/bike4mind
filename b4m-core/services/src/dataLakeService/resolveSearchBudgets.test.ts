@@ -314,6 +314,18 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('clamps a hand-written kbSearchMinRelevancePct above 100 and warns, rather than producing an unreachable minScore', async () => {
+    // The admin UI's schema (max: 100) and the scoped path's own pickOverride parse both reject
+    // this before it can be stored through those paths - this guards a platform row written any
+    // other way (a direct DB edit, a stale pre-max:100 row). Unclamped, 500 would divide down to
+    // minScore: 5.0, a cosine score no real match can ever clear, silently degrading every KB
+    // search to keyword-only forever.
+    const logger = loggerStub();
+    const budgets = await resolveSearchBudgets(makeDb({ kbSearchMinRelevancePct: '500' }), logger);
+    expect(budgets.kbMinRelevance).toBe(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchMinRelevancePct'));
+  });
+
   it('warns and falls back to the coded default for a negative or non-numeric value', async () => {
     const logger = loggerStub();
     const budgets = await resolveSearchBudgets(

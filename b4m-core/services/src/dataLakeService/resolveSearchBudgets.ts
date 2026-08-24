@@ -121,13 +121,7 @@ export async function resolveSearchBudgets(
           'kbSearchResultTokenBudget',
           logger
         ),
-        kbMinRelevance:
-          nonNegativeIntOr(
-            values.kbSearchMinRelevancePct,
-            KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
-            'kbSearchMinRelevancePct',
-            logger
-          ) / 100,
+        kbMinRelevance: resolveRelevancePct(values.kbSearchMinRelevancePct, logger),
       };
     } catch (err) {
       logger?.warn?.('[semanticSearch] scoped budget resolution failed; falling back to platform', err);
@@ -169,13 +163,7 @@ export async function resolveSearchBudgets(
         'kbSearchResultTokenBudget',
         logger
       ),
-      kbMinRelevance:
-        nonNegativeIntOr(
-          values.kbSearchMinRelevancePct,
-          KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
-          'kbSearchMinRelevancePct',
-          logger
-        ) / 100,
+      kbMinRelevance: resolveRelevancePct(values.kbSearchMinRelevancePct, logger),
     };
   } catch (err) {
     logger?.warn?.('[semanticSearch] could not read scan-budget settings; using defaults', err);
@@ -274,4 +262,23 @@ export function nonNegativeIntOr(
     return fallback;
   }
   return Math.floor(parsed);
+}
+
+/**
+ * `kbSearchMinRelevancePct` as a 0..1 fraction. The write-path schema already enforces `max: 100`
+ * and the scoped-override path's own schema parse closes it too - this clamp exists only for a
+ * platform row written by any OTHER means (a hand-edited DB document, a stale row from before the
+ * setting declared `max: 100`). Without it, a value like 500 would divide down to `minScore: 5.0`,
+ * a cosine score no real match can ever clear, silently degrading every KB search to keyword-only
+ * forever. `nonNegativeIntOr` stays generic (no upper bound - `kbSearchResultTokenBudget` reuses it
+ * with a much larger, setting-specific ceiling), so the 100-cap and the /100 conversion live
+ * together here, in the one place that already owns the unit conversion.
+ */
+function resolveRelevancePct(raw: string | number | null | undefined, logger?: Logger): number {
+  const pct = nonNegativeIntOr(raw, KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT, 'kbSearchMinRelevancePct', logger);
+  if (pct > 100) {
+    logger?.warn?.(`[semanticSearch] kbSearchMinRelevancePct ${pct} exceeds 100; clamping`);
+    return 1;
+  }
+  return pct / 100;
 }

@@ -100,15 +100,20 @@ export async function boundPassagesByTokenBudget(
   });
   if (opts.tokenBudget <= 0 || results.length === 0) return boundTo(opts.maxPassages);
 
+  // Price only what could ever be served (up to maxPassages) - the walk below never looks past
+  // that ceiling either, so pricing the rest is pure waste: up to 3 searches/turn, each capable of
+  // 10 candidates when a budget widens topK, but a model-supplied max_results narrows the ceiling.
+  const candidates = results.slice(0, Math.max(opts.maxPassages, 0));
+
   let costs: number[];
   try {
     costs = await Promise.all(
-      results.map(r => opts.tokenizer.countTokens(servedPassageText(r, opts.maxChunkChars).text))
+      candidates.map(r => opts.tokenizer.countTokens(servedPassageText(r, opts.maxChunkChars).text))
     );
   } catch (err) {
     opts.logger?.warn?.('📚 [semantic] token-budget pricing failed; falling back to passage-count bound', err);
     return boundTo(opts.fallbackCount ?? opts.maxPassages);
   }
   const bound = boundByTokenBudget(costs, { tokenBudget: opts.tokenBudget, maxItems: opts.maxPassages });
-  return { kept: results.slice(0, bound.keptCount), tokensUsed: bound.tokensUsed, budgetBound: bound.budgetBound };
+  return { kept: candidates.slice(0, bound.keptCount), tokensUsed: bound.tokensUsed, budgetBound: bound.budgetBound };
 }

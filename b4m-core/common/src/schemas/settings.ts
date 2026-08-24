@@ -3331,9 +3331,13 @@ export const settingsMap = {
     name: 'Knowledge Base Search Result Token Budget',
     defaultValue: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
     min: 0,
-    // Above this, kbSearchDefaultResults' safety ceiling (the tool's hard maximum of 10 passages)
-    // always binds first, so a larger value could never be reached: an approximate 10 passages x
-    // an 8000-char per-passage serve ceiling, at roughly 4 chars/token.
+    // Above this, kbSearchDefaultResults' safety ceiling (KB_SEARCH_MAX_RESULTS, the tool's hard
+    // maximum of 10 passages) always binds first, so a larger value could never be reached:
+    // KB_SEARCH_MAX_RESULTS (10) x SERVE_CHUNK_CHARS_CEILING (8000, chunking.ts), at ~4 chars/token.
+    // Deliberately NOT the codebase's own CHARS_PER_TOKEN_SERVE_BOUND (6, chunking.ts) - that
+    // constant upper-bounds chars-per-token to keep a CHARACTER budget generous; a token CEILING
+    // needs the opposite direction (fewer chars per token -> more tokens for the same text), so 6
+    // would understate the true worst case and let a real value slip past this write-time cap.
     max: 20_000,
     description:
       'Approximate tokens of served passage TEXT (post-trim, post-clip - what the model actually ' +
