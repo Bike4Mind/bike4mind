@@ -42,6 +42,16 @@ export interface ResolvedOrchestrationProfile {
   /** Whether this profile was synthesized from admin defaults (vs sourced from a persisted IAgent). */
   isSynthetic: boolean;
   /**
+   * Whether `allowedTools` IS the run's toolbelt rather than a default the payload may replace.
+   *
+   * A surface that authors its own profile is picking the toolset deliberately -- the loop only
+   * works if every tool in the walk is present -- and the client already tells the user as much
+   * ("your tool selection was replaced by the agent toolset") when the router upgrades a chat
+   * send. Left false for admin-default and persisted-agent profiles, where the caller's payload
+   * (a briefcase override, a quest node's scoped toolset) legitimately takes precedence.
+   */
+  toolsetIsExclusive?: boolean;
+  /**
    * Persona system prompt for the agent (#agent-mode-persona). Sourced from a
    * persisted IAgent's `systemPrompt` / `personality` via `buildAgentPersonaPrompt`.
    * `undefined` for synthetic (agentless) profiles, which have no persona.
@@ -141,9 +151,14 @@ export function pickEffectiveMaxIterations(
 }
 
 /**
- * Pick the effective tool whitelist - payload override beats profile default,
- * but the profile's `deniedTools` ALWAYS wins as a final subtraction so an
- * admin denylist can't be bypassed by shipping `enabledTools` in the payload.
+ * Pick the effective tool whitelist. A non-empty payload beats the profile default - the
+ * briefcase-override contract (`resolveDispatchTools` on the client) depends on a pinned
+ * selection surviving whatever profile the run resolves - EXCEPT for a profile whose
+ * `toolsetIsExclusive`: there the profile's toolset IS the toolbelt and the payload is
+ * ignored, which is the promise the client's "your tool selection was replaced by the
+ * agent toolset" banner already makes. The profile's `deniedTools` ALWAYS wins as a final
+ * subtraction so an admin denylist can't be bypassed by shipping `enabledTools` in the
+ * payload.
  *
  * An EMPTY payload array is treated as "use profile" rather than "explicitly
  * no tools" because the chat dispatch path can ship `[]` when no per-message
@@ -153,7 +168,8 @@ export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
   profile: ResolvedOrchestrationProfile
 ): string[] {
-  const chosen = payloadEnabledTools && payloadEnabledTools.length > 0 ? payloadEnabledTools : profile.allowedTools;
+  const payloadApplies = payloadEnabledTools && payloadEnabledTools.length > 0 && !profile.toolsetIsExclusive;
+  const chosen = payloadApplies ? payloadEnabledTools : profile.allowedTools;
   if (profile.deniedTools.length === 0) return chosen;
   const denied = new Set(profile.deniedTools);
   return chosen.filter(t => !denied.has(t));
