@@ -510,10 +510,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'mermaid_chart',
   ]),
   /**
-   * Tool names explicitly forbidden. Enforced as a final subtraction in
-   * `pickEffectiveEnabledTools` - wins even over payload-pinned tools - so this
-   * is the defense-in-depth backstop for the case where an admin broadens
-   * `allowedTools` without realizing a parallel denylist is also needed.
+   * Tool names explicitly forbidden. Enforced in two places: as a final subtraction in
+   * `pickEffectiveEnabledTools` (wins even over payload-pinned tools), and - for the two
+   * delegation tools, which are injected as objects and never registered by name - at the
+   * dependency gate in agentExecutor (`delegationOffer` withholds `agentStore` /
+   * `dagDispatcher`). The name subtraction alone cannot reach those two; see
+   * agentExecutor.sessionToolPolicy.
    *
    * Seeded with every tool that mutates user data (the spec's
    * "anything tagged `mutates_user_data`"): destructive/overwriting filesystem

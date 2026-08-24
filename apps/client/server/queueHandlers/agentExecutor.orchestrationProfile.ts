@@ -157,7 +157,10 @@ export function pickEffectiveMaxIterations(
  * `toolsetIsExclusive`: there the profile's toolset IS the toolbelt and the payload is
  * ignored - an agent whose toolset is declared exclusive means it. The profile's
  * `deniedTools` ALWAYS wins as a final subtraction so an admin denylist can't be bypassed
- * by shipping `enabledTools` in the payload.
+ * by shipping `enabledTools` in the payload. (For the two delegation tools that
+ * subtraction is advisory only - they are injected as objects, never registered by name;
+ * their effective enforcement is the dependency gate in agentExecutor via
+ * `delegationOffer`.)
  *
  * An EMPTY payload array is treated as "use profile" rather than "explicitly
  * no tools" because the chat dispatch path can ship `[]` when no per-message

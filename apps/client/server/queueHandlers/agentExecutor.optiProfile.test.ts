@@ -74,10 +74,11 @@ describe('opti profile x pickEffectiveEnabledTools', () => {
   // NOT a subtraction test: OPTI_AGENT_TOOLS never contained image_generation, and the
   // exclusive toolset ignores the payload, so the denylist has nothing visible to remove
   // here (a previous version of this case passed with OPTI_DENIED_TOOLS emptied). The
-  // denylist's real job on this profile is downstream - agentExecutor subtracts it from
-  // the run's final toolbelt after the mission/lattice appends - so what this file can
-  // honestly pin is the config itself, which the 'denies image generation and multi-agent
-  // delegation' case above already does.
+  // denylist's only name-level enforcement is pickEffectiveEnabledTools itself; the
+  // delegation pair is enforced at the dependency gate (delegationOffer withholds
+  // agentStore/dagDispatcher - see sessionToolPolicy). What this file can honestly pin
+  // is the config, which the 'denies image generation and multi-agent delegation' case
+  // above already does.
   it('yields the full optimizer toolset even when the payload names a denied tool', () => {
     const profile = buildOptiOrchestrationProfile();
     expect(pickEffectiveEnabledTools(['image_generation'], profile)).toEqual(OPTI_AGENT_TOOLS);
