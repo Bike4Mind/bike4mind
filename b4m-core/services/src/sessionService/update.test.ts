@@ -339,26 +339,32 @@ describe('updateSession - project propagation opt-out', () => {
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
   });
 
-  /**
-   * The rename and tag paths PUT the whole session (`{ ...session, name }`), so a legacy entry
-   * rides along on a write that has nothing to do with knowledge. Rejecting it would make such a
-   * notebook impossible to rename; dropping it heals the row instead.
-   */
-  it('drops an unusable knowledgeId and still performs the write', async () => {
-    const { adapters } = makeAdapters();
-    await updateSession(user, { id: 'session-1', name: 'renamed', knowledgeIds: ['legacy-uuid', NEW_FILE] }, adapters);
+  describe('unusable knowledge ids', () => {
+    /**
+     * The rename and tag paths PUT the whole session (`{ ...session, name }`), so a legacy entry
+     * rides along on a write that has nothing to do with knowledge. Rejecting it would make such a
+     * notebook impossible to rename; dropping it heals the row instead.
+     */
+    it('drops an unusable knowledgeId and still performs the write', async () => {
+      const { adapters } = makeAdapters();
+      await updateSession(
+        user,
+        { id: 'session-1', name: 'renamed', knowledgeIds: ['legacy-uuid', NEW_FILE] },
+        adapters
+      );
 
-    const written = adapters.db.sessions.update.mock.calls[0][0];
-    expect(written.knowledgeIds).toEqual([NEW_FILE]);
-    expect(written.name).toBe('renamed');
-  });
+      const written = adapters.db.sessions.update.mock.calls[0][0];
+      expect(written.knowledgeIds).toEqual([NEW_FILE]);
+      expect(written.name).toBe('renamed');
+    });
 
-  it('preserves the stored list when the field is absent, rather than filtering it to empty', async () => {
-    const { adapters } = makeAdapters();
-    await updateSession(user, { id: 'session-1', name: 'renamed' }, adapters);
+    it('preserves the stored list when the field is absent, rather than filtering it to empty', async () => {
+      const { adapters } = makeAdapters();
+      await updateSession(user, { id: 'session-1', name: 'renamed' }, adapters);
 
-    // The fixture session carries [], so this pins "unchanged", not "cleared".
-    expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual([]);
+      // The fixture session carries [], so this pins "unchanged", not "cleared".
+      expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual([]);
+    });
   });
 });
 

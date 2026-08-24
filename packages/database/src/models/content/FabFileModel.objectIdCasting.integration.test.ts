@@ -8,9 +8,9 @@ import { FabFile, fabFileRepository } from './FabFileModel';
  * Run against a real server because the behaviour under test IS Mongo's casting, not the shape of
  * a query object. Session id arrays are declared `[{ type: String }]` (SessionModel) while these
  * collections are ObjectId-keyed, so every consumer that resolves them by `_id` inherits whatever
- * this file pins down. The notebook export guards its own queries with `isObjectIdOrHexString`;
- * those unit tests stub the throw, which encodes an assumption about Mongo rather than checking it.
- * This is where that assumption is checked.
+ * this file pins down. `services/src/utils/objectIds.ts` guards those consumers with
+ * `isObjectIdOrHexString`, and its unit tests stub the throw - which encodes an assumption about
+ * Mongo rather than checking it. This is where that assumption is checked.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -18,7 +18,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 let liveId: string;
 
-// Not castable at all: the shape a pre-validation session row can still hold.
+// Not castable at all: the shape a session row written before this filtering can still hold.
 const JUNK_ID = 'legacy-uuid-not-an-objectid';
 // 12 hex-ish characters. Mongoose's own docs still show `isValidObjectId('0123456789ab')` as
 // true (the old 12-BYTE-string form); on mongoose 8 it is false and casting throws. Pinned here
