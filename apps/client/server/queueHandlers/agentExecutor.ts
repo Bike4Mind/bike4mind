@@ -1317,6 +1317,12 @@ async function processExecution(
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      // `personalCorpusFileIds` is deliberately NOT threaded here: it is computed on the chat path
+      // from a per-turn attachment read this surface does not perform, so passing a stale or absent
+      // value would be worse than passing none.
+      sessionRetrievalTags: session.retrievalTags,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
@@ -2932,6 +2938,12 @@ async function processSubagentDispatch(
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      // `personalCorpusFileIds` is deliberately NOT threaded here: it is computed on the chat path
+      // from a per-turn attachment read this surface does not perform, so passing a stale or absent
+      // value would be worse than passing none.
+      sessionRetrievalTags: session.retrievalTags,
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
