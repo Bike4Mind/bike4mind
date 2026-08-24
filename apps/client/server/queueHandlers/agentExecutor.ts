@@ -106,7 +106,7 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
-import { applySessionToolPolicy, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -1286,6 +1286,20 @@ async function processExecution(
       cacheWriteTokens: 0,
     };
 
+    // Whether this run may offer each delegation surface - decided from the profile's
+    // denials and the session contract, and consumed below at the dependency level.
+    const delegation = delegationOffer({
+      profileDeniedTools: orchestrationProfile?.deniedTools,
+      session,
+    });
+    if (!delegation.offerDelegate || !delegation.offerDag) {
+      logger.info('[Orchestration] Delegation surfaces withheld for this run', {
+        offerDelegate: delegation.offerDelegate,
+        offerDag: delegation.offerDag,
+        profileId: orchestrationProfile?.id,
+      });
+    }
+
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
@@ -1328,11 +1342,20 @@ async function processExecution(
         models,
       },
       apiKeyTable: apiKeyTable as ApiKeyTable,
-      agentStore,
+      // The delegation tools are injected as OBJECTS keyed on these two deps, never on
+      // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
+      // profile denies both to keep its loop single-agent - or a session whose
+      // disableUserIntegrations promises no delegation, is enforced HERE or nowhere.
+      // Observed before this gate: an optimizer run registered delegate_to_agent and
+      // coordinate_task against its own profile's deniedTools. The `agentStore` local
+      // stays intact above for exclusive-MCP resolution; only the injection key is
+      // withheld - the same shape the chat path uses (`agentStore: undefined` in
+      // ChatCompletionProcess) and `agentExecutor.latticeTools` uses for its pool.
+      agentStore: delegation.offerDelegate ? agentStore : undefined,
       getRemainingTimeMs: () => context.getRemainingTimeInMillis(),
       handoffSignal,
       dagHandoffSignal,
-      dagDispatcher,
+      dagDispatcher: delegation.offerDag ? dagDispatcher : undefined,
       getCurrentExecutionId: () => executionId,
       // In-process delegate_to_agent/coordinate_task have no pre-flight reservation of
       // their own (unlike ChatCompletionProcess), so without this a member who crosses
