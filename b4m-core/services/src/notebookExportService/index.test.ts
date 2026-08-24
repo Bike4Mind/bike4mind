@@ -153,6 +153,34 @@ describe('notebook export', () => {
     expect(payload.notebooks[0].artifacts.map((a: { id: string }) => a.id)).toEqual(['artifact-1']);
   });
 
+  it('warns by id about an artifact reference it could not resolve, so the gap is not silent', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      artifactRepository: { find: vi.fn().mockResolvedValue([]) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(uploaded).toHaveLength(1);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Some artifacts could not be resolved',
+      expect.objectContaining({ unresolved: ['artifact-1'] })
+    );
+  });
+
+  it('leaves a soft-deleted artifact out of the export, like every other artifact reader', async () => {
+    const find = vi.fn(async (query: Record<string, unknown>) => {
+      // Mirrors the collection: a row whose deletedAt is set does not match `deletedAt: null`.
+      if (query.deletedAt !== null) {
+        return [{ id: 'artifact-1', title: 'Deleted Chart', type: 'recharts', deletedAt: new Date() }];
+      }
+      return [];
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts).toEqual([]);
+    expect(find).toHaveBeenCalledWith(expect.objectContaining({ deletedAt: null }));
+  });
+
   it('names an artifact from its title, which is the field the entity actually has', async () => {
     const payload = await exportOnce({
       artifactRepository: {

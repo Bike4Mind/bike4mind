@@ -375,8 +375,11 @@ export class NotebookExportService {
     if (artifactIds.length === 0) return [];
 
     // Artifact ids are `artifact_<ts>_<rand>`, not ObjectIds, so an `_id` query throws a CastError.
+    // `deletedAt: null` matches every read helper on ArtifactRepository - it only started to
+    // matter once the query above began resolving rows at all.
     const artifacts = await this.adapters.artifactRepository.find({
       id: { $in: artifactIds },
+      deletedAt: null,
     });
 
     // Sessions can still hold references to artifacts that no longer exist; without this the
