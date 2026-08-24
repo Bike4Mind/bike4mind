@@ -194,7 +194,7 @@ describe('FilesSection message-scoped files', () => {
     expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
     const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
     expect(updated[0]).toMatchObject({ chunked: false, vectorized: false });
-    expect(updated[0].embeddingModel).not.toBe('model-b');
+    expect(updated[0].embeddingModel).toBe('model-a');
   });
 
   it('renders distinct reprocess testids when the same file id appears in both lists', () => {

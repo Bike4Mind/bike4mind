@@ -234,6 +234,11 @@ export function useReprocessFile() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
     },
+    // No toast here - callers own the wording. Log anyway so a caller that forgets its own
+    // onError leaves a trace instead of failing silently.
+    onError: error => {
+      console.error(error);
+    },
   });
 }
 
