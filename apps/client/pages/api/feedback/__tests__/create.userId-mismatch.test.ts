@@ -10,6 +10,7 @@ import {
 import { FeedbackModel, User, UserActivityCounter, Organization, CounterLog } from '@bike4mind/database';
 import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
+import { getSettingsMap } from '@bike4mind/utils';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -302,5 +303,56 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     expect(saved).not.toBeNull();
 
     createSpy.mockRestore();
+  });
+
+  it('still returns 201 with the feedback saved when the admin settings read fails', async () => {
+    // getSettingsMap is the only post-save await left that can propagate out of the handler; a
+    // settings-store outage there used to turn an already-durable submission into a 5xx.
+    const settingsSpy = vi.mocked(getSettingsMap).mockRejectedValueOnce(new Error('settings store unavailable'));
+
+    const realUser = await User.create({
+      username: 'e2e-settings-failure-user',
+      name: 'Settings Failure User',
+      email: 'settings-failure-user@example.com',
+    });
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: realUser.id,
+        content: 'settings outage should not mask this save',
+        tags: [],
+        username: 'reporter',
+        userEmail: 'reporter@example.com',
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => true;
+    (req as unknown as { user: { id: string; username: string; email: string } }).user = {
+      id: realUser.id,
+      username: realUser.username,
+      email: realUser.email,
+    };
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
+
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ content: 'settings outage should not mask this save' });
+    expect(saved).not.toBeNull();
+
+    // Neither channel's configuration is knowable without settings, so both must report a failure
+    // the alarm can see rather than the silent 'disabled' an empty settings fallback would give.
+    const { delivery } = JSON.parse(res._getData());
+    expect(delivery).toEqual({
+      delivered: false,
+      channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'failed', reason: 'error' } },
+    });
+    expect(mockPostFeedbackToSlack).not.toHaveBeenCalled();
+    expect(mockEmailPublish).not.toHaveBeenCalled();
+
+    settingsSpy.mockClear();
   });
 });

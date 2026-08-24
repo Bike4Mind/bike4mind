@@ -26,6 +26,7 @@ import { Config } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
+  buildFeedbackDeliveryFailureMetrics,
   buildFeedbackDeliverySkippedMetrics,
   emitFeedbackDeliveryMetrics,
   ALARM_WORTHY_SKIP_REASONS,
@@ -146,8 +147,33 @@ const handler = baseApi()
     });
     await newFeedback.save();
 
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const stageClass = classifyStage(Config.STAGE);
+
+    // Reading the settings store is the last post-save await that could still propagate: the
+    // feedback is already durable here, so a settings-store outage must not surface as a 5xx that
+    // makes the client retry and file the report twice. Neither channel's configuration is
+    // knowable without it, so both are reported failed (alarm-worthy) rather than silently
+    // 'disabled', and the submission still answers 201.
+    let settings: Record<string, string>;
+    try {
+      settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    } catch (error) {
+      req.logger.error('Failed to load admin settings for feedback delivery', error);
+      const unavailable: FeedbackChannelDelivery = { outcome: 'failed', reason: 'error' };
+      const delivery: FeedbackDeliveryResult = {
+        delivered: false,
+        channels: { slack: unavailable, email: unavailable },
+      };
+      await emitFeedbackDeliveryMetrics([
+        ...buildFeedbackDeliveryFailureMetrics('slack', stageClass, 'settings_unavailable', Config.STAGE),
+        ...buildFeedbackDeliveryFailureMetrics('email', stageClass, 'settings_unavailable', Config.STAGE),
+      ]);
+      Logger.error('[feedback] delivery skipped: admin settings unavailable', {
+        feedbackId: newFeedback.id,
+        delivery,
+      });
+      return res.status(201).json({ ...newFeedback.toJSON(), delivery });
+    }
 
     // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
     // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
