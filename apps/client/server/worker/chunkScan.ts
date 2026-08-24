@@ -99,21 +99,21 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
   $and: [
     // Media exclusion, with the stamped-file exception - see the doc comment above.
     { $or: [{ mimeType: { $not: /^(audio|image|video)\// } }, { chunkRebuildRequestedAt: { $ne: null } }] },
-  // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
-  // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
-  // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is
-  // the BACKFILL: any file already stuck isChunking:true before chunkClaimedAt existed has no stamp,
-  // which a `$lt` skips - so without it those files would stay unrescuable forever. It's safe
-  // because every code path that sets isChunking:true now stamps chunkClaimedAt in the same write,
-  // so a null stamp on an isChunking:true file can only be a pre-migration straggler, never a
-  // legitimately in-flight one. The sweep does NOT re-claim before enqueue - it sends what this
-  // filter selected, and a file already in flight loses the chunk worker's compare-and-set
-  // (fabFileChunk.ts) and returns without re-chunking. Consequence worth knowing: a file that has
-  // been reset and enqueued but not yet picked up still matches here, so a sweep pass landing in
-  // that window re-sends it. The duplicate is harmless - it loses the CAS, or hits the `chunked`
-  // guard after a successful run - but it does spend one of CHUNK_SCAN_BATCH's slots. The window is
-  // normally sub-second, and the hosted sweep runs daily (infra/cron.ts), so this is a self-host
-  // consideration in practice.
+    // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
+    // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
+    // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is
+    // the BACKFILL: any file already stuck isChunking:true before chunkClaimedAt existed has no stamp,
+    // which a `$lt` skips - so without it those files would stay unrescuable forever. It's safe
+    // because every code path that sets isChunking:true now stamps chunkClaimedAt in the same write,
+    // so a null stamp on an isChunking:true file can only be a pre-migration straggler, never a
+    // legitimately in-flight one. The sweep does NOT re-claim before enqueue - it sends what this
+    // filter selected, and a file already in flight loses the chunk worker's compare-and-set
+    // (fabFileChunk.ts) and returns without re-chunking. Consequence worth knowing: a file that has
+    // been reset and enqueued but not yet picked up still matches here, so a sweep pass landing in
+    // that window re-sends it. The duplicate is harmless - it loses the CAS, or hits the `chunked`
+    // guard after a successful run - but it does spend one of CHUNK_SCAN_BATCH's slots. The window is
+    // normally sub-second, and the hosted sweep runs daily (infra/cron.ts), so this is a self-host
+    // consideration in practice.
     staleClaimBefore
       ? {
           $or: [
