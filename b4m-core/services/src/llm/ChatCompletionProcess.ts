@@ -88,6 +88,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { settleToolCallCredits } from './settleToolCredits';
+import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
@@ -1607,18 +1608,13 @@ export class ChatCompletionProcess {
       const accessibleLakeTags = hasAnyAttachment
         ? new Set((await this.getAccessibleDataLakeAccess()).dataLakeTags)
         : new Set<string>();
-      // Keying this on lake MEMBERSHIP is what makes the corpus-defer path safe without a further
-      // gate: resolveCorpusInlinePlan only ever defers a `lakeTagged` file, against this same
-      // accessible-tag set, so a personal-only corpus has nothing deferrable and cannot be stranded
-      // by a raised CorpusRetrievalMinInlineTokensPerDoc. Change this predicate away from lake
-      // membership and that gate has to be added there.
-      this.personalCorpusOnly =
-        hasAnyAttachment &&
-        attachedKnowledgeFiles !== null &&
-        accessibleLakeTags.size > 0 &&
-        (session.retrievalTags?.length ?? 0) === 0 &&
-        session.corpusGroundingMode !== 'retrieve' &&
-        attachedKnowledgeFiles.every(f => !(f.tags ?? []).some(t => accessibleLakeTags.has(t.name)));
+      this.personalCorpusOnly = resolvePersonalCorpusOnly({
+        requestedKnowledgeIds: session.knowledgeIds ?? [],
+        resolvedFiles: attachedKnowledgeFiles,
+        accessibleLakeTags,
+        retrievalTags: session.retrievalTags,
+        corpusGroundingMode: session.corpusGroundingMode,
+      });
       // Ids come from the already-CASL-filtered lookup, never from session.knowledgeIds directly.
       this.personalCorpusFileIds = this.personalCorpusOnly ? (attachedKnowledgeFiles ?? []).map(f => f.id) : [];
 
