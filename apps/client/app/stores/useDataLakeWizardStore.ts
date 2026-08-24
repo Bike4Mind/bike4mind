@@ -342,6 +342,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       // A lake named "Datalake" derives the reserved membership namespace, which the server
       // rejects and Start Upload gates on - leaving the user blocked over a value they never
       // typed. Leave the field for them to fill instead of seeding one that cannot be used.
+      // (A name with no alphanumerics derives '' rather than a bare ':', so it falls through
+      // and clears the field - which is the same "nothing to offer" outcome, reached by the
+      // path that also drops a prefix left over from a previous name.)
       if (isReservedTagPrefix(prefix)) return state;
       return {
         autoDerivedTagPrefix: prefix,

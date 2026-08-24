@@ -222,9 +222,7 @@ export default function DataLakeTreeView({
   // equality so a host that renders a breadcrumb SHORTER than leafMinDepth (the manager's
   // deep-link opens a lake at an empty path) still reaches its bucket.
   const isUncategorized =
-    !!uncategorized &&
-    breadcrumb.length <= leafMinDepth + 1 &&
-    breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
+    !!uncategorized && breadcrumb.length <= leafMinDepth + 1 && breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
 
   // At a leaf node (no children) below the seeded root, files are filtered locally by the leaf tag.
   const leafTag =
@@ -269,8 +267,7 @@ export default function DataLakeTreeView({
 
   // A ceiling, matching isUncategorized above: the bucket belongs at the seeded root, and a
   // breadcrumb shallower than leafMinDepth is still that root as far as the host is concerned.
-  const showBucketRow =
-    !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketFiles!.length > 0;
+  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketFiles!.length > 0;
   // The bucket / own-files rows standing in for an empty node list are still content, and a
   // pending/matched article search might still fill the pane - none of that should flash
   // "No categories"/"No matches" while it's about to be superseded.
