@@ -265,6 +265,11 @@ export class DataLakePage extends BasePage {
   }
 
   // ── Explorer article (deep-linked) ────────────────────────────────────────
+  get explorer(): Locator {
+    // Both surface modes: the page emits 'datalake-explorer', chat mode 'opti-datalake-explorer'
+    // (DataLakeExplorer.tsx) - a bare page-mode id would strand chat-mode specs.
+    return this.page.getByTestId(/^(opti-)?datalake-explorer$/);
+  }
   get article(): Locator {
     return this.page.getByTestId('datalake-article');
   }
@@ -272,7 +277,7 @@ export class DataLakePage extends BasePage {
     return this.page.getByTestId('datalake-ask-about');
   }
   get sortToggle(): Locator {
-    return this.page.getByTestId('datalake-sort-toggle');
+    return this.explorer.getByTestId('datalake-sort-toggle');
   }
 
   /** Open a lake article directly via the explorer's deep-link search param. */
