@@ -281,6 +281,14 @@ export const commitFabFileChunks = async (
     // partitionByIndexAvailability and lakeHealth's abandonedByKillSwitch) so a lost marker-clear
     // degrades to a stale note rather than to a permanently unsearchable file.
     ...(prepared.clearsConvergencePausedNote ? { notes: '' } : {}),
+
+    // Clear the pending-rebuild stamp (#1939): this run IS the rebuild it recorded. Unconditional,
+    // unlike the note above, because the field carries exactly one fact and nothing else writes it -
+    // and because the ownership check at the top of this function has already established that this
+    // run still holds the claim, so no other rebuild's stamp can be standing here to erase. Leaving
+    // it set would keep a fully rebuilt file reading as in-flight forever: withheld from search,
+    // parked in health's unmeasured bucket, and skipped by convergence as `indexingInFlight`.
+    chunkRebuildRequestedAt: null,
   });
 
   await db.fabFileChunks.deleteManyByFabFileId(fabFileId);

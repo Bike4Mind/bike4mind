@@ -1,3 +1,10 @@
+import {
+  MAX_TAXONOMY_TAGS,
+  MAX_TAXONOMY_TAG_SUFFIX_LENGTH,
+  MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
+  MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
+  MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
+} from '../constants/dataLakes';
 import type {
   InferTaxonomyResponse,
   TaxonomyFileAssignment,
@@ -46,13 +53,20 @@ export function sanitizeCategories(
   return categories
     .filter(cat => cat && isNonEmptyString(cat.tagName))
     .map(cat => {
-      const originalName = cat.tagName.trim();
+      // Truncate originalName BEFORE deriving suffix from it, so the two stay consistent
+      // with each other rather than deriving a suffix from text that gets cut off underneath.
+      const originalName = cat.tagName.trim().slice(0, MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH);
       return {
-        suffix: deriveSuffix(originalName, sourcePrefix),
+        suffix: deriveSuffix(originalName, sourcePrefix).slice(0, MAX_TAXONOMY_TAG_SUFFIX_LENGTH),
         originalName,
         strength: clampStrength(cat.confidence, 0.7),
         source: 'ai' as const,
-        matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
+        matchingFolders: Array.isArray(cat.matchingFolders)
+          ? cat.matchingFolders
+              .filter(isNonEmptyString)
+              .map(folder => folder.slice(0, MAX_TAXONOMY_MATCHING_FOLDER_LENGTH))
+              .slice(0, MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG)
+          : [],
         deleted: false,
       };
     })
@@ -62,7 +76,8 @@ export function sanitizeCategories(
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    });
+    })
+    .slice(0, MAX_TAXONOMY_TAGS);
 }
 
 export function sanitizeFileAssignments(

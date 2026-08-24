@@ -173,6 +173,12 @@ function installFetch(opts: {
     'fetch',
     vi.fn((url: unknown, init?: { method?: string }) => {
       const u = String(url);
+      // The widget obtains its credential by POSTing the refresh endpoint, so this has to be
+      // matched BEFORE the generic POST branch below - otherwise the session exchange is
+      // mistaken for a comment submission and consumes an onPost() response.
+      if (u.includes('/api/auth/refreshToken')) {
+        return Promise.resolve(jsonRes({ accessToken: 'test.access.token' }));
+      }
       if (u.endsWith('/can-comment')) {
         return Promise.resolve(jsonRes({ commentPolicy: 'open', canComment: opts.canComment }));
       }

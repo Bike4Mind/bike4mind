@@ -927,7 +927,7 @@ describe('AgentExecutionRepository', () => {
       );
 
       const swept = await agentExecutionRepository.cleanupStaleActive(userId, 20 * 60 * 1000);
-      expect(swept).toBe(0);
+      expect(swept).toEqual([]);
 
       const after = await agentExecutionRepository.findById(parent.id);
       expect(after?.status).toBe('awaiting_dag_children');
@@ -1051,13 +1051,50 @@ describe('AgentExecutionRepository', () => {
         { $set: { updatedAt: longAgo } }
       );
 
-      const count = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
+      const ids = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
 
-      expect(count).toBe(1);
+      expect(ids).toEqual([stale.id]);
       const after = await AgentExecutionModel.findById(stale.id);
       expect(after?.status).toBe('aborted');
       expect(after?.failureReason).toBeUndefined();
       expect(after?.abortedAt).toBeInstanceOf(Date);
+    });
+
+    it('returns only the executions the guarded write actually took', async () => {
+      // Callers settle the quests behind these ids, so an id the write did not
+      // transition is not merely noise: that run completed naturally, and its
+      // quest can still be `pending` while `persistRunAsQuest` fills in the real
+      // answer. Settling on it stamps an abandoned-run error over a success.
+      const userId = new mongoose.Types.ObjectId().toString();
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const stale = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+      const racer = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+      await AgentExecutionModel.collection.updateMany(
+        { _id: { $in: [stale.id, racer.id].map(id => new mongoose.Types.ObjectId(id)) } },
+        { $set: { updatedAt: longAgo } }
+      );
+
+      // Land the natural completion in the window between the id read and the
+      // guarded write - the only place this race can happen.
+      const realUpdateMany = AgentExecutionModel.updateMany.bind(AgentExecutionModel);
+      const spy = vi.spyOn(AgentExecutionModel, 'updateMany').mockImplementation((async (
+        filter: mongoose.FilterQuery<unknown>,
+        update: mongoose.UpdateQuery<unknown>
+      ) => {
+        await AgentExecutionModel.collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(racer.id) },
+          { $set: { status: 'completed' } }
+        );
+        return realUpdateMany(filter, update);
+      }) as unknown as typeof AgentExecutionModel.updateMany);
+
+      try {
+        expect(await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000)).toEqual([stale.id]);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect((await AgentExecutionModel.findById(racer.id))?.status).toBe('completed');
     });
   });
 

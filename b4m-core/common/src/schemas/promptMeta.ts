@@ -308,11 +308,65 @@ export const CitableSourceSchema = z.object({
     .optional(),
 });
 
+/**
+ * Per-turn retrieval outcome (#1867): whether retrieval was attempted this turn and what happened,
+ * independent of whether the model then cited anything. Exists specifically to make the zero case
+ * distinguishable from "never asked" - `context.lakeMemory` and `citables` both go silent on a
+ * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
+ * where retrieval never ran at all.
+ *
+ * Deliberately holds NO counts and NO chunk/document identifiers. Counts already exist and are
+ * more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * `applyQuestStatusChanges`, while this shape cannot dedupe (no identifiers to dedupe by) and
+ * would have to sum - producing a second, disagreeing number for the same question. Similarity
+ * scores live on `LakeAccessEvent`, not here.
+ *
+ * CAUTION, not a guarantee: the absence of chunk/document identifiers is what keeps this shape
+ * OUT of `promptMetaRedaction.ts`'s scope (that helper is a functionCalls-only denylist and would
+ * not catch a nested nonidentifier field like `dataLakeTags` regardless). It does NOT mean this
+ * field never needs redaction consideration - `dataLakeTags` (which lakes were involved) already
+ * reaches non-owner viewers the same way `lakeMemory.dataLakeTags` does (session shares, feedback
+ * egress, admin logs, session clone - see redactedFeedback.ts, admin/model-logs.ts, clone.ts, none
+ * of which touch this field). That exposure is not new in the general case, but it IS new
+ * specifically on a zero-recall turn: `lakeMemory` was never written there before this field
+ * existed, so a turn that previously carried no lake-identity signal at all now carries one.
+ *
+ * `attempted`/`outcome` on their own would still be ambiguous about WHICH lakes were searched on a
+ * zero-recall turn (dataLakeTags otherwise lives only inside `lakeMemory`, written after the
+ * zero-belief return), so this stamps the resolved tags at write time rather than making a reader
+ * fall back to the session's current (possibly since-changed) `retrievalTags`.
+ *
+ * Absent-or-fully-present, matching `lakeMemory` above - see the Mongoose-side subSchema comment
+ * in QuestModel.ts for why partial-write and default-array shapes are unsafe here.
+ */
+export const RetrievalSummarySchema = z.object({
+  /** True once a retrieval-capable surface actually ran (not merely offered) this turn. */
+  attempted: z.boolean(),
+  /**
+   * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
+   * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
+   * 'failed' - threw; recall did not complete.
+   * On multiple retrieval calls within one turn, merge priority is failed > ok > no_lakes (see
+   * retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never masked by a later
+   * success or abstain, and a real success on one surface is never masked by another surface's
+   * "no lakes in scope" abstain in the same turn.
+   */
+  outcome: z.enum(['ok', 'no_lakes', 'failed']),
+  /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
+  surfaces: z.array(z.string()),
+  /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
+  dataLakeTags: z.array(z.string()),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
+  /** Per-turn retrieval outcome - see RetrievalSummarySchema. Top-level (not under `context`)
+   * deliberately: applyQuestStatusChanges does a one-level spread merge, so a field nested under
+   * `context` would be replaced wholesale by any tool-arm write instead of merging. */
+  retrieval: RetrievalSummarySchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`

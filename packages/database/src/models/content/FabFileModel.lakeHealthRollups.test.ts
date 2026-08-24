@@ -185,5 +185,35 @@ describe('lake-health rollup primitives (#1666)', () => {
       const converge = await fabFileRepository.findLakeConvergenceMembers(scope);
       expect(converge.map(m => m.fileName).sort()).toEqual(['mine-by-prefix-paused.txt', 'mine-paused.txt']);
     });
+
+    // #1939's arm of the same `$or`, with the same scoping obligation. A member mid-rebuild is
+    // chunkless and carries NO marker, so the stamp is the only thing admitting it - and admitting
+    // it is what keeps a rebuild that was never enqueued from silently reducing the lake to the
+    // members it still has.
+    it('admits a member with a rebuild outstanding, and projects the stamp both reads grade on', async () => {
+      await makeFile('mine-rebuilding.txt', {
+        chunkCount: 0,
+        notes: '',
+        chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+        tags: [{ name: tag, strength: 1 }],
+      });
+      await makeFile('other-lake-rebuilding.txt', {
+        chunkCount: 0,
+        chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
+        tags: [{ name: 'datalake:other', strength: 1 }],
+      });
+      // Same shape WITHOUT the stamp: an image or a still-uploading row, and still excluded.
+      await makeFile('mine-chunkless.txt', { chunkCount: 0, tags: [{ name: tag, strength: 1 }] });
+
+      for (const members of [
+        await fabFileRepository.findDataLakeHealthMembers(scope),
+        await fabFileRepository.findLakeConvergenceMembers(scope),
+      ]) {
+        expect(members.map(m => m.fileName)).toEqual(['mine-rebuilding.txt']);
+        // Projected, not just matched: omitting it would admit the member and then grade it as a
+        // settled zero, which is worse than dropping it.
+        expect(members[0].chunkRebuildRequestedAt).toEqual(new Date('2026-08-20T00:00:00Z'));
+      }
+    });
   });
 });

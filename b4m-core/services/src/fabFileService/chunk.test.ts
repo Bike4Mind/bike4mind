@@ -345,6 +345,25 @@ describe('chunkFabfile', () => {
     const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
     expect('notes' in updatedFile).toBe(false);
   });
+
+  // #1939. Unconditional, unlike the note clear above: the field carries exactly one fact and this
+  // run IS the rebuild it recorded. Left set, a fully rebuilt file reads as in-flight forever -
+  // withheld from search, parked as unmeasured in health, skipped by convergence.
+  it('always clears the pending-rebuild stamp, whether or not a marker was present', async () => {
+    for (const notes of ['', CONVERGENCE_PAUSED_CHUNK_NOTE, 'No extractable text: scanned image']) {
+      mockAdapter.db.fabFiles.update.mockClear();
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes });
+
+      await chunkFabfile(
+        mockUser,
+        { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+        mockAdapter as never
+      );
+
+      const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
+      expect(updatedFile.chunkRebuildRequestedAt).toBeNull();
+    }
+  });
 });
 
 // #1681 constraint 3: the phase split is only worth anything if `prepareFabFileChunks` really is

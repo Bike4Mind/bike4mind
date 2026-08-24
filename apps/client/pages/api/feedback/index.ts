@@ -1,5 +1,6 @@
 import { FeedbackModel, User } from '@bike4mind/database';
 import {
+  classifyStage,
   FeedbackEvents,
   FeedbackStatus,
   IOrganizationDocument,
@@ -21,7 +22,7 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -54,6 +55,16 @@ function splitRecipients(raw: string | undefined): string[] {
 type FeedbackEmailRoute =
   | { kind: 'send'; recipients: string[]; stageClass: FeedbackDeliveryStageClass }
   | { kind: 'skip'; stageClass: FeedbackDeliveryStageClass; reason: FeedbackDeliverySkipReason };
+
+// Every value below reaches the email as a raw string interpolation, and on the unauthenticated
+// submission path every one of them (including userId) is attacker-controlled request-body input.
+// disallowedTagsMode: 'escape' (rather than sanitize-html's default 'discard') turns a tag into
+// its visible, inert entity form instead of deleting it - this template has no legitimate use for
+// any markup, but the promptMeta JSON dump is a diagnostic field where silently deleting a
+// bracketed substring would hide information from the staff reading it.
+function sanitizeForEmail(value: string): string {
+  return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
+}
 
 /**
  * Decides where feedback-to-email sends go for a given deploy stage, mirroring
@@ -187,7 +198,7 @@ const handler = baseApi()
         newFeedback.userEmail ?? '',
         newFeedback.userId,
         content,
-        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+        promptMetaForExternalEgress
       );
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
@@ -213,13 +224,14 @@ const handler = baseApi()
       const feedbackEmails = emailRoute.recipients;
       console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
       console.log('Sending feedback to email is enabled');
-      const sanitizedContent = sanitizeHtml(content);
-      const sanitizedUsername = sanitizeHtml(newFeedback.username);
-      const sanitizedUserEmail = sanitizeHtml(newFeedback.userEmail ?? '');
-      const sanitizedType = type ? sanitizeHtml(type) : '';
-      const sanitizedTags = tags ? tags.map(tag => sanitizeHtml(tag)) : [];
+      const sanitizedContent = sanitizeForEmail(content);
+      const sanitizedUsername = sanitizeForEmail(newFeedback.username);
+      const sanitizedUserEmail = sanitizeForEmail(newFeedback.userEmail ?? '');
+      const sanitizedUserId = sanitizeForEmail(newFeedback.userId);
+      const sanitizedType = type ? sanitizeForEmail(type) : '';
+      const sanitizedTags = tags ? tags.map(tag => sanitizeForEmail(tag)) : [];
       const sanitizedPromptMeta = promptMetaForExternalEgress
-        ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
+        ? sanitizeForEmail(JSON.stringify(promptMetaForExternalEgress, null, 2))
         : '';
 
       // allSettled (not all): one rejected recipient must not take down the whole handler
@@ -322,7 +334,7 @@ const handler = baseApi()
                   <div class="content">
                     <h2>New Feedback Submission</h2>
                     <div class="info">
-                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${newFeedback.userId})</p>
+                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
                     </div>

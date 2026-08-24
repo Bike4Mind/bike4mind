@@ -95,11 +95,14 @@ const ProfilePage = () => {
     isPending: publishedPending,
     isError: publishedError,
   } = useQuery({
-    queryKey: ['published-artifacts', 'mine'],
-    queryFn: listMyPublishedArtifacts,
+    // This screen only needs "does the caller have any", so it asks for a single row and reads
+    // the total rather than pulling the whole library. Distinct key from the tab's paged query,
+    // but under the same prefix so the tab's invalidation still refreshes it.
+    queryKey: ['published-artifacts', 'mine', 'any'],
+    queryFn: () => listMyPublishedArtifacts({ limit: 1 }),
     enabled: !!currentUser,
   });
-  const hasPublishedArtifacts = (publishedArtifacts?.length ?? 0) > 0;
+  const hasPublishedArtifacts = (publishedArtifacts?.total ?? 0) > 0;
 
   // Redirect legacy tab values to their new homes (see LEGACY_SETTINGS_REDIRECTS).
   useEffect(() => {

@@ -849,3 +849,60 @@ export interface IDataLakeSpendResponse {
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
   ledger: ILakeUsageSummary;
 }
+
+/**
+ * Overlay store for a STATIC (registry) data lake's admin-settable session defaults. A fallback
+ * lake has no backing document (see `isFallbackLake`), so it has nowhere to persist an override -
+ * this collection is that home, keyed by the registry lake's `id` rather than a Mongo `_id`
+ * relationship. Deliberately NOT a `ScopedSetting` row: these are lake CONTENT (the same fields a
+ * DB lake stores directly on its document), not a resolved operational lever, and every consumer
+ * reads them off a lake object rather than through the scoped-settings resolver.
+ *
+ * `groundingMode` (Phase 0), `preferredSystemPromptId` (Phase 1) and `systemPrompt` (Phase 2) all
+ * live here. `systemPrompt` is injected free text, so it is gated on a NARROWER trust rule than
+ * the other two: `isTrustedForInjection` (getDataLakePrompts.ts) treats a registry lake as trusted
+ * ONLY when it is org-scoped and the caller is a member of that org - the same rule an ordinary
+ * DB lake's org arm already applies, never wider. A gateless/global registry lake's systemPrompt
+ * is stored here but never injected (deliberately - see that rule's doc comment for why unbounded
+ * cross-tenant injection was rejected as an option). `preferredSystemPromptId` carries no such
+ * risk: it is an id reference re-validated against the session-activatable allowlist at every
+ * write AND read boundary (see `isSessionActivatablePromptId`), never injected text itself.
+ */
+export interface IFallbackLakeSetting extends IMongoDocument {
+  /** The registry lake's `id` (a human slug, never an ObjectId hex string - see `isFallbackLake`). */
+  lakeId: string;
+  /** Absent means "use the coded default" - mirrors how a DB lake treats an unset groundingMode. */
+  groundingMode?: DataLakeGroundingMode;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). Absent (never an
+   * empty-string stand-in) means "no preferred prompt". NOTE the `''` clear sentinel is stored
+   * VERBATIM rather than translated to absent - `setFields` filters only `undefined` - so a cleared
+   * binding persists as `''`. Every reader treats it as unset (truthiness, or `.trim()`), which is
+   * why the two spellings are interchangeable downstream; do not assume the row holds only absent.
+   */
+  preferredSystemPromptId?: string;
+  /**
+   * Per-lake system prompt (see IDataLake.systemPrompt). Stored for EVERY registry lake regardless
+   * of scope - `isTrustedForInjection` is what decides whether it is ever actually injected, not
+   * this storage layer, so an admin can set it ahead of a lake being re-scoped to an org without
+   * losing the value. Absent (never an empty-string stand-in) means unset, matching the DB-lake
+   * convention that a blank/whitespace-only prompt reads as absent.
+   */
+  systemPrompt?: string;
+}
+
+export interface IFallbackLakeSettingsRepository extends IBaseRepository<IFallbackLakeSetting> {
+  findByLakeId: (lakeId: string) => Promise<IFallbackLakeSetting | null>;
+  /** Batch read for the manager list, which renders every accessible fallback lake in one response. */
+  findByLakeIds: (lakeIds: string[]) => Promise<IFallbackLakeSetting[]>;
+  /**
+   * Upsert-by-lakeId: a fallback lake has no document to attach this row to via the base `create`.
+   * Only the keys actually present in `fields` are written - an omitted field leaves its stored
+   * value alone (mirrors `updateDataLake`'s "omitted -> unchanged" semantics), so a caller that
+   * sets only `groundingMode` cannot accidentally clear a previously-set `preferredSystemPromptId`.
+   */
+  setFields: (
+    lakeId: string,
+    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>>
+  ) => Promise<IFallbackLakeSetting>;
+}

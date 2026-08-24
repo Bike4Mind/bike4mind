@@ -1,4 +1,10 @@
-import { IChatHistoryItemRepository, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IChatHistoryItemRepository,
+  IFabFileRepository,
+  ISessionRepository,
+  IUserRepository,
+  rebindPromptMetaSession,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
@@ -53,10 +59,13 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
   );
 
   await Promise.all(
-    messagesToSnip.map(async ({ id, ...messageData }) => {
+    messagesToSnip.map(async ({ id, promptMeta, ...messageData }) => {
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,
+        // See forkSession: create() validates promptMeta.session.{id,userId} and the live
+        // update() path does not, so a copied quest must bring its own session block.
+        promptMeta: rebindPromptMetaSession(promptMeta, { sessionId: newSession.id, userId }),
       });
     })
   );
