@@ -165,8 +165,14 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         resolvedLakeIds: input.resolvedLakeIds,
         returnedChunkIds: chunkIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
         returnedFileIds: fileIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
-        // `scores?.length`, not `scores` - an empty array is truthy, and persisting `scores: []`
-        // would defeat the `default: undefined` above that makes absent-vs-empty meaningful.
+        // `scores?.length`, not `scores` - an empty array is truthy, so a caller passing
+        // `scores: []` would otherwise persist one. Note this COLLAPSES the absent-vs-empty
+        // distinction the `default: undefined` above preserves, rather than protecting it: an
+        // explicitly-empty array is stored as absent. That is sound only because the empty state
+        // is unreachable - every scored writer skips the write on zero results (the semantic arm
+        // returns `output: null` and never reaches here), and an empty `scores` alongside
+        // `chunkIds: []` would carry nothing `returnedChunkCount: 0` does not. If a surface ever
+        // records a genuine zero-result semantic search, revisit this rather than the default.
         ...(scores?.length ? { scores } : {}),
         returnedChunkCount,
         returnedFileCount,

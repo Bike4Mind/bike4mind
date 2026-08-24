@@ -25,7 +25,8 @@ export interface ResolveExecutionQuestIdInput {
   /** `questId` from the WS start payload (present only on the first, non-resumed invocation). */
   startPayloadQuestId?: string;
   /** `linkedQuestId` persisted on the execution doc (the resume-path fallback) - NEVER
-   * `execution.questId`, which holds the sessionId under a misleading name. */
+   * `execution.questId`, whose meaning depends on which dispatcher created the row (see the
+   * module docblock above). */
   executionLinkedQuestId?: string;
 }
 
