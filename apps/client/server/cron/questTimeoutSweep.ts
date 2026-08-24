@@ -49,9 +49,13 @@ export async function handler() {
     const recovery = resolveQuestTimeoutRecovery(quest, nowMs);
     if (!recovery) continue;
 
-    await questRepository.update({ id: quest.id, ...recovery });
-    recovered++;
-    logger.warn('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+    try {
+      await questRepository.update({ id: quest.id, ...recovery });
+      recovered++;
+      logger.warn('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+    } catch (err) {
+      logger.error('[QuestTimeoutSweep] Failed to recover quest', { questId: quest.id, err });
+    }
   }
 
   logger.info('[QuestTimeoutSweep] Sweep complete', {

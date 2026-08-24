@@ -119,4 +119,35 @@ describe('questTimeoutSweep cron', () => {
     expect(result).toEqual({ status: 'OK', recovered: 2 });
     expect(mockUpdate).toHaveBeenCalledTimes(2);
   });
+
+  it('continues recovering remaining quests when one update fails', async () => {
+    mockFindStaleRunning.mockResolvedValue([
+      {
+        id: 'q-fail',
+        status: 'running',
+        reply: null,
+        replies: [],
+        images: [],
+        updatedAt: new Date(Date.now() - 300_000).toISOString(),
+      },
+      {
+        id: 'q-ok',
+        status: 'running',
+        reply: null,
+        replies: [],
+        images: [],
+        updatedAt: new Date(Date.now() - 300_000).toISOString(),
+      },
+    ]);
+    mockUpdate
+      .mockRejectedValueOnce(new Error('transient DB error'))
+      .mockImplementation((data: Record<string, unknown>) =>
+        Promise.resolve({ id: data.id, ...data, updatedAt: new Date().toISOString() })
+      );
+
+    const result = await handler();
+
+    expect(result).toEqual({ status: 'OK', recovered: 1 });
+    expect(mockUpdate).toHaveBeenCalledTimes(2);
+  });
 });
