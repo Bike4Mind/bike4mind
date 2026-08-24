@@ -5,17 +5,25 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
-const { mockList, mockExport, mockDownloadData, mockToastError, mockToastSuccess, mockRefresh, mockPrint } = vi.hoisted(
-  () => ({
-    mockList: vi.fn(),
-    mockExport: vi.fn(),
-    mockDownloadData: vi.fn(),
-    mockToastError: vi.fn(),
-    mockToastSuccess: vi.fn(),
-    mockRefresh: vi.fn(),
-    mockPrint: vi.fn(),
-  })
-);
+const {
+  mockList,
+  mockExport,
+  mockDownloadData,
+  mockToastError,
+  mockToastSuccess,
+  mockRefresh,
+  mockPrint,
+  mockUpdateTags,
+} = vi.hoisted(() => ({
+  mockList: vi.fn(),
+  mockUpdateTags: vi.fn(),
+  mockExport: vi.fn(),
+  mockDownloadData: vi.fn(),
+  mockToastError: vi.fn(),
+  mockToastSuccess: vi.fn(),
+  mockRefresh: vi.fn(),
+  mockPrint: vi.fn(),
+}));
 
 vi.mock('sonner', () => ({ toast: { error: mockToastError, success: mockToastSuccess } }));
 
@@ -24,6 +32,7 @@ vi.mock('@client/app/utils/publishApi', () => ({
   deletePublishedArtifact: vi.fn(),
   updatePublishedVisibility: vi.fn(),
   updatePublishedCommentPolicy: vi.fn(),
+  updatePublishedTags: (...a: unknown[]) => mockUpdateTags(...a),
   restorePreviousVersion: vi.fn(),
   toArtifactSharePath: (_t: string, s: string, slug: string) => `/p/u/${s}/${slug}`,
   fetchPublishedExport: (...a: unknown[]) => mockExport(...a),
@@ -60,6 +69,9 @@ const renderTab = () => {
   );
 };
 
+/** The list API answers with the rows plus the owner's full tag vocabulary. */
+const listResult = (artifacts: unknown[], tags: string[] = []) => ({ artifacts, tags });
+
 const bundleRow = {
   publicId: 'pub-1',
   tier: 'user',
@@ -76,13 +88,14 @@ const replyRow = { ...bundleRow, publicId: 'pub-2', title: 'My Reply', source: {
 const sourcedRow = { ...bundleRow, publicId: 'pub-3', source: { kind: 'bundle', artifactId: 'artifact_html_x_1_0' } };
 
 beforeEach(() => {
-  mockList.mockReset().mockResolvedValue([bundleRow]);
+  mockList.mockReset().mockResolvedValue(listResult([bundleRow]));
   mockExport.mockReset().mockResolvedValue('# exported');
   mockDownloadData.mockReset();
   mockRefresh.mockReset().mockResolvedValue({ publicId: 'pub-3' });
   mockToastError.mockReset();
   mockToastSuccess.mockReset();
   mockPrint.mockReset();
+  mockUpdateTags.mockReset().mockResolvedValue(undefined);
 });
 
 describe('PublishedArtifactsTabContent - manage toggle', () => {
@@ -114,7 +127,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
   it('copies a reply as Markdown through the authenticated export fetch', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
-    mockList.mockResolvedValue([replyRow]);
+    mockList.mockResolvedValue(listResult([replyRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-2');
 
@@ -175,7 +188,7 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
 
 describe('PublishedArtifactsTabContent - refresh from source (issue #1142, option 2)', () => {
   it('offers Refresh only for a bundle that still knows its source artifact', async () => {
-    mockList.mockResolvedValue([bundleRow, replyRow, sourcedRow]);
+    mockList.mockResolvedValue(listResult([bundleRow, replyRow, sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
 
@@ -188,7 +201,7 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
 
   it('confirms before refreshing, since it replaces what viewers of a live link see', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(listResult([sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
 
@@ -200,7 +213,7 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
 
   it('refreshes the row on confirm and reports success', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(listResult([sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
 
@@ -213,7 +226,7 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
   it('surfaces a refresh failure', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockRefresh.mockRejectedValue(new Error('boom'));
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(listResult([sourcedRow]));
     renderTab();
     await screen.findByTestId('published-artifact-pub-3');
 
@@ -224,7 +237,7 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
   });
 
   it('points the single-version hint at Refresh when the row can use it', async () => {
-    mockList.mockResolvedValue([sourcedRow]);
+    mockList.mockResolvedValue(listResult([sourcedRow]));
     renderTab();
     const hint = await screen.findByTestId('published-artifact-single-version-pub-3');
     expect(hint.textContent).toContain('refresh it from source');
@@ -234,5 +247,84 @@ describe('PublishedArtifactsTabContent - refresh from source (issue #1142, optio
     renderTab();
     const hint = await screen.findByTestId('published-artifact-single-version-pub-1');
     expect(hint.textContent).toContain('re-publish this artifact');
+  });
+});
+
+describe('PublishedArtifactsTabContent - search and tags', () => {
+  const taggedRow = { ...bundleRow, publicId: 'pub-4', title: 'Tagged', tags: ['design', 'client work'] };
+
+  it('renders a row tags as chips', async () => {
+    mockList.mockResolvedValue(listResult([taggedRow], ['design', 'client work', 'ops']));
+    renderTab();
+
+    const tags = await screen.findByTestId('published-artifact-tags-pub-4');
+    expect(tags.textContent).toContain('design');
+    expect(tags.textContent).toContain('client work');
+  });
+
+  it('sends a debounced text query to the server rather than filtering the loaded page', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    fireEvent.change(screen.getByTestId('published-artifacts-search').querySelector('input')!, {
+      target: { value: 'quarterly' },
+    });
+
+    await waitFor(() => expect(mockList).toHaveBeenCalledWith({ q: 'quarterly', tags: [] }));
+  });
+
+  it('filters to a tag when its chip is clicked, and re-queries the server for it', async () => {
+    mockList.mockResolvedValue(listResult([taggedRow], ['design', 'client work']));
+    renderTab();
+    await screen.findByTestId('published-artifact-tags-pub-4');
+
+    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-4-design'));
+    await waitFor(() => expect(mockList).toHaveBeenCalledWith({ q: '', tags: ['design'] }));
+  });
+
+  it('distinguishes "nothing matches this filter" from "nothing published yet"', async () => {
+    mockList.mockResolvedValue(listResult([taggedRow], ['design']));
+    renderTab();
+    await screen.findByTestId('published-artifact-tags-pub-4');
+
+    mockList.mockResolvedValue(listResult([], ['design']));
+    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-4-design'));
+
+    await waitFor(() => expect(screen.queryByTestId('published-artifacts-no-matches')).not.toBeNull());
+    expect(screen.queryByTestId('published-artifacts-empty')).toBeNull();
+  });
+
+  it('shows the plain empty state when nothing is published and no filter is set', async () => {
+    mockList.mockResolvedValue(listResult([]));
+    renderTab();
+
+    await screen.findByTestId('published-artifacts-empty');
+    expect(screen.queryByTestId('published-artifacts-no-matches')).toBeNull();
+  });
+
+  it('opens the tag editor only on demand and saves the edited set', async () => {
+    mockList.mockResolvedValue(listResult([taggedRow], ['design', 'client work']));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-4');
+
+    expect(screen.queryByTestId('published-artifact-tag-editor-pub-4')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifact-edit-tags-pub-4'));
+    expect(screen.getByTestId('published-artifact-tag-editor-pub-4')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifact-tag-save-pub-4'));
+    await waitFor(() => expect(mockUpdateTags).toHaveBeenCalledWith('pub-4', ['design', 'client work']));
+  });
+
+  it('discards an uncommitted tag edit on Cancel', async () => {
+    mockList.mockResolvedValue(listResult([taggedRow], ['design']));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-4');
+
+    fireEvent.click(screen.getByTestId('published-artifact-edit-tags-pub-4'));
+    fireEvent.click(screen.getByTestId('published-artifact-tag-cancel-pub-4'));
+
+    expect(screen.queryByTestId('published-artifact-tag-editor-pub-4')).toBeNull();
+    expect(mockUpdateTags).not.toHaveBeenCalled();
   });
 });

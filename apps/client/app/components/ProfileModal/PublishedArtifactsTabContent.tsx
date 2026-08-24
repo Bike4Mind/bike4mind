@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
+  Autocomplete,
   Box,
+  Button,
   Typography,
   Sheet,
   Chip,
   Switch,
   IconButton,
+  Input,
   Tooltip,
   Select,
   Option,
@@ -23,14 +26,18 @@ import NotesIcon from '@mui/icons-material/Notes';
 import DownloadIcon from '@mui/icons-material/Download';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
+import LocalOfferIcon from '@mui/icons-material/LocalOffer';
+import SearchIcon from '@mui/icons-material/Search';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { PublishVisibility } from '@bike4mind/common';
+import { normalizePublishedTags, PUBLISHED_TAGS_MAX } from '@bike4mind/common';
 import {
   listMyPublishedArtifacts,
   deletePublishedArtifact,
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
+  updatePublishedTags,
   restorePreviousVersion,
   toArtifactSharePath,
   fetchPublishedExport,
@@ -42,8 +49,10 @@ import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app
 import { downloadData } from '@client/app/utils/download';
 import { printHtmlForPdf } from '@client/app/utils/printToPdf';
 import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 
-const QUERY_KEY = ['published-artifacts', 'mine'] as const;
+/** Prefix shared with the profile page's own listing, so one invalidate refreshes both. */
+const QUERY_KEY_BASE = ['published-artifacts', 'mine'] as const;
 
 function apiError(err: unknown, fallback: string): string {
   if (isAxiosError(err)) return (err.response?.data as { error?: string })?.error || err.message || fallback;
@@ -66,13 +75,34 @@ function sharePath(a: ManagedArtifact): string {
  */
 export default function PublishedArtifactsTabContent() {
   const qc = useQueryClient();
-  const {
-    data: artifacts = [],
-    isLoading,
-    isError,
-  } = useQuery({ queryKey: QUERY_KEY, queryFn: listMyPublishedArtifacts });
+  // Debounced so typing does not fire a request per keystroke; `search` drives the
+  // input, `debouncedSearch` the query key.
+  const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const filtersActive = debouncedSearch.trim().length > 0 || tagFilter.length > 0;
 
-  const invalidate = () => void qc.invalidateQueries({ queryKey: QUERY_KEY });
+  const { data, isLoading, isError } = useQuery({
+    // Filters are part of the key: narrowing happens server-side (ahead of the result
+    // cap), so each filter combination is its own cached result rather than a client
+    // slice of one truncated page.
+    queryKey: [...QUERY_KEY_BASE, { q: debouncedSearch.trim(), tags: tagFilter }],
+    queryFn: () => listMyPublishedArtifacts({ q: debouncedSearch, tags: tagFilter }),
+    // Keep the previous rows on screen while a new filter resolves, so the list does
+    // not flash empty on every keystroke.
+    placeholderData: previous => previous,
+  });
+  const artifacts = data?.artifacts ?? [];
+  // The owner's full vocabulary, which the server returns unfiltered. A tag the owner
+  // just removed from their last artifact would otherwise vanish from the control
+  // mid-edit; keeping the selected values in the option list avoids that.
+  const tagOptions = useMemo(() => [...new Set([...(data?.tags ?? []), ...tagFilter])].sort(), [data?.tags, tagFilter]);
+  // A filter can empty the list, so "has rows" alone is not the test - keep the
+  // controls on screen whenever they are the reason the list looks the way it does.
+  const showControls = artifacts.length > 0 || filtersActive;
+
+  // Prefix invalidate: refreshes every filter combination plus the profile page's
+  // own unfiltered listing.
+  const invalidate = () => void qc.invalidateQueries({ queryKey: QUERY_KEY_BASE });
 
   const visibilityMut = useMutation({
     mutationFn: (v: { publicId: string; visibility: PublishVisibility }) =>
@@ -108,6 +138,15 @@ export default function PublishedArtifactsTabContent() {
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Refresh failed')),
   });
+  const tagsMut = useMutation({
+    mutationFn: (v: { publicId: string; tags: string[] }) => updatePublishedTags(v.publicId, v.tags),
+    onSuccess: () => {
+      toast.success('Tags updated');
+      setTagEditor(null);
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(apiError(e, 'Failed to update tags')),
+  });
   const deleteMut = useMutation({
     mutationFn: (publicId: string) => deletePublishedArtifact(publicId),
     onSuccess: () => {
@@ -122,9 +161,12 @@ export default function PublishedArtifactsTabContent() {
     commentsMut.isPending ||
     restoreMut.isPending ||
     refreshMut.isPending ||
+    tagsMut.isPending ||
     deleteMut.isPending;
   // One row's sharing panel open at a time.
   const [manageOpen, setManageOpen] = useState<string | null>(null);
+  // One row's tag editor open at a time; `draft` is the uncommitted selection.
+  const [tagEditor, setTagEditor] = useState<{ publicId: string; draft: string[] } | null>(null);
   // publicId+format of an export in flight, so only the clicked button disables.
   const [exporting, setExporting] = useState<string | null>(null);
 
@@ -190,11 +232,59 @@ export default function PublishedArtifactsTabContent() {
         content, refresh a link from its source artifact, restore a previous version, or delete.
       </Typography>
 
+      {/* Management-list controls: they narrow the list the row actions operate on,
+          and deliberately sit above the rows rather than replacing any per-row action.
+          Hidden entirely for an owner with nothing published, where they would be
+          controls over an empty set. */}
+      {showControls && (
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mb: 2 }}>
+          <Input
+            size="sm"
+            placeholder="Search by title..."
+            startDecorator={<SearchIcon sx={{ fontSize: 16 }} />}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            data-testid="published-artifacts-search"
+            sx={{ flex: 1, minWidth: 200 }}
+          />
+          <Autocomplete
+            multiple
+            size="sm"
+            placeholder={tagFilter.length ? '' : 'Filter by tag'}
+            options={tagOptions}
+            value={tagFilter}
+            onChange={(_e, value) => setTagFilter(value)}
+            data-testid="published-artifacts-tag-filter"
+            sx={{ flex: 1, minWidth: 200 }}
+          />
+          {filtersActive && (
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => {
+                setSearch('');
+                setTagFilter([]);
+              }}
+              data-testid="published-artifacts-clear-filters"
+            >
+              Clear
+            </Button>
+          )}
+        </Box>
+      )}
+
       {artifacts.length === 0 ? (
-        <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-empty">
-          You haven&apos;t published anything yet. Share an artifact or run the publish-to-bike4mind skill to get
-          started.
-        </Typography>
+        filtersActive ? (
+          <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-no-matches">
+            No published artifacts match this search. Clear the filters to see all of them.
+          </Typography>
+        ) : (
+          <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-empty">
+            You haven&apos;t published anything yet. Share an artifact or run the publish-to-bike4mind skill to get
+            started.
+          </Typography>
+        )
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           {artifacts.map(a => {
@@ -243,6 +333,28 @@ export default function PublishedArtifactsTabContent() {
                   )}
                 </Box>
 
+                {/* Clicking a tag filters to it - the fastest path from "I see this
+                    grouping" to "show me only that grouping". */}
+                {(a.tags?.length ?? 0) > 0 && (
+                  <Box
+                    sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}
+                    data-testid={`published-artifact-tags-${a.publicId}`}
+                  >
+                    {a.tags?.map(tag => (
+                      <Chip
+                        key={tag}
+                        size="sm"
+                        variant={tagFilter.includes(tag) ? 'solid' : 'soft'}
+                        color="primary"
+                        onClick={() => setTagFilter(cur => (cur.includes(tag) ? cur : [...cur, tag]))}
+                        slotProps={{ action: { 'data-testid': `published-artifact-tag-${a.publicId}-${tag}` } }}
+                      >
+                        {tag}
+                      </Chip>
+                    ))}
+                  </Box>
+                )}
+
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                     <Typography level="body-xs" sx={{ opacity: 0.7 }}>
@@ -279,6 +391,24 @@ export default function PublishedArtifactsTabContent() {
                   )}
 
                   <Box sx={{ flex: 1 }} />
+
+                  <Tooltip title="Edit tags">
+                    <IconButton
+                      size="sm"
+                      variant={tagEditor?.publicId === a.publicId ? 'soft' : 'plain'}
+                      color={tagEditor?.publicId === a.publicId ? 'primary' : 'neutral'}
+                      disabled={busy}
+                      onClick={() =>
+                        setTagEditor(cur =>
+                          cur?.publicId === a.publicId ? null : { publicId: a.publicId, draft: a.tags ?? [] }
+                        )
+                      }
+                      data-testid={`published-artifact-edit-tags-${a.publicId}`}
+                      aria-expanded={tagEditor?.publicId === a.publicId}
+                    >
+                      <LocalOfferIcon />
+                    </IconButton>
+                  </Tooltip>
 
                   <Tooltip title="Share, gate & embed">
                     <IconButton
@@ -422,6 +552,55 @@ export default function PublishedArtifactsTabContent() {
                     </IconButton>
                   </Tooltip>
                 </Box>
+
+                {tagEditor?.publicId === a.publicId && (
+                  <Box
+                    sx={{ mt: 0.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}
+                    data-testid={`published-artifact-tag-editor-${a.publicId}`}
+                  >
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Autocomplete
+                        multiple
+                        freeSolo
+                        size="sm"
+                        placeholder="Add a tag and press Enter"
+                        options={tagOptions}
+                        value={tagEditor.draft}
+                        onChange={(_e, value) =>
+                          setTagEditor(cur =>
+                            cur ? { ...cur, draft: normalizePublishedTags(value as string[]) } : cur
+                          )
+                        }
+                        sx={{ flex: 1 }}
+                        data-testid={`published-artifact-tag-input-${a.publicId}`}
+                      />
+                      <Button
+                        size="sm"
+                        loading={tagsMut.isPending && tagsMut.variables?.publicId === a.publicId}
+                        onClick={() => tagsMut.mutate({ publicId: a.publicId, tags: tagEditor.draft })}
+                        data-testid={`published-artifact-tag-save-${a.publicId}`}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        onClick={() => setTagEditor(null)}
+                        data-testid={`published-artifact-tag-cancel-${a.publicId}`}
+                      >
+                        Cancel
+                      </Button>
+                    </Box>
+                    {/* The write path silently drops anything past the cap, so say so
+                        here rather than letting a typed tag vanish on save. */}
+                    {tagEditor.draft.length >= PUBLISHED_TAGS_MAX && (
+                      <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.7 }}>
+                        Maximum of {PUBLISHED_TAGS_MAX} tags reached - remove one to add another.
+                      </Typography>
+                    )}
+                  </Box>
+                )}
 
                 {/* Lazily mounted so the manage-state fetch (gate + embed list) only
                     fires for the row the owner actually opens. */}

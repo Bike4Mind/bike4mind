@@ -96,10 +96,10 @@ const ProfilePage = () => {
     isError: publishedError,
   } = useQuery({
     queryKey: ['published-artifacts', 'mine'],
-    queryFn: listMyPublishedArtifacts,
+    queryFn: () => listMyPublishedArtifacts(),
     enabled: !!currentUser,
   });
-  const hasPublishedArtifacts = (publishedArtifacts?.length ?? 0) > 0;
+  const hasPublishedArtifacts = (publishedArtifacts?.artifacts.length ?? 0) > 0;
 
   // Redirect legacy tab values to their new homes (see LEGACY_SETTINGS_REDIRECTS).
   useEffect(() => {

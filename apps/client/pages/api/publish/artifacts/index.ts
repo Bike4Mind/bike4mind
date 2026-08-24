@@ -1,11 +1,17 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, Project } from '@bike4mind/database';
 import { buildListVisibilityFilter } from '@server/services/publish';
+import { normalizePublishedTags, PUBLISHED_TAGS_MAX } from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
  * GET /api/publish/artifacts - list artifacts visible to the caller.
  * Non-admins see their own + public + their org/project-visible artifacts
  * (buildListVisibilityFilter); admins see everything. Summary fields only.
+ *
+ * `?q=` (title/slug substring) and `?tags=a,b` (AND across tags) narrow the list.
+ * Both are applied in the $match, BEFORE $sort/$limit, so filtering selects from the
+ * whole set rather than from the truncated page.
  */
 const handler = baseApi().get(async (req, res) => {
   if (!req.user) {
@@ -23,7 +29,22 @@ const handler = baseApi().get(async (req, res) => {
   // (PATCH/restore/delete are owner-only). Otherwise apply the visibility filter.
   const mine = req.query.mine === 'true' || req.query.mine === '1';
 
+  // Free-text narrowing over the fields a manager can actually see in the row:
+  // title and slug. Anchored nowhere (substring), case-insensitive, and escaped so
+  // a user typing regex metacharacters searches for those characters literally.
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
+  // Comma-separated, normalized through the same helper as the write path so
+  // casing/spacing differences still match what is stored. AND semantics ($all):
+  // picking two tags narrows rather than widens.
+  const rawTags = typeof req.query.tags === 'string' ? req.query.tags.split(',') : [];
+  const tags = normalizePublishedTags(rawTags).slice(0, PUBLISHED_TAGS_MAX);
+
   const filter: Record<string, unknown> = { deletedAt: null };
+  if (q) {
+    const rx = new RegExp(escapeRegex(q), 'i');
+    filter.$or = [{ title: rx }, { slug: rx }];
+  }
+  if (tags.length) filter.tags = { $all: tags };
   if (sourceArtifactId) {
     filter.ownerId = userId;
     filter['source.artifactId'] = sourceArtifactId;
@@ -71,6 +92,7 @@ const handler = baseApi().get(async (req, res) => {
         discoverable: 1,
         source: 1,
         size: 1,
+        tags: 1,
         publishedAt: 1,
         viewCount: 1,
         ownerId: 1,
@@ -80,7 +102,18 @@ const handler = baseApi().get(async (req, res) => {
     },
   ]);
 
-  return res.status(200).json({ artifacts });
+  // The owner's FULL distinct tag vocabulary, independent of the filter and the
+  // $limit above - the filter control must offer every tag the owner has, not just
+  // the ones that survived the current query (which would strip out the option they
+  // need to switch to). Owner-scoped surfaces only; the visibility-filtered listing
+  // has no tag control.
+  let allTags: string[] | undefined;
+  if (mine && !sourceArtifactId) {
+    allTags = (await PublishedArtifact.distinct('tags', { ownerId: userId, deletedAt: null })) as string[];
+    allTags.sort();
+  }
+
+  return res.status(200).json(allTags ? { artifacts, tags: allTags } : { artifacts });
 });
 
 export const config = {

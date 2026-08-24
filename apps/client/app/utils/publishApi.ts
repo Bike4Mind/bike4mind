@@ -33,6 +33,23 @@ export interface ManagedArtifact {
   /** Number of entries in the published version history (drives the version switcher
    *  and the single-version hint). 0/1 means no switcher yet; 2+ shows the switcher. */
   versionsCount?: number;
+  /** Owner-assigned tags. Independent of the source workbench artifact's tags. */
+  tags?: string[];
+}
+
+/** Narrowing applied server-side to the published list. */
+export interface PublishedListFilters {
+  /** Case-insensitive substring over title and slug. */
+  q?: string;
+  /** AND semantics: an artifact must carry every selected tag. */
+  tags?: string[];
+}
+
+/** The owner-scoped list plus the owner's full tag vocabulary for the filter control. */
+export interface MyPublishedArtifacts {
+  artifacts: ManagedArtifact[];
+  /** Every tag the caller has used, regardless of the current filter or page. */
+  tags: string[];
 }
 
 /** How a re-publish of an already-published artifact should land. */
@@ -43,10 +60,22 @@ export function toArtifactSharePath(tier: PublishScopeTier, scopeId: string, slu
   return `${SCOPE_URL_PREFIX[tier]}/${scopeId}/${slug}`;
 }
 
-/** List the caller's OWN published artifacts (the manageable set). */
-export async function listMyPublishedArtifacts(): Promise<ManagedArtifact[]> {
-  const { data } = await api.get<{ artifacts: ManagedArtifact[] }>('/api/publish/artifacts?mine=true');
-  return data.artifacts ?? [];
+/**
+ * List the caller's OWN published artifacts (the manageable set), optionally narrowed
+ * by a text query and/or tags. Filtering happens server-side, ahead of the result cap,
+ * so narrowing selects from the whole set rather than from an already-truncated page.
+ *
+ * The returned `tags` is the caller's COMPLETE tag vocabulary and is deliberately
+ * unaffected by `filters` - the filter control has to keep offering every tag.
+ */
+export async function listMyPublishedArtifacts(filters: PublishedListFilters = {}): Promise<MyPublishedArtifacts> {
+  const params = new URLSearchParams({ mine: 'true' });
+  if (filters.q?.trim()) params.set('q', filters.q.trim());
+  if (filters.tags?.length) params.set('tags', filters.tags.join(','));
+  const { data } = await api.get<{ artifacts: ManagedArtifact[]; tags?: string[] }>(
+    `/api/publish/artifacts?${params.toString()}`
+  );
+  return { artifacts: data.artifacts ?? [], tags: data.tags ?? [] };
 }
 
 /**
@@ -205,6 +234,11 @@ export async function reportPublishedArtifact(
 /** Change a published item's visibility (owner/admin). */
 export async function updatePublishedVisibility(publicId: string, visibility: PublishVisibility): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { visibility });
+}
+
+/** Replace a published item's tags (owner/admin). Pass `[]` to clear them. */
+export async function updatePublishedTags(publicId: string, tags: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { tags });
 }
 
 /** Change who may comment on a published item (owner/admin). */

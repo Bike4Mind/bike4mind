@@ -41,7 +41,7 @@ vi.mock('@client/app/components/help', () => ({
 }));
 
 vi.mock('@client/app/utils/publishApi', () => ({
-  listMyPublishedArtifacts: () => Promise.resolve(mockPublishedArtifacts),
+  listMyPublishedArtifacts: () => Promise.resolve({ artifacts: mockPublishedArtifacts, tags: [] }),
 }));
 
 // next/dynamic + static tab content are irrelevant to the strip itself; stub them

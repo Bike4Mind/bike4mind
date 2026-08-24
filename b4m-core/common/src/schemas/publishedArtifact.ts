@@ -178,6 +178,46 @@ export const ALLOWED_MIME_EXACT: readonly string[] = [
   'application/octet-stream',
 ];
 
+// --- Tags (owner-facing organization of the published list) ---
+
+/**
+ * Tags on a PublishedArtifact are INDEPENDENT of the source workbench artifact's
+ * own `tags` and are never inherited from it: only `bundle` sources have a
+ * workbench artifact at all, and a publication is a snapshot that must not be
+ * mutated by later edits to its source. They organize the owner's list of live
+ * publications, not their drafts.
+ */
+export const PUBLISHED_TAG_MAX_LENGTH = 50;
+export const PUBLISHED_TAGS_MAX = 20;
+
+/**
+ * Normalize one tag to its stored form: trimmed, lowercased, inner whitespace
+ * collapsed to single spaces, truncated to the max length. Returns '' for a tag
+ * that is empty once normalized (callers drop those). Shared by the write path
+ * and the filter path so a tag typed with different casing/spacing still matches
+ * what is stored.
+ */
+export function normalizePublishedTag(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, PUBLISHED_TAG_MAX_LENGTH);
+}
+
+/** Normalize, drop empties, dedupe (order-preserving), cap. */
+export function normalizePublishedTags(raw: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const tag of raw) {
+    const normalized = normalizePublishedTag(tag);
+    if (normalized) seen.add(normalized);
+    if (seen.size >= PUBLISHED_TAGS_MAX) break;
+  }
+  return [...seen];
+}
+
+/** Field schema: normalizes on parse, so stored tags are always canonical. */
+export const PublishedTagsSchema = z
+  .array(z.string().max(200))
+  .max(PUBLISHED_TAGS_MAX * 2)
+  .transform(list => normalizePublishedTags(list));
+
 // --- Embed allowlist (publisher-controlled external framing) ---
 
 /**
@@ -354,6 +394,10 @@ export const PublishedArtifactSchema = z.object({
    *  normalizing/deduping EmbedOriginsSchema as the write path so the stored
    *  contract enforces the canonical-origin invariant, not just `string[]`. */
   embedOrigins: EmbedOriginsSchema.optional(),
+
+  /** Owner-assigned tags for organizing the published list. Independent of the
+   *  source workbench artifact's tags - see PublishedTagsSchema. */
+  tags: PublishedTagsSchema.prefault([]),
 
   ownerId: z.string(),
   lastPublishedBy: z.string().optional(),

@@ -147,6 +147,13 @@ const PublishedArtifactSchema = new Schema(
      *  rather than staying silently exposed. */
     discoverable: { type: Boolean, default: false },
 
+    /** Owner-assigned tags for organizing the published list. Deliberately
+     *  independent of the source workbench artifact's `tags` (see
+     *  PublishedTagsSchema in @bike4mind/common): only `bundle` sources have a
+     *  workbench artifact at all, and a publication is a snapshot. Stored
+     *  pre-normalized (trimmed, lowercased) by the write path. */
+    tags: { type: [String], default: [] },
+
     ownerId: { type: String, required: true },
     lastPublishedBy: { type: String },
 
@@ -225,6 +232,10 @@ PublishedArtifactSchema.index(
 );
 PublishedArtifactSchema.index({ ownerId: 1, deletedAt: 1 }); // a user's published artifacts
 PublishedArtifactSchema.index({ visibility: 1, deletedAt: 1 }); // public listing / gate
+// Owner-scoped tag filtering on the Published tab. ownerId leads because every
+// query on this surface is owner-scoped; deletedAt trails so the multikey `tags`
+// term stays adjacent to the equality prefix.
+PublishedArtifactSchema.index({ ownerId: 1, tags: 1, deletedAt: 1 });
 PublishedArtifactSchema.index({ 'source.kind': 1, 'source.sessionId': 1 }); // reply lookups
 PublishedArtifactSchema.index({ 'source.fabFileId': 1 }); // fabfile lookups
 // "Is this notebook artifact already published?" drives the publish dialog's

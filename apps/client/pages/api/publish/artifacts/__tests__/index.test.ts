@@ -9,8 +9,9 @@ import { createMocks } from 'node-mocks-http';
  * emits - no real database, so we mock the DB layer and inspect the pipeline handed to it.
  */
 
-const { aggregate, buildListVisibilityFilter, projectFind } = vi.hoisted(() => ({
+const { aggregate, distinct, buildListVisibilityFilter, projectFind } = vi.hoisted(() => ({
   aggregate: vi.fn(),
+  distinct: vi.fn(),
   buildListVisibilityFilter: vi.fn(),
   projectFind: vi.fn(() => ({ select: () => ({ lean: () => Promise.resolve([]) }) })),
 }));
@@ -31,7 +32,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  PublishedArtifact: { aggregate: (...a: unknown[]) => aggregate(...a) },
+  PublishedArtifact: {
+    aggregate: (...a: unknown[]) => aggregate(...a),
+    distinct: (...a: unknown[]) => distinct(...a),
+  },
   // Project.find(...).select(...).lean() -> caller's accessible project ids (empty here).
   // Only the default visibility branch needs them; the owner-scoped branches must skip it.
   Project: { find: (...a: unknown[]) => projectFind(...a) },
@@ -73,6 +77,7 @@ function projectStage(): Record<string, unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   aggregate.mockResolvedValue([{ publicId: 'p1', versionsCount: 3 }]);
+  distinct.mockResolvedValue(['zeta', 'alpha']);
   buildListVisibilityFilter.mockReturnValue(VIS);
 });
 
@@ -158,6 +163,58 @@ describe('GET /api/publish/artifacts — projection', () => {
   it('returns the aggregation result under { artifacts }', async () => {
     const res = await run({ mine: 'true' });
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ artifacts: [{ publicId: 'p1', versionsCount: 3 }] });
+    expect(res._getJSONData()).toMatchObject({ artifacts: [{ publicId: 'p1', versionsCount: 3 }] });
+  });
+
+  it('projects tags so the rows can render and filter by them', async () => {
+    await run({ mine: 'true' });
+    expect(projectStage().tags).toBe(1);
+  });
+});
+
+describe('GET /api/publish/artifacts \u2014 search + tag filtering', () => {
+  it('matches ?q against title and slug, case-insensitively', async () => {
+    await run({ mine: 'true', q: 'Quarterly' });
+    const or = matchStage().$or as Array<{ title?: RegExp; slug?: RegExp }>;
+    expect(or).toHaveLength(2);
+    expect(or[0].title?.source).toBe('Quarterly');
+    expect(or[0].title?.flags).toContain('i');
+    expect(or[1].slug?.source).toBe('Quarterly');
+  });
+
+  it('escapes regex metacharacters so a query is matched literally', async () => {
+    await run({ mine: 'true', q: '(a+)+$' });
+    const or = matchStage().$or as Array<{ title?: RegExp }>;
+    expect(or[0].title?.source).toBe('\\(a\\+\\)\\+\\$');
+  });
+
+  it('ignores a blank ?q rather than matching everything', async () => {
+    await run({ mine: 'true', q: '   ' });
+    expect(matchStage().$or).toBeUndefined();
+  });
+
+  it('ANDs the selected tags and normalizes them like the write path', async () => {
+    await run({ mine: 'true', tags: 'Design , design,  Client Work ' });
+    expect(matchStage().tags).toEqual({ $all: ['design', 'client work'] });
+  });
+
+  it('applies the filter before the sort and limit, not after', async () => {
+    await run({ mine: 'true', q: 'x' });
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const stages = pipeline.map(s => Object.keys(s)[0]);
+    expect(stages.indexOf('$match')).toBeLessThan(stages.indexOf('$sort'));
+    expect(stages.indexOf('$match')).toBeLessThan(stages.indexOf('$limit'));
+  });
+
+  it('returns the owner full sorted tag vocabulary, unaffected by the active filter', async () => {
+    const res = await run({ mine: 'true', tags: 'alpha' });
+    expect(distinct).toHaveBeenCalledWith('tags', { ownerId: USER, deletedAt: null });
+    expect(res._getJSONData().tags).toEqual(['alpha', 'zeta']);
+  });
+
+  it('omits the tag vocabulary on the non-owner listing, which has no tag control', async () => {
+    const res = await run({});
+    expect(distinct).not.toHaveBeenCalled();
+    expect(res._getJSONData().tags).toBeUndefined();
   });
 });

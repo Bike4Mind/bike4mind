@@ -2,14 +2,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact } from '@bike4mind/database';
-import { VisibilitySchema, CommentPolicySchema, EMBED_ORIGINS_MAX } from '@bike4mind/common';
+import { VisibilitySchema, CommentPolicySchema, EMBED_ORIGINS_MAX, PublishedTagsSchema } from '@bike4mind/common';
 import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
  *   GET    -> full record (owner/admin, or anyone if public)
- *   PATCH  -> update title/description/visibility/commentPolicy (owner/admin)
+ *   PATCH  -> update title/description/visibility/commentPolicy/tags (owner/admin)
  *   DELETE -> soft-delete / archive (owner/admin)
  */
 
@@ -52,6 +52,9 @@ const PatchSchema = z.object({
   // rules server-side. `[]` clears the allowlist. Bounded here so a huge payload
   // is rejected before per-origin parsing.
   embedOrigins: z.array(z.string()).max(EMBED_ORIGINS_MAX).optional(),
+  // Normalized (trim/lowercase/dedupe/cap) by the schema, so the stored form always
+  // matches what the list filter normalizes an incoming `?tags=` value to. `[]` clears.
+  tags: PublishedTagsSchema.optional(),
 });
 
 function canManage(artifact: { ownerId: string }, user: { id: string; isAdmin?: boolean }): boolean {
@@ -173,6 +176,9 @@ const handler = baseApi()
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
+    // Tags are owner-facing organization only - they never appear on a viewer surface,
+    // so a change needs no CDN purge.
+    if (parsed.data.tags !== undefined) artifact.tags = parsed.data.tags;
     const discoverableBefore = !!artifact.discoverable;
     if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
 

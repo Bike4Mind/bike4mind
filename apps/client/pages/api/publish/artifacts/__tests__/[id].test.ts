@@ -328,3 +328,50 @@ describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving op
     expect(isDiscoverable(artifact)).toBe(false);
   });
 });
+
+describe('PATCH /api/publish/artifacts/[id] - tags', () => {
+  async function patchBody(body: Record<string, unknown>, artifact = makeArtifact()) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  const tagsOf = (a: unknown) => (a as { tags?: string[] }).tags;
+
+  it('stores tags normalized, so a filter built from either surface matches', async () => {
+    const { res, artifact } = await patchBody({ tags: ['  Client Work ', 'DESIGN', 'design'] });
+    expect(res._getStatusCode()).toBe(200);
+    expect(tagsOf(artifact)).toEqual(['client work', 'design']);
+  });
+
+  it('clears tags on an empty array', async () => {
+    const artifact = makeArtifact();
+    (artifact as unknown as { tags?: string[] }).tags = ['old'];
+    await patchBody({ tags: [] }, artifact);
+    expect(tagsOf(artifact)).toEqual([]);
+  });
+
+  it('leaves tags untouched when the field is absent from the patch', async () => {
+    const artifact = makeArtifact();
+    (artifact as unknown as { tags?: string[] }).tags = ['keep'];
+    await patchBody({ title: 'Renamed' }, artifact);
+    expect(tagsOf(artifact)).toEqual(['keep']);
+  });
+
+  it('does not purge the CDN - tags never appear on a viewer surface', async () => {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    await patchBody({ tags: ['a'] });
+    expect(invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-array tags value', async () => {
+    const { res } = await patchBody({ tags: 'a,b' });
+    expect(res._getStatusCode()).toBe(400);
+  });
+});
