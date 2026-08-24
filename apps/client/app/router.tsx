@@ -820,6 +820,10 @@ const dataLakesRoute = createRoute({
   beforeLoad: ({ search }) => {
     // The store is the mode's source of truth on /new (no session exists yet to carry
     // forceKnowledgeRetrieval), so flipping it here is what makes the tree open on arrival.
+    // Deliberately UNGATED by EnableDataLakes: beforeLoad cannot read the admin-settings
+    // context, and on a cold load that query has not resolved, so a gate here would read as
+    // "off" and break the deep link for entitled users. DataLakeChatSurface re-checks the flag
+    // before rendering, so an unentitled arrival leaves this flag set but inert.
     useDataLakeMode.getState().setEnabled(true);
     throw redirect({ to: '/new', search: search.article ? { article: search.article } : {} });
   },

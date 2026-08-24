@@ -96,7 +96,7 @@ export class DataLakePage extends BasePage {
   /**
    * Open the Data Lake surface: a fresh chat with Data Lake mode turned on. The mode toggle is
    * the only entry point since #1943 retired the standalone page, and it hides itself once mode
-   * is on (the tree's close X becomes the off-switch), so a already-on chat skips the click.
+   * is on (the tree's close X becomes the off-switch), so an already-on chat skips the click.
    */
   async gotoDataLakes() {
     // Navigate on 'domcontentloaded', not the default 'load'. Under parallel load the preview's
@@ -105,7 +105,13 @@ export class DataLakePage extends BasePage {
     // is the real readiness gate, so we don't need to block navigation on full 'load'.
     await this.page.goto('/new', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    if (await this.modeToggle.isVisible({ timeout: TIMEOUTS.VISIBLE }).catch(() => false)) {
+    // isVisible() resolves against the CURRENT DOM and ignores its timeout option, so it cannot
+    // stand in for the SPA wait the domcontentloaded navigation above deliberately skips - it
+    // would answer false on an unpainted shell and silently leave mode off. Wait for whichever
+    // settles first: the pill to click, or the surface already open (DataLakeToggle renders null
+    // once mode is on, so an already-on mode means the pill never appears).
+    await expect(this.modeToggle.or(this.explorer).first()).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    if (await this.modeToggle.isVisible()) {
       await this.modeToggle.click();
     }
     await expect(this.explorer).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });

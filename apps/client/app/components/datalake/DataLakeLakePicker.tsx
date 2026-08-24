@@ -55,8 +55,12 @@ export interface DataLakeLakePickerProps {
   onSelect: (lakeId: string | null) => void;
   /** Distinct live files per lake, keyed by `datalakeTag` (see DataLakeTagCountsResponse). */
   lakeFileCounts: Record<string, number> | undefined;
-  /** Combined distinct-file count across every reachable lake, for the all-lakes row. */
-  totalFileCount: number;
+  /**
+   * Combined distinct-file count across every reachable lake, for the all-lakes row.
+   * `undefined` means not yet known - a known zero is `0` and renders as such. Pass the raw
+   * value rather than coalescing to 0, or a loading payload reads as an empty account.
+   */
+  totalFileCount: number | undefined;
   /** Opens the Create Lake wizard. */
   onCreate?: () => void;
   /** Opens the public-lake browse catalog (the manager's Discover tab). */
@@ -115,7 +119,10 @@ export default function DataLakeLakePicker({
 
   return (
     <Box sx={{ px: '12px', pt: '12px' }}>
-      <Dropdown>
+      {/* The filter is scratch state for one browse, not a setting: a query left over from a
+          previous open would greet the next one with a narrowed list and a "1 of 10 lakes"
+          chip, which reads as a broken picker rather than a remembered choice. */}
+      <Dropdown onOpenChange={(_, isOpen) => !isOpen && setQuery('')}>
         <MenuButton
           variant="outlined"
           color="neutral"
@@ -137,8 +144,10 @@ export default function DataLakeLakePicker({
           <Typography noWrap level="body-sm" textColor="inherit" sx={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             {selectedLake ? selectedLake.name : copy.allLakesLabel}
           </Typography>
-          {/* Withheld while the counts are unknown so the trigger never shows a confident zero. */}
-          {typeof selectedCount === 'number' && selectedCount > 0 && (
+          {/* Withheld only while the count is UNKNOWN. A known zero prints 0: suppressing it too
+              made an empty lake indistinguishable from a still-loading one, which is the very
+              ambiguity this guard exists to prevent. */}
+          {typeof selectedCount === 'number' && (
             <Typography
               level="body-xs"
               textColor="inherit"
@@ -224,7 +233,7 @@ export default function DataLakeLakePicker({
                   </Typography>
                 </ListItemContent>
                 <Typography level="body-xs" sx={COUNT_SX}>
-                  {totalFileCount || '-'}
+                  {typeof totalFileCount === 'number' ? totalFileCount : '-'}
                 </Typography>
               </MenuItem>
 
@@ -293,9 +302,10 @@ export default function DataLakeLakePicker({
               </Typography>
             </MenuItem>
           )}
-          {/* Discover has no other home on this surface: the standalone page was the only thing
-              that ever passed it, so public-lake browse was unreachable while that page was
-              (#1943). It sits with the lake list because it is a "find more lakes" action. */}
+          {/* A shortcut, not a restoration: Discover was already reachable through Manage ->
+              the manager's own Discover button, and still is. It is duplicated here because it
+              is a "find more lakes" action and this is the lake list, so it belongs one click
+              from the scope you are trying to change rather than two through a modal. */}
           {onDiscover && (
             <MenuItem onClick={onDiscover} data-testid="datalake-lake-picker-discover-btn">
               <ListItemDecorator>

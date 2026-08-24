@@ -22,6 +22,13 @@ interface DataLakeTreeEmptyStateProps {
  *
  * `no-selection` is excluded by the type: it asserts nothing about why the tree is empty, so the
  * tree keeps its own neutral line for that case rather than being handed an empty box to render.
+ *
+ * Deliberately NOT built on DataLakeEmptyState, which serves the manager's right pane and the
+ * Discover catalog: that one is a pane-filling state (flex: 1, centred, 40px icon badge,
+ * title-lg, 380px body) and renders its `children` inside a Typography, so it has nowhere to put
+ * the Create / Retry / Add-files button - a <button> in a <p>. This one is a compact block in a
+ * 260px rail whose whole point is the action. Same feature, different container; if a third
+ * caller ever wants THIS shape, deepen this component rather than widening that one.
  */
 export default function DataLakeTreeEmptyState({
   variant,

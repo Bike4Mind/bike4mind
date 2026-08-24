@@ -13,6 +13,14 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 // /data-lakes route land in the viewer (#1943).
 const routerMocks = vi.hoisted(() => ({ search: {} as { article?: string } }));
 vi.mock('@tanstack/react-router', () => ({ useSearch: () => routerMocks.search }));
+// The surface re-checks EnableDataLakes itself before rendering the tree, since the mode store
+// has writers that never saw the flag (the /data-lakes redirect, seedFromSession).
+const settingsMocks = vi.hoisted(() => ({ dataLakesEnabled: true }));
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({
+    isFeatureEnabled: (name: string) => (name === 'EnableDataLakes' ? settingsMocks.dataLakesEnabled : false),
+  }),
+}));
 // The shared manage-knowledge gate reads the admin settings cache and the user store.
 const isAdminFeatureEnabled = vi.fn(() => true);
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -62,7 +70,21 @@ describe('DataLakeChatSurface', () => {
     useDataLakeMode.setState({ enabled: false, seededSessionId: 's1' });
     useDataLakeWizardStore.setState({ isManagerOpen: false, managerTab: 'mine' });
     isAdminFeatureEnabled.mockReturnValue(true);
+    settingsMocks.dataLakesEnabled = true;
     routerMocks.search = {};
+  });
+
+  it('keeps the tree off for an unentitled user even with the mode flag set', () => {
+    // The /data-lakes redirect flips the flag from beforeLoad, which cannot read the settings
+    // context, and a session's forceKnowledgeRetrieval can outlive the flag being turned off.
+    // Either way the surface, not the store, is what decides whether the tree renders.
+    settingsMocks.dataLakesEnabled = false;
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+
+    render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+
+    expect(screen.getByTestId('chat')).toBeInTheDocument();
+    expect(screen.queryByTestId('explorer')).not.toBeInTheDocument();
   });
 
   it('renders the bare chat when mode is off', () => {
@@ -112,7 +134,7 @@ describe('DataLakeChatSurface', () => {
     expect(screen.getByTestId('explorer')).toHaveAttribute('data-article-id', 'file-42');
   });
 
-  it('offers Discover, the only reachable public-lake browse surface, behind the manage gate', () => {
+  it('offers Discover behind the manage gate, as a shortcut to the manager tab', () => {
     useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
     const { unmount } = render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
     expect(screen.getByTestId('explorer')).toHaveAttribute('data-can-discover', 'true');

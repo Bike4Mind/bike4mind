@@ -502,7 +502,7 @@ export default function DataLakeExplorer({
                 selectedLakeId={selectedLake?.id ?? null}
                 onSelect={handleSelectLake}
                 lakeFileCounts={tagCountsData?.lakeFileCounts}
-                totalFileCount={tagCountsData?.uniqueArticleCounts?.total ?? 0}
+                totalFileCount={tagCountsData?.uniqueArticleCounts?.total}
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
               />

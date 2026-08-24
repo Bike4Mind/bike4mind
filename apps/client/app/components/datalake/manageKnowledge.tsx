@@ -14,7 +14,10 @@
  *    `onManage`-style prop whose affordance is already hidden when unset (see
  *    `DataLakeExplorer`).
  *  - `ManageKnowledgeButton` - the affordance, gate folded in. Renders nothing when
- *    the user may not manage, so a nav can mount it unconditionally.
+ *    the user may not manage, so a nav can mount it unconditionally. Since #1943 no
+ *    in-repo surface renders it (the in-chat tree puts Manage on its own footer and
+ *    consumes the hook above instead); it stays because deleting the shared affordance
+ *    is precisely what let overlays grow their own drifting copies before #841.
  *
  * Anything product-flavored (the label) stays a surface token, per surfaceTokens.tsx.
  */

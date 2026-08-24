@@ -7,6 +7,7 @@ import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession
 import DataLakeExplorer from './DataLakeExplorer';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { useManageKnowledge } from './manageKnowledge';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 
 /**
  * Wraps a chat node with the Data Lake tree (left) when Data Lake mode is on for the current
@@ -21,6 +22,7 @@ import { useManageKnowledge } from './manageKnowledge';
  */
 export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode }) {
   const { currentSession } = useSessions();
+  const { isFeatureEnabled } = useAdminSettingsCache();
   const { article } = useSearch({ strict: false }) as { article?: string };
   const enabled = useDataLakeMode(s => s.enabled);
   const seedFromSession = useDataLakeMode(s => s.seedFromSession);
@@ -49,7 +51,12 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
     [createDataLakeSession]
   );
 
-  if (!enabled) return <>{chat}</>;
+  // Entitlement is re-checked here rather than trusted from the mode store, because the store
+  // has writers that never saw the flag: the retired /data-lakes route flips it from beforeLoad
+  // (which cannot read the settings context), and seedFromSession flips it from a session's
+  // forceKnowledgeRetrieval, which may outlive the flag being turned off. Same gate as
+  // DataLakeToggle, so the entry pill and the surface can never disagree.
+  if (!enabled || !isFeatureEnabled('EnableDataLakes')) return <>{chat}</>;
 
   return (
     <DataLakeExplorer

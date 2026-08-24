@@ -229,9 +229,7 @@ export default function DataLakeTreeView({
   // equality so a host that renders a breadcrumb SHORTER than leafMinDepth (the manager's
   // deep-link opens a lake at an empty path) still reaches its bucket.
   const isUncategorized =
-    !!uncategorized &&
-    breadcrumb.length <= leafMinDepth + 1 &&
-    breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
+    !!uncategorized && breadcrumb.length <= leafMinDepth + 1 && breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
 
   // At a leaf node (no children) below the seeded root, files are filtered locally by the leaf tag.
   const leafTag =
@@ -251,8 +249,19 @@ export default function DataLakeTreeView({
 
   // Cross-tree article search (#1693): while browsing folders, a query also reaches article
   // titles/tags/notes across EVERY lake/tag the caller can access - not scoped to the current
-  // breadcrumb or folder, since the server search takes no tags/path filter. Intentional: the
-  // Explorer already merges multiple lakes into one tag tree, so this matches that merged scope.
+  // breadcrumb, and NOT to the host's lake scope either. That was once justified by the tree
+  // always showing every lake merged, which the in-chat picker (#1943) made false: with a lake
+  // scoped, the folders above narrow but these results still span every reachable lake.
+  //
+  // Left wide rather than filtered because lake membership is not expressible as a tag filter.
+  // `filters.tags` would AND against tag names, but a lake's members are "carries the lake's
+  // meta-tag OR carries its prefix and is owned by the lake's creator" (see
+  // countDataLakeFilesByMembership) - so filtering on datalakeTag alone would silently drop the
+  // prefix-only files, and a search that quietly omits matches is worse than one that is
+  // honestly account-wide. Narrowing this wants a lake-scope parameter on the articles endpoint.
+  // For the same reason the query is not reset on a scope change: it is an account-wide article
+  // search that happens to be typed here, not a filter over the current scope.
+  //
   // Skipped at a leaf/bucket since `files` above already searches the (already-loaded) scope.
   const treeSearchActive = !showFiles && !!source && effectiveSearch.length >= MIN_SEARCH_LENGTH;
   const { data: treeSearchResult, isLoading: treeSearchLoading } = useGetDataLakeArticles(
@@ -276,8 +285,7 @@ export default function DataLakeTreeView({
 
   // A ceiling, matching isUncategorized above: the bucket belongs at the seeded root, and a
   // breadcrumb shallower than leafMinDepth is still that root as far as the host is concerned.
-  const showBucketRow =
-    !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketFiles!.length > 0;
+  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketFiles!.length > 0;
   // The bucket / own-files rows standing in for an empty node list are still content, and a
   // pending/matched article search might still fill the pane - none of that should flash
   // "No categories"/"No matches" while it's about to be superseded.
@@ -344,53 +352,60 @@ export default function DataLakeTreeView({
           </Box>
         ) : showFiles ? (
           /* File list at a leaf (or the uncategorized bucket) */
-          <List size="sm" sx={chrome.fileListSx}>
-            {files.length === 0 ? (
-              <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  {chrome.emptyFilesLabel}
-                </Typography>
-              </Box>
-            ) : (
-              files.map(f => (
+          files.length === 0 ? (
+            /* Outside the List: Joy's List is a <ul>, whose only valid children are <li>. */
+            <Box sx={{ p: 2, textAlign: 'center' }}>
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                {chrome.emptyFilesLabel}
+              </Typography>
+            </Box>
+          ) : (
+            <List size="sm" sx={chrome.fileListSx}>
+              {files.map(f => (
                 <Fragment key={f.id}>
                   {chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))}
                 </Fragment>
-              ))
-            )}
-          </List>
+              ))}
+            </List>
+          )
         ) : (
           /* Folder tree, own-tagged files mixed in, plus (while searching) articles matched
              anywhere in scope below it. */
           <>
-            <List size="sm" sx={chrome.nodeListSx}>
-              {filteredNodes.map(node => (
-                <Fragment key={node.segment}>
-                  {chrome.renderNodeRow(node, breadcrumb.length, () => onNavigate([...breadcrumb, node.segment]))}
-                </Fragment>
-              ))}
-              {/* Single conditional child, not a .map element - a key here would be inert. */}
-              {showBucketRow &&
-                uncategorized!.renderRow(uncategorized!.files.length, () =>
-                  onNavigate([...breadcrumb, UNCATEGORIZED_KEY])
-                )}
-              {showOwnFiles &&
-                ownFiles.map(f => (
-                  <Fragment key={f.id}>
-                    {chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))}
+            {/* The empty state renders INSTEAD of the List, not inside it: Joy's List is a
+                <ul>, and an emptySlot carrying an action button would put a <button> straight
+                into it. showNodeEmpty already excludes every case where the List has content,
+                so this is a swap rather than a hidden branch. */}
+            {showNodeEmpty ? (
+              !searchQuery && emptySlot ? (
+                emptySlot
+              ) : (
+                <Box sx={{ p: 2, textAlign: 'center' }}>
+                  <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                    {searchQuery ? 'No matches' : 'No categories'}
+                  </Typography>
+                </Box>
+              )
+            ) : (
+              <List size="sm" sx={chrome.nodeListSx}>
+                {filteredNodes.map(node => (
+                  <Fragment key={node.segment}>
+                    {chrome.renderNodeRow(node, breadcrumb.length, () => onNavigate([...breadcrumb, node.segment]))}
                   </Fragment>
                 ))}
-              {showNodeEmpty &&
-                (!searchQuery && emptySlot ? (
-                  emptySlot
-                ) : (
-                  <Box sx={{ p: 2, textAlign: 'center' }}>
-                    <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                      {searchQuery ? 'No matches' : 'No categories'}
-                    </Typography>
-                  </Box>
-                ))}
-            </List>
+                {/* Single conditional child, not a .map element - a key here would be inert. */}
+                {showBucketRow &&
+                  uncategorized!.renderRow(uncategorized!.files.length, () =>
+                    onNavigate([...breadcrumb, UNCATEGORIZED_KEY])
+                  )}
+                {showOwnFiles &&
+                  ownFiles.map(f => (
+                    <Fragment key={f.id}>
+                      {chrome.renderFileRow(f, selectedFileIds.has(f.id), () => onSelectFile(f))}
+                    </Fragment>
+                  ))}
+              </List>
+            )}
             {treeSearchActive && treeSearchArticles.length > 0 && (
               <>
                 <Typography

@@ -104,8 +104,8 @@ vi.mock('./DataLakeRailViewer', () => ({
   default: () => <div data-testid="datalake-rail-viewer" />,
 }));
 
-// The page-mode header's ManageKnowledgeButton folds in the EnableDataLakes gate, which
-// reaches the admin settings cache; mirror manageKnowledge.test's stubs for that chain.
+// The tree footer's Manage affordance folds in the EnableDataLakes gate, which reaches the
+// admin settings cache; mirror manageKnowledge.test's stubs for that chain.
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true, isFeatureEnabled: () => true, isLoading: false }),
 }));
@@ -113,8 +113,17 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector?: (s: { isAdmin: boolean }) => unknown) =>
     selector ? selector({ isAdmin: true }) : { isAdmin: true },
 }));
+// Both writers, not just openManager: SelectedLakeHeader selects openWizardForLake too, and a
+// stub missing it hands the Add-files button `undefined` - the click throws, and a test that
+// only asserts the button is PRESENT never finds out. Hoisted spies so the tests below can
+// assert on them.
+const { openManagerSpy, openWizardForLakeSpy } = vi.hoisted(() => ({
+  openManagerSpy: vi.fn(),
+  openWizardForLakeSpy: vi.fn(),
+}));
 vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
-  useDataLakeWizardStore: (selector: (s: { openManager: () => void }) => unknown) => selector({ openManager: vi.fn() }),
+  useDataLakeWizardStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ openManager: openManagerSpy, openWizardForLake: openWizardForLakeSpy }),
 }));
 
 // Collapsed-sidenav clearance reads this store; default open (no extra indent) for these tests.
@@ -555,6 +564,21 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     // Add files is a manage capability; Configure deep-links the manager either way.
     expect(screen.getByTestId('datalake-selected-lake-addfiles-btn')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
+  });
+
+  // Clicked, not just asserted present: the strip's handlers come from the wizard store, so a
+  // rendered button proves nothing about whether the explorer wired the store through to it.
+  it('drives the strip actions against the lake the picker scoped to', () => {
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    fireEvent.click(screen.getByTestId('datalake-selected-lake-addfiles-btn'));
+    expect(openWizardForLakeSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake-1' }));
+
+    fireEvent.click(screen.getByTestId('datalake-selected-lake-manage-btn'));
+    expect(openManagerSpy).toHaveBeenCalledWith('mine', 'lake-1');
   });
 
   it('falls back to the all-lakes scope when the scoped lake leaves the list', () => {
