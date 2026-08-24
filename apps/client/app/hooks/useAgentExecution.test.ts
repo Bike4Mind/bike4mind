@@ -22,13 +22,16 @@ import React from 'react';
 // vi.mock factories are hoisted, so anything they reference must be created via
 // vi.hoisted. `subscribeToAction` is a stable identity so the subscription
 // effect (keyed on it) doesn't re-run across renders.
-const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffectsMock } = vi.hoisted(() => {
+const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffectsMock, ws } = vi.hoisted(() => {
   const handlers: Record<string, (msg: unknown) => Promise<void>> = {};
   return {
     navigateMock: vi.fn(),
     toastMock: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
     dispatchUiSideEffectsMock: vi.fn(),
     handlers,
+    // Mutable socket state so a test can mount with the socket already up (or
+    // still down) without re-mocking the module.
+    ws: { readyState: 3 /* CLOSED */, sendJsonMessage: vi.fn() },
     subscribeToAction: (action: string, cb: (msg: unknown) => Promise<void>) => {
       handlers[action] = cb;
       return () => {
@@ -42,7 +45,14 @@ const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffe
 vi.mock('@client/app/router', () => ({ router: { navigate: navigateMock } }));
 vi.mock('sonner', () => ({ toast: toastMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction }),
+  // ReadyState is re-exported by the real module and the hook compares against
+  // it, so the mock has to carry it too.
+  ReadyState: { UNINSTANTIATED: -1, CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
+  useWebsocket: () => ({
+    subscribeToAction,
+    readyState: ws.readyState,
+    sendJsonMessage: ws.sendJsonMessage,
+  }),
 }));
 vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
@@ -307,5 +317,69 @@ describe('useAgentExecutionSubscriptions — iteration_step UI side-effects', ()
     });
 
     expect(dispatchUiSideEffectsMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression coverage for the run that never finishes on screen.
+ *
+ * Agent progress is pushed to the connection id captured when the run started,
+ * and a failed push is only logged. So a socket that dies mid-run misses every
+ * later frame including `completed`, and the UI keeps showing "In Progress"
+ * for a run the server finished long ago (observed on production: a ~2 minute
+ * run still spinning 81 minutes later). The repair round-trip existed on both
+ * ends already - it just had no caller. These tests pin the caller.
+ */
+describe('useAgentExecutionSubscriptions -- recovering a run after the socket comes back', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const reconnectCalls = () =>
+    ws.sendJsonMessage.mock.calls.map(c => c[0] as Record<string, unknown>).filter(m => m.command === 'reconnect');
+
+  it('asks the server to re-state a still-running execution once the socket is open', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([
+      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+    ]);
+    // The response does not echo the sessionId back, so it must be queued for
+    // `reconnect_result` to stamp on - same contract the dispatch hook honors.
+    expect(useAgentExecutionStore.getState().pendingReconnects).toContain('sess-1');
+  });
+
+  it('stays silent while the socket is down', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 3; // CLOSED
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([]);
+  });
+
+  it('does not re-ask about a run that already finished', () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-1', 'sess-1');
+    store.setStatus('exec-1', 'completed');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([]);
+  });
+
+  it('sends nothing when this tab is not watching any run', () => {
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(reconnectCalls()).toEqual([]);
   });
 });
