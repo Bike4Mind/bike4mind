@@ -153,7 +153,7 @@ describe('notebook export', () => {
     expect(payload.notebooks[0].artifacts.map((a: { id: string }) => a.id)).toEqual(['artifact-1']);
   });
 
-  it('warns by id about an artifact reference it could not resolve, so the gap is not silent', async () => {
+  it('warns by id about an artifact it could not export, so the gap is not silent', async () => {
     const { adapters, uploaded } = makeAdapters({
       artifactRepository: { find: vi.fn().mockResolvedValue([]) },
     });
@@ -161,8 +161,8 @@ describe('notebook export', () => {
 
     expect(uploaded).toHaveLength(1);
     expect(adapters.logger.warn).toHaveBeenCalledWith(
-      'Some artifacts could not be resolved',
-      expect.objectContaining({ unresolved: ['artifact-1'] })
+      'Some artifacts were not exported',
+      expect.objectContaining({ notExported: ['artifact-1'] })
     );
   });
 

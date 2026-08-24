@@ -382,11 +382,14 @@ export class NotebookExportService {
       deletedAt: null,
     });
 
-    // Sessions can still hold references to artifacts that no longer exist; without this the
-    // export is quietly incomplete. Names them, since this fires once per notebook.
-    const unresolved = artifactIds.filter(id => !artifacts.some((a: ArtifactRow) => a.id === id));
-    if (unresolved.length > 0) {
-      this.adapters.logger.warn('Some artifacts could not be resolved', { unresolved });
+    // Covers two causes, and deliberately does not distinguish them: an artifact the user has
+    // since deleted (routine - the session keeps referencing it), and a row that is genuinely
+    // gone (rare). Neither is exportable, and telling them apart would cost a second query to
+    // sharpen a log line nothing alarms on. Named because a partial export must not read as a
+    // complete one; fires once per notebook.
+    const notExported = artifactIds.filter(id => !artifacts.some((a: ArtifactRow) => a.id === id));
+    if (notExported.length > 0) {
+      this.adapters.logger.warn('Some artifacts were not exported', { notExported });
     }
 
     return artifacts.map((artifact: ArtifactRow) => ({
