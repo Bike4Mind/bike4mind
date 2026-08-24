@@ -351,8 +351,11 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
       { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
     ]);
     // The response does not echo the sessionId back, so it must be queued for
-    // `reconnect_result` to stamp on - same contract the dispatch hook honors.
-    expect(useAgentExecutionStore.getState().pendingReconnects).toContain('sess-1');
+    // `reconnect_result` to stamp on - keyed by executionId so a sweep over
+    // several runs cannot be mis-paired by arrival order.
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'sess-1', executionId: 'exec-1' },
+    ]);
   });
 
   it('stays silent while the socket is down', () => {
@@ -381,5 +384,99 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
     mountSubscriptions();
 
     expect(reconnectCalls()).toEqual([]);
+  });
+});
+
+/**
+ * A socket-open sweep asks about several runs at once, and each request is answered by an
+ * independent server invocation whose cost scales with that run's child count - so the
+ * responses routinely come back in a different order than they were sent. Correlating them
+ * by arrival order would stamp a live run with another session's id, which is worse than the
+ * spinner this recovery exists to clear: the run vanishes from the session the user is
+ * looking at and reappears under one it does not belong to, and nothing corrects it.
+ */
+describe('useAgentExecutionSubscriptions -- reconnect responses pair with the run that asked', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const reconnectResult = (executionId: string) =>
+    handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId,
+      status: 'running',
+    });
+
+  it('keeps each session on its own run when the responses arrive out of order', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-1', 'sess-A');
+    store.startExecution('exec-2', 'sess-B');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    // exec-2 answers first - the case that arrival-order pairing gets wrong.
+    await reconnectResult('exec-2');
+    await reconnectResult('exec-1');
+
+    const executions = useAgentExecutionStore.getState().executions;
+    expect(executions['exec-2']?.sessionId).toBe('sess-B');
+    expect(executions['exec-1']?.sessionId).toBe('sess-A');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+  });
+
+  it('still answers the mount-time probe, which has no execution id to key on', async () => {
+    // The probe asks "is anything running in this session?" before any id exists.
+    useAgentExecutionStore.getState().registerPendingReconnect('sess-C');
+    mountSubscriptions();
+
+    await reconnectResult('exec-9');
+
+    expect(useAgentExecutionStore.getState().executions['exec-9']?.sessionId).toBe('sess-C');
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+  });
+});
+
+/**
+ * Production never mounts into an already-open socket - it mounts once at app root and the
+ * socket goes down and comes back underneath it. The mount-time cases above cannot see a
+ * regression in that transition, so drive it directly.
+ */
+describe('useAgentExecutionSubscriptions -- the sweep runs on the transition, not just at mount', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const reconnectCalls = () =>
+    ws.sendJsonMessage.mock.calls.map(c => c[0] as Record<string, unknown>).filter(m => m.command === 'reconnect');
+
+  it('sweeps when a mounted subscriber sees the socket come back', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    const { rerender } = mountSubscriptions();
+    expect(reconnectCalls()).toEqual([]);
+
+    ws.readyState = 1; // OPEN
+    rerender();
+
+    expect(reconnectCalls()).toEqual([
+      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('does not re-sweep while the socket stays open', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 1; // OPEN
+    const { rerender } = mountSubscriptions();
+    rerender();
+    rerender();
+
+    expect(reconnectCalls()).toHaveLength(1);
   });
 });

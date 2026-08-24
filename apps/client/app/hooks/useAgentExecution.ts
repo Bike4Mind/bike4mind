@@ -20,7 +20,7 @@
  * first events. Subscriptions live at the WebsocketProvider scope now.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -174,7 +174,8 @@ function notifyBackgroundCompletion(agentName: string, finalAnswer?: string, onV
 }
 
 export function useAgentExecutionSubscriptions(): void {
-  const { subscribeToAction, readyState, sendJsonMessage } = useWebsocket();
+  const { subscribeToAction, readyState } = useWebsocket();
+  const { reconnect } = useAgentExecutionDispatch();
   const queryClient = useQueryClient();
 
   // Re-ask the server for the state of every run this tab still believes is live,
@@ -193,22 +194,29 @@ export function useAgentExecutionSubscriptions(): void {
   // `handleReconnect` -> `reconnect_result`) and simply had no caller. This is
   // that caller. Cheap by construction: it fires only on a socket transition
   // and only when the store holds an active run, so an idle tab sends nothing.
+  //
+  // Each request carries its executionId, which is what keeps a sweep over
+  // several runs from mis-pairing: the responses come from independent handler
+  // invocations whose latency scales with each run's child count, so they
+  // routinely arrive out of order (see `consumePendingReconnect`).
+  //
+  // The dispatcher is read through a ref and the effect is keyed on `readyState`
+  // alone: the dispatcher's identity is memoised over `sendJsonMessage`, which
+  // churns whenever the access token refreshes, and holding it in the deps would
+  // re-send the whole sweep each time it did. Same guard, same reason, as the
+  // mount-time caller in `ActiveAgentExecutions`.
+  const reconnectRef = useRef(reconnect);
+  useEffect(() => {
+    reconnectRef.current = reconnect;
+  }, [reconnect]);
   useEffect(() => {
     if (readyState !== ReadyState.OPEN) return;
-    const store = useAgentExecutionStore.getState();
-    for (const [executionId, execution] of Object.entries(store.executions)) {
+    const { executions } = useAgentExecutionStore.getState();
+    for (const [executionId, execution] of Object.entries(executions)) {
       if (!isActiveStatus(execution.status)) continue;
-      // Mirrors the dispatch hook: the response doesn't echo the sessionId, so
-      // it has to be queued here for `reconnect_result` to stamp back on.
-      if (execution.sessionId) store.registerPendingReconnect(execution.sessionId);
-      sendJsonMessage({
-        action: 'agent_execute',
-        command: 'reconnect',
-        sessionId: execution.sessionId,
-        executionId,
-      } as unknown as Parameters<typeof sendJsonMessage>[0]);
+      reconnectRef.current(execution.sessionId, executionId);
     }
-  }, [readyState, sendJsonMessage]);
+  }, [readyState]);
 
   // Navigate via the `router` singleton, NOT useNavigate(): this hook's host
   // (AgentExecutionSubscriber) mounts in providers.tsx, OUTSIDE the
@@ -401,7 +409,7 @@ export function useAgentExecutionSubscriptions(): void {
         // Always drain the pending sessionId, even on a `found: false` response;
         // otherwise the queue would carry a stale entry and pair it with the
         // next reconnect, mis-attributing the execution to the wrong session.
-        const sessionId = store().consumePendingReconnect();
+        const sessionId = store().consumePendingReconnect(msg.executionId);
         if (!msg.found || !msg.executionId || !msg.status) return;
         const executionId = msg.executionId;
 
@@ -716,7 +724,7 @@ export function useAgentExecutionDispatch() {
         // when sessionId is absent (callers reconnecting by executionId
         // already know their target).
         if (sessionId) {
-          useAgentExecutionStore.getState().registerPendingReconnect(sessionId);
+          useAgentExecutionStore.getState().registerPendingReconnect(sessionId, executionId);
         }
         sendJsonMessage({
           action: 'agent_execute',
