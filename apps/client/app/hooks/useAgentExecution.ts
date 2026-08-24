@@ -406,9 +406,14 @@ export function useAgentExecutionSubscriptions(): void {
     unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
-        // Always drain the pending sessionId, even on a `found: false` response;
+        // Always drain a pending entry, even on a `found: false` response;
         // otherwise the queue would carry a stale entry and pair it with the
         // next reconnect, mis-attributing the execution to the wrong session.
+        // A found:false carries no executionId on the wire, so what it drains
+        // is the oldest UN-KEYED entry - the mount-time probe's own, which is
+        // the caller a found:false answers. A keyed sweep entry whose run was
+        // deleted server-side stays queued; it can only ever match its own id,
+        // so it pairs with nothing and is dropped with the session's store.
         const sessionId = store().consumePendingReconnect(msg.executionId);
         if (!msg.found || !msg.executionId || !msg.status) return;
         const executionId = msg.executionId;
@@ -718,12 +723,14 @@ export function useAgentExecutionDispatch() {
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),
       reconnect: (sessionId?: string, executionId?: string) => {
-        // Queue the sessionId so the matching `reconnect_result` can stamp it
-        // onto the hydrated execution; the server response doesn't echo it
-        // back (the payload shape stays stable). Skip queueing
-        // when sessionId is absent (callers reconnecting by executionId
-        // already know their target).
-        if (sessionId) {
+        // Queue an entry for every request that can be answered, not only the ones
+        // carrying a sessionId. A request sent WITHOUT an entry is the dangerous
+        // case: its keyed response would miss on the id and drain the oldest
+        // un-keyed entry - a concurrent mount-time probe's - stamping that session
+        // onto the wrong run. An entry with no sessionId is harmless by contrast:
+        // consuming it returns undefined and hydrate falls back to the execution's
+        // own stored sessionId.
+        if (sessionId || executionId) {
           useAgentExecutionStore.getState().registerPendingReconnect(sessionId, executionId);
         }
         sendJsonMessage({

@@ -1038,3 +1038,31 @@ describe('useAgentExecutionStore - final_answer collapse (issue #35)', () => {
     expect(child.pendingTextByIteration).toBeUndefined();
   });
 });
+
+describe('useAgentExecutionStore -- keyed entries that can never match do not decay into steals', () => {
+  beforeEach(resetStore);
+
+  it('a keyed miss with no un-keyed entry consumes nothing', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('session-A', 'exec-1');
+
+    // The arm that carries the "a keyed entry cannot offset the un-keyed FIFO"
+    // argument: a response for an unknown run must not touch exec-1's entry.
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-unknown')).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'session-A', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('a session-less sweep entry answers its own id and leaves the probe entry alone', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    // The sweep can ask about a run whose session the store never learned
+    // (a stray event synthesises an active, session-less execution). Its entry
+    // must still exist, keyed - otherwise its response would drain the probe's.
+    registerPendingReconnect(undefined, 'exec-orphan');
+    registerPendingReconnect('sess-probe');
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-orphan')).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([{ sessionId: 'sess-probe' }]);
+  });
+});
