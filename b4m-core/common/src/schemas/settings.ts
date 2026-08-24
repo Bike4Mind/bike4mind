@@ -3215,9 +3215,9 @@ export const settingsMap = {
   }),
   bflApiKey: makeStringSetting({
     key: 'bflApiKey',
-    name: 'BlackForest Labs API Key',
+    name: 'Black Forest Labs API Key',
     defaultValue: '',
-    description: 'The API Key for BlackForest Labs image generation service.',
+    description: 'The API Key for Black Forest Labs image generation service.',
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.IMAGE_GENERATION.id,

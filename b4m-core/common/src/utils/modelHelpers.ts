@@ -32,7 +32,7 @@ export function isGeminiImageModel(model?: string | null): boolean {
   return (GEMINI_IMAGE_MODELS as readonly string[]).includes(model);
 }
 
-/** Returns true for BlackForest Labs image models; derives from BFL_IMAGE_MODELS so it never drifts. */
+/** Returns true for Black Forest Labs image models; derives from BFL_IMAGE_MODELS so it never drifts. */
 export function isBflImageModel(model: string): model is BFLImageModel;
 export function isBflImageModel(model?: string | null): boolean;
 export function isBflImageModel(model?: string | null): boolean {
