@@ -75,16 +75,24 @@ export const DEFAULT_MANIFEST = {
   agentProactiveMessageQueue: { kind: 'queue' },
   dataLakeTaxonomyQueue: { kind: 'queue', optional: true },
   deepAgentWakeQueue: { kind: 'queue' },
+  // Read by the drive-sync route, the resync poll cron and the ingest handler's own redrive.
+  // drive-sync takes the GLOBALLY unique driveFolderId claim before it enqueues, so an
+  // unregistered key here left a folder reading "Connected" that could never sync, with the
+  // claim released only by hand.
+  driveLakeIngestQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
   emailIngestionQueue: { kind: 'queue' },
   emailJobQueue: { kind: 'queue' },
   fabFileChunkQueue: { kind: 'queue' },
   fabFileVectorizeQueue: { kind: 'queue' },
+  // Reached from the data-lake batch finalize path and from lakeMemoryExtraction. Both enqueue
+  // sites sit inside a try/catch, so an unregistered key degraded to a logged error and a
+  // feature that silently did nothing.
+  lakeMemoryQueue: { kind: 'queue' },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
-  sreAnalysisQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it
   // from the same per-queue env vars so enqueue sites resolve identically in self-host.
