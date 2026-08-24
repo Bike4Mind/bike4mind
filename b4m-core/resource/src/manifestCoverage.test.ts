@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { DEFAULT_MANIFEST } from './manifest';
 
 /**
  * Every queue the application reads off `Resource` must exist in the self-host manifest.
@@ -19,58 +19,73 @@ import { join } from 'path';
  */
 
 const REPO_ROOT = join(__dirname, '../../..');
-const MANIFEST = join(__dirname, 'manifest.ts');
 
 /**
- * Queue names the application resolves, by ANY mechanism, in shippable (non-test) code.
+ * Where shippable code lives. `packages` is enumerated rather than taken whole: `packages/*` is a
+ * live pnpm workspace glob in EVERY checkout and `packages/premium/<name>` is hydrated by the
+ * deploy pipeline, so scanning it would make this test pass in CI (never hydrated) and fail on a
+ * developer machine that has the overlay. Optional packages are out of scope for the manifest by
+ * the same reasoning index.test.ts gives for tavernHeartbeatQueue: open core cannot consume them.
+ */
+const SCAN_ROOTS = [
+  'apps/client/server',
+  'apps/client/pages',
+  'b4m-core',
+  'packages/cli',
+  'packages/database',
+  'packages/scripts',
+];
+
+/** Reads off `Resource`, including through a cast of any width and across a line break. */
+const RESOURCE_READ = /Resource(?:\s+as\s+[^)]*\))?\s*\??\s*\.\s*([A-Za-z][A-Za-z0-9]*Queue)(?![A-Za-z0-9])/g;
+/** The string path: getSourceQueueUrl('fooQueue'). */
+const BY_NAME = /getSourceQueueUrl\(\s*'([A-Za-z][A-Za-z0-9]*)'\s*\)/g;
+/** dlqRegistry's own table of queue names - see the second-source note below. */
+const DLQ_SOURCE_QUEUE = /sourceQueue:\s*'([A-Za-z][A-Za-z0-9]*)'/g;
+
+const shippableFiles = (): string[] => {
+  const out: string[] = [];
+  for (const root of SCAN_ROOTS) {
+    const abs = join(REPO_ROOT, root);
+    if (!existsSync(abs)) continue;
+    for (const rel of readdirSync(abs, { recursive: true }) as string[]) {
+      const file = join(root, String(rel));
+      if (!/\.tsx?$/.test(file)) continue;
+      if (/\.test\.|__tests__|[\\/]dist[\\/]|node_modules/.test(file)) continue;
+      out.push(file);
+    }
+  }
+  return out;
+};
+
+/**
+ * Queue names the application resolves in shippable (non-test) code.
  *
- * There are three, and each one this guard did not know about had already hidden a real gap:
- *   1. the property path `Resource.fooQueue.url`;
- *   2. the string path `getSourceQueueUrl('fooQueue')`, which reads the `sourceQueueUrls`
- *      name-to-URL Linkable instead - invisible to a search for `Resource.*Queue`, and the form
- *      the API routes mostly use, so the first version of this test declared sreJobQueue
- *      "unreachable on self-host" while two admin routes were resolving it by name;
- *   3. the cast path `(Resource as any).fooQueue.url`, where the matched text starts
- *      `Resource as any).fooQueue` so a bare `Resource\.` never matches. That one hid
- *      webhookDeliveryQueue, which shippable code reads and no list accounted for.
+ * Scans file CONTENT rather than shelling out to grep, because grep is line-oriented and a
+ * wrapped access - `(Resource as unknown as Record<...>)` on one line, `.fooQueue` on the next -
+ * carries no `Resource` token on the line that names the queue. That is not hypothetical: it is
+ * how whatsNewHighlightsQueue stayed invisible after the cast form was already handled.
  *
- * `Resource['fooQueue']` is not used anywhere, so it is deliberately not covered.
+ * Two independent sources, deliberately. Every previous round of this guard was defeated by one
+ * more syntactic form nobody had enumerated (the string path, then `as any`, then a wide cast,
+ * then a line break), and a regex cannot be robust to syntax it has never seen. dlqRegistry.ts
+ * carries an authoritative table of queue names as `sourceQueue: '<name>'` literals in one stable
+ * shape, so it catches a queue however its call site happens to be written. It is a SECOND source,
+ * not a replacement: it only covers queues that have a DLQ.
  */
 const referencedQueues = (): Map<string, string[]> => {
-  let out = '';
-  try {
-    out = execFileSync(
-      'grep',
-      [
-        '-rnoE',
-        "Resource( as [A-Za-z][A-Za-z0-9]*\\))?(\\?)?\\.[A-Za-z][A-Za-z0-9]*Queue|getSourceQueueUrl\\('[A-Za-z][A-Za-z0-9]*'\\)",
-        'apps/client/server',
-        'apps/client/pages',
-        'b4m-core',
-        // Dev scripts resolve queues off Resource too. In scope on purpose: a queue whose only
-        // read lives here would otherwise be invisible, and the sanity check below cannot see
-        // the difference because it only asserts the map is non-empty.
-        'packages',
-      ],
-      { cwd: REPO_ROOT, encoding: 'utf8' }
-    );
-  } catch (e) {
-    // grep exits 1 for no matches and 2 for a real failure (missing path, unreadable file).
-    // Collapsing both to an empty scan would report "no queues referenced" for a broken run,
-    // so only the no-match case is tolerated here.
-    if ((e as { status?: number }).status !== 1) throw e;
-  }
-
   const found = new Map<string, string[]>();
-  for (const line of out.split('\n')) {
-    if (!line) continue;
-    const [, , expr] = line.split(/:(\d+):/);
-    const file = line.slice(0, line.indexOf(':'));
-    if (/\.test\.|__tests__|\/dist\//.test(file)) continue;
-    const raw = expr ?? line;
-    // Either `Resource.fooQueue` or `getSourceQueueUrl('fooQueue')`.
-    const key = raw.includes("'") ? raw.split("'")[1] : raw.split('.').pop()!;
-    found.set(key, [...(found.get(key) ?? []), file]);
+  const add = (key: string, file: string) => found.set(key, [...(found.get(key) ?? []), file]);
+
+  for (const file of shippableFiles()) {
+    const content = readFileSync(join(REPO_ROOT, file), 'utf8');
+    for (const re of [RESOURCE_READ, BY_NAME]) {
+      re.lastIndex = 0;
+      for (const m of content.matchAll(re)) add(m[1], file);
+    }
+    if (file.endsWith('dlqRegistry.ts')) {
+      for (const m of content.matchAll(DLQ_SOURCE_QUEUE)) add(m[1], file);
+    }
   }
   return found;
 };
@@ -88,6 +103,13 @@ const UNREACHABLE_ON_SELF_HOST: Record<string, string> = {
   // it with. The route exists here, which means it fails on self-host - but declaring the queue
   // would not fix that, it would just move the failure.
   overwatchAnalyticsQueue: 'premium overlay handler; open core cannot consume it',
+  // Surfaced by the dlqRegistry second source, which sees a queue however its call site is
+  // written. Same disposition as above and it must stay that way: these are premium overlay
+  // queues and declaring them in the open-core manifest would be wrong, not merely unnecessary.
+  // They are listed here (not registered) precisely so that stays a stated decision.
+  tavernHeartbeatQueue: 'premium overlay (b4m-tavern) handler; open core cannot consume it',
+  optihashiRunCompletionQueue: 'premium overlay handler; open core cannot consume it',
+  bobRunQueue: 'premium overlay handler; open core cannot consume it',
 };
 
 /**
@@ -120,12 +142,28 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
 
   // Admin-only, and each needs something self-host has not got.
   whatsNewGenerationQueue: 'admin-only backfill route; needs a content-generation decision',
+  // Same feature family, surfaced once the scanner learned to read a wide cast and a wrapped
+  // access. Worth noting for whoever wires it: the 500 guard at generate-highlights.ts cannot
+  // fire on self-host, because the shim's Proxy throws on the property access before `?.url` is
+  // ever evaluated. The cron site degrades to a logged error instead.
+  whatsNewHighlightsQueue: 'admin route + highlights cron; needs the same content-generation decision',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
 };
 
+/**
+ * Registered QUEUES, imported and filtered on kind rather than parsed out of the source text.
+ * Text-matching every `  name:` line admitted all 88 manifest entries of every kind, so a queue
+ * mistyped as `{ kind: 'secret' }` would satisfy this check AND drop out of the three consistency
+ * checks in index.test.ts, leaving it absent from elasticmq.conf and the env template with nothing
+ * complaining - while the shim handed its call site `{ value }` instead of `{ url }`.
+ */
 const manifestKeys = (): Set<string> =>
-  new Set([...readFileSync(MANIFEST, 'utf8').matchAll(/^ {2}([A-Za-z0-9_]+):/gm)].map(m => m[1]));
+  new Set(
+    Object.entries(DEFAULT_MANIFEST)
+      .filter(([, entry]) => (entry as { kind: string }).kind === 'queue')
+      .map(([name]) => name)
+  );
 
 describe('self-host resource manifest coverage', () => {
   it('finds queue references at all', () => {

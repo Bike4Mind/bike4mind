@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { createResource, type Manifest } from './index';
+import { createResource, toEnvKey, type Manifest } from './index';
 import { DEFAULT_MANIFEST } from './manifest';
 
 describe('createResource — self-host Resource shim', () => {
@@ -147,12 +147,17 @@ const manifestQueues = (): string[] =>
 
 const brokerQueues = (): string[] => {
   const conf = readFileSync(join(REPO_ROOT, 'elasticmq.conf'), 'utf8');
-  const block = conf.slice(conf.indexOf('queues {'));
-  return [...block.matchAll(/^\s+([a-zA-Z][a-zA-Z0-9]*)\s*\{/gm)].map(m => m[1]).filter(n => n !== 'queues');
+  // Bounded at the block's closing brace, not sliced to EOF: `queues { }` merely happens to be
+  // the last block today, and a config gaining a trailing section would start harvesting it.
+  // Only top-level entries count - a nested `deadLettersQueue { }` inside a queue is that
+  // queue's DLQ setting, not a queue of its own. Underscores and hyphens are legal in a name.
+  const block = conf.slice(conf.indexOf('queues {')).split(/\n\}/)[0];
+  return [...block.matchAll(/^ {2}([a-zA-Z][a-zA-Z0-9_-]*)\s*\{/gm)].map(m => m[1]).filter(n => n !== 'queues');
 };
 
-/** camelCase queue name to the SCREAMING_SNAKE env key, matching the shim's own toEnvKey. */
-const envKey = (name: string): string => name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+/** The shim's OWN name-to-env-key mapping, imported rather than restated: a local copy silently
+ *  dropped its SCREAMING_SNAKE passthrough branch while still claiming to match. */
+const envKey = toEnvKey;
 
 const templateEnvKeys = (): Set<string> => {
   const template = readFileSync(join(REPO_ROOT, '.env.selfhost.example'), 'utf8');
