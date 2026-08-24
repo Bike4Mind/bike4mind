@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.bike4mind/bike4mind",
+  "title": "Bike4Mind",
+  "description": "Notebooks, agents, files and RAG from your Bike4Mind workspace, as MCP tools.",
+  "version": "0.20.2",
+  "websiteUrl": "https://github.com/Bike4Mind/bike4mind",
+  "repository": {
+    "url": "https://github.com/Bike4Mind/bike4mind",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@bike4mind/cli",
+      "version": "0.20.2",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "mcp" },
+        { "type": "positional", "value": "serve" }
+      ],
+      "environmentVariables": [
+        {
+          "name": "B4M_API_KEY",
+          "description": "Bike4Mind API key. Alternatively sign in once with `b4m` and the stored OAuth token is used.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "B4M_API_URL",
+          "description": "API endpoint. Defaults to the CLI's configured backend; set this for a self-hosted deployment.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
