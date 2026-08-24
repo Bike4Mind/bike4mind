@@ -18,7 +18,8 @@ afterAll(async () => {
   await server?.stop();
 });
 
-// `create` takes a full document type, so every call site needs the cast.
+// The payload cannot be typed: the first case is invalid by design, omitting the required
+// `llmParams` to pin the rejection this suite exists for.
 const create = (data: Record<string, unknown>) => toolRepository.create(data as never);
 
 /**

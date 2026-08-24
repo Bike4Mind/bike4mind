@@ -161,6 +161,25 @@ describe('attachment ids come from the store, not from this service', () => {
     return sessionCreate.mock.calls[0][0];
   };
 
+  // ToolSchema requires llmParams; without it every tool write was rejected and swallowed.
+  it('sends llmParams so the tool write is not rejected', async () => {
+    const { adapters } = makeAdapters();
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-tool-id' });
+
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      withAttachments as never,
+      {
+        ...OPTIONS,
+        importTools: true,
+      } as never
+    );
+
+    expect(adapters.toolRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ llmParams: DefaultLLMParams })
+    );
+  });
+
   it.each([true, false])('records store-assigned attachment ids, preserveIds=%s', async preserveIds => {
     const sessionData = await runWithAttachments({ preserveIds });
     expect(sessionData.toolIds).toEqual(['store-tool-id']);
@@ -191,11 +210,6 @@ describe('an attachment store that returns no id is not recorded', () => {
         ...OPTIONS,
         importTools: true,
       } as never
-    );
-
-    // ToolSchema requires llmParams; without it every tool write was rejected and swallowed.
-    expect(adapters.toolRepository.create).toHaveBeenCalledWith(
-      expect.objectContaining({ llmParams: DefaultLLMParams })
     );
 
     const sessionData = (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0];

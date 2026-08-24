@@ -502,7 +502,7 @@ export class NotebookImportService {
           // ToolSchema requires llmParams and no export carries one, so an imported tool takes the
           // app's declared defaults. Not `{}`: that would apply the schema's own defaults, which
           // still name gpt-3.5-turbo.
-          llmParams: DefaultLLMParams,
+          llmParams: { ...DefaultLLMParams },
         };
 
         importedIds.push(this.takeStoreId(await this.adapters.toolRepository.create(toolData), 'tool'));
