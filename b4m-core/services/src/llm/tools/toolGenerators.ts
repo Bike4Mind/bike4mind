@@ -38,7 +38,7 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
-    personalCorpusFileIds,
+    suppressLakeArms,
     sessionRetrievalTags,
     questId,
   }: {
@@ -47,7 +47,7 @@ export const generateTools = (
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
-    personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
+    suppressLakeArms?: ToolContext['suppressLakeArms'];
     sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
     questId?: ToolContext['questId'];
   },
@@ -93,7 +93,7 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
-    personalCorpusFileIds,
+    suppressLakeArms,
     sessionRetrievalTags,
     codeMinifier,
     availableModels,

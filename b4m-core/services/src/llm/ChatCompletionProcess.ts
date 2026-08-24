@@ -771,12 +771,7 @@ export class ChatCompletionProcess {
    * suppressing retrieval (fail toward grounding, mirroring the tool-offer gate below).
    */
   public personalCorpusOnly = false;
-  /**
-   * The permission-filtered file ids behind `personalCorpusOnly`, handed to the knowledge tools as
-   * their scope. Already resolved through a CASL read scope (getAttachedKnowledgeFiles), which is
-   * what makes them safe to pass to the file-scoped arm - see ToolContext.personalCorpusFileIds.
-   */
-  public personalCorpusFileIds: string[] = [];
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -953,9 +948,11 @@ export class ChatCompletionProcess {
    * attaching a teammate's lake file is invisible to an ownership/share-based reader. Classifying a
    * corpus as "personal" off that reader alone is how such a session lost its grounding.
    *
-   * Uses the ownership-OR-lake arm (`includeShared` with the resolved lake args and NO
-   * `skipOwnership`), so it is permission-correct: `restrictToFileIds` bounds it to the requested
-   * ids and `buildOwnershipConditions` still has to admit each one. Returns `null` when it cannot
+   * Runs LAKE-ONLY: `restrictToDataLake` makes buildOwnershipConditions start from no ownership
+   * arms at all (fabFileSearchQuery: `restrictToDataLake ? [] : [...baseAccess]`), so only the lake
+   * tag/prefix arms select. That is narrower than an ownership-OR-lake read and is what we want -
+   * the question is "is this file lake content", not "can the caller read it by any route".
+   * `restrictToFileIds` bounds it to the requested ids. Returns `null` when it cannot
    * tell, which callers must treat as "cannot judge".
    */
   private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
@@ -978,7 +975,7 @@ export class ChatCompletionProcess {
           scopedTagPrefixes: access.scopedTagPrefixes,
           restrictToDataLake: true,
           excludeContent: true,
-        } as never
+        }
       );
       return res.data.length;
     } catch (err) {
@@ -1652,19 +1649,18 @@ export class ChatCompletionProcess {
       const accessibleLakeTags = hasAnyAttachment
         ? new Set((await this.getAccessibleDataLakeAccess()).dataLakeTags)
         : new Set<string>();
-      this.personalCorpusOnly = resolvePersonalCorpusOnly({
+      this.personalCorpusOnly = await resolvePersonalCorpusOnly({
         requestedKnowledgeIds: session.knowledgeIds ?? [],
         resolvedFiles: attachedKnowledgeFiles,
         accessibleLakeTags,
         retrievalTags: session.retrievalTags,
         corpusGroundingMode: session.corpusGroundingMode,
-        // Asked through the lake arm, because the reader above cannot see lake-membership files.
-        lakeReachableAttachments: hasAnyAttachment
-          ? await this.countLakeReachableAttachments(session.knowledgeIds ?? [])
-          : 0,
+        // A THUNK, not a value: this costs a db.fabfiles.search, and the predicate discards it on
+        // four cheap guards before ever reaching that clause. Passing it eagerly made every
+        // lake-scoped session - the population this whole fix serves - pay the round-trip on every
+        // attachment-bearing turn for a result that was thrown away.
+        countLakeReachableAttachments: () => this.countLakeReachableAttachments(session.knowledgeIds ?? []),
       });
-      // Ids come from the already-CASL-filtered lookup, never from session.knowledgeIds directly.
-      this.personalCorpusFileIds = this.personalCorpusOnly ? (attachedKnowledgeFiles ?? []).map(f => f.id) : [];
 
       // "Attached knowledge" for the offer means the caller has an attachment the tool can
       // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
@@ -2390,7 +2386,7 @@ export class ChatCompletionProcess {
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
-        personalCorpusFileIds: this.personalCorpusFileIds,
+        suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
         logger: this.logger,

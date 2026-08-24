@@ -101,8 +101,8 @@ export interface ToolBuilderConfig {
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
-  /** Personal-corpus file ids, forwarded to the tool context (see ToolContext.personalCorpusFileIds). */
-  personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
+  /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
+  suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
   logger: Logger;
@@ -700,7 +700,7 @@ export class ToolBuilder {
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
-        personalCorpusFileIds: this.deps.personalCorpusFileIds,
+        suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,

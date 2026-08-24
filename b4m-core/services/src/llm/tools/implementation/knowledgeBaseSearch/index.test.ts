@@ -2305,15 +2305,16 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
 });
 
 /**
- * Personal-corpus scoping (a notebook whose whole corpus is non-lake files). The load-bearing
- * assertion is that the LAKE ARMS DO NOT RUN - scoping only the semantic arm would let the keyword
- * fallback re-widen to owner-wide lake access on exactly the turns the semantic arm found nothing.
+ * Personal-corpus sessions search WITHOUT their lake arms. The load-bearing assertions are that the
+ * lake corpus walk does not run, AND that the caller's own library stays reachable - routing this
+ * through kbScope previously made the attached ids the sole authority, which suppressed the lakes
+ * and the rest of the owner's files together.
  */
 describe('search_knowledge_base personal-corpus scoping', () => {
-  function makePersonalContext(personalCorpusFileIds: string[], overrides: Partial<ToolContext> = {}): ToolContext {
+  function makePersonalContext(overrides: Partial<ToolContext> = {}): ToolContext {
     return makeContext({
       retrievalFilter: undefined,
-      personalCorpusFileIds,
+      suppressLakeArms: true,
       db: {
         fabfiles: {
           search: vi.fn().mockResolvedValue({
@@ -2330,44 +2331,39 @@ describe('search_knowledge_base personal-corpus scoping', () => {
     });
   }
 
-  it('routes to the file-scoped arm and never consults owner-wide lake access', async () => {
-    await run(makePersonalContext(['own1', 'own2']));
+  it('searches with NO lake arms and never consults owner-wide lake access', async () => {
+    await run(makePersonalContext());
 
-    expect(fileScopedSemanticSearchMock).toHaveBeenCalledTimes(1);
-    expect(fileScopedSemanticSearchMock.mock.calls[0][0]).toMatchObject({ fileIds: ['own1', 'own2'] });
-    // The bug being fixed: these two ARE the lake corpus walk.
-    expect(semanticDataLakeSearchMock).not.toHaveBeenCalled();
     expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+    // The unscoped semantic arm still runs: collectScopedFiles admits the caller's own and shared
+    // files via includeShared, so the corpus is real - it simply carries no lake tags.
+    expect(semanticDataLakeSearchMock).toHaveBeenCalled();
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({ dataLakeTags: [] });
   });
 
-  it('narrows the keyword fallback too, so it cannot re-widen to the lakes', async () => {
-    const ctx = makePersonalContext(['own1']);
+  it('does NOT restrict to the attached files - the rest of the owner library stays searchable', async () => {
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makePersonalContext();
     await run(ctx);
 
     const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
     const [, , filters, , , opts] = searchMock.mock.calls[0];
-    expect(filters.restrictToFileIds).toEqual(['own1']);
-    expect(opts.dataLakeTags).toBeUndefined();
-    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+    expect(filters.restrictToFileIds).toBeUndefined();
+    expect(opts.skipOwnership).not.toBe(true);
+    expect(opts.includeShared).toBe(true);
+    expect(opts.dataLakeTags).toEqual([]);
   });
 
-  it('an EMPTY list means "no opinion", not "read nothing" - it must never narrow to zero', async () => {
-    await run(makePersonalContext([]));
-    // Falls through to the owner-wide arm exactly as an unscoped session does today.
-    expect(fileScopedSemanticSearchMock).not.toHaveBeenCalled();
-    expect(getDynamicDataLakeAccessMock).toHaveBeenCalled();
-  });
-
-  it('kbScope wins when both are set - it is the stricter, fail-closed restriction', async () => {
-    await run(makePersonalContext(['own1'], { kbScope: { fileIds: ['agent1'] } }));
+  it('an agent kbScope still hard-restricts, independent of lake suppression', async () => {
+    await run(makePersonalContext({ kbScope: { fileIds: ['agent1'] } }));
     expect(fileScopedSemanticSearchMock.mock.calls[0][0]).toMatchObject({ fileIds: ['agent1'] });
   });
 });
 
 /**
- * Session lake scoping (A1a). narrowLakeAccessToSession is NOT mocked here, so these exercise the
- * real narrowing. Both arms are asserted: a keyword fallback that re-widened would undo the scope
- * on exactly the turns semantic search found nothing.
+ * Session lake scoping. narrowLakeAccessToSession is NOT mocked here, so these exercise the real
+ * narrowing. Both arms are asserted: a keyword fallback that re-widened would undo the scope on
+ * exactly the turns semantic search found nothing.
  */
 describe('search_knowledge_base narrows lake access to the session lake', () => {
   const twoLakes = {

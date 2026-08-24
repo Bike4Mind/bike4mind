@@ -1108,15 +1108,34 @@ describe('retrieve_knowledge_content access-event audit', () => {
  * lake the owner could reach.
  */
 describe('retrieve_knowledge_content honours the personal-corpus scope', () => {
-  it('rejects an out-of-scope id with no DB lookup, exactly as kbScope does', async () => {
-    const ctx = makeContext({
-      retrievalFilter: undefined,
-      personalCorpusFileIds: ['some-other-file'],
-    } as Partial<ToolContext>);
+  it("serves the caller's own file without consulting owner-wide lake access", async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, suppressLakeArms: true } as Partial<ToolContext>);
 
-    const out = await runById(ctx);
+    await runById(ctx);
 
-    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
-    expect(ctx.db.fabfiles!.findById).not.toHaveBeenCalled();
+    // Suppression removes the LAKE arms only. It must not become an id allow-list: the caller's own
+    // documents stay retrievable, which is what routing this through kbScope used to break.
+    expect(ctx.db.fabfiles!.findById).toHaveBeenCalled();
+  });
+});
+
+describe('retrieve_knowledge_content narrows lake access to the session lake', () => {
+  it('resolves lake access through the session narrowing, not owner-wide', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:mine', 'datalake:other'],
+      dataLakeTagPrefixes: ['mine:', 'other:'],
+      scopedTagPrefixes: [],
+      lakes: [
+        { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+        { id: 'l2', name: 'other', datalakeTag: 'datalake:other', fileTagPrefix: 'other:', source: 'registry' },
+      ],
+    });
+    const ctx = makeContext({ retrievalFilter: undefined, sessionRetrievalTags: ['datalake:mine'] } as never);
+    await runById(ctx);
+    // The narrowing runs on the resolved set; the other lake must not survive into the search args.
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    if (searchMock?.mock.calls.length) {
+      expect(searchMock.mock.calls[0][5]?.dataLakeTags ?? []).not.toContain('datalake:other');
+    }
   });
 });

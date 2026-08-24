@@ -1,5 +1,4 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
-import { resolveEffectiveKbScope } from '../../base/resolveEffectiveKbScope';
 import {
   CitableSource,
   getEmbeddingModelCost,
@@ -19,7 +18,7 @@ import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
-import { narrowLakeAccessToSession } from '../../../../dataLakeService/narrowLakeAccessToSession';
+import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
@@ -413,12 +412,15 @@ async function trySemanticKbSearch(
     // Narrowed to the session's own lake(s) before anything is searched: without this, a session
     // created FOR one lake still ranks passages from every lake its owner can reach. Subtractive
     // only - see narrowLakeAccessToSession.
-    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = narrowLakeAccessToSession(
-      await getDynamicDataLakeAccess(context),
-      context.sessionRetrievalTags
-    );
-    // No accessible data lake - keyword search owns the user's own files.
-    if (dataLakeTags.length === 0) return NO_SEMANTIC_RESULT;
+    // A personal-corpus session searches with NO lake arms: `collectScopedFiles` passes
+    // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
+    // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
+    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+    // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
+    // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
+    // files), and falling through to the metadata-only keyword arm would lose content search over
+    // it entirely. Left intact for the genuinely lake-less caller so their behaviour is unchanged.
+    if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
 
     const search = await semanticDataLakeSearch(
       {
@@ -813,9 +815,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
         // Agent-scoped KB restriction (see KbScope). An empty scope reads NOTHING - return
         // the generic no-results message before either arm runs, never fall back owner-wide.
-        // One effective scope from two sources - see resolveEffectiveKbScope. Every downstream
-        // branch that keys on `scope` (the semantic arm AND its keyword fallback) narrows together.
-        const scope = resolveEffectiveKbScope(context);
+        // Agent restriction only. A personal-corpus session is NOT expressed here - see
+        // ToolContext.suppressLakeArms for why narrowing to the attachments was the wrong shape.
+        const scope = context.kbScope;
         if (scope && scope.fileIds.length === 0) {
           // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
           // empty-scope agent surface must read as a pure "nothing in scope" early return, not
@@ -914,12 +916,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           } else {
             // Search files the user has access to (owned + shared + org-shared + data lake)
-            // Same narrowing as the semantic arm above - a fallback that re-widened to owner-wide
+            // Same treatment as the semantic arm above - a fallback that re-widened to owner-wide
             // lake access would undo the scope on exactly the turns semantic search found nothing.
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = narrowLakeAccessToSession(
-              await getDynamicDataLakeAccess(context),
-              context.sessionRetrievalTags
-            );
+            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
             keywordArmLakes = lakes;
             searchResults = await context.db.fabfiles.search(
               context.userId,
@@ -1038,7 +1037,13 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const more = rankedResults.length > 3 ? ` +${rankedResults.length - 3} more` : '';
             // Scoped wording avoids "data lake" framing - a scoped caller sees only the
             // agent's KB, and the status must not imply a wider corpus exists.
-            const corpusLabel = scope ? "this agent's knowledge base" : 'the data lake';
+            // Three corpora, three names. Saying "this agent's knowledge base" on an ordinary
+            // session with no agent is text the model paraphrases straight to the user.
+            const corpusLabel = scope
+              ? "this agent's knowledge base"
+              : context.suppressLakeArms
+                ? 'your files'
+                : 'the data lake';
             // The semantic arm's notice (e.g. every matching file withheld for a model mismatch)
             // has to land here too: when semantic finds nothing to say, this keyword status is the
             // ONLY user-visible write for the turn, so a total-withholding warning would otherwise

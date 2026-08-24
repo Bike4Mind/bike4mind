@@ -19,8 +19,10 @@ export interface PersonalCorpusInput {
    * How many attachments are reachable as LAKE content, asked through the lake arm rather than the
    * ownership/share reader that produced `resolvedFiles`. `null` means "could not tell". Any nonzero
    * count means the corpus is not personal, whatever `resolvedFiles` was able to see.
+   *
+   * A THUNK because resolving it costs a query, and the guards above it reject most callers first.
    */
-  lakeReachableAttachments: number | null;
+  countLakeReachableAttachments: () => Promise<number | null>;
 }
 
 /**
@@ -34,9 +36,9 @@ export interface PersonalCorpusInput {
  * FAIL-SAFE DIRECTION: every uncertainty resolves to `false` (keep grounding). A wrong `true`
  * silently removes retrieval; a wrong `false` merely leaves today's behavior in place.
  */
-export function resolvePersonalCorpusOnly(input: PersonalCorpusInput): boolean {
+export async function resolvePersonalCorpusOnly(input: PersonalCorpusInput): Promise<boolean> {
   const { requestedKnowledgeIds, resolvedFiles, accessibleLakeTags, retrievalTags, corpusGroundingMode } = input;
-  const { lakeReachableAttachments } = input;
+
 
   if (requestedKnowledgeIds.length === 0) return false; // nothing attached -> nothing to classify
   if (resolvedFiles === null) return false; // lookup failed -> cannot judge
@@ -61,6 +63,7 @@ export function resolvePersonalCorpusOnly(input: PersonalCorpusInput): boolean {
   // The authoritative half of the same question: the lake arm can see files the reader above
   // cannot, so a nonzero count means lake content is attached even when `resolvedFiles` showed none
   // of it. `null` is "could not tell", which is not permission to classify.
+  const lakeReachableAttachments = await input.countLakeReachableAttachments();
   if (lakeReachableAttachments === null || lakeReachableAttachments > 0) return false;
 
   // Keying on lake MEMBERSHIP is what makes the corpus-defer path safe without a further gate:

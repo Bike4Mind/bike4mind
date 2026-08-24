@@ -38,10 +38,26 @@ export function narrowLakeAccessToSession(
   // So a tag list carrying no lake identity means "no lake opinion" - the same no-op as an absent
   // list - NOT "no lakes".
   const lakeTags = datalakeTagsFrom(sessionRetrievalTags);
-  if (lakeTags.length === 0) return access;
 
-  const wanted = new Set(lakeTags);
-  const retainedLakes = access.lakes.filter(lake => wanted.has(lake.datalakeTag));
+  // A session may name its lake by IDENTITY (`datalake:x`) or scope itself by that lake's FILE-TAG
+  // PREFIX (`acme:`), which is the shape a curated surface uses when it scopes by content. Both
+  // identify a lake, so both narrow. Falling back to "no opinion" for the prefix shape left those
+  // sessions on the full owner-wide union - the very bug this function exists to close, still open
+  // on any account that can reach a second lake.
+  // Two DIFFERENT empty results, and collapsing them is a widening bug: a session that names a lake
+  // the caller cannot reach must end up with NO lake access (they asked for something they may not
+  // have), while a session whose tags name no lake at all has expressed no lake opinion and must be
+  // left alone. Only the second returns `access`.
+  const prefixMatched = access.lakes.filter(
+    lake => lake.fileTagPrefix && sessionRetrievalTags.includes(lake.fileTagPrefix)
+  );
+  if (lakeTags.length === 0 && prefixMatched.length === 0) return access;
+
+  const wantedTags = new Set(lakeTags);
+  const retainedLakes =
+    lakeTags.length > 0 ? access.lakes.filter(lake => wantedTags.has(lake.datalakeTag)) : prefixMatched;
+
+  const wanted = new Set(retainedLakes.map(lake => lake.datalakeTag));
   // Prefixes are matched by VALUE against the retained lakes, so a lake dropped from scope also
   // loses its prefix arm. Two lakes sharing a prefix is a pre-existing collision concern
   // (tagPrefixCollision.ts), not one this narrowing introduces.

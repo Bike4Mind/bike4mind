@@ -47,8 +47,8 @@ export interface ToolBuilderDeps {
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
-  /** Personal-corpus file ids, forwarded to the tool context (see ToolContext.personalCorpusFileIds). */
-  personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
+  /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
+  suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
   /**
@@ -291,7 +291,7 @@ export function buildSharedTools(
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
-    personalCorpusFileIds,
+    suppressLakeArms,
     sessionRetrievalTags,
   } = deps;
 
@@ -308,7 +308,7 @@ export function buildSharedTools(
       kbScope,
       inlinedAttachmentIds,
       fullyInlinedAttachmentIds,
-      personalCorpusFileIds,
+      suppressLakeArms,
       sessionRetrievalTags,
       questId: callbacks.questId,
     },

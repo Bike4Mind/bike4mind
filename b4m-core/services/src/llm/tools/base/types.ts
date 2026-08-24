@@ -169,20 +169,21 @@ export interface ToolContext {
    */
   kbScope?: KbScope;
   /**
-   * FabFile ids of a session whose attached corpus is entirely PERSONAL - nothing belonging to a
-   * data lake the caller can reach (see ChatCompletionProcess.personalCorpusOnly). When set, the
-   * knowledge tools scope to these files and do not consult owner-wide lake access, so a notebook
-   * about its own uploads stops grounding on an unrelated product's lake.
+   * True when this session's attached corpus is entirely PERSONAL - nothing belonging to a data
+   * lake the caller can reach (see ChatCompletionProcess.personalCorpusOnly). The knowledge tools
+   * then search WITHOUT their lake arms, so a notebook about its own uploads stops grounding on an
+   * unrelated product's lake.
    *
-   * DISTINCT FROM `kbScope`, deliberately. kbScope is agent config, is never derived from request
-   * input, and is fail-closed (an empty list reads NOTHING). This is derived from
-   * `session.knowledgeIds`, which IS client-writable, so it carries two different rules:
-   *  - the ids MUST already be permission-filtered by the host (the chat path resolves them through
-   *    getAttachedKnowledgeFiles -> a CASL read scope) - passing raw session ids here would make the
-   *    file-scoped arm a cross-tenant read, since it resolves with a lifecycle-only scope;
-   *  - empty/absent means "no opinion", NOT "read nothing" - it must never narrow a session to zero.
+   * Deliberately a flag and NOT a file-id scope. Routing it through `kbScope` made the attached ids
+   * the sole authority (`restrictToFileIds` + `skipOwnership`, no owner/shared expansion), which
+   * suppressed the lakes AND the rest of the caller's own library - so a user who attached one file
+   * could no longer find anything in the other fifty they own. Suppressing the lake arms is the
+   * whole of the fix; narrowing to the attachments was collateral.
+   *
+   * Distinct from `kbScope` for the same reason: that one is a hard, fail-closed agent restriction
+   * where an empty list reads NOTHING, and this is a corpus-shaping hint on an ordinary session.
    */
-  personalCorpusFileIds?: string[];
+  suppressLakeArms?: boolean;
   /**
    * The session's lake scope (`session.retrievalTags`). Narrows the knowledge tools' owner-wide lake
    * access to the lake(s) this session is FOR, so a session created for one lake stops searching
