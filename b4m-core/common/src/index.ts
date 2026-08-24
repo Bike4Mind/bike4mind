@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './apiErrorCodes';
 export * from './groupTypes';
 export * from './insufficientCredits';
 export * from './validation';

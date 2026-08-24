@@ -1002,39 +1002,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
-              "provider_not_configured",
-              "provider_rejected"
-            ]
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "synthesizeSpeechResponse402": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "deprecated": true,
-            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
-          },
-          "provider": {
-            "type": "string",
-            "enum": [
-              "openai",
-              "elevenlabs"
-            ]
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1099,6 +1067,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1132,6 +1101,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1165,6 +1135,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -2427,12 +2398,12 @@
               }
             }
           },
-          "402": {
-            "description": "Not enough credits to cover the synthesis.",
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/synthesizeSpeechResponse402"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -2441,42 +2412,6 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
-                }
-              },
-              "X-RateLimit-Limit-Minute": {
-                "description": "Request quota per minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Minute": {
-                "description": "Requests remaining in the current minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Minute": {
-                "description": "Unix epoch (seconds) when the minute window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Limit-Day": {
-                "description": "Request quota per day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Day": {
-                "description": "Requests remaining in the current day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Day": {
-                "description": "Unix epoch (seconds) when the day window resets.",
-                "schema": {
-                  "type": "integer"
                 }
               }
             }
@@ -2536,7 +2471,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation, the text exceeds the provider character limit, or the provider cannot produce the requested `format`.",
+            "description": "Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: \"insufficient_credits\"`, so match on the classifier rather than the status to tell a billing failure from a bad request.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2698,6 +2633,9 @@
             }
           }
         },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
         "x-codeSamples": [
           {
             "lang": "curl",
