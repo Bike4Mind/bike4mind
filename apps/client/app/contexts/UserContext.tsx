@@ -378,6 +378,16 @@ export function resolveIdentifyEffect(params: {
  */
 export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): boolean => !heldToken;
 
+/**
+ * Merge a `users` WebSocket push onto the existing store user. The push carries only the
+ * subscription's projected fields, so replacing would wipe every non-projected field (integration
+ * settings, lastNotebookId, isBanned/isModerated, ...); merging updates the projected fields and
+ * preserves the rest. `existing` may be null (no user yet), in which case the pushed subset is
+ * adopted as-is. Exported for unit testing.
+ */
+export const applyUserPush = (existing: IUserDocument | null, pushed: IUserDocument): IUserDocument =>
+  ({ ...(existing ?? {}), ...pushed }) as IUserDocument;
+
 /** Provides user data and operations to children via the zustand store. */
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   const [userId, setCurrentUser] = useUser(useShallow(s => [s.currentUser?.id, s.setCurrentUser, s.refreshUser]));
@@ -397,7 +407,13 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       (_type: string, data: IUserDocument) => {
         if (data && data.id === userId) {
           try {
-            setCurrentUser({ ...data });
+            // The 'users' push carries only the projected `fields` (see the options below), so
+            // replacing the store user would wipe every field outside that projection (integration
+            // settings, lastNotebookId, isBanned/isModerated, ...). Merge onto the existing user so
+            // a push updates the projected fields and leaves the rest intact. Tradeoff: a field
+            // cleared server-side but absent from the projection keeps its stale value until the
+            // next refreshUser()/identify.
+            setCurrentUser(applyUserPush(useUser.getState().currentUser, data));
             // Real-time kill switch: if the user's tokenVersion has advanced
             // past the version embedded in this tab's access token, the session
             // was revoked server-side (password reset / MFA change / unlink) -
@@ -461,8 +477,9 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
         // Security and permissions
         mfa: 1,
         groups: 1,
-        // Integration settings (subscription replaces currentUser entirely,
-        // so slackSettings must be included or it gets wiped on every update)
+        // Integration settings: projected so a real-time slackSettings change reaches this tab.
+        // The handler now merges rather than replaces, so a field absent here is no longer wiped -
+        // it just doesn't update in real time and refreshes on the next refreshUser()/identify.
         slackSettings: 1,
       },
     }

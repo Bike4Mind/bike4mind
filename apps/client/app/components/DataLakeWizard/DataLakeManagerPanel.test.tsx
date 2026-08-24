@@ -74,6 +74,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
         lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
       },
     }),
+    // The nav's in-lake tree is DataLakeTreeView, which calls this even with no `source` (the
+    // manager passes none, so cross-tree search stays off) - it still has to exist on the mock.
+    useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
     // The access modal (mounted by the panel) pulls these from this module; the modal itself is
     // covered by its own suite, so a quiet stub keeps this mock complete (see the missing-export trap).
     useLakeAccessView: () => ({ data: undefined, isLoading: false, isError: false }),

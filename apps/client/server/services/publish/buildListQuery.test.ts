@@ -96,3 +96,22 @@ describe('buildListQuery - sort', () => {
     expect(buildListQuery({ sort: 'versions' }).sort.versionsCount).toBe(-1);
   });
 });
+
+describe('buildListQuery - tags', () => {
+  it('matches the normalized form exactly, so the multikey index applies', () => {
+    // Stored tags are normalized, so an exact equality match is both correct and indexable - a
+    // case-insensitive regex here would give up the index for nothing.
+    expect(buildListQuery({ tag: '  IonQ ' }).match.tags).toBe('ionq');
+  });
+
+  it('ignores a blank tag rather than matching artifacts with an empty tag', () => {
+    expect(buildListQuery({ tag: '   ' }).match.tags).toBeUndefined();
+  });
+
+  it('lets an unknown tag match nothing, unlike the enum filters', () => {
+    // Deliberate asymmetry: an unrecognised `kind` is a malformed filter, so it is ignored; an
+    // unrecognised tag is a real tag whose last use the owner may have just removed, and
+    // widening that to "everything" would misreport it as still in use.
+    expect(buildListQuery({ tag: 'never-used' }).match.tags).toBe('never-used');
+  });
+});

@@ -1,5 +1,5 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
+import { IChatHistoryItem, IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -368,7 +368,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     claudeMessageId: { type: String, required: false },
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
-    prompt: { type: String, required: true },
+    // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
+    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
+    // could therefore never protect the write that omits it; it only fired on create(), the copy
+    // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
+    // notebook. Same reasoning as promptMeta.session (see rebindPromptMetaSession), one field over.
+    // Note `prompt ?? ''` is not an alternative: Mongoose's `required` on a String rejects '' too.
+    prompt: { type: String, required: false },
     fabFileIds: { type: [String], required: false },
     agentIds: { type: [String], required: false },
     reply: { type: String, required: false },
@@ -591,6 +598,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
   }
 );
 
+/**
+ * The statuses that mean a quest will never be written to again. Anything else
+ * (`pending`, `running`) is still claiming to be live, and is what a settle pass
+ * is allowed to take over. Shared by the two halves of that pass so its read and
+ * its write cannot drift on what "unfinished" means.
+ */
+const TERMINAL_QUEST_STATUSES = ['done', 'stopped'];
+
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
 
@@ -727,6 +742,54 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Quests still showing as in-flight for the given agent executions.
+   * Shape is `UnfinishedQuestView`, declared below the class.
+   *
+   * Used by the abandoned sweep to find bubbles stranded by an execution it just
+   * terminated: the execution reaches a terminal status but nothing else writes
+   * the quest, so without this the UI spins forever on a run the backend knows
+   * is dead. Returns only the content fields the terminal-patch decision reads
+   * (`terminalRecoveryFor`), not whole quest documents - a sweep can match many
+   * rows and the checkpoint/context fields are large.
+   *
+   * `done` and `stopped` are the terminal statuses; anything else (`pending`,
+   * `running`) is still claiming to be live. Terminal quests are excluded rather
+   * than re-patched so a natural completion racing the sweep always wins.
+   */
+  async findUnfinishedByAgentExecutionIds(agentExecutionIds: string[]): Promise<UnfinishedQuestView[]> {
+    if (agentExecutionIds.length === 0) return [];
+    // MUST STAY IN SYNC with `QuestContentView` in questTimeoutRecovery.ts: a
+    // content field the decision reads but this does not project reads as
+    // absent, and a run that produced that content gets stamped as a failure.
+    const docs = await this.model
+      .find(
+        { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: TERMINAL_QUEST_STATUSES } },
+        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
+      )
+      .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
+  }
+
+  /**
+   * Write a terminal patch to a quest only while it is still unfinished, and
+   * report whether a document actually matched.
+   *
+   * The status predicate is the atomic half of the settle pass. Candidates are
+   * read in one query and written one at a time, so a natural completion can
+   * land in the gap; an `_id`-only write (`BaseRepository.update`) would then
+   * overwrite a real answer with the abandoned-run error. Callers count only
+   * the writes that matched, so a quest that finished in that window is
+   * reported as not settled rather than as settled.
+   */
+  async settleIfUnfinished(
+    id: string,
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply'>>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
+    return result.matchedCount > 0;
+  }
+
+  /**
    * Append generated-file names to a Quest's `images` array, keyed by the agent execution
    * that produced them. Uses `$addToSet` so concurrent writers - the parent run and any
    * subagents, each in its own Lambda - accumulate into the same array instead of clobbering
@@ -825,3 +888,15 @@ function initializeQuestModel() {
 export const Quest = initializeQuestModel();
 
 export const questRepository = new QuestRepository(Quest);
+
+/**
+ * Content fields the stranded-quest settle reads, plus the id it writes back to.
+ *
+ * Picked from `IChatHistoryItem` rather than restated so this and
+ * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
+ * projection in the query above still has to list the same fields by hand.
+ */
+export type UnfinishedQuestView = { id: string } & Pick<
+  IChatHistoryItem,
+  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;
