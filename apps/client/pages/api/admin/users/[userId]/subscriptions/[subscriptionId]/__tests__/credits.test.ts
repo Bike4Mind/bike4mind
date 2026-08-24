@@ -72,8 +72,11 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
-    const config = (handler as unknown as { _config?: { requiredScopes?: string[] } })._config;
-    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+    // Pins the whole config object, not just requiredScopes - a sibling `auth: false`
+    // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
+    // and disable this gate while leaving requiredScopes untouched.
+    const config = (handler as unknown as { _config?: unknown })._config;
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
   });
 
   it('rejects a non-admin', async () => {
