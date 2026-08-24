@@ -19,7 +19,6 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
 
@@ -56,11 +55,10 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
     }
   }
 
-  // Billing target is an explicit, opt-in choice. `resolveActiveOrg` is the one place a
-  // route turns a client-supplied org id into a trusted scope; it throws 403 for a
-  // non-member and 404 for an org that does not exist.
-  const organizationId = await resolveActiveOrg(req, body.organization_id);
-
+  // Billing target is an explicit, opt-in choice: omitted means the run is billed to
+  // the caller personally. The membership check lives in `startAgentExecution` - one
+  // gate, shared with the WebSocket transport, rather than a second one here that
+  // would disagree with it about who counts as a member.
   const result = await startAgentExecution(
     {
       userId: req.user.id,
@@ -72,7 +70,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       model,
       // No WebSocket peer on this transport: the caller polls instead of streaming.
       connectionId: HEADLESS_CONNECTION_ID,
-      organizationId,
+      organizationId: body.organization_id,
       agentId: body.agent_id,
       enabledTools: body.tools,
       maxIterations: body.max_iterations,
@@ -98,9 +96,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
         // the endpoint cannot be used to probe which session ids exist.
         throw new NotFoundError('Session not found');
       case 'organization_not_found':
-        // Unreachable in practice: resolveActiveOrg above already rejected an org the
-        // caller cannot use. Kept as the honest mapping for the service's own guard
-        // rather than folded into the 502 default.
+        // Same reasoning as the session case: "no such org" and "not your org" are one
+        // response, so membership cannot be probed.
         throw new NotFoundError('Organization not found');
       case 'concurrent_limit':
         throw new ConflictError(result.message);

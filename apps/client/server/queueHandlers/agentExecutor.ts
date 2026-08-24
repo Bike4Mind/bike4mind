@@ -263,10 +263,13 @@ function createWsSender(connectionId: string, logger: Logger) {
   // on every single step - and this sender swallows send errors, so those failures
   // would be invisible noise rather than a signal. Short-circuit instead, with one log
   // line so "no events streamed" stays distinguishable from "events were sent and
-  // dropped". A later `reconnect` replaces the id with a live connection.
+  // dropped". See `headlessConnection.ts` for why a later reconnect does not promote
+  // a headless run to a streaming one.
   if (isHeadlessConnection(connectionId)) {
     logger.info('[WS] Headless execution: streaming disabled; poll GET /api/v1/agent-executions/{id}');
-    return async () => {};
+    // Same signature as the real sender, so a call site that starts passing a new
+    // argument cannot silently type-check against a narrower no-op.
+    return async (_action: string, _payload: Record<string, unknown> = {}) => {};
   }
 
   const wsEndpoint = Resource.websocket.managementEndpoint;

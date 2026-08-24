@@ -13,10 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AgentExecutionAckSchema, AgentExecutionStatusResponseSchema } from '@bike4mind/common';
 
-const { mockStart, mockLoadTrace, mockResolveActiveOrg } = vi.hoisted(() => ({
+const { mockStart, mockLoadTrace } = vi.hoisted(() => ({
   mockStart: vi.fn(),
   mockLoadTrace: vi.fn(),
-  mockResolveActiveOrg: vi.fn(),
 }));
 
 // Strip the middleware chain but keep next-connect's registrar shape, so
@@ -48,7 +47,6 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: mockStart }));
 vi.mock('@server/utils/loadAgentExecutionTrace', () => ({ loadAgentExecutionTrace: mockLoadTrace }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: mockResolveActiveOrg }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
@@ -85,7 +83,6 @@ async function statusOf(run: Promise<unknown>): Promise<number> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockResolveActiveOrg.mockResolvedValue(undefined);
   mockStart.mockResolvedValue({ ok: true, executionId: 'exec1', questId: 'quest1' });
 });
 
@@ -148,6 +145,15 @@ describe('POST /api/v1/agent-executions', () => {
 
     expect(res._getJSONData().tracking_info.quest_id).toBeUndefined();
     expect(AgentExecutionAckSchema.safeParse(res._getJSONData()).success).toBe(true);
+  });
+
+  it('forwards the requested billing organization for the service to authorize', async () => {
+    const { req, res } = post({ session_id: 's1', message: 'go', organization_id: 'org1' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org1' }), logger);
   });
 
   it.each([

@@ -2080,7 +2080,7 @@
             }
           },
           "403": {
-            "description": "The caller is not a member of the organization named by `organization_id`.",
+            "description": "The API key does not hold any of the required scopes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2094,47 +2094,11 @@
                 "schema": {
                   "type": "string"
                 }
-              },
-              "X-RateLimit-Limit-Minute": {
-                "description": "Request quota per minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Minute": {
-                "description": "Requests remaining in the current minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Minute": {
-                "description": "Unix epoch (seconds) when the minute window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Limit-Day": {
-                "description": "Request quota per day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Day": {
-                "description": "Requests remaining in the current day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Day": {
-                "description": "Unix epoch (seconds) when the day window resets.",
-                "schema": {
-                  "type": "integer"
-                }
               }
             }
           },
           "404": {
-            "description": "No session with the given `session_id` is owned by the caller, or `organization_id` names an organization that does not exist. A session that exists but belongs to someone else is reported as 404 too, so the endpoint cannot be used to probe which session ids exist.",
+            "description": "No session with the given `session_id` is owned by the caller, or `organization_id` names an organization the caller does not belong to. \"Exists but is not yours\" is reported as 404 too, so neither session ids nor org membership can be probed through this endpoint.",
             "content": {
               "application/json": {
                 "schema": {

@@ -51,15 +51,11 @@ export const startAgentExecutionContract = defineEndpoint({
       schema: AgentExecutionAckSchema,
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
-    403: {
-      description: 'The caller is not a member of the organization named by `organization_id`.',
-      schema: ApiErrorSchema,
-    },
     404: {
       description:
         'No session with the given `session_id` is owned by the caller, or `organization_id` names an ' +
-        'organization that does not exist. A session that exists but belongs to someone else is reported ' +
-        'as 404 too, so the endpoint cannot be used to probe which session ids exist.',
+        'organization the caller does not belong to. "Exists but is not yours" is reported as 404 too, ' +
+        'so neither session ids nor org membership can be probed through this endpoint.',
       schema: ApiErrorSchema,
     },
     409: {
