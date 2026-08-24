@@ -147,6 +147,7 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { isHeadlessConnection } from '@server/utils/headlessConnection';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
@@ -258,6 +259,16 @@ const sqsClient = new SQSClient({});
 // ---------------------------------------------------------------------------
 
 function createWsSender(connectionId: string, logger: Logger) {
+  // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail
+  // on every single step - and this sender swallows send errors, so those failures
+  // would be invisible noise rather than a signal. Short-circuit instead, with one log
+  // line so "no events streamed" stays distinguishable from "events were sent and
+  // dropped". A later `reconnect` replaces the id with a live connection.
+  if (isHeadlessConnection(connectionId)) {
+    logger.info('[WS] Headless execution: streaming disabled; poll GET /api/v1/agent-executions/{id}');
+    return async () => {};
+  }
+
   const wsEndpoint = Resource.websocket.managementEndpoint;
   const client = new ApiGatewayManagementApiClient({ endpoint: wsEndpoint });
 

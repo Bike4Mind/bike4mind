@@ -189,6 +189,55 @@ Cancels an in-progress streaming response.
 
 ---
 
+### Agent Executions (ReAct)
+
+The tool-using agent loop behind the product UI's Agent Mode toggle. This is a different
+pipeline from \`POST /api/chat\`: it runs several LLM iterations, calling tools between them,
+rather than producing a single completion. It used to be reachable only over the
+\`agent_execute\` WebSocket route, so an API-key caller could reproduce a chat turn but not an
+agent run.
+
+#### Start an Agent Run
+
+\`\`\`
+POST /api/v1/agent-executions
+\`\`\`
+
+**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
+
+> **This endpoint is generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`startAgentExecution\`, derived from the same
+> object the handler validates with.
+>
+> The run is asynchronous and nothing is streamed back over REST: you get a \`202\` with an
+> execution id, then poll. Omit \`agent_id\` to get whatever profile the session's own surface
+> resolves to - that is what reproduces the in-app toggle, rather than pinning one specific
+> agent. The final answer is also written to the session as a normal chat message, so it
+> appears in history.
+
+#### Poll an Agent Run
+
+\`\`\`
+GET /api/v1/agent-executions/[id]
+\`\`\`
+
+**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
+
+> See the [generated API docs](/api/v1/docs) under \`getAgentExecution\`. Returns the run's
+> status, its reasoning trace (which grows while the run is in flight), and the final answer
+> once \`status\` is terminal. GET requests here are exempt from the per-day API-key quota, so
+> polling one run costs a single daily slot; the per-minute burst limit still applies.
+
+#### Agent Execution Endpoints Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/v1/agent-executions | Start an agent (ReAct) run |
+| GET | /api/v1/agent-executions/[id] | Poll status, reasoning trace, and answer |
+
+---
+
 ### Files (FabFiles)
 
 Manage uploaded files, trigger chunking for RAG, and search file content.
