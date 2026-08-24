@@ -4,6 +4,7 @@ import {
   addPairedTool,
   resolveEnabledTools,
   shouldDeferCorpusToRetrieval,
+  attachmentHasIndexedContent,
   computeSettlementDelta,
   clampFraction,
   dropOldestHistoryTurn,
@@ -37,7 +38,8 @@ import {
 import { ToolBuilder } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
-import type { ISkill } from '@bike4mind/common';
+import { LakeMemoryFeature } from './ChatCompletionFeatures';
+import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -72,7 +74,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCredits: vi.fn(),
   usdToCreditsStochastic: vi.fn(),
   processUrlsFromPrompt: vi.fn(),
-  getLastBuildDebugInfo: vi.fn().mockReturnValue({}),
   isOverloadedError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
@@ -224,7 +225,7 @@ describe('ChatCompletionProcess', () => {
         update: vi.fn(),
         attachAgent: vi.fn().mockResolvedValue(mockSession),
       },
-      organizations: { findById: vi.fn(), update: vi.fn() },
+      organizations: { findById: vi.fn(), update: vi.fn(), findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       quests: {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
@@ -319,7 +320,10 @@ describe('ChatCompletionProcess', () => {
       // re-run the DB lookup every turn for every caller who has no lake - the common case.
       const findLakes = vi.fn().mockResolvedValue([]);
       (service as any).accessibleDataLakeAccessMemo = undefined;
-      (service as any).db = { dataLakes: { findActiveByUserTagsAndEntitlements: findLakes } };
+      (service as any).db = {
+        dataLakes: { findActiveByUserTagsAndEntitlements: findLakes },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
       (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
@@ -685,7 +689,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -701,6 +708,54 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    // Every other test in this file mocks messageTruncation: null, which never exercises the
+    // `if (messageTruncationInfo)` persist branch below - this is the one test that does.
+    it('persists a non-null messageTruncation onto quest.promptMeta.context', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      const messageTruncation = {
+        wasTruncated: true,
+        originalMessageCount: 10,
+        truncatedMessageCount: 6,
+        truncationMethod: 'token-budget' as const,
+      };
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const logger = mockLogger;
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.messageTruncation !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      expect(updateCall[0].promptMeta.context.messageTruncation).toEqual(messageTruncation);
     });
 
     // The promptMode wiring, asserted at the boundary the prompt actually crosses: the
@@ -729,7 +784,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       };
@@ -751,6 +809,112 @@ describe('ChatCompletionProcess', () => {
           promptMeta?: { context?: { systemPromptDetails?: { name: string }[] } };
         };
         expect(savedQuest.promptMeta?.context?.systemPromptDetails?.map(d => d.name)).toContain('date_time_context');
+      });
+
+      it('exposes the disclosure on the process when the caller asked for it', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        // Row-level only: buildAndSortMessages is stubbed to a fixed payload here, so nothing
+        // counts as delivered and no text is disclosed. The text itself is covered against a real
+        // delivered set in systemPromptDisclosure.test.ts.
+        expect(service.systemPromptText?.blocks.map(b => b.name)).toContain('date_time_context');
+      });
+
+      // The two lists are documented as joinable on `name`, and the always-on floor is where that
+      // is easiest to break: a gate-excluded floor source contributes no message to the stack, yet
+      // buildAlwaysOnFloorDetails still inventories it.
+      it('emits a prompt-text row for every breakdown row even when a floor source is gated off', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          enableArtifacts: false,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string; wasIncluded: boolean }[] } };
+        };
+        const details = savedQuest.promptMeta?.context?.systemPromptDetails ?? [];
+        expect(details.find(d => d.name === 'artifact_emission')?.wasIncluded).toBe(false);
+
+        const disclosedNames = service.systemPromptText?.blocks.map(b => b.name) ?? [];
+        expect(disclosedNames).toContain('artifact_emission');
+        expect(details.map(d => d.name).filter(name => !disclosedNames.includes(name))).toEqual([]);
+      });
+
+      // Proves the ChatCompletionProcess wiring itself: buildAndSortMessages's injectedBlocks reaches
+      // both the persisted breakdown and the opt-in disclosure, joined on the same name.
+      it('itemizes a delivered injected block into both systemPromptDetails and the disclosure', async () => {
+        mockTextModel();
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [
+            { role: 'system', content: 'Formatting only.' },
+            { role: 'user', content: 'Hello' },
+          ],
+          messageTruncation: null,
+          injectedBlocks: [
+            { id: 'formatPrompt', injected: true, delivered: true, content: 'Formatting only.' },
+            { id: 'imagePrompt', injected: false, delivered: false, reason: 'not_triggered' },
+          ],
+        });
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string; wasIncluded: boolean }[] } };
+        };
+        const details = savedQuest.promptMeta?.context?.systemPromptDetails ?? [];
+        expect(details.find(d => d.name === 'format_prompt')).toEqual(expect.objectContaining({ wasIncluded: true }));
+        expect(details.find(d => d.name === 'image_prompt')).toEqual(
+          expect.objectContaining({ wasIncluded: false, exclusionReason: 'disabled' })
+        );
+        expect(service.systemPromptText?.blocks.find(b => b.name === 'format_prompt')?.text).toBe('Formatting only.');
+      });
+
+      it('builds no prompt text unless the caller asked, so the default response carries none', async () => {
+        mockTextModel();
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(service.systemPromptText).toBeUndefined();
+      });
+
+      it('never persists the disclosed text, which would hand it to every reader of the session', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0];
+        expect(JSON.stringify(savedQuest)).not.toContain('Current date:');
       });
 
       it('hands an EMPTY system stack to the builder under raw, and skips the admin templates', async () => {
@@ -796,20 +960,119 @@ describe('ChatCompletionProcess', () => {
       // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
       // server-side tool-use preamble into the request (observed live: an Anthropic completion
       // with only auto-added tools knew the current date on a fresh raw session). The same
-      // admin user is used for both cases, so the pair discriminates on the mode alone.
-      it('suppresses auto-added tools under a mode, but not for a default request', async () => {
-        (service as any).user.isAdmin = true; // makes blog_draft auto-add fire on the default path
+      // admin user is used across all three cases, so they discriminate on message/mode alone.
+      it('offers blog_draft when the message signals blog intent, on a default request', async () => {
+        (service as any).user.isAdmin = true;
         try {
           mockTextModel();
-          const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+          const body = {
+            ...startQuestParams,
+            message: 'Turn this conversation into a blog post',
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
 
-          await service.process({ body: base, logger: mockLogger });
-          const defaultTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
-          expect(defaultTools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
 
+      // The no-signal path: an ordinary "Hello" carries no blog intent and continues no prior
+      // blog workflow, so blog_draft is not worth its tokens on this turn.
+      it('does not offer blog_draft on an ordinary message with no blog intent', async () => {
+        (service as any).user.isAdmin = true;
+        try {
           mockTextModel();
-          await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
-          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[1].value.complete).mock.calls[0][2].tools;
+          const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? []).not.toContain(
+            'blog_draft'
+          );
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
+
+      // Wiring test: proves process() actually reads cacheInfo.priorToolNames off
+      // fetchAndProcessPreviousMessages and threads it into the gate, rather than the pure-function
+      // coverage in autoAddedToolGating.test.ts alone.
+      it('offers blog_publish/edit on a follow-up turn that used blog_draft earlier, with no blog keyword', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        try {
+          mockTextModel();
+          mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, { priorToolNames: ['blog_draft'] }]);
+          const body = {
+            ...startQuestParams,
+            message: 'now publish it',
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          const names = tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? [];
+          expect(names).toContain('blog_publish');
+          expect(names).toContain('blog_edit');
+        } finally {
+          delete (service as any).user.isAdmin;
+          delete (service as any).user.blogIntegration;
+        }
+      });
+
+      // Blog tools moved relative to resolveEnabledTools (they're now pushed after it, unlike
+      // skill's disabledTools case above which was already past that seam) - this pins that the
+      // final denylist pass on the built tool list still catches them regardless of the new
+      // position.
+      it('does not offer blog tools when the session explicitly disabled them, even with blog intent', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        mockSession.disabledTools = ['blog_draft', 'blog_publish', 'blog_edit'];
+        try {
+          mockTextModel();
+          const body = {
+            ...startQuestParams,
+            message: 'blog this conversation',
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          const names = tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? [];
+          expect(names).not.toContain('blog_draft');
+          expect(names).not.toContain('blog_publish');
+          expect(names).not.toContain('blog_edit');
+        } finally {
+          delete (service as any).user.isAdmin;
+          delete (service as any).user.blogIntegration;
+          mockSession.disabledTools = undefined;
+        }
+      });
+
+      it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
+        (service as any).user.isAdmin = true;
+        try {
+          mockTextModel();
+          const body = {
+            ...startQuestParams,
+            message: 'Turn this conversation into a blog post',
+            promptMode: 'raw' as const,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
           expect(rawTools ?? []).toEqual([]);
         } finally {
           delete (service as any).user.isAdmin;
@@ -839,7 +1102,7 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([]);
+      mockedBuildAndSortMessages.mockResolvedValue({ messages: [], messageTruncation: null });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -874,7 +1137,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'a duck on a bicycle' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'a duck on a bicycle' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'a duck on a bicycle' });
 
@@ -945,7 +1211,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -971,6 +1240,93 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.actualInputTokens).toBe(apiInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(apiOutputTokens);
       expect(tokenUsage.settledBasis).toBe('provider');
+    });
+
+    // Guards the headline fix: the per-member cap is enforced at the reservation
+    // pre-flight, before the org pool is debited or a reply streams. An over-cap
+    // request is not thrown to the caller - it is caught and written to the quest as
+    // an error reply carrying the insufficient_credits code (the client's inline "Add
+    // Credits" CTA), then process() returns. Without this, deleting or inverting the
+    // reservation guard would pass CI untouched. Mirrors cliCompletions.orgBilling.test.ts.
+    const capOrgSetup = () => {
+      const complete = vi.fn();
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      // enforceCredits gates the whole reservation block; leave every other setting off.
+      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      return { complete };
+    };
+
+    it('blocks an over-cap org member at reservation, before debiting the pool or streaming', async () => {
+      const { complete } = capOrgSetup();
+      // Member has spent 50 against a cap of 1: already over, so any charge trips it.
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: 1,
+        userDetails: [{ id: 'user1', usedCredits: 50 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn();
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: 'org1' };
+      await service.process({ body, logger: mockLogger });
+
+      // Recorded on the quest as an insufficient-credits error, not thrown to the caller.
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.errorCode).toBe('insufficient_credits');
+      expect(mockQuest.reply).toMatch(/per-member credit limit/);
+      // Blocked at pre-flight: the org pool is never touched and the model never runs.
+      expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+    });
+
+    it('lets an in-cap org member through the cap guard to the org-pool debit', async () => {
+      capOrgSetup();
+      // Well under a large cap, so the cap guard must pass. Force the org pool to read
+      // empty at the debit so the request is blocked by the ORG-POOL guard instead - a
+      // distinct message proving control reached the debit (the cap did not block).
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: 1_000_000,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: 'org1' };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.reply).toMatch(/is out of credits/);
+      expect(mockQuest.reply).not.toMatch(/per-member credit limit/);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
     });
 
     // Idempotency guard for a cross-model failover: the failed primary
@@ -1051,7 +1407,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1181,7 +1540,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1276,7 +1638,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1356,7 +1721,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1445,7 +1813,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1497,7 +1868,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1540,7 +1914,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1559,6 +1936,9 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // The local basis never bills cache creation, so recording a count here would
+      // imply a charge that was not made.
+      expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
     });
 
     // Partial provider usage (cache read reported without input/output counts) also
@@ -1589,7 +1969,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1638,7 +2021,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1706,7 +2092,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1731,6 +2120,10 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.creditsUsed).toBe(132);
       // Provider-reported cache read recorded as billed (no local cap on this basis).
       expect(tokenUsage.cacheReadInputTokens).toBe(3000);
+      // The write is the dominant component of this charge ($0.0625 of $0.06594), so it
+      // has to be recorded too - otherwise the row shows a 132-credit charge explained by
+      // 2 input tokens, and the cache-write rate can only be guessed at from read being absent.
+      expect(tokenUsage.cacheCreationInputTokens).toBe(5000);
     });
 
     // A cold turn (provider reports the full prompt as fresh input) and a warm
@@ -1767,7 +2160,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1794,6 +2190,192 @@ describe('ChatCompletionProcess', () => {
       expect(warm.estimatedCost).toBeCloseTo(0.0051, 6);
       expect(warm.creditsUsed).toBe(11);
       expect(warm.creditsUsed).toBeLessThan(cold.creditsUsed);
+
+      // Fully-cached turn: every prompt token came from cache, so the provider's
+      // uncached input is legitimately 0. That must still read as "provider reported
+      // usage" - treating a zero uncached tail as "no report" would drop the row onto
+      // the local estimate and throw away the very discount that produced the zero.
+      //   0 * 10/1M + 10 * 30/1M + 3000 * 10/1M * 0.1 = $0.0003 + $0.0030 = $0.0033.
+      const fullyCached = await runWithProviderUsage(0, 3000);
+      expect(fullyCached.settledBasis).toBe('provider');
+      expect(fullyCached.estimatedCost).toBeCloseTo(0.0033, 6);
+      expect(fullyCached.cacheReadInputTokens).toBe(3000);
+    });
+  });
+
+  // Proves the route branch, not just the pure predicate: the offer signal a still-chunking
+  // attachment produces at the `hasAttachedKnowledge` computation inside process() (#1163).
+  describe('knowledge-tool gating for a still-chunking attachment (#1163)', () => {
+    const knowledgeToolDefs: Record<string, { toolSchema: { name: string; description: string; parameters: object } }> =
+      {
+        search_knowledge_base: {
+          toolSchema: { name: 'search_knowledge_base', description: 'search', parameters: {} },
+        },
+        retrieve_knowledge_content: {
+          toolSchema: { name: 'retrieve_knowledge_content', description: 'retrieve', parameters: {} },
+        },
+      };
+
+    // Mirrors the real filter (buildSharedTools includes a tool iff its name is in enabledTools),
+    // so `enabledToolsArg` below is exactly what the model would actually be offered.
+    const runKnowledgeGatingCase = async (opts: {
+      knowledgeIds?: string[];
+      files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
+      getAccessibleFilesImpl?: () => Promise<unknown>;
+      dataLakeTags?: string[];
+      promptMode?: 'raw';
+      fabPromptMessages?: IMessage[];
+    }) => {
+      mockSession.knowledgeIds = opts.knowledgeIds ?? [];
+      const getAccessibleFiles = opts.getAccessibleFilesImpl
+        ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
+        : vi.fn().mockResolvedValue(opts.files ?? []);
+      mockDb.fabfiles = { getAccessibleFiles };
+      // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
+      // so this test controls the lake signal without exercising the DB-backed resolver.
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: opts.dataLakeTags ?? [],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+
+      if (opts.fabPromptMessages) {
+        vi.spyOn(service as any, 'fabFilesToMessages').mockResolvedValue({
+          promptMessages: opts.fabPromptMessages,
+          convertedFabFiles: [],
+        });
+      }
+
+      const buildToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildTools')
+        .mockImplementation(
+          ({ enabledTools = [] }: { enabledTools?: string[] }) =>
+            enabledTools.filter(t => knowledgeToolDefs[t]).map(t => knowledgeToolDefs[t]) as any
+        );
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockClear();
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+      // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
+      const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
+      const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+
+      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+    };
+
+    it('withholds both knowledge tools for an attachment with no readable chunk text yet', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: false, chunkCount: 0 }],
+      });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+      // Shared with resolveCorpusInlinePlan's lookup (same turn, same memo) - one DB read, not two.
+      expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
+      // The invisible-failure warning must stay silent: withholding here is deliberate, not a bug.
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringMatching(/search_knowledge_base is not offered/));
+    });
+
+    it('still offers both knowledge tools for a fully-indexed attachment (regression)', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+      });
+      expect(enabledToolsArg).toContain('search_knowledge_base');
+      expect(enabledToolsArg).toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers both knowledge tools from an accessible lake with no attachment, and never reads files', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: [],
+        dataLakeTags: ['datalake:corpus'],
+      });
+      expect(enabledToolsArg).toContain('search_knowledge_base');
+      expect(enabledToolsArg).toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('withholds the offer under promptMode and never reads files, even with a pending attachment', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        promptMode: 'raw',
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: false, chunkCount: 0 }],
+      });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('fails OPEN (still offers the tools) and completes the turn when the file lookup throws', async () => {
+      const { enabledToolsArg } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        getAccessibleFilesImpl: () => Promise.reject(new Error('db down')),
+      });
+      expect(enabledToolsArg).toContain('search_knowledge_base');
+      expect(enabledToolsArg).toContain('retrieve_knowledge_content');
+    });
+
+    it('offers neither knowledge tool with no attachment and no accessible lake (baseline)', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({ knowledgeIds: [] });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    // Withholding the TOOL must not also withhold the CONTENT: the file's raw text still reaches
+    // the model via the ordinary attachedFiles inline path (processFabFilesServer), regardless of
+    // whether the knowledge tool was offered for it.
+    it('still inlines the pending attachment content even though the tool is withheld', async () => {
+      const { enabledToolsArg, contextAndSystemMessages } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: false, chunkCount: 0 }],
+        fabPromptMessages: [
+          { role: 'system', content: 'Here is the content from the attached file f1.pdf: PENDING_FILE_MARKER' },
+        ],
+      });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(
+        contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
+      ).toBe(true);
     });
   });
 
@@ -1831,7 +2413,10 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -1893,6 +2478,7 @@ describe('ChatCompletionProcess', () => {
       message: string;
       sessionAgentIds?: string[];
       allowedAgents?: string[];
+      priorToolNames?: string[];
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -1921,8 +2507,11 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, { priorToolNames: params.priorToolNames ?? [] }]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
       const body = {
@@ -1970,6 +2559,29 @@ describe('ChatCompletionProcess', () => {
       expect(agentStore).toBeDefined();
     });
 
+    // An @mention is only a delegation signal when it names an agent the store can actually run.
+    // "Any @mention at all" attached the tool (and the tool prompt's agent directory) to ordinary
+    // prose that happened to contain a handle, which is both wasted tokens and a live
+    // self-delegation side-channel on a turn the user never asked to delegate on.
+    it('does NOT expose delegate_to_agent for an @mention that names no delegatable agent', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'can you loop in @dave and compare the smartphones',
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    // No prior-turn rescue here, deliberately, unlike the blog/skill gates: an earlier delegation
+    // must not re-arm autonomous subagent spawning for the rest of the conversation. A real
+    // multi-turn workflow rides session.agentIds, which AgentDetectionFeature persists for any
+    // summon that resolved to a real agent.
+    it('does NOT re-expose delegate_to_agent on a follow-up turn just because an earlier turn delegated', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'now check battery life too',
+        priorToolNames: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {
       // Pre-fix, `allowedAgents: []` would still trip the `!= null` predicate and
       // expose `delegate_to_agent` to the model, but the resulting store had zero
@@ -2012,7 +2624,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2078,7 +2693,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
@@ -2119,6 +2737,54 @@ describe('ChatCompletionProcess', () => {
       expect(systemText).not.toContain('Skill Invoked');
     });
 
+    // The `skill` LLM tool used to be offered unconditionally. These pin the conditional gate to
+    // the SAME catalog/session state runAndCaptureSystemText already exercises for the
+    // system-prompt side, so the tool and the catalog it describes move together.
+    describe('conditional skill tool offer', () => {
+      const runAndCaptureTools = async (params: { message: string; catalog?: ISkill[]; resolved?: ISkill[] }) => {
+        await runAndCaptureSystemText(params);
+        return vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools as
+          { toolSchema: { name: string } }[] | undefined;
+      };
+
+      it('does not offer skill for an empty catalog and an ordinary message', async () => {
+        const tools = await runAndCaptureTools({ message: 'just chatting, no slash command' });
+        expect(tools?.map(t => t.toolSchema.name) ?? []).not.toContain('skill');
+      });
+
+      it('offers skill when the user has at least one invocable skill, paired with its catalog block', async () => {
+        const [systemText, tools] = await Promise.all([
+          runAndCaptureSystemText({
+            message: 'just chatting',
+            catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+          }),
+          runAndCaptureTools({
+            message: 'just chatting',
+            catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+          }),
+        ]);
+        expect(systemText).toContain('Available Skills');
+        expect(tools?.map(t => t.toolSchema.name)).toContain('skill');
+      });
+
+      it('rescues an empty catalog via an explicit /skill-name invocation attempt', async () => {
+        const tools = await runAndCaptureTools({
+          message: '/greet Bob',
+          resolved: [ownedSkill({ name: 'greet', body: 'Say hello to $ARGUMENTS' })],
+        });
+        expect(tools?.map(t => t.toolSchema.name)).toContain('skill');
+      });
+
+      it('does not offer skill when the session explicitly disabled it, even with a non-empty catalog', async () => {
+        mockSession.disabledTools = ['skill'];
+        const tools = await runAndCaptureTools({
+          message: 'just chatting',
+          catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+        });
+        expect(tools?.map(t => t.toolSchema.name) ?? []).not.toContain('skill');
+      });
+    });
+
     // The priority table decides nothing unless the builder is handed the resolver. Dropping
     // systemMessagePriority from buildOptions leaves every table-level unit test passing and quietly
     // restores retention-by-array-position, so the wiring is asserted here rather than assumed.
@@ -2151,6 +2817,304 @@ describe('ChatCompletionProcess', () => {
         // expectation below pass on exactly the wiring regression this describe exists to catch.
         expect(typeof options.systemMessagePriority).toBe('function');
         expect(options.systemMessagePriority!({ role: 'system', content: 'not from this assembly' })).toBeUndefined();
+      });
+    });
+  });
+
+  describe('overflow-recovery reserves tool-schema budget', () => {
+    // Small-context model (see safeInputWindow in @bike4mind/utils' contextBudget) so a realistic
+    // MCP tool-schema block is a meaningful fraction of the safe input window.
+    const smallContextModel = {
+      id: ChatModels.GPT4,
+      type: 'text',
+      name: 'small-context-model',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 512,
+      contextWindow: 8000,
+      can_stream: false,
+      pricing: { 8000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+
+    const manyMcpTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `mcp_tool_${i}`,
+        description: 'a schema-heavy MCP tool',
+        parameters: { type: 'object', properties: { arg: { type: 'string' } } },
+      },
+    }));
+
+    // Three prior turns give dropOldestHistoryTurn (needs >= 2 user-turn boundaries) room to shed.
+    const priorHistory: IMessage[] = [
+      { role: 'user', content: 'turn one' },
+      { role: 'assistant', content: 'reply one' },
+      { role: 'user', content: 'turn two' },
+      { role: 'assistant', content: 'reply two' },
+      { role: 'user', content: 'turn three' },
+      { role: 'assistant', content: 'reply three' },
+    ];
+
+    const TOOL_SCHEMA_TOKENS = 3000;
+
+    const runRecoveryScenario = async (opts: {
+      recoveryTokenCounts: number[];
+      toolSchemaTokens?: number;
+      // Simulates buildAndSortMessages' own system-prompt cap admitting none of the system candidates
+      // once the reserved recovery budget lands too small - the first build still carries a system
+      // message, every rebuild after it does not.
+      dropSystemMessagesOnRebuild?: boolean;
+    }): Promise<any> => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+      const toolSchemaTokens = opts.toolSchemaTokens ?? TOOL_SCHEMA_TOKENS;
+
+      mockedCalculateTotalTokenLength.mockReset();
+      // Initial totals: a huge messages total forces the recovery loop to trigger regardless of the
+      // exact small-context budget; mementos/fab/url/userPrompt are irrelevant to this scenario.
+      for (const n of [100_000, 0, 0, 0, 90_000, 10]) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+      // Queued per recovery-loop iteration as [effectiveTotalTokens, effectiveHistoryTokens] pairs.
+      for (const n of opts.recoveryTokenCounts) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+
+      mockTokenizer.countTokens
+        .mockReset()
+        .mockImplementation(async (text: any) => (typeof text === 'string' ? toolSchemaTokens : 7));
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
+      const userOnlyBuild = { messages: [{ role: 'user', content: 'Hello' }], messageTruncation: null };
+      if (opts.dropSystemMessagesOnRebuild) {
+        mockedBuildAndSortMessages
+          .mockResolvedValueOnce({
+            messages: [
+              { role: 'system', content: 'system prompt' },
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+          } as any)
+          .mockResolvedValue(userOnlyBuild as any);
+      } else {
+        mockedBuildAndSortMessages.mockResolvedValue(userOnlyBuild as any);
+      }
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([priorHistory, priorHistory.length, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+
+      const updateCall = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      return { updateCall, buildCalls: mockedBuildAndSortMessages.mock.calls };
+    };
+
+    it('reserves toolSchemaTokens before rebuilding, so a rebuild that reports "fits" actually fits', async () => {
+      // One shed turn is enough: effectiveTotalTokens(100) + toolSchemaTokens(3000) = 3100, comfortably
+      // under the small-context budget, so the loop exits after exactly one iteration.
+      const { updateCall, buildCalls } = await runRecoveryScenario({ recoveryTokenCounts: [100, 50] });
+
+      expect(buildCalls.length).toBeGreaterThanOrEqual(2);
+      const firstBuildBudget = buildCalls[0][3];
+      const recoveryBuildBudget = buildCalls[1][3];
+      // The regression: unpatched code passes the SAME raw maxSafeInputTokens to both calls.
+      expect(recoveryBuildBudget).toBe(firstBuildBudget - TOOL_SCHEMA_TOKENS);
+      expect(updateCall?.type).not.toBe('error');
+    });
+
+    it('still fails with the existing clear message when tool schemas alone exceed the budget', async () => {
+      // No queued total ever lets effectiveTotalTokens + toolSchemaTokens fit, and history is short
+      // enough that dropOldestHistoryTurn eventually returns null, so the loop breaks and the
+      // pre-existing hard-overflow check fires -- a clear failure, not a silent overrun.
+      const { updateCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [50_000, 40_000, 50_000, 40_000],
+      });
+
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('never attempts a rebuild once tool schemas alone already exceed the safe budget', async () => {
+      // When toolSchemaTokens >= maxSafeInputTokens, the reserved budget (maxSafeInputTokens -
+      // toolSchemaTokens) is <= 0, so a rebuild attempt would call buildAndSortMessages with an
+      // invalid budget and log at error severity for an outcome that is already known unrecoverable.
+      // The loop skips the attempt entirely instead: buildCalls stays at 1 (the initial firstBuild),
+      // and no recovery iteration (no dropOldestHistoryTurn, no rebuild) ever runs.
+      const HUGE_TOOL_SCHEMA_TOKENS = 100_000;
+      const { updateCall, buildCalls } = await runRecoveryScenario({
+        recoveryTokenCounts: [],
+        toolSchemaTokens: HUGE_TOOL_SCHEMA_TOKENS,
+      });
+
+      expect(buildCalls.length).toBe(1);
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('rejects a rebuild that silently dropped every system message instead of accepting it as recovered (#1795)', async () => {
+      // The first build carries a system message; every rebuild after it does not (simulating
+      // buildAndSortMessages' own system-prompt cap admitting none of the system candidates once the
+      // reserved recovery budget - maxSafeInputTokens - toolSchemaTokens - lands too small). Without the
+      // fix, the loop would accept the rebuilt user-only messages as a successful recovery once
+      // recoveryTokenCounts let inputTokens fit; instead it must break and fall through to the existing
+      // clear overflow message rather than completing a turn with no system-role content.
+      const { updateCall, buildCalls } = await runRecoveryScenario({
+        recoveryTokenCounts: [100, 50],
+        dropSystemMessagesOnRebuild: true,
+      });
+
+      expect(buildCalls.length).toBe(2);
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+  });
+
+  // LakeMemoryFeature computes a real belief card (entitlement resolution, DB lake lookup, the
+  // recallLakeMemory call) but the drop was in the ASSEMBLY: 'lakeMemory' was never a
+  // PromptSourceId and never spread into contextAndSystemMessages, so the card silently vanished
+  // whenever a Data-Lake-mode turn ran it. Same assert-present/assert-absent shape as the
+  // SkillsFeature test above.
+  describe('LakeMemoryFeature context reaches the assembled system prompt (#1404)', () => {
+    const ownedLake = (id: string): IDataLakeDocument =>
+      ({
+        id,
+        name: id,
+        slug: id,
+        fileTagPrefix: `${id}:`,
+        datalakeTag: `datalake:${id}`,
+        createdByUserId: 'user1', // matches mockUser.id, so it resolves via the owner bypass
+        status: 'active',
+      }) as IDataLakeDocument;
+
+    const runAndCaptureSystemText = async (params: {
+      message: string;
+      beliefs?: { fact: string; relevance: number; sources: string[] }[];
+      recallLakeMemory?: (input: unknown) => Promise<unknown>;
+      retrievalTags?: string[];
+    }): Promise<{ systemText: string; retrieval: unknown }> => {
+      mockDb.dataLakes = { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([ownedLake('corpus')]) };
+      (service as any).entitlementsResolved = true;
+      (service as any).entitlementKeys = [];
+      (service as any).recallLakeMemory = params.recallLakeMemory ?? vi.fn().mockResolvedValue(params.beliefs ?? []);
+      // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
+      // same key the assembly reads, mirroring the SkillsFeature test above.
+      service.features.set('lakeMemory', new LakeMemoryFeature(service, params.retrievalTags ?? [], {}));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
+
+      const body = {
+        ...startQuestParams,
+        message: params.message,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await service.process({ body, logger: mockLogger });
+
+      const contextAndSystemMessages = (mockedBuildAndSortMessages.mock.calls[0]?.[1] ?? []) as IMessage[];
+      const systemText = contextAndSystemMessages
+        .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+        .join('\n---\n');
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown };
+      };
+      return { systemText, retrieval: savedQuest?.promptMeta?.retrieval };
+    };
+
+    it('spreads the hot-card belief text into the system messages, and records the ok outcome', async () => {
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [{ fact: 'The X-200 pump has a 5-year warranty.', relevance: 0.9, sources: ['doc1'] }],
+      });
+
+      expect(systemText).toContain('Background reference facts');
+      expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['datalake:corpus'],
+      });
+    });
+
+    it('emits no lake-memory block when recall returns nothing, but still records attempted:true, outcome:ok (#1867 zero case)', async () => {
+      const { systemText, retrieval } = await runAndCaptureSystemText({ message: 'just chatting, no lake query' });
+
+      expect(systemText).not.toContain('Background reference facts');
+      // This is the case the whole feature exists for: a legitimate zero must be recorded, not
+      // left indistinguishable from "retrieval never ran".
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['datalake:corpus'],
+      });
+    });
+
+    it('degrades to no card, without failing the turn, when recall throws, and records outcome:failed', async () => {
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        recallLakeMemory: vi.fn().mockRejectedValue(new Error('lake recall backend down')),
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
+      // A retrieval that threw must not be byte-identical to one never attempted.
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'failed',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['datalake:corpus'],
+      });
+    });
+
+    it('emits no card when the session lake selection excludes every entitled lake, and records outcome:no_lakes', async () => {
+      // retrievalTags narrows to a lake the user does not actually have -- the intersection with
+      // entitledTags is empty, so the feature must return early rather than fall back to the
+      // full entitled set.
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        beliefs: [{ fact: 'should never be recalled', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: ['datalake:other'],
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
+      // The single most common real answer to "why did I get nothing from my lake" - no entitled
+      // lake in scope - must be distinguishable from a zero-belief 'ok'.
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'no_lakes',
+        surfaces: ['lake-memory'],
+        dataLakeTags: [],
       });
     });
   });
@@ -2218,7 +3182,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2439,7 +3406,10 @@ describe('ChatCompletionProcess', () => {
 
     function setupTimeoutMocks() {
       mockedGetAvailableModels.mockResolvedValue([modelInfo]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       // Timeout errors are retryable
@@ -2612,7 +3582,10 @@ describe('ChatCompletionProcess', () => {
 
     function setupStreamIdleTimeoutMocks() {
       mockedGetAvailableModels.mockResolvedValue([modelInfo]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       mockedShouldTriggerFallback.mockReturnValue(true);
@@ -2915,6 +3888,79 @@ describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => 
     expect(
       shouldDeferCorpusToRetrieval({ retrievableCount: 0, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 })
     ).toBe(false);
+  });
+
+  describe('per-lake grounding mode overrides the size heuristic', () => {
+    it("'inline' never defers, even when the size rule alone would (large corpus)", () => {
+      // 4000 / 40 = 100 < 500 would defer under auto-by-size; inline suppresses that.
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 40,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 500,
+          groundingMode: 'inline',
+        })
+      ).toBe(false);
+    });
+
+    it("'retrieve' always defers the retrievable subset, even with the size feature OFF", () => {
+      // minInlineTokensPerDoc: 0 is the size off-switch; retrieve defers by policy regardless.
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 3,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 0,
+          groundingMode: 'retrieve',
+        })
+      ).toBe(true);
+    });
+
+    it("'retrieve' still never defers when nothing is retrievable (anti-strand wins over the mode)", () => {
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 0,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 0,
+          groundingMode: 'retrieve',
+        })
+      ).toBe(false);
+    });
+
+    it("'auto-by-size' matches the absent-mode size behavior exactly", () => {
+      const size = { retrievableCount: 40, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 };
+      expect(shouldDeferCorpusToRetrieval({ ...size, groundingMode: 'auto-by-size' })).toBe(
+        shouldDeferCorpusToRetrieval(size)
+      );
+      const small = { retrievableCount: 3, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 };
+      expect(shouldDeferCorpusToRetrieval({ ...small, groundingMode: 'auto-by-size' })).toBe(
+        shouldDeferCorpusToRetrieval(small)
+      );
+    });
+  });
+});
+
+describe('attachmentHasIndexedContent (readable-chunk-text predicate, #1163)', () => {
+  it('is true once chunking completes, even before vectorizedChunkCount catches up', () => {
+    expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0 })).toBe(true);
+  });
+
+  it('is true from chunk count alone, without waiting on the vectorized flag', () => {
+    expect(attachmentHasIndexedContent({ vectorized: false, chunkCount: 3 })).toBe(true);
+  });
+
+  it('is false for a freshly attached file with no chunks yet (the #1163 gap)', () => {
+    expect(attachmentHasIndexedContent({ vectorized: false, chunkCount: 0 })).toBe(false);
+  });
+
+  // chunkCount is bumped to a nonzero value here (the ticket's literal 0 can't exercise this
+  // guard - it would already read false without deletedAt) to prove deletedAt overrides an
+  // otherwise-truthy chunk signal.
+  it('is false for a soft-deleted file regardless of chunk count', () => {
+    expect(attachmentHasIndexedContent({ vectorized: false, chunkCount: 3, deletedAt: new Date() })).toBe(false);
+  });
+
+  it('is false for an archived file even when fully vectorized', () => {
+    expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0, archivedAt: new Date() })).toBe(false);
   });
 });
 

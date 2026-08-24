@@ -144,4 +144,32 @@ describe('recordOperationalUsage', () => {
       recordOperationalUsage(baseParams, { db: { adminSettings: {} as never }, logger })
     ).resolves.toBeUndefined();
   });
+
+  it('never deducts credits when bypassCreditBilling is set, even with both toggles on', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage({ ...baseParams, bypassCreditBilling: true }, { db: fullBillingDb(record), logger });
+
+    expect(deductMock).not.toHaveBeenCalled();
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
+  });
+
+  it('threads dataLakeId onto the recorded event', async () => {
+    setToggles({ bill: false, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage({ ...baseParams, dataLakeId: 'lake1' }, { db: fullBillingDb(record), logger });
+
+    expect(record.mock.calls[0][0]).toMatchObject({ dataLakeId: 'lake1' });
+  });
+
+  it('leaves dataLakeId unset for callers that do not pass one', async () => {
+    setToggles({ bill: false, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage(baseParams, { db: fullBillingDb(record), logger });
+
+    expect(record.mock.calls[0][0].dataLakeId).toBeUndefined();
+  });
 });

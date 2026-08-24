@@ -110,6 +110,123 @@ describe('applyQuestStatusChanges', () => {
     });
   });
 
+  describe('retrieval', () => {
+    it('merges a tool-arm write onto an existing forced-arm value instead of clobbering it', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-b'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory', 'knowledgeBaseSearch'],
+        dataLakeTags: ['lake-a', 'lake-b'],
+      });
+    });
+
+    it('never lets a later ok mask an earlier failure within the same turn', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'failed', surfaces: ['lake-memory'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    });
+
+    it('never lets an abstain (no_lakes) on one surface mask a real success on another (#1971 review)', () => {
+      // lake-memory abstains (no lakes in scope for that surface) while knowledgeBaseSearch
+      // independently succeeds in the same turn -- the merged outcome must be 'ok', not
+      // 'no_lakes', since the turn genuinely retrieved and grounded its answer.
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['lake-memory'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
+    });
+
+    it('still lets a failure mask an earlier no_lakes abstain', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['lake-memory'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    });
+
+    it('dedupes the union of surfaces/dataLakeTags rather than replacing with the incoming value', () => {
+      // Partially overlapping, not identical, on both sides: an incoming write that shares ONE
+      // entry with the existing state and adds ONE new entry can only produce the full union
+      // (both old and new) via a real merge. A wholesale overwrite would drop 'lake-memory' and
+      // 'lake-a' entirely, since neither appears in the incoming payload - so this distinguishes
+      // dedup-merge from overwrite, which a repeated-identical-call test cannot (#1867 review).
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: {
+            attempted: true,
+            outcome: 'ok',
+            surfaces: ['knowledgeBaseSearch', 'lake-memory'],
+            dataLakeTags: ['lake-a'],
+          },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: {
+            attempted: true,
+            outcome: 'ok',
+            surfaces: ['knowledgeBaseSearch', 'knowledgeBaseRetrieve'],
+            dataLakeTags: ['lake-a', 'lake-b'],
+          },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.surfaces).toEqual([
+        'knowledgeBaseSearch',
+        'lake-memory',
+        'knowledgeBaseRetrieve',
+      ]);
+      expect(quest.promptMeta?.retrieval?.dataLakeTags).toEqual(['lake-a', 'lake-b']);
+    });
+
+    it('does not erase an existing retrieval value when the change set carries none', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['lake-a'],
+      });
+    });
+  });
+
   describe('other fields', () => {
     it('overwrites non-accreting fields wholesale', () => {
       const quest = makeQuest({ status: 'running' } as Partial<IChatHistoryItemDocument>);

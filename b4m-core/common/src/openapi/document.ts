@@ -1,12 +1,13 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
-import { CONTRACTS } from '../api-contract';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
+// `registeredContracts` is the same import: it reports what ./operations put in
+// the registry, which is the only honest source for per-operation metadata.
 import './schemas';
-import './operations';
+import { registeredContracts } from './operations';
 
 // Neutral placeholder default so the committed openapi.json never hardcodes a
 // real deployment domain in this public repo (matches apiReferenceContent.ts).
@@ -100,18 +101,24 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  */
 const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
 
-function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string) {
-  const url = `${prodUrl()}${path}`;
+function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string, method: string) {
+  // A raw OpenAPI path template (`/api/sessions/{id}`) is not a runnable URL - swap each
+  // `{param}` for a `<param>` placeholder, matching this file's existing `<key>`/`<fabFileId>`
+  // convention for "substitute your own value here", so a copy-pasted sample doesn't 404.
+  const url = `${prodUrl()}${path.replace(/\{(\w+)\}/g, '<$1>')}`;
   const pretty = JSON.stringify(body, null, 2);
   const curlFlags = streaming ? '-sN' : '-s';
   const pyStream = streaming ? '\n    stream=True,' : '';
   const d = CURL_HEREDOC_DELIMITER;
+  // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
+  // matching the lowercase HTTP method name exactly.
+  const pyMethod = method.toLowerCase();
   return [
     {
       lang: 'curl',
       label: 'curl',
       source:
-        `curl ${curlFlags} -X POST "${url}" \\\n` +
+        `curl ${curlFlags} -X ${method.toUpperCase()} "${url}" \\\n` +
         `  -H "Authorization: Bearer ${authToken}" \\\n` +
         `  -H "Content-Type: application/json" \\\n` +
         `  --data-binary @- <<'${d}'\n${pretty}\n${d}`,
@@ -121,7 +128,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       label: 'fetch',
       source:
         `const res = await fetch("${url}", {\n` +
-        `  method: "POST",\n` +
+        `  method: "${method.toUpperCase()}",\n` +
         `  headers: {\n    "Authorization": "Bearer ${authToken}",\n    "Content-Type": "application/json",\n  },\n` +
         `  body: JSON.stringify(${pretty}),\n});`,
     },
@@ -130,49 +137,52 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       label: 'requests',
       source:
         `import requests\n\n` +
-        `res = requests.post(\n    "${url}",\n` +
+        `res = requests.${pyMethod}(\n    "${url}",\n` +
         `    headers={"Authorization": "Bearer ${authToken}"},\n` +
         `    json=${toPythonLiteral(body)},${pyStream}\n)`,
     },
   ];
 }
 
-// `authToken` is the placeholder shown in the Authorization header: completions
-// accepts a b4m_live_ API key; the tools endpoint is JWT-only (see security.ts).
-const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
-  createCompletion: {
-    streaming: true,
-    authToken: 'b4m_live_<key>',
-    body: {
-      model: 'claude-opus-4-8',
-      messages: [{ role: 'user', content: 'How do I reset my password?' }],
-      max_tokens: 500,
-    },
-  },
-  executeTool: {
-    streaming: false,
-    authToken: '<access_token>',
-    body: { toolName: 'web_search', input: { query: 'how to reset a password' } },
-  },
-};
+// Legacy hand-registered code samples. Now EMPTY: every operation is a contract
+// that carries its own `codeSample`. Kept as an extension point (see REQUIRED_SCOPES).
+const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {};
 
-// Merge legacy (hand-registered) scopes/samples with contract-derived ones, so a
-// contract-based operation publishes x-required-scopes + x-codeSamples with no
-// second declaration. Contracts are the source of truth for their own metadata.
-const REQUIRED_SCOPES_BY_OP: Record<string, readonly string[]> = {
-  ...(REQUIRED_SCOPES as Record<string, readonly string[]>),
-  ...Object.fromEntries(CONTRACTS.filter(c => c.scopes?.length).map(c => [c.operationId, c.scopes as string[]])),
-};
+type CodeSampleSpec = { streaming: boolean; authToken: string; body: unknown };
 
-const CODE_SAMPLES_BY_OP: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
-  ...CODE_SAMPLES,
-  ...Object.fromEntries(
-    CONTRACTS.filter(c => c.codeSample).map(c => [
-      c.operationId,
-      { streaming: c.codeSample!.streaming ?? false, authToken: c.codeSample!.authToken, body: c.codeSample!.body },
-    ])
-  ),
-};
+/**
+ * Per-operationId metadata for the post-generation pass, merging legacy
+ * (hand-registered) scopes/samples with contract-derived ones so a contract-based
+ * operation publishes x-required-scopes + x-codeSamples with no second declaration.
+ *
+ * Derived from the contracts actually REGISTERED, not from `CONTRACTS`:
+ * `registerContracts` takes an explicit array, so the two can differ and the
+ * document must describe what the registry holds. Computed per call for the same
+ * reason - the registry is module-global and callers register into it.
+ */
+function operationMetadata() {
+  const contracts = registeredContracts();
+  const withCodeSample = contracts.filter(c => c.codeSample);
+  return {
+    scopes: {
+      ...(REQUIRED_SCOPES as Record<string, readonly string[]>),
+      ...Object.fromEntries(contracts.filter(c => c.scopes?.length).map(c => [c.operationId, c.scopes as string[]])),
+    } as Record<string, readonly string[] | undefined>,
+    codeSamples: {
+      ...CODE_SAMPLES,
+      ...Object.fromEntries(
+        withCodeSample.map(c => [
+          c.operationId,
+          { streaming: c.codeSample!.streaming ?? false, authToken: c.codeSample!.authToken, body: c.codeSample!.body },
+        ])
+      ),
+    } as Record<string, CodeSampleSpec | undefined>,
+    rateLimitHeaderOps: new Set(contracts.filter(c => c.emitsRateLimitHeaders).map(c => c.operationId)),
+    // Statuses each contract declares ITSELF, as opposed to the 401/403 that
+    // registerContract injects - the distinction rate-limit headers turn on below.
+    declaredStatuses: new Map(contracts.map(c => [c.operationId, new Set(Object.keys(c.responses))])),
+  };
+}
 
 const REQUEST_ID_HEADER_SPEC = {
   'X-Request-ID': {
@@ -181,17 +191,42 @@ const REQUEST_ID_HEADER_SPEC = {
   },
 };
 
+/**
+ * The rate-limit headers `apiKeyRateLimit` actually sets - two windows, six
+ * headers. These names are load-bearing: a client reading the unwindowed
+ * `X-RateLimit-Limit` gets `undefined`. Must stay in sync with
+ * apps/client/server/middlewares/apiKeyRateLimit.ts.
+ */
+const INTEGER_HEADER = { type: 'integer' as const };
 const RATE_LIMIT_HEADER_SPEC = {
-  'X-RateLimit-Limit': { description: 'Request quota for the window.', schema: { type: 'integer' as const } },
-  'X-RateLimit-Remaining': {
-    description: 'Requests remaining in the window.',
-    schema: { type: 'integer' as const },
+  'X-RateLimit-Limit-Minute': { description: 'Request quota per minute.', schema: INTEGER_HEADER },
+  'X-RateLimit-Remaining-Minute': { description: 'Requests remaining in the current minute.', schema: INTEGER_HEADER },
+  'X-RateLimit-Reset-Minute': {
+    description: 'Unix epoch (seconds) when the minute window resets.',
+    schema: INTEGER_HEADER,
   },
-  'X-RateLimit-Reset': {
-    description: 'Unix epoch (seconds) when the window resets.',
-    schema: { type: 'integer' as const },
-  },
+  'X-RateLimit-Limit-Day': { description: 'Request quota per day.', schema: INTEGER_HEADER },
+  'X-RateLimit-Remaining-Day': { description: 'Requests remaining in the current day.', schema: INTEGER_HEADER },
+  'X-RateLimit-Reset-Day': { description: 'Unix epoch (seconds) when the day window resets.', schema: INTEGER_HEADER },
 };
+
+/**
+ * The auth failures `registerContract` INJECTS carry no rate-limit headers:
+ * `apiKeyAuth` throws on an invalid key (401) or an under-scoped one (403), and
+ * `apiKeyRateLimit` is mounted AFTER it, so it never runs.
+ *
+ * That reasoning covers only the injected pair. A contract declaring its own 401
+ * or 403 means something else entirely - `/api/ai/tts` 401s `provider_not_configured`
+ * from its handler, long after the middleware set all six headers - so the
+ * exclusion keys off "the contract did not declare this status", not off the
+ * status alone. 429 is never excluded: the middleware sets the headers before
+ * throwing TooManyRequests.
+ */
+const INJECTED_AUTH_STATUSES = new Set(['401', '403']);
+
+function isInjectedAuthFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
+  return INJECTED_AUTH_STATUSES.has(status) && !declaredStatuses?.has(status);
+}
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
 
@@ -217,10 +252,15 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     servers: servers(),
   });
 
-  doc.tags = [{ name: 'AI', description: 'Completions and server-side tool execution.' }];
+  doc.tags = [
+    { name: 'AI', description: 'Chat, completions, and server-side tool execution.' },
+    { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
+    { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+  ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
   // HTTP verbs: a Path Item can also carry summary/description/parameters/servers.
+  const meta = operationMetadata();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAPI doc is loosely typed for vendor extensions
   const paths = (doc.paths ?? {}) as Record<string, any>;
   for (const pathKey of Object.keys(paths)) {
@@ -230,15 +270,19 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const opId = op?.operationId as string | undefined;
       if (!opId) continue;
 
-      const scopes = REQUIRED_SCOPES_BY_OP[opId];
+      const scopes = meta.scopes[opId];
       if (scopes) op['x-required-scopes'] = scopes;
-      const sample = CODE_SAMPLES_BY_OP[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken);
+      const sample = meta.codeSamples[opId];
+      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
 
+      const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
+      const declaredStatuses = meta.declaredStatuses.get(opId);
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
         response.headers = { ...REQUEST_ID_HEADER_SPEC, ...(response.headers ?? {}) };
-        if (opId === 'executeTool') response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
+        if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
+          response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
+        }
       }
     }
   }

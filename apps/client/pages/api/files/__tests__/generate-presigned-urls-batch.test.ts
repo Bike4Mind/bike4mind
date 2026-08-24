@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
+  assertLakeAdmission: vi.fn(),
+  assertCanWriteDataLakeTags: vi.fn(),
   findByDatalakeTag: vi.fn(),
   // The real fallback tagger checks the lake's prefix against other lakes in scope before
   // stamping a content tag; without this it takes its overlap-check-failed path on every test.
@@ -48,8 +50,19 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
   dataLakeBatchRepository: { findById: h.batchFindById, appendFiles: h.appendFiles },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
 }));
 
 // Partial: only the lake-authorization collaborators are stubbed. The fallback tagger is the
@@ -62,7 +75,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
     dataLakeService: {
       ...actual.dataLakeService,
       assertLakeWriteAccess: h.assertLakeWriteAccess,
-      assertCanWriteDataLakeTags: vi.fn(),
+      assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags,
+      assertLakeAdmission: h.assertLakeAdmission,
     },
   };
 });
@@ -178,6 +192,31 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
+  // The admission contract (#1680) opts in by NAMING the files being admitted; delete the `members`
+  // argument and the whole contract silently switches off at this door with nothing else changing.
+  // These two assertions are what make that deletion fail.
+  it('runs the admission contract for the resolved lake before handing out any presigned URL', async () => {
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res);
+
+    expect(h.assertLakeAdmission).toHaveBeenCalledWith(
+      [LAKE],
+      // No FabFile exists yet, so the subject is the uploader as owner-to-be.
+      [{ userId: 'u1' }],
+      expect.objectContaining({ db: expect.objectContaining({ scopedSettings: expect.anything() }) })
+    );
+    expect(h.assertLakeAdmission.mock.invocationCallOrder[0]).toBeLessThan(h.createFabFile.mock.invocationCallOrder[0]);
+  });
+
+  it('names the uploader as owner-to-be on the smuggled-meta-tag gate too', async () => {
+    // The defense-in-depth arm covers a meta-tag for a DIFFERENT lake than the one resolved above,
+    // so it needs its own admission subject rather than riding on the call before it.
+    const { res } = makeRes();
+    await run({ files: [file({ tags: [{ name: 'datalake:other', strength: 1 }] })] }, res);
+
+    expect(h.assertCanWriteDataLakeTags.mock.calls[0][2]).toMatchObject({ members: [{ userId: 'u1' }] });
+  });
+
   it('decides per file, and looks the lake up once for the whole batch', async () => {
     const { res } = makeRes();
     await run(
@@ -229,6 +268,18 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
 
     const persisted = (h.createFabFile.mock.calls[0][0] as { tags: { name: string; strength: number }[] }).tags;
     expect(persisted.find(t => t.name === 'datalake:orga:acme-2026')?.strength).toBe(1.0);
+  });
+
+  // This route creates each FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates this namespace centrally - it needs its own
+  // check, same as the meta-tag one above. assertCanWriteDataLakeTags is mocked to a no-op above,
+  // so a throw here can only come from the real assertCanWriteStaticRegistryTags.
+  it('refuses a non-admin self-applying a static-registry-prefixed tag (e.g. opti:)', async () => {
+    const { res } = makeRes();
+    await expect(run({ files: [file({ tags: [{ name: 'opti:report', strength: 1 }] })] }, res)).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });
 

@@ -1,3 +1,4 @@
+import { isChunkRebuildPending, isConvergencePausedNote } from '@bike4mind/common';
 import { escapeRegex } from './escapeRegex';
 
 /**
@@ -80,10 +81,39 @@ export function buildFilenameMarkerRegex(markers?: string[]): RegExp | null {
  * of the best-effort DB pre-filter. Fail-closed by design.
  */
 export function isRetrievalExcluded(
-  file: { fileName?: string | null; vectorized?: boolean },
+  file: {
+    fileName?: string | null;
+    vectorized?: boolean;
+    notes?: string | null;
+    chunkRebuildRequestedAt?: Date | string | null;
+  },
   opts: RetrievalExclusionOptions
 ): boolean {
-  if (opts.vectorizedOnly && !file.vectorized) return true;
+  // The `vectorizedOnly` arm is exempted for files the convergence kill switch stalled, and the
+  // exemption is load-bearing. Such a member is unvectorized not because it is an image or a failed
+  // job, but because the corpus now has a hole where it was. Dropping it here happens strictly
+  // UPSTREAM of `partitionByIndexAvailability`, so on a vectorizedOnly lake the file would never
+  // reach the withhold, the turn would answer around the hole, and it would report full coverage
+  // while doing it - the exact silent degradation that partition exists to prevent, on the
+  // highest-traffic surface. It stays a candidate so it can be REFUSED and named.
+  //
+  // EITHER arm, via the shared predicate, not the chunk marker alone. The vectorize arm's file
+  // usually survives this filter anyway because `vectorized` stays true while `vectorizedChunkCount`
+  // is 0 - which is precisely the kind of accident this should not depend on: the two fields are
+  // written by different paths, and the day that flag is corrected to false the exemption would go
+  // missing exactly where the guarantee is advertised as strongest.
+  //
+  // Filename-marker exclusion is deliberately NOT exempted below: that one says the surface must
+  // never retrieve or NAME this document, which outranks reporting a hole in it.
+  //
+  // A REQUESTED-but-uncommitted rebuild (#1939) is exempted on the same argument and closes the
+  // larger hole: the reset writes `vectorized: false` and clears `notes` in one write, so between
+  // that write and the consumer's marker there is no note to key on and the file was dropped here -
+  // upstream of the withhold - for the whole window. On a producer that died before its sends, that
+  // window never ends.
+  const stalledByConvergence =
+    isConvergencePausedNote(file.notes) || isChunkRebuildPending(file.chunkRebuildRequestedAt);
+  if (opts.vectorizedOnly && !file.vectorized && !stalledByConvergence) return true;
   const re = buildFilenameMarkerRegex(opts.excludeFilenameMarkers);
   return !!re && re.test((file.fileName ?? '').toLowerCase());
 }
@@ -94,10 +124,14 @@ export function isRetrievalExcluded(
  * candidate set so retrieval correctness never depends on the DB regex engine or on the
  * `fileNameLower` field being populated (see isRetrievalExcluded).
  */
-export function filterRetrievalExcluded<T extends { fileName?: string | null; vectorized?: boolean }>(
-  files: T[],
-  opts: RetrievalExclusionOptions
-): T[] {
+export function filterRetrievalExcluded<
+  T extends {
+    fileName?: string | null;
+    vectorized?: boolean;
+    notes?: string | null;
+    chunkRebuildRequestedAt?: Date | string | null;
+  },
+>(files: T[], opts: RetrievalExclusionOptions): T[] {
   if (!opts.vectorizedOnly && normalizeExclusionMarkers(opts.excludeFilenameMarkers).length === 0) {
     return files;
   }

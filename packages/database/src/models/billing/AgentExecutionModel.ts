@@ -284,6 +284,12 @@ export interface IAgentExecution {
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
+  /**
+   * Memory gates resolved once at execution start and persisted so the read, write, and
+   * stop-at-gate paths all observe one verdict via `resolveExecutionMementoGates` (#1525).
+   * Absent for per-request opt-outs (`enableMementos === false`) and legacy executions.
+   */
+  resolvedMementoGates?: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean };
 
   // Execution state
   status: AgentExecutionStatus;
@@ -626,6 +632,20 @@ const AgentExecutionSchema = new mongoose.Schema(
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
     usedMementoIds: [{ type: String }],
+    // Memory gates resolved once at execution start and persisted so read/write/
+    // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
+    // sub-schema (not Mixed) so the three booleans are enforced at the DB layer.
+    resolvedMementoGates: {
+      type: new mongoose.Schema(
+        {
+          v1: { type: Boolean, required: true },
+          v2: { type: Boolean, required: true },
+          v2OptInLookupFailed: { type: Boolean, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
 
     // Execution state
     status: {
@@ -1008,8 +1028,9 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * (~10-30s per step, ~5-15 min for max_thorough runs) but short enough
    * that an abandoned run unblocks the next try within the same session.
    *
-   * Returns the number of executions cleaned up so the dispatch handler
-   * can log it for diagnostics.
+   * Returns the ids this sweep actually transitioned - not every candidate it
+   * considered - so callers can settle the quests they strand; the dispatch
+   * handler logs the count for diagnostics.
    *
    * Writes `status: 'aborted'` rather than `failed`/`failureReason: 'abandoned'`
    * intentionally: consumers (e.g. `IterationStream.tsx`, child-observation
@@ -1018,32 +1039,53 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * (`markAbandoned`) is the one that needs explicit classification because
    * an operator inspecting the doc needs to tell a sweep from a real failure.
    */
-  async cleanupStaleActive(userId: string, maxAgeMs: number): Promise<number> {
+  async cleanupStaleActive(userId: string, maxAgeMs: number): Promise<string[]> {
     const cutoff = new Date(Date.now() - maxAgeMs);
+    const filter = {
+      userId,
+      status: { $in: this.sweepableStatuses },
+      updatedAt: { $lt: cutoff },
+    };
+    // Ids are read BEFORE the write because callers have to settle the quests
+    // these executions leave behind, and `aborted` is terminal: once written,
+    // the doc falls out of `sweepableStatuses` and no later sweep can find it
+    // again. Without the ids here, the bubble is stranded permanently.
+    const doomed = await this.model.find(filter, { _id: 1 }).lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    if (doomed.length === 0) return [];
+
+    const doomedIds = doomed.map(d => d._id);
+    const sweptAt = new Date();
     const result = await this.model.updateMany(
-      {
-        userId,
-        status: { $in: this.sweepableStatuses },
-        updatedAt: { $lt: cutoff },
-      },
+      { ...filter, _id: { $in: doomedIds } },
       {
         $set: {
           status: 'aborted',
-          abortedAt: new Date(),
-          completedAt: new Date(),
+          abortedAt: sweptAt,
+          completedAt: sweptAt,
           // Use the existing `error` slot so an operator inspecting the doc
           // can tell this was a sweep, not an explicit user abort.
           error: { message: 'Auto-aborted: stale active execution' },
         },
       }
     );
-    return result.modifiedCount ?? 0;
+    // The status guard is re-applied above, so an execution that completed
+    // naturally between the read and the write keeps its own terminal state -
+    // and must not be reported as swept. Its quest can still be `pending` while
+    // `persistRunAsQuest` writes the real answer, and settling on that id would
+    // stamp an abandoned-run error over a run that actually succeeded.
+    if (result.matchedCount === doomed.length) return doomedIds.map(id => id.toString());
+    // Lost the race on at least one: re-read the batch by the stamp this sweep
+    // just wrote, which is what distinguishes the ones it really took.
+    const swept = await this.model
+      .find({ _id: { $in: doomedIds }, abortedAt: sweptAt }, { _id: 1 })
+      .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    return swept.map(d => d._id.toString());
   }
 
   /** @deprecated Use `cleanupStaleActive` instead - kept as a thin alias
    *  during the transition so any caller landing between commits keeps
    *  working. Remove once nothing references it. */
-  async cleanupStaleAwaitingPermission(userId: string, maxAgeMs: number): Promise<number> {
+  async cleanupStaleAwaitingPermission(userId: string, maxAgeMs: number): Promise<string[]> {
     return this.cleanupStaleActive(userId, maxAgeMs);
   }
 
@@ -1234,6 +1276,19 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async persistMementoIds(id: string, mementoIds: string[]): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { usedMementoIds: mementoIds } });
+  }
+
+  /**
+   * Persist the memory gates resolved at execution start so continuation Lambdas
+   * and the stop-at-gate WS handler read the same verdict rather than re-deriving
+   * it from mutable state (see `resolveExecutionMementoGates`). Written once, on
+   * the first invocation, before any handoff could resume the execution.
+   */
+  async persistResolvedMementoGates(
+    id: string,
+    gates: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean }
+  ): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
   }
 
   async updatePermissionState(

@@ -524,6 +524,12 @@ export async function safeDropIndex(collection: mongoose.Collection, indexName: 
   } catch (error) {
     if (error instanceof mongoose.mongo.MongoError && error.code === 27) {
       console.log(`⚠ Index not found (skipping): ${indexName}`);
+    } else if (error instanceof mongoose.mongo.MongoError && error.code === 26) {
+      // NamespaceNotFound: the collection itself does not exist yet, so there is no index
+      // to drop - as "safe" a no-op as a missing index. Surfaced as a test-order flake:
+      // a migration test calling this in beforeEach fails only when no earlier test in the
+      // shard happened to create the collection.
+      console.log(`⚠ Collection not found (skipping): ${indexName}`);
     } else if (error instanceof Error && error.message?.includes('index not found')) {
       console.log(`⚠ Index not found (skipping): ${indexName}`);
     } else {

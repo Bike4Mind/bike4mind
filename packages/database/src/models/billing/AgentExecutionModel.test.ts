@@ -121,6 +121,58 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('persistResolvedMementoGates (#1525)', () => {
+    it('is absent on a fresh execution', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.resolvedMementoGates).toBeUndefined();
+    });
+
+    it('persists the resolved gates and reads them back verbatim through the typed sub-schema', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: true,
+        v2: false,
+        v2OptInLookupFailed: true,
+      });
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.resolvedMementoGates).toEqual({ v1: true, v2: false, v2OptInLookupFailed: true });
+    });
+
+    it('stores the sub-document without an _id and drops unknown fields (typed sub-schema, not Mixed)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      // Cast: the typed method never passes extras, but the sub-schema must strip them rather than
+      // let arbitrary keys ride into the DB - the reason this is a Schema and not `Mixed`.
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: false,
+        v2: true,
+        v2OptInLookupFailed: false,
+        rogue: 'nope',
+      } as unknown as { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean });
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      const gates = loaded?.resolvedMementoGates as Record<string, unknown> | undefined;
+      expect(gates).toEqual({ v1: false, v2: true, v2OptInLookupFailed: false });
+      expect(gates?.rogue).toBeUndefined();
+      expect(gates?._id).toBeUndefined();
+    });
+
+    it('overwrites a prior verdict (last write wins)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: true,
+        v2: true,
+        v2OptInLookupFailed: false,
+      });
+      await agentExecutionRepository.persistResolvedMementoGates(exec.id, {
+        v1: false,
+        v2: false,
+        v2OptInLookupFailed: false,
+      });
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.resolvedMementoGates).toEqual({ v1: false, v2: false, v2OptInLookupFailed: false });
+    });
+  });
+
   describe('addChildExecution', () => {
     it('links a child id to the parent without duplicating', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution());
@@ -875,7 +927,7 @@ describe('AgentExecutionRepository', () => {
       );
 
       const swept = await agentExecutionRepository.cleanupStaleActive(userId, 20 * 60 * 1000);
-      expect(swept).toBe(0);
+      expect(swept).toEqual([]);
 
       const after = await agentExecutionRepository.findById(parent.id);
       expect(after?.status).toBe('awaiting_dag_children');
@@ -999,13 +1051,50 @@ describe('AgentExecutionRepository', () => {
         { $set: { updatedAt: longAgo } }
       );
 
-      const count = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
+      const ids = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
 
-      expect(count).toBe(1);
+      expect(ids).toEqual([stale.id]);
       const after = await AgentExecutionModel.findById(stale.id);
       expect(after?.status).toBe('aborted');
       expect(after?.failureReason).toBeUndefined();
       expect(after?.abortedAt).toBeInstanceOf(Date);
+    });
+
+    it('returns only the executions the guarded write actually took', async () => {
+      // Callers settle the quests behind these ids, so an id the write did not
+      // transition is not merely noise: that run completed naturally, and its
+      // quest can still be `pending` while `persistRunAsQuest` fills in the real
+      // answer. Settling on it stamps an abandoned-run error over a success.
+      const userId = new mongoose.Types.ObjectId().toString();
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const stale = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+      const racer = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+      await AgentExecutionModel.collection.updateMany(
+        { _id: { $in: [stale.id, racer.id].map(id => new mongoose.Types.ObjectId(id)) } },
+        { $set: { updatedAt: longAgo } }
+      );
+
+      // Land the natural completion in the window between the id read and the
+      // guarded write - the only place this race can happen.
+      const realUpdateMany = AgentExecutionModel.updateMany.bind(AgentExecutionModel);
+      const spy = vi.spyOn(AgentExecutionModel, 'updateMany').mockImplementation((async (
+        filter: mongoose.FilterQuery<unknown>,
+        update: mongoose.UpdateQuery<unknown>
+      ) => {
+        await AgentExecutionModel.collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(racer.id) },
+          { $set: { status: 'completed' } }
+        );
+        return realUpdateMany(filter, update);
+      }) as unknown as typeof AgentExecutionModel.updateMany);
+
+      try {
+        expect(await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000)).toEqual([stale.id]);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect((await AgentExecutionModel.findById(racer.id))?.status).toBe('completed');
     });
   });
 

@@ -1,6 +1,7 @@
 export { validateBundle, type ValidateBundleInput, type ValidateBundleResult } from './validateBundle';
 export { resolveVisibility } from './resolveVisibility';
 export { buildListVisibilityFilter, type BuildListFilterInput } from './buildListFilter';
+export { buildListQuery, type ListQueryParams, type SortKey } from './buildListQuery';
 export {
   checkScopePermission,
   type PublishUser,

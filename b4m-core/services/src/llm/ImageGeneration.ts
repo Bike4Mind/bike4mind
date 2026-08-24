@@ -77,7 +77,7 @@ import {
 import { FluxImageCostCalculator } from './imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from './imageCostCalculator/GeminiImageCostCalculator';
 import { CostInput } from './imageCostCalculator/types';
-import { deductCreditsWithOrgSupport } from '../creditService';
+import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
@@ -243,12 +243,15 @@ export class ImageGenerationService {
         height: rest.height,
         aspect_ratio: rest.aspect_ratio,
         response_format: rest.response_format,
-        // BFL-specific parameters - these may not be available in GenerateImageRequestBodySchema
-        safety_tolerance: (parsedBody as any).safety_tolerance,
-        prompt_upsampling: (parsedBody as any).prompt_upsampling,
-        seed: (parsedBody as any).seed,
-        output_format: (parsedBody as any).output_format,
-      }).filter(([_, value]) => value !== undefined)
+        // BFL-specific parameters
+        safety_tolerance: rest.safety_tolerance,
+        prompt_upsampling: rest.prompt_upsampling,
+        seed: rest.seed,
+        output_format: rest.output_format,
+        // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
+        // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
+        // client's own default) fails /api/feedback's validation when a bug report posts it back.
+      }).filter(([_, value]) => value !== undefined && value !== null)
     );
 
     // Get session message history to build proper context
@@ -451,6 +454,15 @@ export class ImageGenerationService {
       const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
       throw insufficientCreditsError(
         `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
+      );
+    }
+
+    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
+    // shared pool. This is the only enforcement point - the settlement write
+    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
+    if (organization && isMemberCreditCapExceeded(organization, user.id, requiredCredits)) {
+      throw insufficientCreditsError(
+        `Your organization member credit limit has been reached for image generation. Contact your organization administrator.`
       );
     }
 
@@ -915,9 +927,11 @@ export class ImageGenerationService {
             aspect_ratio,
             output_format,
             safety_tolerance,
-            // GeminiImageService maps this to Google's `enhancePrompt`. Only the text-to-image path
-            // honours it: `edit()` takes ImageEditOptions and does not build a generation config.
+            // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
+            // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
+            // forward them to Google's API, since it rejects their mere presence.
             prompt_upsampling,
+            seed,
           });
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {

@@ -121,3 +121,54 @@ export function normalizeCompletionRequest<T extends CompletionRequest>(req: T):
     },
   } as T;
 }
+
+// --- Completions SSE response events ---
+// Plain Zod (no `.openapi()`) so any runtime can import them; the OpenAPI layer
+// annotates them via the contract. MUST stay in sync with the SSE event builders
+// in utils/sseEvents.ts (the wire shapes the completions handler emits).
+
+const CompletionUsageSchema = z.object({
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  cacheReadInputTokens: z.number().optional(),
+  cacheCreationInputTokens: z.number().optional(),
+});
+
+const CompletionMetaEventSchema = z.object({
+  type: z.literal('meta'),
+  requestId: z.string(),
+});
+
+const CompletionContentEventSchema = z.object({
+  type: z.enum(['content', 'tool_use']),
+  text: z.string(),
+  tools: z
+    .array(z.object({ name: z.string(), arguments: z.string().optional(), id: z.string().optional() }))
+    .optional(),
+  usage: CompletionUsageSchema.optional(),
+  credits: z.object({ used: z.number().optional(), usdCost: z.number().optional() }).optional(),
+  responseFormatMode: z.enum(['native', 'tool_use', 'best-effort']).optional(),
+  // Why generation ended, on the terminal event. Normalized vocabulary (see stopReasons.ts):
+  // 'max_tokens' means the reply was CUT OFF, not finished. Left as a plain string rather
+  // than an enum so a new or provider-specific reason reaches clients instead of failing
+  // validation at the boundary.
+  stopReason: z.string().optional(),
+  // Complete assistant message incl. reasoning blocks (Anthropic extended thinking with tools).
+  thinking: z.array(z.any()).optional(),
+});
+
+const CompletionSseErrorEventSchema = z.object({
+  type: z.literal('error'),
+  message: z.string(),
+  requestId: z.string().optional(),
+  code: z.string().optional(),
+});
+
+/** One `data:` event in the `text/event-stream` completions response. */
+export const CompletionStreamEventSchema = z.union([
+  CompletionMetaEventSchema,
+  CompletionContentEventSchema,
+  CompletionSseErrorEventSchema,
+]);
+
+export type CompletionStreamEvent = z.infer<typeof CompletionStreamEventSchema>;

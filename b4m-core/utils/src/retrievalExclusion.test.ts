@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import {
   buildFilenameMarkerRegex,
   filterRetrievalExcluded,
@@ -61,6 +62,42 @@ describe('isRetrievalExcluded', () => {
   it('excludes an unvectorized file when vectorizedOnly is set', () => {
     expect(isRetrievalExcluded({ fileName: 'Clean.pdf', vectorized: false }, { vectorizedOnly: true })).toBe(true);
     expect(isRetrievalExcluded({ fileName: 'Clean.pdf', vectorized: true }, { vectorizedOnly: true })).toBe(false);
+  });
+
+  it('keeps a convergence-stranded file despite vectorizedOnly, so the withhold can report it', () => {
+    // It is unvectorized because a halted wave DELETED its passages, not because it is an image or a
+    // failed job. Dropping it here runs upstream of partitionByIndexAvailability, so the turn would
+    // answer around the hole and report full coverage - the failure the withhold exists to prevent.
+    const stranded = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    expect(isRetrievalExcluded(stranded, { vectorizedOnly: true })).toBe(false);
+    expect(filterRetrievalExcluded([stranded], { vectorizedOnly: true })).toEqual([stranded]);
+  });
+
+  it('still excludes a stranded file whose NAME the surface excludes - naming it outranks the hole', () => {
+    const marked = { fileName: 'MARK - Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    expect(isRetrievalExcluded(marked, { vectorizedOnly: true, excludeFilenameMarkers: ['MARK'] })).toBe(true);
+  });
+
+  it('exempts the vectorize-arm marker too, so it reaches the withhold on a vectorizedOnly lake', () => {
+    // This assertion used to be the opposite, on the premise that a vectorize-arm file "keeps its
+    // chunks and is served". QA disproved it live: the search read path requires
+    // `vector: {$exists: true, $ne: []}`, so a file with chunks and zero vectors returns nothing while
+    // its neighbours are re-ranked into the top-K - the answer confidently contradicted the missing
+    // document. Both arms must reach partitionByIndexAvailability to be refused and NAMED.
+    const vectorizePaused = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_NOTE };
+    expect(isRetrievalExcluded(vectorizePaused, { vectorizedOnly: true })).toBe(false);
+    expect(filterRetrievalExcluded([vectorizePaused], { vectorizedOnly: true })).toEqual([vectorizePaused]);
+  });
+
+  // #1939, and the wider hole of the three: the reset writes `vectorized: false` and clears `notes`
+  // in ONE write, so for the whole window between it and the consumer's marker there is no note for
+  // the arms above to match. On a producer that died before its sends, that window never ends.
+  it('keeps a file with a rebuild outstanding, which carries no note to key on', () => {
+    const rebuilding = { fileName: 'Report.pdf', vectorized: false, notes: '', chunkRebuildRequestedAt: new Date() };
+    expect(isRetrievalExcluded(rebuilding, { vectorizedOnly: true })).toBe(false);
+    expect(filterRetrievalExcluded([rebuilding], { vectorizedOnly: true })).toEqual([rebuilding]);
+    // Without the stamp it is an ordinary unvectorized file again, and still excluded.
+    expect(isRetrievalExcluded({ ...rebuilding, chunkRebuildRequestedAt: null }, { vectorizedOnly: true })).toBe(true);
   });
 
   it('combines both rules (either triggers exclusion)', () => {
