@@ -308,6 +308,11 @@ export const imageGenerationTool: ToolDefinition = {
           aspect_ratio: aspect_ratio,
           output_format: output_format ?? 'png',
           safety_tolerance: safety_tolerance,
+          // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
+          // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
+          // forward them to Google's API, since it rejects their mere presence.
+          prompt_upsampling: prompt_upsampling,
+          seed: seed,
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);

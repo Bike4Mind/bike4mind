@@ -51,13 +51,16 @@ const handler = baseApi()
   .put(async (req: Request, res) => {
     const { id } = req.query as { id: string };
     const params = UpdateDataLakeRequestInput.parse(req.body);
-    // This is the authoritative write boundary for the lake's preferred prompt, and the one place
-    // that owns the session-activatable allowlist. Reject a non-activatable id here (fail loud, 400)
-    // rather than storing a value the session resolver would silently refuse to inject later. '' is
-    // the clear sentinel and passes (falsy), so removing the binding is always allowed.
-    // INVARIANT: this route is the ONLY caller of updateDataLake with preferredSystemPromptId, so
-    // the check is not bypassable today. A second write path must repeat this allowlist check (core
-    // cannot host it - see the schema comment on preferredSystemPromptId in common/schemas/dataLake).
+    // This is the write boundary for a DB LAKE's preferred prompt, and one of two places that owns
+    // the session-activatable allowlist - the other is PUT /api/data-lakes/:id/settings, the sibling
+    // write path for a STATIC (registry) lake's overlay. Reject a non-activatable id here (fail loud,
+    // 400) rather than storing a value the session resolver would silently refuse to inject later.
+    // '' is the clear sentinel and passes (falsy), so removing the binding is always allowed.
+    // INVARIANT: this route is the ONLY caller of updateDataLake with preferredSystemPromptId - the
+    // static-lake path calls updateFallbackLakeSettings instead, a different function entirely, so
+    // the two cannot double-write the same document. Each independently repeats this allowlist check
+    // (core cannot host it - see the schema comment on preferredSystemPromptId in
+    // common/schemas/dataLake); a THIRD write path must repeat it again.
     if (params.preferredSystemPromptId && !isSessionActivatablePromptId(params.preferredSystemPromptId)) {
       throw new BadRequestError(`"${params.preferredSystemPromptId}" is not a valid preferred system prompt`);
     }

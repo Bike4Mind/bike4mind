@@ -2979,7 +2979,7 @@ describe('ChatCompletionProcess', () => {
       beliefs?: { fact: string; relevance: number; sources: string[] }[];
       recallLakeMemory?: (input: unknown) => Promise<unknown>;
       retrievalTags?: string[];
-    }): Promise<string> => {
+    }): Promise<{ systemText: string; retrieval: unknown }> => {
       mockDb.dataLakes = { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([ownedLake('corpus')]) };
       (service as any).entitlementsResolved = true;
       (service as any).entitlementKeys = [];
@@ -3023,47 +3023,80 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const contextAndSystemMessages = (mockedBuildAndSortMessages.mock.calls[0]?.[1] ?? []) as IMessage[];
-      return contextAndSystemMessages
+      const systemText = contextAndSystemMessages
         .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
         .join('\n---\n');
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown };
+      };
+      return { systemText, retrieval: savedQuest?.promptMeta?.retrieval };
     };
 
-    it('spreads the hot-card belief text into the system messages', async () => {
-      const systemText = await runAndCaptureSystemText({
+    it('spreads the hot-card belief text into the system messages, and records the ok outcome', async () => {
+      const { systemText, retrieval } = await runAndCaptureSystemText({
         message: 'What is the warranty on the X-200 pump?',
         beliefs: [{ fact: 'The X-200 pump has a 5-year warranty.', relevance: 0.9, sources: ['doc1'] }],
       });
 
       expect(systemText).toContain('Background reference facts');
       expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['datalake:corpus'],
+      });
     });
 
-    it('emits no lake-memory block when recall returns nothing (assert-absent counterpart)', async () => {
-      const systemText = await runAndCaptureSystemText({ message: 'just chatting, no lake query' });
+    it('emits no lake-memory block when recall returns nothing, but still records attempted:true, outcome:ok (#1867 zero case)', async () => {
+      const { systemText, retrieval } = await runAndCaptureSystemText({ message: 'just chatting, no lake query' });
 
       expect(systemText).not.toContain('Background reference facts');
+      // This is the case the whole feature exists for: a legitimate zero must be recorded, not
+      // left indistinguishable from "retrieval never ran".
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['datalake:corpus'],
+      });
     });
 
-    it('degrades to no card, without failing the turn, when recall throws (fail-open contract)', async () => {
-      const systemText = await runAndCaptureSystemText({
+    it('degrades to no card, without failing the turn, when recall throws, and records outcome:failed', async () => {
+      const { systemText, retrieval } = await runAndCaptureSystemText({
         message: 'What is the warranty?',
         recallLakeMemory: vi.fn().mockRejectedValue(new Error('lake recall backend down')),
       });
 
       expect(systemText).not.toContain('Background reference facts');
+      // A retrieval that threw must not be byte-identical to one never attempted.
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'failed',
+        surfaces: ['lake-memory'],
+        dataLakeTags: ['datalake:corpus'],
+      });
     });
 
-    it('emits no card when the session lake selection excludes every entitled lake', async () => {
+    it('emits no card when the session lake selection excludes every entitled lake, and records outcome:no_lakes', async () => {
       // retrievalTags narrows to a lake the user does not actually have -- the intersection with
       // entitledTags is empty, so the feature must return early rather than fall back to the
       // full entitled set.
-      const systemText = await runAndCaptureSystemText({
+      const { systemText, retrieval } = await runAndCaptureSystemText({
         message: 'What is the warranty?',
         beliefs: [{ fact: 'should never be recalled', relevance: 0.9, sources: ['doc1'] }],
         retrievalTags: ['datalake:other'],
       });
 
       expect(systemText).not.toContain('Background reference facts');
+      // The single most common real answer to "why did I get nothing from my lake" - no entitled
+      // lake in scope - must be distinguishable from a zero-belief 'ok'.
+      expect(retrieval).toEqual({
+        attempted: true,
+        outcome: 'no_lakes',
+        surfaces: ['lake-memory'],
+        dataLakeTags: [],
+      });
     });
   });
 

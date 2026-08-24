@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
+import { withSubmitMutex } from './withSubmitMutex';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 
@@ -70,7 +71,7 @@ import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 
-// Sentinel statusMessage written by `handleSendClick` to render the Stop
+// Sentinel statusMessage written by the send path to render the Stop
 // affordance the instant the user clicks Send, masking backend cold-start
 // latency before the WS handler has emitted a real stream event. The real
 // stream overwrites this on first event; the error path detects it via strict
@@ -267,7 +268,7 @@ export function useSendMessage({
   const [submitting, setSubmittingState] = useState<boolean>(false);
   // Ref-based mutex: React state updates are batched, so two rapid calls can
   // both read `submitting === false` from their closure. The ref flips
-  // synchronously, making the guard at the top of handleSendClick airtight.
+  // synchronously, making the guard at the top of runSendClick airtight.
   const submittingRef = useRef(false);
   const setSubmitting = useCallback((value: boolean) => {
     submittingRef.current = value;
@@ -328,7 +329,9 @@ export function useSendMessage({
     }
   };
 
-  const handleSendClick = async (
+  // Body of the send. Always call it through `handleSendClick` below, never
+  // directly: the wrapper is what releases the submit mutex if this throws.
+  const runSendClick = async (
     newPrompt?: string,
     options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
   ): Promise<IChatHistoryItemDocument | undefined> => {
@@ -1080,16 +1083,20 @@ export function useSendMessage({
       // rendering; `SessionMiddle` clears the `pendingFirstMessage` overlay once
       // the failed quest lands in `flattenQuests`, so the chat shows prompt +
       // error reply in context.
-      setWorkBenchAgents([]);
-      setSubmitting(false);
-      // Roll back the optimistic Stop affordance only when no real stream
+      // Roll back the optimistic Stop affordance FIRST, only when no real stream
       // event landed - `statusMessage` strict-equals the sentinel iff the WS
       // handler never overwrote it. Leaves a real in-flight stream untouched.
+      // Ordering is load-bearing: if either state write below throws, a skipped
+      // rollback leaves `completed: false` with the generating sentinel, so
+      // `shouldShowStopButton` stays true and the composer renders Stop and
+      // swallows Enter for good - dead in a way releasing the mutex cannot fix.
       setChatCompletion(prev =>
         prev.statusMessage === OPTIMISTIC_GENERATING_STATUS
           ? { ...prev, completed: true, statusMessage: undefined }
           : prev
       );
+      setWorkBenchAgents([]);
+      setSubmitting(false);
       return;
     }
 
@@ -1127,6 +1134,46 @@ export function useSendMessage({
       lexicalInputRef.current?.blur();
     }, 100);
   };
+
+  // Latest-ref so the exported `handleSendClick` below can be permanently
+  // stable. The body closes over most of this hook's state, so a `useCallback`
+  // with real dependencies would change identity every render anyway (and a
+  // truncated dep array would send stale state). Same pattern as
+  // `useProgrammaticSubmit`.
+  const runSendClickRef = useRef(runSendClick);
+  // eslint-disable-next-line react-hooks/refs
+  runSendClickRef.current = runSendClick;
+
+  /**
+   * The composer's send entry point. Stable across renders: consumers hand it to
+   * lexical plugins and zustand registrations that key on the identity, so an
+   * unstable one re-registers a command per keystroke.
+   *
+   * `withSubmitMutex` guarantees the submit mutex is released if the body throws,
+   * which is what stops a single failure from latching the composer dead. An
+   * unexpected throw is surfaced and consumed here rather than rethrown: every
+   * caller drops the rejection, so rethrowing only bought an unhandled rejection
+   * with no error visible to the user.
+   */
+  const handleSendClick = useCallback(
+    async (
+      newPrompt?: string,
+      options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+    ): Promise<IChatHistoryItemDocument | undefined> => {
+      try {
+        return await withSubmitMutex(submittingRef, setSubmittingState, () =>
+          runSendClickRef.current(newPrompt, options)
+        );
+      } catch (error) {
+        // Reached only on an unexpected throw: `runSendClick` already handles
+        // send failures itself (LLMCommand toasts, optimistic rollback).
+        console.error('Unexpected error sending message:', error);
+        toast.error("Couldn't send your message - please try again.");
+        return undefined;
+      }
+    },
+    []
+  );
 
   // Auto-submit quest goal when websocket is ready (from /quests New Quest modal)
   useEffect(() => {

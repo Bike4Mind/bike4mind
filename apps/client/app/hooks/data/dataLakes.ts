@@ -14,7 +14,11 @@ import type {
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
-import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
+import type {
+  CreateDataLakeRequestInputType,
+  UpdateDataLakeRequestInputType,
+  UpdateFallbackLakeSettingsRequestInputType,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
@@ -322,6 +326,29 @@ export function useUpdateDataLake() {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to update data lake');
+    },
+  });
+}
+
+/**
+ * Edit a STATIC (registry) lake's admin-settable overlay (currently `groundingMode` only). A
+ * separate mutation from `useUpdateDataLake` on purpose: it targets PUT /api/data-lakes/:id/settings,
+ * not the general update route, which refuses a fallback lake outright.
+ */
+export function useUpdateFallbackLakeSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, ...params }: UpdateFallbackLakeSettingsRequestInputType & { id: string }) => {
+      const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}/settings`, params);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      toast.success('Data lake settings updated');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update data lake settings');
     },
   });
 }

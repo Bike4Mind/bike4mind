@@ -5,6 +5,7 @@ import type { Logger } from '@bike4mind/observability';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Resource } from 'sst';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
+import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 
 const lambdaClient = new LambdaClient({});
 
@@ -97,7 +98,10 @@ export async function runQuestNode(args: {
   // by a dead Lambda would count against them (unconditional here rather than
   // memoized as in `agentExecute`: a dispatch is rare and about to cost real
   // credits, so one extra updateMany is noise).
-  await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
+  const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
+  // `aborted` is terminal, so the hourly abandoned-sweep can never revisit these
+  // - settle their bubbles here or they spin forever.
+  await settleStrandedQuests(swept, logger, '[runQuestNode]');
   const activeCount = await agentExecutionRepository.countActiveByUserId(userId);
   if (activeCount >= MAX_CONCURRENT_EXECUTIONS_PER_USER) {
     throw new BadRequestError(

@@ -14,6 +14,7 @@ import {
   Link,
   Input,
   Button,
+  Autocomplete,
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkIcon from '@mui/icons-material/Link';
@@ -31,6 +32,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import LockIcon from '@mui/icons-material/Lock';
 import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { PublishVisibility } from '@bike4mind/common';
@@ -46,16 +48,22 @@ import {
   refreshPublishedFromSource,
   type ManagedArtifact,
   type ManagedListFacets,
+  type ManagedListPage,
+  updatePublishedTags,
+  fetchMyTagVocabulary,
 } from '@client/app/utils/publishApi';
+import { ArtifactCover } from '@client/app/components/common/ArtifactCover';
+import { normalizePublishTag, normalizePublishTags, PUBLISH_TAGS_MAX, PUBLISH_TAG_MAX_LENGTH } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
 import { downloadData } from '@client/app/utils/download';
 import { printHtmlForPdf } from '@client/app/utils/printToPdf';
 import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
 
-/** Page size. Small enough that the tab opens instantly on a large library, large enough that
- *  most people never page at all. */
-const PAGE_SIZE = 25;
+/** Page size. Small enough that the tab opens instantly on a large library, large enough that most
+ *  people never page at all. Exported so the paging tests assert against one number rather than a
+ *  copy, and named the same as the server's own bound so the two are greppable together. */
+export const PAGE_SIZE = 25;
 
 /** Sort options, mirroring the keys the list endpoint accepts. */
 const SORTS: Array<{ value: string; label: string }> = [
@@ -69,6 +77,7 @@ const SORTS: Array<{ value: string; label: string }> = [
 
 /** The filter state the toolbar owns. `null` means "not filtering on this axis". */
 interface Filters {
+  tag: string | null;
   kind: string | null;
   visibility: string | null;
   gate: string | null;
@@ -76,11 +85,11 @@ interface Filters {
   sort: string;
 }
 
-const NO_FILTERS: Filters = { kind: null, visibility: null, gate: null, comments: null, sort: 'newest' };
+const NO_FILTERS: Filters = { tag: null, kind: null, visibility: null, gate: null, comments: null, sort: 'newest' };
 
 /** True when anything is narrowing the list - drives the "no matches" copy and Clear button. */
 function isFiltering(f: Filters, q: string): boolean {
-  return Boolean(q.trim() || f.kind || f.visibility || f.gate || f.comments);
+  return Boolean(q.trim() || f.tag || f.kind || f.visibility || f.gate || f.comments);
 }
 
 /** Compact date for the row meta line: same-year dates drop the year. */
@@ -122,17 +131,16 @@ export default function PublishedArtifactsTabContent() {
   const query = useMemo(
     () => ({
       q: debouncedQ,
+      tag: filters.tag ?? undefined,
       kind: filters.kind ?? undefined,
       visibility: filters.visibility ?? undefined,
       gate: filters.gate ?? undefined,
       comments: filters.comments ?? undefined,
       sort: filters.sort,
-      // The tab renders the chips, so it is the one caller that wants the counts.
-      facets: true,
       limit: PAGE_SIZE,
       skip,
     }),
-    [debouncedQ, filters.kind, filters.visibility, filters.gate, filters.comments, filters.sort, skip]
+    [debouncedQ, filters.tag, filters.kind, filters.visibility, filters.gate, filters.comments, filters.sort, skip]
   );
 
   const { data, isLoading, isError } = useQuery({
@@ -144,21 +152,37 @@ export default function PublishedArtifactsTabContent() {
     placeholderData: prev => prev,
   });
 
+  // Facets are their own query: they are group-bys over the caller's WHOLE library and by design
+  // ignore the current selection, so they do not change when you turn a page. Folding them into the
+  // list query re-ran five group-bys on every paging click. staleTime keeps them out of the way of
+  // ordinary navigation; the tab's invalidation still refreshes them when the library changes.
+  const { data: facetData } = useQuery({
+    queryKey: ['published-artifacts', 'mine', 'facets'] as const,
+    queryFn: () => listMyPublishedArtifacts({ facets: true, limit: 1 }),
+    staleTime: 60_000,
+  });
+
   const artifacts = data?.artifacts ?? [];
   const total = data?.total ?? 0;
 
   // Backstop alongside `wasLastOnPage` below: that flag is computed at click time from the
-  // render-time array, which `placeholderData` keeps stale while an invalidation is in flight, so
+  // render-time array, which retains its stale value while an invalidation is in flight, so
   // a second delete fired in that window can still land on an empty page it didn't think it
   // caused. This reacts to the settled response itself instead, so it self-heals regardless of
   // which mutation (or how many in a race) emptied the page.
   useEffect(() => {
-    if (!isLoading && artifacts.length === 0 && skip > 0) {
+    if (!isLoading && !isError && artifacts.length === 0 && skip > 0) {
       setSkip(Math.max(0, Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE));
     }
-  }, [artifacts.length, isLoading, skip, total]);
+  }, [artifacts.length, isLoading, isError, skip, total]);
 
-  const facets: ManagedListFacets = data?.facets ?? { kind: {}, visibility: {}, gate: {}, comments: 0 };
+  const facets: ManagedListFacets = facetData?.facets ?? {
+    kind: {},
+    visibility: {},
+    gate: {},
+    comments: 0,
+    tag: {},
+  };
   const filtering = isFiltering(filters, q);
 
   /** Change a filter. Always resets to the first page - staying on page 4 of a narrower result
@@ -172,6 +196,18 @@ export default function PublishedArtifactsTabContent() {
     setFilter(key, (filters[key] === value ? null : value) as Filters[K]);
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+
+  // The caller's own tag vocabulary, for autocomplete. Deliberately OUTSIDE the
+  // ['published-artifacts','mine'] prefix: under it, every visibility toggle and comment switch
+  // refetched it too, and it is the one query backed by a scan of another collection. The two
+  // mutations that CAN change it - a tag edit, and a delete, which takes that artifact's tags out
+  // of the counts with it - invalidate it explicitly; a staleTime keeps reopening the tab from
+  // re-running it.
+  const { data: tagVocabulary = [] } = useQuery({
+    queryKey: ['publish-tag-vocabulary'] as const,
+    queryFn: fetchMyTagVocabulary,
+    staleTime: 5 * 60_000,
+  });
 
   const visibilityMut = useMutation({
     mutationFn: (v: { publicId: string; visibility: PublishVisibility }) =>
@@ -207,6 +243,33 @@ export default function PublishedArtifactsTabContent() {
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Refresh failed')),
   });
+  const tagsMut = useMutation({
+    mutationFn: (v: { publicId: string; tags: string[] }) => updatePublishedTags(v.publicId, v.tags),
+    // Patch the cached rows immediately. The PATCH is a full replace computed off `a.tags`, and
+    // `busy` tracks the mutation but not the list refetch, so the input re-enables while the cache
+    // is still pre-write: typing a second tag inside that one round trip sent the first one's
+    // absence as the new list and silently dropped it, under a "Tags updated" toast. Because the
+    // cache is corrected here rather than by the refetch, `busy` settling on the mutation is now
+    // harmless - do not "fix" it back into a dependency on refetch timing.
+    onMutate: v => {
+      qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
+        prev
+          ? { ...prev, artifacts: prev.artifacts.map(a => (a.publicId === v.publicId ? { ...a, tags: v.tags } : a)) }
+          : prev
+      );
+    },
+    onSuccess: () => {
+      toast.success('Tags updated');
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
+    },
+    // Resync rather than restoring a snapshot: the server is the truth about what is stored, and
+    // the toast already says the write did not land.
+    onError: (e: unknown) => {
+      toast.error(apiError(e, 'Failed to update tags'));
+      invalidate();
+    },
+  });
   const deleteMut = useMutation({
     // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
     // read from a ref: it decides whether this delete empties the current page.
@@ -219,11 +282,16 @@ export default function PublishedArtifactsTabContent() {
       // resetting skip on a filter change, applied to the mutation that can shrink the set.
       if (v.wasLastOnPage) setSkip(cur => Math.max(0, cur - PAGE_SIZE));
       invalidate();
+      // A delete takes that artifact's tags out of the vocabulary counts, so the suggestions have
+      // to be refreshed too - otherwise deleting the last artifact carrying a label keeps offering
+      // it for up to the staleTime.
+      void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
   });
 
   const busy =
+    tagsMut.isPending ||
     visibilityMut.isPending ||
     commentsMut.isPending ||
     restoreMut.isPending ||
@@ -361,6 +429,29 @@ export default function PublishedArtifactsTabContent() {
           {/* Facet chips. Counts come from the whole library, not the filtered page, so a chip
               still tells you how many there are after you have clicked it. */}
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+            {/* The active tag is merged in when the facet response does not carry it: the counts are
+                capped at the top 24, but a row chip can select ANY tag the artifact has - and
+                without this there is no per-facet control to turn that selection back off, only the
+                global Clear. */}
+            {/* hasOwn, not `=== undefined`: facets.tag is a plain object built by reduce, so a tag
+                named `constructor` is never undefined there and the merge would be skipped - and
+                Object.entries would not list it either, leaving that selection with no chip. */}
+            {Object.entries(
+              filters.tag && !Object.hasOwn(facets.tag, filters.tag) ? { [filters.tag]: 0, ...facets.tag } : facets.tag
+            ).map(([tag, n]) => (
+              <Chip
+                key={`tag-${tag}`}
+                size="sm"
+                variant={filters.tag === tag ? 'solid' : 'outlined'}
+                color={filters.tag === tag ? 'primary' : 'neutral'}
+                startDecorator={<LocalOfferIcon sx={{ fontSize: 12 }} />}
+                onClick={() => toggleFilter('tag', tag)}
+                slotProps={{ action: { 'data-testid': `published-artifacts-facet-tag-${tag}` } }}
+              >
+                {tag}
+                {n > 0 ? ` ${n}` : ''}
+              </Chip>
+            ))}
             {Object.entries(facets.kind).map(([kind, n]) => (
               <Chip
                 key={kind}
@@ -450,6 +541,14 @@ export default function PublishedArtifactsTabContent() {
                     scroll. Copy-link stays out here because it is the verb people actually reach
                     for; the rest is one click away. */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                  {/* Generated cover: costs nothing, always exists, and is stable per artifact so
+                      the eye can find a row it has seen before. Real screenshots replace it later. */}
+                  <ArtifactCover
+                    publicId={a.publicId}
+                    title={a.title}
+                    size={26}
+                    data-testid={`published-artifact-cover-${a.publicId}`}
+                  />
                   <Tooltip title="Opens in a new tab">
                     <Link
                       href={url}
@@ -472,6 +571,33 @@ export default function PublishedArtifactsTabContent() {
                       <span>{a.title}</span>
                     </Link>
                   </Tooltip>
+
+                  {/* Tags are clickable: seeing a label and wanting everything sharing it is the
+                      same impulse, so the chip filters rather than being decoration. */}
+                  {(a.tags ?? []).length > 0 && (
+                    <Box
+                      sx={{ display: 'flex', gap: 0.25, flexWrap: 'nowrap', overflow: 'hidden', flex: '0 1 auto' }}
+                      data-testid={`published-artifact-tags-${a.publicId}`}
+                    >
+                      {(a.tags ?? []).slice(0, 3).map(tag => (
+                        <Chip
+                          key={tag}
+                          size="sm"
+                          variant="outlined"
+                          color="neutral"
+                          onClick={() => setFilter('tag', tag)}
+                          slotProps={{ action: { 'data-testid': `published-artifact-tag-${a.publicId}-${tag}` } }}
+                        >
+                          {tag}
+                        </Chip>
+                      ))}
+                      {(a.tags ?? []).length > 3 && (
+                        <Chip size="sm" variant="plain" color="neutral">
+                          +{(a.tags ?? []).length - 3}
+                        </Chip>
+                      )}
+                    </Box>
+                  )}
 
                   <Box
                     sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', ml: 'auto' }}
@@ -545,6 +671,62 @@ export default function PublishedArtifactsTabContent() {
                     </Tooltip>
                   </Box>
                 </Box>
+
+                {isOpen && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <LocalOfferIcon sx={{ fontSize: 15, opacity: 0.6 }} />
+                    {/* freeSolo because tags are freeform: the vocabulary SUGGESTS, it does not
+                        restrict. Suggestions merge published-artifact and AppFile tags so one
+                        label means one thing across the app. */}
+                    <Autocomplete
+                      size="sm"
+                      multiple
+                      freeSolo
+                      disableClearable
+                      placeholder={(a.tags ?? []).length ? '' : 'Add tags'}
+                      options={tagVocabulary.map(t => t.tag)}
+                      value={a.tags ?? []}
+                      disabled={busy}
+                      onChange={(_e, next) => {
+                        // Normalize with the SAME helper the server uses, so the chips the owner
+                        // sees are what gets stored - no surprise re-spelling on reload.
+                        const entered = next as string[];
+                        const tags = normalizePublishTags(entered);
+                        // A REJECTED tag (over-long, or past the cap) is dropped rather than
+                        // rewritten, which made the equality check below see no change: no write, no
+                        // toast, and the chip just disappeared on the next render. Rewrites are
+                        // self-explanatory; drops have to be said out loud or the field reads broken.
+                        //
+                        // The REASON comes from the entries, not from `tags.length < entered.length`
+                        // - that is true of any shortening, dedupe and blank-drop included. MUI
+                        // compares options with ===, so typing `IonQ` beside an existing `ionq` chip
+                        // appends the variant and the normalizer then dedupes it: the old check
+                        // reported a length problem about a four-character tag. Blanks and duplicates
+                        // stay SILENT, for the same reason a rewrite does - they explain themselves.
+                        const normalizedEach = entered.map(normalizePublishTag);
+                        const tooLong = normalizedEach.some(t => t.length > PUBLISH_TAG_MAX_LENGTH);
+                        const overCap =
+                          new Set(normalizedEach.filter(t => t && t.length <= PUBLISH_TAG_MAX_LENGTH)).size >
+                          PUBLISH_TAGS_MAX;
+                        // Over-long wins when both hold: it points at a specific bad token, where
+                        // the cap message can only restate the limit.
+                        if (tooLong) {
+                          toast.error(`Tags can be at most ${PUBLISH_TAG_MAX_LENGTH} characters`);
+                        } else if (overCap) {
+                          toast.error(`Up to ${PUBLISH_TAGS_MAX} tags per artifact`);
+                        }
+                        const current = a.tags ?? [];
+                        if (tags.length === current.length && tags.every((t, i) => t === current[i])) return;
+                        tagsMut.mutate({ publicId: a.publicId, tags });
+                      }}
+                      slotProps={{ input: { 'data-testid': `published-artifact-tag-input-${a.publicId}` } }}
+                      sx={{ flex: 1, minWidth: 200 }}
+                    />
+                    <Typography level="body-xs" sx={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
+                      {(a.tags ?? []).length}/{PUBLISH_TAGS_MAX}
+                    </Typography>
+                  </Box>
+                )}
 
                 {isOpen && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
