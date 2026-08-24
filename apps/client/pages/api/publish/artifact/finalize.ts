@@ -10,6 +10,7 @@ import {
   type ArtifactFile,
   type PublishResult,
   type ValidationViolation,
+  normalizePublishTags,
 } from '@bike4mind/common';
 import {
   validateBundle,
@@ -47,6 +48,7 @@ const DraftManifestSchema = z.object({
   slug: z.string(),
   title: z.string(),
   description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
   visibility: z.enum(['private', 'project', 'organization', 'public']),
   gatedToGroupId: z.string().optional(),
   commentPolicy: z.enum(['none', 'open', 'restricted']).optional(),
@@ -326,6 +328,7 @@ const handler = baseApi().post(async (req, res) => {
       sha256Index: indexEntry.sha256,
     });
   }
+  const publishTags = normalizePublishTags(manifest.tags ?? []);
   const saved = await PublishedArtifact.findOneAndUpdate(
     { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null },
     {
@@ -333,6 +336,13 @@ const handler = baseApi().post(async (req, res) => {
         publicId,
         title: manifest.title,
         description: manifest.description,
+        // Guarded on the NORMALIZED length, not the raw one. `[]` is truthy, so a client that always
+        // sends the field would clear an artifact's tags on every re-publish - and a raw-length check
+        // has the same hole one step in, since `['  ']` passes it and then normalizes to `[]`. Same
+        // reasoning as the embedOrigins guard below: a publish can only ADD tags, and clearing
+        // belongs to the PATCH path, which has unambiguous full-replace semantics. Re-normalizing
+        // here is idempotent and keeps the invariant local to the write.
+        ...(publishTags.length ? { tags: publishTags } : {}),
         visibility: manifest.visibility,
         gatedToGroupId: manifest.gatedToGroupId,
         commentPolicy: manifest.commentPolicy ?? 'none',

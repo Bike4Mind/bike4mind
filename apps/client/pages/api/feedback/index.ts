@@ -1,5 +1,6 @@
 import { FeedbackModel, User } from '@bike4mind/database';
 import {
+  classifyStage,
   FeedbackEvents,
   FeedbackStatus,
   IOrganizationDocument,
@@ -21,11 +22,12 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { Config, classifyStage } from '@server/utils/config';
+import { Config } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
-  recordFeedbackDeliverySkipped,
+  buildFeedbackDeliverySkippedMetrics,
+  emitFeedbackDeliveryMetrics,
   ALARM_WORTHY_SKIP_REASONS,
 } from '@server/utils/cloudwatch';
 import sanitizeHtml from 'sanitize-html';
@@ -54,20 +56,35 @@ type FeedbackEmailRoute =
   | { kind: 'send'; recipients: string[]; stageClass: FeedbackDeliveryStageClass }
   | { kind: 'skip'; stageClass: FeedbackDeliveryStageClass; reason: FeedbackDeliverySkipReason };
 
+// Every value below reaches the email as a raw string interpolation, and on the unauthenticated
+// submission path every one of them (including userId) is attacker-controlled request-body input.
+// disallowedTagsMode: 'escape' (rather than sanitize-html's default 'discard') turns a tag into
+// its visible, inert entity form instead of deleting it - this template has no legitimate use for
+// any markup, but the promptMeta JSON dump is a diagnostic field where silently deleting a
+// bracketed substring would hide information from the staff reading it.
+function sanitizeForEmail(value: string): string {
+  return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
+}
+
 /**
  * Decides where feedback-to-email sends go for a given deploy stage, mirroring
  * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
  * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
  * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production for the same reason as
+ * resolveFeedbackSlackRoute: one environment, no separate non-prod recipient list to leak into.
+ * `stageClass` itself stays the true classifyStage() result for metrics/logs.
  */
 export function resolveFeedbackEmailRoute(
   stage: string | undefined,
-  settings: Record<string, string>
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
 ): FeedbackEmailRoute {
   const stageClass = classifyStage(stage);
 
-  if (stageClass === 'production') {
+  if (stageClass === 'production' || singleEnvironmentInstall) {
     const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmail', settings));
     return recipients.length > 0
       ? { kind: 'send', recipients, stageClass }
@@ -165,7 +182,12 @@ const handler = baseApi()
 
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
-    // recorded here since it never even calls into postFeedbackToSlack.
+    // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
+    // email 'disabled'/'no_recipients' skips) into one batched PutMetricData call rather than one
+    // per channel - on a fresh install with both channels off by default, that's the difference
+    // between one CloudWatch call and two per feedback submission.
+    const disabledChannelMetrics: ReturnType<typeof buildFeedbackDeliverySkippedMetrics> = [];
+
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
@@ -176,33 +198,40 @@ const handler = baseApi()
         newFeedback.userEmail ?? '',
         newFeedback.userId,
         content,
-        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+        promptMetaForExternalEgress
       );
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('slack', stageClass, 'disabled', Config.STAGE)
+      );
     }
 
     let email: FeedbackChannelDelivery;
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
-    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings);
+    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, 'disabled', Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', emailRoute.stageClass, 'disabled', Config.STAGE)
+      );
     } else if (emailRoute.kind === 'skip') {
       email = { outcome: 'skipped', reason: emailRoute.reason };
-      await recordFeedbackDeliverySkipped('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE);
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE)
+      );
     } else {
       const feedbackEmails = emailRoute.recipients;
       console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
       console.log('Sending feedback to email is enabled');
-      const sanitizedContent = sanitizeHtml(content);
-      const sanitizedUsername = sanitizeHtml(newFeedback.username);
-      const sanitizedUserEmail = sanitizeHtml(newFeedback.userEmail ?? '');
-      const sanitizedType = type ? sanitizeHtml(type) : '';
-      const sanitizedTags = tags ? tags.map(tag => sanitizeHtml(tag)) : [];
+      const sanitizedContent = sanitizeForEmail(content);
+      const sanitizedUsername = sanitizeForEmail(newFeedback.username);
+      const sanitizedUserEmail = sanitizeForEmail(newFeedback.userEmail ?? '');
+      const sanitizedUserId = sanitizeForEmail(newFeedback.userId);
+      const sanitizedType = type ? sanitizeForEmail(type) : '';
+      const sanitizedTags = tags ? tags.map(tag => sanitizeForEmail(tag)) : [];
       const sanitizedPromptMeta = promptMetaForExternalEgress
-        ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
+        ? sanitizeForEmail(JSON.stringify(promptMetaForExternalEgress, null, 2))
         : '';
 
       // allSettled (not all): one rejected recipient must not take down the whole handler
@@ -305,7 +334,7 @@ const handler = baseApi()
                   <div class="content">
                     <h2>New Feedback Submission</h2>
                     <div class="info">
-                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${newFeedback.userId})</p>
+                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
                     </div>
@@ -369,6 +398,10 @@ const handler = baseApi()
       // return success with a rejected entry that nothing in this repo currently checks for, and
       // SMTP delivery itself happens in a separate, uninstrumented subsystem.
       email = succeeded > 0 ? { outcome: 'delivered' } : { outcome: 'failed', reason: 'error' };
+    }
+
+    if (disabledChannelMetrics.length > 0) {
+      await emitFeedbackDeliveryMetrics(disabledChannelMetrics);
     }
 
     const delivery: FeedbackDeliveryResult = {

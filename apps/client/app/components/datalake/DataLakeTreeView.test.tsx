@@ -37,18 +37,19 @@ const testChrome: DataLakeTreeChrome = {
       {label}
     </ListItemButton>
   ),
+  backRowPlacement: 'above',
   scrollSx: {},
   nodeListSx: {},
   fileListSx: {},
   renderNodeRow: (node, _depth, onOpen) => (
-    <ListItem key={node.segment}>
+    <ListItem>
       <ListItemButton data-testid={`datalake-node-${node.segment}`} onClick={onOpen}>
         {node.segment} ({node.fileCount})
       </ListItemButton>
     </ListItem>
   ),
   renderFileRow: (file, selected, onSelect) => (
-    <ListItem key={file.id}>
+    <ListItem>
       <ListItemButton data-testid={`datalake-file-${file.id}`} data-selected={selected} onClick={onSelect}>
         {file.fileName}
       </ListItemButton>
@@ -236,9 +237,10 @@ describe('DataLakeTreeView back row', () => {
     expect(onNavigate).toHaveBeenCalledWith(['books']);
   });
 
-  it('renders sticky-back inside the scroll pane when chrome.stickyBackSx is set', () => {
+  it('renders sticky-back inside the scroll pane when chrome.backRowPlacement is sticky', () => {
     const stickyChrome: DataLakeTreeChrome = {
       ...testChrome,
+      backRowPlacement: 'sticky',
       stickyBackSx: { position: 'sticky', top: 0 },
     };
     const { onNavigate } = renderTree({ breadcrumb: ['books'], chrome: stickyChrome });
@@ -253,12 +255,22 @@ describe('DataLakeTreeView back row', () => {
     expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(true);
   });
 
-  it('keeps the back row outside the scroll pane under default chrome (no stickyBackSx)', () => {
+  it('keeps the back row outside the scroll pane when chrome.backRowPlacement is above', () => {
     renderTree({ breadcrumb: ['books'] });
-    // Default chrome renders the back row as a preceding sibling of the scroll pane, so it
-    // is NOT contained within it - the inverse of the sticky-chrome case above.
+    // Default chrome (backRowPlacement: 'above') renders the back row as a preceding sibling
+    // of the scroll pane, so it is NOT contained within it - the inverse of the sticky case.
     const scrollPane = screen.getByTestId('datalake-node-war').closest('ul')!.parentElement!;
     expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(false);
+  });
+
+  it('alwaysShowBackRow renders the back row even at an empty breadcrumb, as an exit control', () => {
+    const { onNavigate } = renderTree({ breadcrumb: [], alwaysShowBackRow: true });
+    const backBtn = screen.getByTestId('datalake-back');
+    expect(backBtn.textContent).toBe('All Categories');
+    fireEvent.click(backBtn);
+    // Popping an empty breadcrumb (slice(0, -1) of []) is still [] - the host's onNavigate([])
+    // is what drives the actual exit.
+    expect(onNavigate).toHaveBeenCalledWith([]);
   });
 });
 
@@ -279,7 +291,7 @@ describe('DataLakeTreeView uncategorized bucket', () => {
   const uncategorized = {
     files: loose,
     renderRow: (count: number, onOpen: () => void) => (
-      <ListItem key={UNCATEGORIZED_KEY}>
+      <ListItem>
         <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
           Uncategorized ({count})
         </ListItemButton>
@@ -310,6 +322,81 @@ describe('DataLakeTreeView uncategorized bucket', () => {
     renderTree({ uncategorized, tree: [] });
     expect(screen.queryByText('No categories')).toBeNull();
     expect(screen.getByTestId('datalake-node-uncategorized')).toBeTruthy();
+  });
+});
+
+describe('DataLakeTreeView v2 contract', () => {
+  it('controlled search/sort: uses the props and reports changes instead of internal state', () => {
+    const onSearchChange = vi.fn();
+    const onSortChange = vi.fn();
+    renderTree({ search: 'new', onSearchChange, sort: 'alpha', onSortChange });
+    // 'new' filters to the news node; alpha mode is active on the toggle
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+    expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
+    expect(screen.getByTestId('datalake-sort-toggle').dataset.sort).toBe('alpha');
+    fireEvent.change(screen.getByTestId('datalake-search').querySelector('input')!, { target: { value: 'x' } });
+    expect(onSearchChange).toHaveBeenCalledWith('x');
+    fireEvent.click(screen.getByTestId('datalake-sort-toggle'));
+    expect(onSortChange).toHaveBeenCalledWith('count');
+    // still controlled: the visible filter did not change on its own
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+  });
+
+  it('uncontrolled search with only onSearchChange: reports the change AND still filters locally', async () => {
+    // A host that passes onSearchChange without `search` must not lose typing (finding 2):
+    // internal state has to keep driving the filter even though the callback also fires.
+    const onSearchChange = vi.fn();
+    renderTree({ onSearchChange });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'new');
+    expect(onSearchChange).toHaveBeenCalledWith('new');
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+    expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
+  });
+
+  it('hideToolbar renders no search input', () => {
+    renderTree({ hideToolbar: true });
+    expect(screen.queryByTestId('datalake-search')).toBeNull();
+    expect(screen.getByTestId('datalake-node-books')).toBeTruthy();
+  });
+
+  it('leafMinDepth keeps the folder view at the seeded root and starts leaves below it', () => {
+    // tree has depth-1 'books' with children war/peace; seed the path at ['books'] with
+    // leafMinDepth 1: 'books' is the ROOT here, so even though searching yields nodes,
+    // an empty currentNodes at ['books'] must NOT flip to a file list.
+    const { onNavigate } = renderTree({ breadcrumb: ['books'], leafMinDepth: 1 });
+    expect(screen.getByTestId('datalake-node-war')).toBeTruthy(); // folder view at seeded root
+    fireEvent.click(screen.getByTestId('datalake-node-war'));
+    expect(onNavigate).toHaveBeenCalledWith(['books', 'war']);
+    // below the seed, an empty node level IS a leaf: files of books:war render
+    const leaf = renderTree({ breadcrumb: ['books', 'war'], leafMinDepth: 1 });
+    expect(leaf.getAllByTestId(/^datalake-file-/).length).toBeGreaterThan(0);
+  });
+
+  it('leafMinDepth gates the bucket at the seeded root and the synthetic key works at depth', () => {
+    const loose = [file('u1', 'loose.md', ['datalake:mine'])];
+    const uncategorized = {
+      files: loose,
+      renderRow: (count: number, onOpen: () => void) => (
+        <ListItem>
+          <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
+            Uncategorized ({count})
+          </ListItemButton>
+        </ListItem>
+      ),
+    };
+    const { onNavigate } = renderTree({ breadcrumb: ['books'], leafMinDepth: 1, uncategorized });
+    fireEvent.click(screen.getByTestId('datalake-node-uncategorized'));
+    expect(onNavigate).toHaveBeenCalledWith(['books', UNCATEGORIZED_KEY]);
+    const opened = renderTree({ breadcrumb: ['books', UNCATEGORIZED_KEY], leafMinDepth: 1, uncategorized });
+    expect(opened.getAllByTestId(/^datalake-file-/).map(el => el.dataset.testid)).toEqual(['datalake-file-u1']);
+  });
+
+  it('testIds overrides rename the container and error nodes', () => {
+    renderTree({ isError: true, testIds: { container: 'datalake-manager-tree', error: 'datalake-manager-error' } });
+    expect(screen.getByTestId('datalake-manager-tree')).toBeTruthy();
+    expect(screen.getByTestId('datalake-manager-error')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-tree')).toBeNull();
   });
 });
 

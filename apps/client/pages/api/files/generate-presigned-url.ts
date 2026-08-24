@@ -17,6 +17,7 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { dataLakeService } from '@bike4mind/services';
@@ -38,8 +39,12 @@ const handler = baseApi().post(
       const userId = req.user.id;
       const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
 
-      // Same feature gate as the batch-presign sibling: when this upload is bound to a data
-      // lake batch, the feature must actually be on.
+      // Same effective gate as the batch-presign sibling (generate-presigned-urls-batch.ts):
+      // when this upload is bound to a data lake batch, the feature must actually be on. Same
+      // 403 + FEATURE_DISABLED code, but a different response shape - this route throws
+      // ForbiddenError (rendered by errorHandler as {code, name, error, request_id}), while the
+      // sibling still hand-rolls res.status(403).json({error, code}). Convert the sibling to
+      // throw too if exact parity is ever wanted.
       if (data.batchId) {
         const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
         if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
@@ -75,7 +80,16 @@ const handler = baseApi().post(
       const requestedTagNames = (data.tags ?? []).map(t => t.name);
       const ctx = await toAccessContext(req);
       await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
-        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+          scopedSettings: scopedSettingsRepository,
+        },
+        // This request creates the file, so the caller is its owner-to-be and the admission
+        // contract (#1680) predicts against their chunk policy.
+        members: [{ userId }],
+        logger: req.logger,
       });
       // This route creates the FabFile through the manager's direct FabFile.create(), not the
       // fabFileService.createFabFile door that gates the static-registry namespace centrally -

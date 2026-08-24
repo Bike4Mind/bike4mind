@@ -6,8 +6,12 @@ import type { FabFileChunkPolicyConflict, FabFileSourceType } from '@bike4mind/c
  * evaluated at the ONE checkpoint every door's file already flows through - the chunk pipeline. It
  * does not funnel the structurally-different doors through one create call; it (1) fingerprints the
  * extracted text (`computeServerTextHash`) and (2) derives the member's retrievability against the
- * applicable chunk policy (`deriveAdmissionStatus`). REPORT-ONLY per #1658 - #1680 turns the same
- * `chunkPolicyConflict` signal into the hard gate. Provenance is carried by `FabFile.sourceType`.
+ * applicable chunk policy (`deriveAdmissionStatus`). Provenance is carried by `FabFile.sourceType`.
+ *
+ * This module stays REPORT-ONLY, and deliberately so: it runs POST-chunk, by which point the file is
+ * already a member, and the contract governs admission rather than eviction. The hard gate reads the
+ * same `chunkPolicyConflict` comparison at the MEMBERSHIP WRITE instead - see `lakeAdmissionGate.ts`
+ * (#1680), which refuses a new membership before the content is ever ingested.
  */
 
 /** Whether an admitted member's chunks honor every lake policy that applies to it. */
@@ -43,7 +47,8 @@ export function computeServerTextHash(extractedText: string | undefined): string
  * The admission decision, derived from the cross-lake chunk-policy conflict the checkpoint already
  * computes (#1662): a member with an unresolved conflict cannot honor a lake it belongs to, so it is
  * `quarantined`; otherwise it is `admitted`. Derived rather than stored as a second field so the
- * "cannot be honored" truth lives in exactly one place (`chunkPolicyConflict`), which #1680 enforces.
+ * "cannot be honored" truth lives in exactly one place (`chunkPolicyConflict`) - the same place
+ * `lakeAdmissionGate` enforces from, so the report and the gate cannot disagree.
  */
 export function deriveAdmissionStatus(conflict: FabFileChunkPolicyConflict | null): AdmissionStatus {
   return conflict ? 'quarantined' : 'admitted';

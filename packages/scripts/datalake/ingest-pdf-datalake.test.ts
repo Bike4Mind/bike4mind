@@ -13,6 +13,10 @@ vi.mock('@bike4mind/database', () => ({
   buildDataLakeMembershipFilter: () => ({}),
   connectDB: vi.fn(),
   adminSettingsRepository: {},
+  // Declared even though no test reaches the ingest path yet: the source imports it, and Vitest
+  // throws on ACCESS of an undeclared export - so omitting it is a trap for whoever extends this
+  // file to cover that path, not a saving.
+  scopedSettingsRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},

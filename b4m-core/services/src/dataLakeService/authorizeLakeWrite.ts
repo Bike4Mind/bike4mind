@@ -4,12 +4,17 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
 } from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
+import { type LakeAccessLogger } from './resolveLakeReadAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
+import { type ScopedSettingsDb } from '../settings/resolveScopedSetting';
 
 export { canManageLake, type ManageActor } from './manageRule';
 
@@ -85,6 +90,53 @@ export const assertLakeRebuildAccess = async (
 };
 
 /**
+ * Resolve a lake by id-or-slug and assert the caller may edit its FALLBACK SETTINGS OVERLAY (see
+ * IFallbackLakeSetting) - currently `groundingMode` only. Exists only for a static registry lake: a
+ * DB lake's settings live on its document and go through the ordinary `updateDataLake` write path
+ * (PUT /api/data-lakes/:id), which this gate deliberately refuses so the two paths cannot both
+ * claim to own a persisted lake's settings.
+ *
+ * Gates on `ctx.isAdmin` DIRECTLY, not `resolveCanManageLake` - same reasoning as
+ * `assertLakeRebuildAccess`: a fallback lake's synthetic document (`resolveFallbackLake`) spreads
+ * the registry config's `organizationId` onto it, so an org-scoped lake would let a customer-side
+ * org admin (not a platform admin) pass `canManageLake`'s org-admin rung if this used it. Must stay
+ * in sync with `canManageSettings` in `listDataLakes.ts`, which computes the identical predicate for
+ * the UI affordance this gate enforces server-side.
+ */
+export const assertFallbackLakeSettingsWriteAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  {
+    db,
+    logger,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      /**
+       * Declared, and non-optional, so the overlay merge cannot be lost by a caller that builds
+       * exactly this type. It previously worked only by structural typing - the one route passes a
+       * wider object - so a second caller assembling the minimal declared shape would have
+       * typechecked green while every overlay field silently read as unset.
+       */
+      fallbackLakeSettings: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>;
+    };
+    // Forwarded so resolveFallbackLake's overlay-read failure is logged on the WRITE path too;
+    // without it that catch is reachable here but permanently silent.
+    logger?: LakeAccessLogger;
+  }
+): Promise<IDataLakeDocument> => {
+  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db, logger });
+  if (!isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake has its own settings editor; use the standard update endpoint');
+  }
+  if (!ctx.isAdmin) {
+    throw new BadRequestError("You do not have permission to change this data lake's settings");
+  }
+  return lake;
+};
+
+/**
  * The distinct `datalake:*` meta-tags in a raw tag-name list, lowercased for lookup
  * (`datalakeTag` values are canonically lowercase, so a mixed-case meta-tag still resolves to
  * its real lake).
@@ -141,6 +193,8 @@ export const assertCanWriteDataLakeTags = async (
   tagNames: readonly unknown[],
   {
     db,
+    members,
+    logger,
   }: {
     db: {
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
@@ -148,10 +202,25 @@ export const assertCanWriteDataLakeTags = async (
       // The file-create fan-in (email/url/generated/research) applies only its own/hardcoded tags,
       // so it need not wire the grant repo; user-facing tag doors that do, get full grant-awareness.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    };
+    } & ScopedSettingsDb;
+    /**
+     * The files this write ADMITS into the named lakes, for the admission contract (#1680). Pass
+     * resolved files (with `chunkedPassageTokenTarget`) where they are known, so an already-chunked
+     * file is graded on what its chunks ARE rather than on what policy predicts they would be; at a
+     * pre-upload door, where no FabFile exists yet, pass `[{ userId: <owner-to-be> }]` so the gate
+     * predicts against the right owner's chunk policy.
+     *
+     * OMITTED means "nothing is being admitted" and the contract is skipped. That is the correct
+     * default for this direction-NEUTRAL gate: it also sees tag REMOVALS, and a removal must never
+     * be refused for a contract the file is leaving. A door that admits files opts IN by naming
+     * them - never inferred from the actor, which would refuse removals at every toggle door.
+     */
+    members?: readonly AdmissionMember[];
+    logger?: Logger;
   }
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
+  const targetLakes: IDataLakeDocument[] = [];
   for (const tag of metaTags) {
     if (STATIC_REGISTRY_DATALAKE_TAGS.has(tag)) {
       if (!actor.isAdmin) {
@@ -166,6 +235,22 @@ export const assertCanWriteDataLakeTags = async (
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("You do not have permission to change this data lake's files");
     }
+    targetLakes.push(lake);
+  }
+
+  // Authorization answered "may you write here"; the admission contract answers "will this content
+  // be findable once it is here" (#1680). Same chokepoint on purpose: every door that writes a
+  // CLIENT-SUPPLIED meta-tag already passes through here, so those cannot skip the contract.
+  //
+  // It is NOT a chokepoint for the whole contract. A door that resolves its lake server-side and
+  // stamps the meta-tag itself has no client meta-tag for this function to see, so it must call
+  // `assertLakeAdmission` explicitly - `generate-presigned-urls-batch`, `data-lakes/batches` and the
+  // Drive folder sync (`driveLakeIngest`) each do. A new door of that shape needs its own call.
+  //
+  // The gate itself short-circuits (no settings read) when nothing is being admitted or no target
+  // lake declares a passage policy - the common case - so this costs nothing on the ordinary path.
+  if (members?.length) {
+    await assertLakeAdmission(targetLakes, members, { db, logger });
   }
 };
 

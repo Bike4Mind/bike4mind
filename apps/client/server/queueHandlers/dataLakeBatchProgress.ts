@@ -172,7 +172,10 @@ export async function enqueueTaxonomyAnalysisIfWanted(
         .setTaxonomyStatusIfActive(batch.id, ['queued'], 'failed', {
           taxonomyError: 'Daily AI tag-suggestion limit reached - try again tomorrow',
         })
-        .catch(() => null);
+        .catch(error => {
+          logger.error(`Error reverting batch ${batch.id} to failed after daily taxonomy cap: ${error}`);
+          return null;
+        });
       // Only notify if THIS call's transition actually won (mirrors analyzeBatchTaxonomy's
       // fail()) - otherwise something else already resolved the phase, and pushing here would
       // contradict whatever that other resolution already told the client.

@@ -31,10 +31,7 @@ import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
-import DataLakeTreeView, {
-  UNCATEGORIZED_KEY,
-  type DataLakeTreeChrome,
-} from '@client/app/components/datalake/DataLakeTreeView';
+import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 
 // Utilities
 
@@ -86,7 +83,7 @@ export default function DataLakeViewer({
   );
 
   const { data: filesResult, isLoading, isError } = useDataLakeFiles(dataLakeId);
-  const articles = filesResult?.data ?? [];
+  const articles = useMemo(() => filesResult?.data ?? [], [filesResult?.data]);
 
   // Build tag tree from articles, filtering to only data lake-specific tags
   const tree = useMemo(() => {
@@ -244,11 +241,12 @@ function TreeSidebar({
         </Typography>
       </ListItemButton>
     ),
+    backRowPlacement: 'above',
     scrollSx: { flex: 1, overflow: 'auto' },
     nodeListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' },
     fileListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' },
     renderNodeRow: (node, _depth, onOpen) => (
-      <ListItem key={node.segment}>
+      <ListItem>
         <ListItemButton
           onClick={onOpen}
           sx={{ borderRadius: 'sm', gap: 1 }}
@@ -271,7 +269,7 @@ function TreeSidebar({
       </ListItem>
     ),
     renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
+      <ListItem>
         <ListItemButton
           selected={selected}
           onClick={onSelect}
@@ -307,7 +305,7 @@ function TreeSidebar({
       uncategorized={{
         files: uncategorizedFiles,
         renderRow: (count, onOpen) => (
-          <ListItem key={UNCATEGORIZED_KEY}>
+          <ListItem>
             <ListItemButton
               onClick={onOpen}
               sx={{ borderRadius: 'sm', gap: 1 }}
@@ -389,9 +387,8 @@ function ArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          {/* These mutate lake content, so they are owner-or-admin only (the backend enforces the
-              same). Hidden when viewing a read-only lake. Remove unpicks lake membership and is
-              reversible; Delete permanently destroys the document everywhere and is not. */}
+          {/* Re-process and Remove mutate lake content, so they are owner-or-admin only
+              (the backend enforces the same). Hidden when viewing a read-only lake. */}
           {canManage && (
             <>
               <Tooltip title="Re-run chunking + vectorization" size="sm">

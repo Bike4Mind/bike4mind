@@ -1,4 +1,4 @@
-import { isConvergencePausedNote, isMemberIndexingInFlight } from '@bike4mind/common';
+import { isChunkRebuildPending, isConvergencePausedNote, isMemberIndexingInFlight } from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
 
 /**
@@ -45,9 +45,11 @@ export interface RetrievalUnavailableReport {
   };
   /**
    * True when content was withheld here - the single flag a consumer branches on, alongside
-   * `EmbeddingMismatchReport.partial`. For the `indexing` bucket it is TRANSIENT and clears on its
-   * own, which is why it is safe to raise on an ordinary in-progress ingest as well as on a
-   * convergence wave; for `paused` it does not. Both are the same fact for a reader - some of this
+   * `EmbeddingMismatchReport.partial`. For the `indexing` bucket it is transient in the ordinary
+   * case and clears on its own, which is why it is safe to raise on an in-progress ingest as well as
+   * on a convergence wave; for `paused` it never does. The one `indexing` member that does not clear
+   * by itself is a rebuild whose enqueue was lost (#1939) - rare, and the prose names the action for
+   * it rather than promising only time. Both buckets are the same fact for a reader - some of this
    * lake is not searchable right now - so they share the flag, and the prose says which is which.
    */
   partial: boolean;
@@ -65,6 +67,8 @@ export type IndexStateFile = {
   vectorizedChunkCount?: number | null;
   error?: string | null;
   notes?: string | null;
+  /** A requested-but-uncommitted passage rebuild (#1939) - see the partition below. */
+  chunkRebuildRequestedAt?: Date | string | null;
 };
 
 /**
@@ -74,15 +78,19 @@ export type IndexStateFile = {
  * flagging every image and every still-uploading row would fire the partial signal on healthy
  * lakes forever - the failure mode that teaches a reader to ignore the flag.
  *
- * That `chunkCount > 0` guard looks like a hole for convergence and is not one, but only because of
- * an invariant elsewhere - stated here because nothing local would fail if it changed. Convergence's
- * `resetChunkStateByIds` sets `chunkCount: 0`, which routes a member being repaired to `servable`;
- * it is not silently absent, because that reset touches FabFile DOCUMENT fields only. The chunk rows
- * are deleted much later, inside `commitFabFileChunks`. So across the whole reset -> queue -> claim
- * -> tokenize span the member's previous vectorized chunks still exist and still rank normally: it
- * serves stale-but-real passages, and becomes withheld only once the commit lands and `chunkCount`
- * is positive with `vectorizedChunkCount` behind it. That is the better outcome, and it depends on
- * the reset never deleting chunk rows - keep the two in sync.
+ * The `chunkCount > 0` guard is what keeps images and pending uploads out, and it USED to route a
+ * member being repaired to `servable` as well: `resetChunkStateByIds` sets `chunkCount: 0`, and that
+ * reset touches FabFile DOCUMENT fields only - the chunk rows are deleted much later, inside
+ * `commitFabFileChunks` - so across the reset -> queue -> claim -> tokenize span the member's old
+ * vectorized chunks still existed and still ranked. That reading was defensible while the window was
+ * short, and wrong in the case that matters: it is indistinguishable from a rebuild that was reset
+ * and never enqueued, which never ends, and on a `vectorizedOnly` surface the file was dropped
+ * upstream of this partition entirely, so the hole was not even served-stale - it was silent.
+ *
+ * So the pending stamp (#1939) overrides the guard: a member with a rebuild outstanding is withheld
+ * and REPORTED as re-indexing. The cost is naming a file whose stale passages could still have been
+ * ranked for the minutes between reset and commit; the prose below is worded to be true of that
+ * member too. Refuse-and-report over degrade-silently, the same rule as everywhere else here.
  */
 export function partitionByIndexAvailability<T extends IndexStateFile>(
   files: readonly T[]
@@ -119,8 +127,14 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     // degrade-silently. `commitFabFileChunks` clearing the marker on a successful rebuild is the
     // other half of this - see the note there; this guard is what holds if that write is lost.
     const hasNoRetrievablePassage = (file.vectorizedChunkCount ?? 0) === 0;
+    // The pending stamp widens the `chunkCount > 0` guard rather than replacing it: it is the one
+    // in-flight signal that fires on a CHUNKLESS member, and `isMemberIndexingInFlight` is still what
+    // decides (so `error` and the paused note keep their precedence there, and a stamp left behind by
+    // a rebuild that stopped does not read as one still running).
+    const rebuildPending = isChunkRebuildPending(file.chunkRebuildRequestedAt);
     if (isConvergencePausedNote(file.notes) && hasNoRetrievablePassage) withheld.push(file);
-    else if (chunkCount > 0 && isMemberIndexingInFlight({ ...file, chunkCount })) withheld.push(file);
+    else if ((chunkCount > 0 || rebuildPending) && isMemberIndexingInFlight({ ...file, chunkCount }))
+      withheld.push(file);
     else servable.push(file);
   }
   return { servable, withheld };
@@ -156,11 +170,24 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
   const sentences: string[] = [];
   if (report.indexing.count > 0) {
     // States the remedy is TIME, not an action: the reader must not be sent to re-embed a file that
-    // is already re-embedding.
+    // is already re-embedding. Worded as "being replaced" rather than "no longer exist" because a
+    // member reset but not yet committed still has its old chunk rows (#1939) - the claim has to be
+    // true of the earliest point in the window as well as the rest of it.
+    //
+    // The trailing sentence is what keeps "returns on its own" from being a FALSE promise. A pending
+    // rebuild whose enqueue never landed (a producer killed between the reset and its sends) is
+    // withheld here indefinitely, and nothing brings it back until the rescue sweep runs or someone
+    // rebuilds the lake - so a bare "wait and re-run" would be exactly the wrong instruction, the
+    // same failure the `paused` bucket below exists to avoid. Stated as a CONDITIONAL escape hatch
+    // rather than by re-bucketing a stale stamp as `paused`: the two states differ in what a reader
+    // should do FIRST (wait vs act), which is what these buckets encode, and this keeps that split
+    // honest without giving a pure reporting function a clock or `paused` a cause it does not have.
     sentences.push(
       `Partial knowledge-base results: ${report.indexing.count} file(s)${namesOf(report.indexing)} are being ` +
-        're-indexed right now and were withheld - their previous passages no longer exist and their new ones are ' +
-        'not searchable yet. They will return on their own once indexing completes; re-run the search then.'
+        're-indexed right now and were withheld - their passages are being replaced and the replacements are ' +
+        'not searchable yet. They return on their own once indexing completes; re-run the search then. If they ' +
+        'are still missing much later, the rebuild did not finish - use the lake\'s "Rebuild passages" action, ' +
+        'or reprocess the files individually.'
     );
   }
   if (report.paused.count > 0) {
@@ -187,7 +214,7 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     sentences.push(
       `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: re-processing ` +
         'them was paused partway, so they were withheld. Unlike re-indexing files these do NOT return on ' +
-        "their own - use the lake's \"Rebuild passages\" action, or reprocess the files individually, to " +
+        'their own - use the lake\'s "Rebuild passages" action, or reprocess the files individually, to ' +
         'restore them. If background lake work is still paused, an administrator has to resume it first.'
     );
   }
