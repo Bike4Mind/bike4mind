@@ -809,6 +809,25 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return !!(await this.model.exists({ sessionId }));
   }
 
+  /**
+   * Returns quests stuck at `status: 'running'` whose `updatedAt` is older than `olderThan`.
+   * Projects only the fields the timeout-recovery decision reads (status, reply, replies, images,
+   * videos, updatedAt) plus `_id` so the caller can write back.
+   *
+   * Used by the questTimeoutSweep cron to recover orphaned quests server-side.
+   */
+  async findStaleRunning(opts: { olderThan: Date; limit?: number }): Promise<IChatHistoryItemDocument[]> {
+    const result = await this.model
+      .find({ status: 'running', updatedAt: { $lt: opts.olderThan } })
+      .select('_id status reply replies images videos updatedAt')
+      .limit(opts.limit ?? 500)
+      .lean();
+
+    return result
+      .filter(doc => doc._id != null)
+      .map(doc => ({ ...doc, id: doc._id.toString() }) as IChatHistoryItemDocument);
+  }
+
   // Returns the most recent quest in the session that has no reply yet, or
   // null if every quest already has one (or none exist).
   async findLatestUnrepliedMessage(sessionId: string) {
@@ -875,6 +894,9 @@ function initializeQuestModel() {
     // completion. Sparse because most Quests are chat_completion and
     // lack the field - a dense index would waste space on nulls.
     ChatHistoryItemSchema.index({ agentExecutionId: 1 }, { name: 'agentExecutionId', sparse: true });
+
+    // Index for findStaleRunning (questTimeoutSweep cron + read-time recovery)
+    ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
   } catch (error) {
     // Plugin already applied, ignore error
   }

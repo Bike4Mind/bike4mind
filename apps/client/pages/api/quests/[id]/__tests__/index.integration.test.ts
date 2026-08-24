@@ -14,13 +14,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindById, mockRateLimit, mockQuestFindById, mockSessionFindById } = vi.hoisted(() => ({
-  mockValidate: vi.fn(),
-  mockFindById: vi.fn(),
-  mockRateLimit: vi.fn(),
-  mockQuestFindById: vi.fn(),
-  mockSessionFindById: vi.fn(),
-}));
+const { mockValidate, mockFindById, mockRateLimit, mockQuestFindById, mockQuestUpdate, mockSessionFindById } =
+  vi.hoisted(() => ({
+    mockValidate: vi.fn(),
+    mockFindById: vi.fn(),
+    mockRateLimit: vi.fn(),
+    mockQuestFindById: vi.fn(),
+    mockQuestUpdate: vi.fn(),
+    mockSessionFindById: vi.fn(),
+  }));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -60,6 +62,7 @@ vi.mock('@bike4mind/database', async orig => {
     questRepository: {
       ...(actual.questRepository as object),
       findById: (...a: unknown[]) => mockQuestFindById(...a),
+      update: (...a: unknown[]) => mockQuestUpdate(...a),
     },
     sessionRepository: {
       ...(actual.sessionRepository as object),
@@ -83,6 +86,7 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../index';
 import { ApiKeyScope } from '@bike4mind/common';
+import { QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -260,6 +264,133 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+  });
+
+  describe('read-time timeout recovery (headless API clients)', () => {
+    const staleDate = new Date(Date.now() - QUEST_TIMEOUT_THRESHOLD_MS - 5_000).toISOString();
+
+    it('recovers a stuck quest on GET and returns terminal status', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'running',
+        reply: null,
+        replies: [],
+        images: [],
+        promptMeta: {},
+        updatedAt: staleDate,
+      });
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+      mockQuestUpdate.mockResolvedValue({
+        id: 'quest-1',
+        status: 'done',
+        type: 'error',
+        updatedAt: new Date().toISOString(),
+      });
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
+      expect(mockQuestUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'quest-1', status: 'done', type: 'error' })
+      );
+    });
+
+    it('preserves content on a stuck quest that has replies', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'running',
+        reply: 'partial answer',
+        replies: ['partial answer'],
+        images: [],
+        promptMeta: {},
+        updatedAt: staleDate,
+      });
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+      mockQuestUpdate.mockResolvedValue({
+        id: 'quest-1',
+        status: 'done',
+        updatedAt: new Date().toISOString(),
+      });
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
+      // No error type when content exists
+      expect(mockQuestUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest-1', status: 'done' }));
+      expect(mockQuestUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+    });
+
+    it('does not recover a fresh running quest (heartbeat still alive)', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'running',
+        reply: null,
+        replies: [],
+        promptMeta: {},
+        updatedAt: new Date().toISOString(), // fresh
+      });
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('running');
+      expect(mockQuestUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not re-recover an already-terminal quest', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        reply: 'complete',
+        replies: ['complete'],
+        promptMeta: {},
+        updatedAt: staleDate,
+      });
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
+      expect(mockQuestUpdate).not.toHaveBeenCalled();
+    });
+
+    it('works for API-key callers (the actual bug: headless API clients never got recovery)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'running',
+        reply: null,
+        replies: [],
+        images: [],
+        promptMeta: {},
+        updatedAt: staleDate,
+      });
+      mockSessionFindById.mockResolvedValue({
+        id: 'sess-1',
+        userId: 'owner',
+        users: [{ userId: 'user-1' }],
+      });
+      mockQuestUpdate.mockResolvedValue({
+        id: 'quest-1',
+        status: 'done',
+        type: 'error',
+        updatedAt: new Date().toISOString(),
+      });
+
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().status).toBe('done');
     });
   });
 

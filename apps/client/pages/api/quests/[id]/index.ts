@@ -3,6 +3,7 @@ import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { ApiKeyScope, redactPromptMetaForViewer, toToolPayloads } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
+import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import type { Request } from 'express';
 
@@ -37,6 +38,17 @@ const handler = baseApi({
 
   if (!userHasAccess) {
     throw new NotFoundError('Quest not found');
+  }
+
+  // Recover a stuck quest on read so API clients (CLI, MCP, automated harnesses) that poll
+  // this endpoint get a terminal status without needing the browser-only check-timeout POST.
+  // See resolveQuestTimeoutRecovery for the liveness-based decision.
+  const recovery = resolveQuestTimeoutRecovery(quest, Date.now());
+  if (recovery) {
+    const recovered = await questRepository.update({ id: quest.id, ...recovery });
+    if (recovered) {
+      Object.assign(quest, recovery, { updatedAt: recovered.updatedAt });
+    }
   }
 
   // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, a `.mp3` from
