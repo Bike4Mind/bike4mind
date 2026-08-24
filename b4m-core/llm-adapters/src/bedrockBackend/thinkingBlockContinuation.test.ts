@@ -289,12 +289,20 @@ describe('Bedrock Claude tool continuation preserves signed thinking blocks', ()
     const { backend, emitted } = await runToolTurn([thinkingToolRound(), synthesisRound()]);
 
     expect(backend.sentBodies).toHaveLength(2);
+    const continuation = JSON.parse(backend.sentBodies[1]) as { thinking?: unknown };
     const content = rebuiltAssistantContent(backend.sentBodies[1]);
 
-    // Anthropic requires the thinking block FIRST, and unmodified.
+    // Anthropic requires the thinking block FIRST, and unmodified. `input` is asserted so a
+    // replay that corrupted the tool parameters would fail rather than pass on block shape alone.
     expect(content[0]).toEqual({ type: 'thinking', thinking: THINKING_TEXT, signature: SIGNATURE });
-    expect(content[1]).toMatchObject({ type: 'tool_use', name: 'get_weather' });
-    // The synthesis round produced a real answer rather than tripping the EMPTY guard.
+    expect(content[1]).toMatchObject({ type: 'tool_use', name: 'get_weather', input: { location: 'Paris' } });
+
+    // The reported config: an adaptive model reasons without being asked, so the caller passed
+    // no `thinking`. The signed blocks ride the assistant history (asserted above) while the
+    // continuation request declares no thinking - the exact wire shape the whole fix rests on.
+    expect(continuation.thinking).toBeUndefined();
+
+    // Smoke check that the synthesis round emitted text; its payload validity is pinned above.
     expect(emitted).toContain('It is sunny in Paris.');
   });
 
@@ -319,7 +327,7 @@ describe('Bedrock Claude tool continuation preserves signed thinking blocks', ()
 
     const content = rebuiltAssistantContent(backend.sentBodies[1]);
     expect(content).toHaveLength(1);
-    expect(content[0]).toMatchObject({ type: 'tool_use', name: 'get_weather' });
+    expect(content[0]).toMatchObject({ type: 'tool_use', name: 'get_weather', input: { location: 'Paris' } });
   });
 
   it('keeps declaring thinking on the continuation round when the caller enabled it', async () => {
@@ -347,6 +355,10 @@ describe('Bedrock Claude tool continuation preserves signed thinking blocks', ()
       expect(content[1]).toMatchObject({ type: 'tool_use' });
     }
     expect(turns.map(c => (c[1] as { name?: string }).name)).toEqual(['get_weather', 'get_time']);
+    expect(turns.map(c => (c[1] as { input?: unknown }).input)).toEqual([
+      { location: 'Paris' },
+      { timezone: 'Europe/Paris' },
+    ]);
   });
 
   // The non-streaming half of both the capture and the replay: a different Bedrock command
@@ -358,7 +370,7 @@ describe('Bedrock Claude tool continuation preserves signed thinking blocks', ()
     const content = rebuiltAssistantContent(backend.sentBodies[1]);
 
     expect(content[0]).toEqual({ type: 'thinking', thinking: THINKING_TEXT, signature: SIGNATURE });
-    expect(content[1]).toMatchObject({ type: 'tool_use', name: 'get_weather' });
+    expect(content[1]).toMatchObject({ type: 'tool_use', name: 'get_weather', input: { location: 'Paris' } });
     expect(emitted).toContain('It is sunny in Paris.');
   });
 });
