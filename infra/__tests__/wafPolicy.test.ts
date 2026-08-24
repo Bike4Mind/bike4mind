@@ -357,9 +357,15 @@ describe('wafPolicy', () => {
       const rateBased = (fallback!.Statement as any).RateBasedStatement;
       const apiLimit = (rules.find(r => r.Name === 'api-rate-limit')!.Statement as any).RateBasedStatement.Limit;
 
-      // Negated: it applies to everything EXCEPT assets, which carry their own ceilings.
-      expect(rateBased.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString).toBe('/_next/');
-      // Above the API limit, so the specific rule is what bites on API traffic.
+      // Excludes only real assets. /_next/static/ is the sole prefix CloudFront routes to the
+      // bucket, so /_next/data, /_next/image and any case variant stay function-backed and must
+      // fall through to this ceiling rather than into the 50000 asset bucket.
+      expect(rateBased.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString).toBe(
+        '/_next/static/'
+      );
+      // Pinned, not bounded: this number is about to be retuned off a shadow reading, and a
+      // greater-than assertion would pass a 10x loosening while failing a tightening.
+      expect(rateBased.Limit).toBe(5000);
       expect(rateBased.Limit).toBeGreaterThan(apiLimit);
     });
 
@@ -430,10 +436,10 @@ describe('wafPolicy', () => {
 
       const rateBased = (assetRule.Statement as any).RateBasedStatement;
       expect(rateBased.Limit).toBe(50000);
-      // CloudFront routes the whole /_next/ prefix to the assets bucket, not just /_next/static/,
-      // so the carve-out covers the prefix. image-rate-limit sits behind this at a higher priority
-      // and is still reached while this rule is under its limit.
-      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/');
+      // Only /_next/static/ is routed to the assets bucket: probed staging, /_next/static/x answers
+      // from AmazonS3 while /_next/x and /_NEXT/static/x both come from the default origin. So the
+      // carve-out stops here and everything else under /_next/ stays function-backed.
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/static/');
     });
 
     it('includes the ai-route-rate-limit rule at Priority 4', () => {

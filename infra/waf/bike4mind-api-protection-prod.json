@@ -448,7 +448,7 @@
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
             "ByteMatchStatement": {
-              "SearchString": "/_next/",
+              "SearchString": "/_next/static/",
               "FieldToMatch": {
                 "UriPath": {}
               },
@@ -534,7 +534,7 @@
             "NotStatement": {
               "Statement": {
                 "ByteMatchStatement": {
-                  "SearchString": "/_next/",
+                  "SearchString": "/_next/static/",
                   "FieldToMatch": {
                     "UriPath": {}
                   },
