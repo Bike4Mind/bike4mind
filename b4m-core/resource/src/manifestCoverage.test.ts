@@ -22,14 +22,19 @@ const REPO_ROOT = join(__dirname, '../../..');
 const MANIFEST = join(__dirname, 'manifest.ts');
 
 /**
- * Queue names the application resolves, by EITHER mechanism, in shippable (non-test) code.
+ * Queue names the application resolves, by ANY mechanism, in shippable (non-test) code.
  *
- * There are two, and covering only the first is how this guard shipped with a hole: the
- * property path `Resource.fooQueue.url`, and the string path `getSourceQueueUrl('fooQueue')`,
- * which reads the `sourceQueueUrls` name-to-URL Linkable instead. The string path is invisible
- * to a search for `Resource.*Queue`, and it is the one the API routes mostly use - so the first
- * version of this test declared sreJobQueue "unreachable on self-host" while two admin routes
- * were resolving it by name.
+ * There are three, and each one this guard did not know about had already hidden a real gap:
+ *   1. the property path `Resource.fooQueue.url`;
+ *   2. the string path `getSourceQueueUrl('fooQueue')`, which reads the `sourceQueueUrls`
+ *      name-to-URL Linkable instead - invisible to a search for `Resource.*Queue`, and the form
+ *      the API routes mostly use, so the first version of this test declared sreJobQueue
+ *      "unreachable on self-host" while two admin routes were resolving it by name;
+ *   3. the cast path `(Resource as any).fooQueue.url`, where the matched text starts
+ *      `Resource as any).fooQueue` so a bare `Resource\.` never matches. That one hid
+ *      webhookDeliveryQueue, which shippable code reads and no list accounted for.
+ *
+ * `Resource['fooQueue']` is not used anywhere, so it is deliberately not covered.
  */
 const referencedQueues = (): Map<string, string[]> => {
   let out = '';
@@ -38,15 +43,22 @@ const referencedQueues = (): Map<string, string[]> => {
       'grep',
       [
         '-rnoE',
-        "Resource(\\?)?\\.[A-Za-z][A-Za-z0-9]*Queue|getSourceQueueUrl\\('[A-Za-z][A-Za-z0-9]*'\\)",
+        "Resource( as [A-Za-z][A-Za-z0-9]*\\))?(\\?)?\\.[A-Za-z][A-Za-z0-9]*Queue|getSourceQueueUrl\\('[A-Za-z][A-Za-z0-9]*'\\)",
         'apps/client/server',
         'apps/client/pages',
         'b4m-core',
+        // Dev scripts resolve queues off Resource too. In scope on purpose: a queue whose only
+        // read lives here would otherwise be invisible, and the sanity check below cannot see
+        // the difference because it only asserts the map is non-empty.
+        'packages',
       ],
       { cwd: REPO_ROOT, encoding: 'utf8' }
     );
-  } catch {
-    // grep exits 1 on no matches, which the sanity check below turns into a failure.
+  } catch (e) {
+    // grep exits 1 for no matches and 2 for a real failure (missing path, unreadable file).
+    // Collapsing both to an empty scan would report "no queues referenced" for a broken run,
+    // so only the no-match case is tolerated here.
+    if ((e as { status?: number }).status !== 1) throw e;
   }
 
   const found = new Map<string, string[]>();
@@ -98,6 +110,13 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   slackExportQueue: 'reachable from /api/slack/export/async - candidate to wire',
   dataLakeCleanupQueue: 'reachable from /api/data-lakes/[id]/lifecycle - candidate to wire',
   githubWebhookQueue: 'reachable from /api/webhooks/github/[token] - candidate to wire',
+
+  // Surfaced by teaching the scanner the cast form. Read at two admin routes (webhook delivery
+  // retry, and GitHub replay-dlq) and its handler IS in open core, so this is a real gap rather
+  // than an impossibility. Not registered here on purpose: nothing consumes it on self-host yet,
+  // and a declared queue with no consumer accepts messages forever and drops them silently,
+  // which is worse than the clean 503 both call sites already degrade to.
+  webhookDeliveryQueue: 'reachable from the webhook retry and replay-dlq routes - needs a consumer first',
 
   // Admin-only, and each needs something self-host has not got.
   whatsNewGenerationQueue: 'admin-only backfill route; needs a content-generation decision',
