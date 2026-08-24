@@ -770,6 +770,12 @@ export class ChatCompletionProcess {
    * suppressing retrieval (fail toward grounding, mirroring the tool-offer gate below).
    */
   public personalCorpusOnly = false;
+  /**
+   * The permission-filtered file ids behind `personalCorpusOnly`, handed to the knowledge tools as
+   * their scope. Already resolved through a CASL read scope (getAttachedKnowledgeFiles), which is
+   * what makes them safe to pass to the file-scoped arm - see ToolContext.personalCorpusFileIds.
+   */
+  public personalCorpusFileIds: string[] = [];
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -1613,6 +1619,8 @@ export class ChatCompletionProcess {
         (session.retrievalTags?.length ?? 0) === 0 &&
         session.corpusGroundingMode !== 'retrieve' &&
         attachedKnowledgeFiles.every(f => !(f.tags ?? []).some(t => accessibleLakeTags.has(t.name)));
+      // Ids come from the already-CASL-filtered lookup, never from session.knowledgeIds directly.
+      this.personalCorpusFileIds = this.personalCorpusOnly ? (attachedKnowledgeFiles ?? []).map(f => f.id) : [];
 
       // "Attached knowledge" for the offer means the caller has an attachment the tool can
       // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
@@ -2338,6 +2346,7 @@ export class ChatCompletionProcess {
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
+        personalCorpusFileIds: this.personalCorpusFileIds,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,

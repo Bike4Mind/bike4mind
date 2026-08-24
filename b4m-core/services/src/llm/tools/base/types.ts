@@ -169,6 +169,21 @@ export interface ToolContext {
    */
   kbScope?: KbScope;
   /**
+   * FabFile ids of a session whose attached corpus is entirely PERSONAL - nothing belonging to a
+   * data lake the caller can reach (see ChatCompletionProcess.personalCorpusOnly). When set, the
+   * knowledge tools scope to these files and do not consult owner-wide lake access, so a notebook
+   * about its own uploads stops grounding on an unrelated product's lake.
+   *
+   * DISTINCT FROM `kbScope`, deliberately. kbScope is agent config, is never derived from request
+   * input, and is fail-closed (an empty list reads NOTHING). This is derived from
+   * `session.knowledgeIds`, which IS client-writable, so it carries two different rules:
+   *  - the ids MUST already be permission-filtered by the host (the chat path resolves them through
+   *    getAttachedKnowledgeFiles -> a CASL read scope) - passing raw session ids here would make the
+   *    file-scoped arm a cross-tenant read, since it resolves with a lifecycle-only scope;
+   *  - empty/absent means "no opinion", NOT "read nothing" - it must never narrow a session to zero.
+   */
+  personalCorpusFileIds?: string[];
+  /**
    * FabFile ids attached to THIS session whose text was actually delivered into this turn's
    * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
    * silently dropped by `processFabFilesServer` - see `buildDataSources`'s

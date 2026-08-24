@@ -38,6 +38,7 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    personalCorpusFileIds,
     questId,
   }: {
     db: ToolContext['db'];
@@ -45,6 +46,7 @@ export const generateTools = (
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+    personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
     questId?: ToolContext['questId'];
   },
   storage: BaseStorage,
@@ -89,6 +91,7 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    personalCorpusFileIds,
     codeMinifier,
     availableModels,
     onToolLlmUsage,

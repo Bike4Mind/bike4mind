@@ -101,6 +101,8 @@ export interface ToolBuilderConfig {
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  /** Personal-corpus file ids, forwarded to the tool context (see ToolContext.personalCorpusFileIds). */
+  personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -696,6 +698,7 @@ export class ToolBuilder {
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
+        personalCorpusFileIds: this.deps.personalCorpusFileIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

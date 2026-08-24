@@ -2303,3 +2303,63 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
     });
   });
 });
+
+/**
+ * Personal-corpus scoping (a notebook whose whole corpus is non-lake files). The load-bearing
+ * assertion is that the LAKE ARMS DO NOT RUN - scoping only the semantic arm would let the keyword
+ * fallback re-widen to owner-wide lake access on exactly the turns the semantic arm found nothing.
+ */
+describe('search_knowledge_base personal-corpus scoping', () => {
+  function makePersonalContext(personalCorpusFileIds: string[], overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      personalCorpusFileIds,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'own1', fileName: 'work-notes.txt', tags: [], vectorized: true, mimeType: 'text/plain' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('routes to the file-scoped arm and never consults owner-wide lake access', async () => {
+    await run(makePersonalContext(['own1', 'own2']));
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalledTimes(1);
+    expect(fileScopedSemanticSearchMock.mock.calls[0][0]).toMatchObject({ fileIds: ['own1', 'own2'] });
+    // The bug being fixed: these two ARE the lake corpus walk.
+    expect(semanticDataLakeSearchMock).not.toHaveBeenCalled();
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('narrows the keyword fallback too, so it cannot re-widen to the lakes', async () => {
+    const ctx = makePersonalContext(['own1']);
+    await run(ctx);
+
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    const [, , filters, , , opts] = searchMock.mock.calls[0];
+    expect(filters.restrictToFileIds).toEqual(['own1']);
+    expect(opts.dataLakeTags).toBeUndefined();
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('an EMPTY list means "no opinion", not "read nothing" - it must never narrow to zero', async () => {
+    await run(makePersonalContext([]));
+    // Falls through to the owner-wide arm exactly as an unscoped session does today.
+    expect(fileScopedSemanticSearchMock).not.toHaveBeenCalled();
+    expect(getDynamicDataLakeAccessMock).toHaveBeenCalled();
+  });
+
+  it('kbScope wins when both are set - it is the stricter, fail-closed restriction', async () => {
+    await run(makePersonalContext(['own1'], { kbScope: { fileIds: ['agent1'] } }));
+    expect(fileScopedSemanticSearchMock.mock.calls[0][0]).toMatchObject({ fileIds: ['agent1'] });
+  });
+});

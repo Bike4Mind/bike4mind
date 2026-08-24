@@ -47,6 +47,8 @@ export interface ToolBuilderDeps {
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  /** Personal-corpus file ids, forwarded to the tool context (see ToolContext.personalCorpusFileIds). */
+  personalCorpusFileIds?: ToolContext['personalCorpusFileIds'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -287,6 +289,7 @@ export function buildSharedTools(
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    personalCorpusFileIds,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -296,7 +299,15 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope, inlinedAttachmentIds, fullyInlinedAttachmentIds, questId: callbacks.questId },
+    {
+      db,
+      retrievalFilter,
+      kbScope,
+      inlinedAttachmentIds,
+      fullyInlinedAttachmentIds,
+      personalCorpusFileIds,
+      questId: callbacks.questId,
+    },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,
