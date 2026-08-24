@@ -1,10 +1,12 @@
 import { Logger } from '@bike4mind/observability';
 import {
   FAB_FILE_CONTENT_REWRITE_PATCH,
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
   isImageServeable,
@@ -52,6 +54,10 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
     // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
+    // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
+    // same reason it is there: a door that could omit it would silently skip the contract.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -121,7 +127,14 @@ export const updateFabFile = async (
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
-          { db, logger, fileOwnerUserId: fabFile.userId }
+          {
+            db,
+            logger,
+            fileOwnerUserId: fabFile.userId,
+            // Already in hand, so the admission contract grades this file on the target its chunks
+            // WERE built with instead of re-fetching it or predicting from policy.
+            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+          }
         );
 
   const updatedFabFile: Partial<IFabFileDocument> = {

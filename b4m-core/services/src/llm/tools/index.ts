@@ -1,5 +1,6 @@
 import { ToolDefinition } from './base/types';
 export type { ToolContext, ToolDefinition } from './base/types';
+export { mergeRetrievalSummary, type RetrievalSummary } from './retrievalSummaryMerge';
 import { diceRollTool } from './implementation/diceroll';
 import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';

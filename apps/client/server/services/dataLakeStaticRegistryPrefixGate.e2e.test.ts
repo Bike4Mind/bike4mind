@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { KnowledgeType } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   FabFile,
   User,
@@ -13,6 +13,10 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * End-to-end guard, against REAL Mongo rather than a mock, for the static-registry namespace gate
@@ -37,11 +41,11 @@ beforeAll(async () => {
   const admin = await User.create({ username: 'platform-admin', name: 'Admin', isAdmin: true });
   ownerId = owner.id as string;
   adminId = admin.id as string;
-}, 30000);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 afterEach(async () => {
   await FabFile.deleteMany({});
 });
@@ -86,7 +90,7 @@ describe('data-lake static-registry prefix gate (real Mongo, both single-file do
 
       const persisted = await FabFile.findById(file.id);
       expect(persisted?.tags ?? []).toEqual([]);
-    }, 30000);
+    });
 
     it('allows an admin to apply a static-registry-prefixed tag', async () => {
       const file = await makeFile([], adminId);
@@ -95,7 +99,7 @@ describe('data-lake static-registry prefix gate (real Mongo, both single-file do
 
       const persisted = await FabFile.findById(file.id);
       expect((persisted?.tags ?? []).map(t => t.name)).toEqual(['opti:report']);
-    }, 30000);
+    });
 
     it('allows a non-admin to remove a legacy static-registry-prefixed tag already on their file', async () => {
       const file = await makeFile([{ name: 'opti:legacy' }]);
@@ -104,7 +108,7 @@ describe('data-lake static-registry prefix gate (real Mongo, both single-file do
 
       const persisted = await FabFile.findById(file.id);
       expect(persisted?.tags ?? []).toEqual([]);
-    }, 30000);
+    });
   });
 
   describe('updateFabFile (whole-array PUT /api/files/[id] path)', () => {
@@ -122,7 +126,7 @@ describe('data-lake static-registry prefix gate (real Mongo, both single-file do
 
       const persisted = await FabFile.findById(file.id);
       expect(persisted?.tags ?? []).toEqual([]);
-    }, 30000);
+    });
 
     it('does not block an unrelated edit to a file that already carries a legacy static-registry-prefixed tag', async () => {
       const file = await makeFile([{ name: 'opti:legacy' }]);
@@ -142,7 +146,7 @@ describe('data-lake static-registry prefix gate (real Mongo, both single-file do
 
       const persisted = await FabFile.findById(file.id);
       expect((persisted?.tags ?? []).map(t => t.name).sort()).toEqual(['opti:legacy', 'unrelated']);
-    }, 30000);
+    });
 
     it('allows an admin whole-array write that newly adds a static-registry-prefixed tag', async () => {
       const file = await makeFile([], adminId);
@@ -156,6 +160,6 @@ describe('data-lake static-registry prefix gate (real Mongo, both single-file do
 
       const persisted = await FabFile.findById(file.id);
       expect((persisted?.tags ?? []).map(t => t.name)).toEqual(['opti:report']);
-    }, 30000);
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/utils';
 
 // Passthrough the wrapper so we drive the raw handler directly.
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -37,6 +38,7 @@ const h = vi.hoisted(() => ({
   fetchDriveFileContent: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   sendToQueue: vi.fn(),
+  assertLakeAdmission: vi.fn(),
   // records the interleaving of manifest-append vs byte-upload to assert ordering
   order: [] as string[],
   // wider ordering record - user loads, uploads, carry-over writes, deletes - for the invariants that
@@ -50,6 +52,9 @@ vi.mock('@bike4mind/database', () => ({
   // The real one gives the quota read-modify-write conflict-checked isolation; here it just runs the
   // body, so the assertions are about WHICH document gets read and when.
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  // Backing stores the admission contract's enforcement lever (#1680) resolves from.
+  adminSettingsRepository: { findAll: vi.fn(), findBySettingNames: vi.fn() },
+  scopedSettingsRepository: { findOverrides: vi.fn() },
   dataLakeRepository: { findById: h.lakeFindById, find: h.lakeFind },
   dataLakeBatchRepository: {
     create: h.batchCreate,
@@ -83,6 +88,7 @@ vi.mock('@bike4mind/services', () => ({
     hasOtherLakeClaim: (claims: { metaTagNames: string[]; prefixArmLakes: unknown[] }) =>
       claims.metaTagNames.length > 0 || claims.prefixArmLakes.length > 0,
     recomputeLakeStats: h.recomputeLakeStats,
+    assertLakeAdmission: h.assertLakeAdmission,
   },
   fabFilesService: { deleteFabFile: h.deleteFabFile },
 }));
@@ -942,6 +948,52 @@ describe('driveLakeIngest consumer', () => {
     h.recomputeLakeStats.mockRejectedValue(new Error('aggregate blew up'));
 
     await expect(run()).rejects.toThrow('s3 blip');
+  });
+
+  // The admission contract (#1680). This door resolves its own lake and stamps its own meta-tag, and
+  // it creates FabFiles through the manager's direct create - so it is gated nowhere else.
+  it('grades the lake once per sync, against the connecting user as owner-to-be', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Once, not per candidate: the lake and the owner-to-be are the same for every file.
+    expect(h.assertLakeAdmission).toHaveBeenCalledTimes(1);
+    expect(h.assertLakeAdmission).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 'lake1', datalakeTag: 'lake-tag' })],
+      [{ userId: 'user1' }],
+      expect.anything()
+    );
+  });
+
+  it('refuses the whole sync cleanly on an admission refusal - no batch, no retry spiral', async () => {
+    // A refusal is deterministic (same lever, same chunk policy on every retry), so rethrowing it
+    // would spin this message to the DLQ. Recorded as guidance and returned, like the candidate cap.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertLakeAdmission.mockRejectedValue(new BadRequestError('"Lake" requires passages of 1000 tokens'));
+
+    await run();
+
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.fetchDriveFileContent).not.toHaveBeenCalled();
+    expect(h.updateHealth).toHaveBeenCalledWith(
+      'conn1',
+      expect.objectContaining({ status: 'connected', lastError: expect.stringContaining('requires passages of 1000') })
+    );
+  });
+
+  it('lets a non-admission failure from the gate reach SQS for retry', async () => {
+    // Only a BadRequestError is a verdict; a settings-store outage is transient and must retry.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertLakeAdmission.mockRejectedValue(new Error('settings store unreachable'));
+
+    await expect(run()).rejects.toThrow('settings store unreachable');
+    expect(h.batchCreate).not.toHaveBeenCalled();
   });
 });
 

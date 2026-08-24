@@ -65,6 +65,17 @@ export const archiveDataLake = async (
     throw new BadRequestError('You do not have permission to archive this data lake');
   }
 
+  // Refused ahead of the status handling below, and for the same reason restore refuses it: the
+  // purge has been accepted and its sweep is irreversible (#1744). Falling through would settle
+  // this lake on 'archived', clobbering the claim - and the release that is supposed to rescue an
+  // abandoned purge is conditional on 'purging' (releasePurgingToDeleted), so it would match
+  // nothing and no-op, leaving the accepted purge silently abandoned. Not reachable from the UI (a
+  // purging lake is absent from every list, so no Archive control renders), but this service is
+  // the guard, not the client - which is the whole point of #1744.
+  if (existing.status === 'purging') {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be archived');
+  }
+
   // Only short-circuit on the terminal state. A lake left in the transitional
   // 'archiving' state by a crashed/timed-out prior attempt must be able to re-run -
   // the side effects below (cancel batches, archive files, recompute) are idempotent.
@@ -196,7 +207,11 @@ export const archiveDataLake = async (
   // Always recompute from source, never short-circuit on the sweep's own count ("it archived
   // nothing, so stats can't have changed"): a re-entry sweeps 0 for rows a PRIOR attempt already
   // archived, and those rows are exactly what this recompute needs to reflect.
-  await recomputeLakeStats(existing, { db });
+  // Logger forwarded for parity with every other recompute call, not because an audit row is
+  // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's
+  // draft/null window, so the recompute cannot emit an auto-activate event. Passing it anyway costs
+  // nothing and saves the next reader re-deriving that.
+  await recomputeLakeStats(existing, { db, logger });
 
   return updated;
 };

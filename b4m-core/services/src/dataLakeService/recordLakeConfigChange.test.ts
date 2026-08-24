@@ -81,6 +81,42 @@ describe('recordLakeConfigChange', () => {
       );
       expect(recordedInput(record)).toMatchObject({ principalKind: 'system', principalId: 'system' });
     });
+
+    // Only the route can tell an API key from a session, so a principal it resolved always wins over
+    // the userId-derived fallback. Without this, a key-driven reconfiguration is recorded as though
+    // the key's owner had made the change by hand - wrong in the one field the row exists to get right.
+    describe('resolved by the route (auditPrincipal)', () => {
+      it('records the KEY as the principal and keeps the human findable', async () => {
+        const { record, adapters: a } = adapters();
+        await recordLakeConfigChange(
+          {
+            actor: actor({
+              userId: 'alice',
+              auditPrincipal: { principalKind: 'apiKey', principalId: 'key_abc', onBehalfOfUserId: 'alice' },
+            }),
+            lake: lake(),
+            action: 'update',
+            changes: [change],
+          },
+          a
+        );
+        expect(recordedInput(record)).toMatchObject({
+          principalKind: 'apiKey',
+          principalId: 'key_abc',
+          onBehalfOfUserId: 'alice',
+        });
+      });
+
+      it('leaves onBehalfOfUserId unset for an ordinary session write - the human IS the principal', async () => {
+        const { record, adapters: a } = adapters();
+        await recordLakeConfigChange(
+          { actor: actor({ userId: 'alice' }), lake: lake(), action: 'update', changes: [change] },
+          a
+        );
+        expect(recordedInput(record)).toMatchObject({ principalKind: 'user', principalId: 'alice' });
+        expect(recordedInput(record).onBehalfOfUserId).toBeUndefined();
+      });
+    });
   });
 
   describe('manage rung', () => {
@@ -176,23 +212,51 @@ describe('recordLakeConfigChange', () => {
   });
 
   describe('best-effort - the deliberate inverse of the read side', () => {
-    it('swallows a failing event write and warns through the wired logger', async () => {
-      const warn = vi.fn();
+    // Audit LOSS is an error, not a warning - the read-side twin (recordLakeAccessEvent) logs its
+    // own loss at `error`, and an alert keyed off that severity has to catch both halves of the trail
+    // or config-audit loss accumulates while only reads page anyone.
+    it('swallows a failing event write and logs it at ERROR through the wired logger', async () => {
+      const error = vi.fn();
       const { adapters: a } = adapters({
         record: vi.fn().mockRejectedValue(new Error('mongo down')),
-        logger: { warn },
+        logger: { error },
       });
       await expect(
         recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, a)
       ).resolves.toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
+      expect(error).toHaveBeenCalledWith(
         expect.stringContaining('audit event did not persist'),
         expect.objectContaining({ dataLakeId: 'lake1', action: 'update' })
       );
     });
 
-    it('falls back to console.warn when no logger is wired, so it cannot go fully silent', async () => {
-      const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    it('prefers error over warn when the logger offers both', async () => {
+      const error = vi.fn();
+      const warn = vi.fn();
+      const { adapters: a } = adapters({
+        record: vi.fn().mockRejectedValue(new Error('mongo down')),
+        logger: { warn, error },
+      });
+      await recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, a);
+      expect(error).toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('falls back to warn for a logger that only offers warn, rather than losing the line', async () => {
+      const warn = vi.fn();
+      const { adapters: a } = adapters({
+        record: vi.fn().mockRejectedValue(new Error('mongo down')),
+        logger: { warn },
+      });
+      await recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, a);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('audit event did not persist'),
+        expect.objectContaining({ dataLakeId: 'lake1' })
+      );
+    });
+
+    it('falls back to console.error when no logger is wired, so it cannot go fully silent', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const { adapters: a } = adapters({ record: vi.fn().mockRejectedValue(new Error('mongo down')) });
       await recordLakeConfigChange({ actor: actor(), lake: lake(), action: 'update', changes: [change] }, a);
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('audit event did not persist'), expect.anything());

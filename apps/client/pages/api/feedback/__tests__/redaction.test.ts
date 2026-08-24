@@ -35,7 +35,11 @@ const mockSave = vi.fn().mockResolvedValue(undefined);
 const mockFind = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FeedbackModelMock(this: any, data: unknown) {
-  Object.assign(this, data, { id: savedFeedback.id, save: mockSave });
+  Object.assign(this, data, {
+    id: savedFeedback.id,
+    save: mockSave,
+    toJSON: () => ({ id: savedFeedback.id, ...(data as object) }),
+  });
 }
 FeedbackModelMock.find = mockFind;
 
@@ -47,7 +51,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
-const mockPostFeedbackToSlack = vi.fn().mockResolvedValue(undefined);
+const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
 vi.mock('@server/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
@@ -66,6 +70,22 @@ vi.mock('@bike4mind/utils', () => ({
     return undefined;
   }),
 }));
+
+vi.mock('@server/utils/config', () => ({
+  Config: { STAGE: 'production' },
+}));
+
+vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
+
+vi.mock('@server/utils/cloudwatch', async () => {
+  const actual = await vi.importActual<typeof import('@server/utils/cloudwatch')>('@server/utils/cloudwatch');
+  return {
+    recordFeedbackDeliverySuccess: vi.fn(),
+    recordFeedbackDeliveryFailure: vi.fn(),
+    recordFeedbackDeliverySkipped: vi.fn(),
+    ALARM_WORTHY_SKIP_REASONS: actual.ALARM_WORTHY_SKIP_REASONS,
+  };
+});
 
 import '../index';
 
@@ -110,9 +130,9 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     await mockRefs.postHandler!(req, res);
 
     expect(mockPostFeedbackToSlack).toHaveBeenCalled();
-    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][6] as string;
-    expect(slackPromptMetaArg).not.toContain('PRIVATE TOOL OUTPUT');
-    expect(slackPromptMetaArg).toContain('web_search');
+    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][6];
+    expect(JSON.stringify(slackPromptMetaArg)).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(JSON.stringify(slackPromptMetaArg)).toContain('web_search');
   });
 
   it('does not send returnValue to email', async () => {

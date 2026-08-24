@@ -3,10 +3,17 @@ import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { FeedbackModel, User, UserActivityCounter, Organization, CounterLog } from '@bike4mind/database';
 import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * End-to-end regression test for the real chain: POST handler -> logEvent -> incrementUserCounter
@@ -33,7 +40,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const mockPostFeedbackToSlack = vi.fn().mockResolvedValue(undefined);
+const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
 vi.mock('@server/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
@@ -50,13 +57,15 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     getSettingsMap: vi.fn().mockResolvedValue({}),
     // Slack and email both enabled so the identity-resolution fix in each egress block is actually
     // exercised -- with both off, neither block ran and the resolved-identity substitutions had no
-    // coverage at all.
+    // coverage at all. FeedbackReceiveEmailNonProd is also set: this suite's real Config.STAGE is
+    // 'test' (vitest.setup.ts), which classifies as non-production, and this test's own concern is
+    // identity resolution reaching the email body, not stage routing (covered separately).
     getSettingsValue: vi.fn((key: string) =>
       key === 'EnableFeedBackToSlack'
         ? true
         : key === 'EnableFeedBackToEmail'
           ? true
-          : key === 'FeedbackReceiveEmail'
+          : key === 'FeedbackReceiveEmail' || key === 'FeedbackReceiveEmailNonProd'
             ? 'ops@example.com'
             : undefined
     ),
@@ -70,12 +79,12 @@ let mongoServer: MongoMemoryServer;
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, 30000);
+});
 
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 
 afterEach(async () => {
   await mongoose.connection.dropDatabase();

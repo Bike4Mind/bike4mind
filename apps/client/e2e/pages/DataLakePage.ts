@@ -290,7 +290,7 @@ export class DataLakePage extends BasePage {
 
   // ── Explorer article (deep-linked) ────────────────────────────────────────
   get sortToggle(): Locator {
-    return this.page.getByTestId('datalake-sort-toggle');
+    return this.explorer.getByTestId('datalake-sort-toggle');
   }
 
   /**

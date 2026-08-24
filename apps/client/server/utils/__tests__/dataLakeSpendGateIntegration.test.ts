@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { createMongoServer } from '../../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../packages/database/src/__test__/createMongoServer';
 import {
   DataLakeModel,
   dataLakeRepository,
@@ -17,6 +20,10 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 // Only the admin-settings SOURCE is stubbed (an external config leaf, not the seam under
 // test) - resolveSpendLevers' own parsing/clamping still runs for real against these values.

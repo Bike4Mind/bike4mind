@@ -14,6 +14,12 @@ const deleteMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => o
 // Same for purge, so the confirm dialog's close-on-success wiring is exercised.
 const cleanupMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
+// Stable spy (not the shared `mutation` stub, which mints a fresh vi.fn per call) so the tests
+// below can assert WHAT the convergence action sent - specifically that `confirm: true` only ever
+// leaves the dialog.
+const convergeMutate = vi.fn((_vars?: { limit?: number; confirm?: boolean }, opts?: { onSuccess?: () => void }) =>
+  opts?.onSuccess?.()
+);
 // Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
 // empty-section rendering.
 const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
@@ -47,6 +53,11 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
     useRechunkDataLake: mutation,
+    // Default: no convergence plan, so the "Converge to policy" button stays hidden (it needs an
+    // explicit lake policy AND something off it). A test that wants it overrides via
+    // useLakeConvergencePlan.mockReturnValue(...).
+    useLakeConvergencePlan: (...args: unknown[]) => useLakeConvergencePlan(...(args as [string, boolean])),
+    useConvergeDataLake: () => ({ mutate: convergeMutate, isPending: false }),
     // Per-lake files: only the selected lake queries (id != null).
     useDataLakeFiles: (id: string | null) => ({
       data: id ? { data: lakeFiles } : undefined,
@@ -63,6 +74,13 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
         lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
       },
     }),
+    // The nav's in-lake tree is DataLakeTreeView, which calls this even with no `source` (the
+    // manager passes none, so cross-tree search stays off) - it still has to exist on the mock.
+    useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
+    // The access modal (mounted by the panel) pulls these from this module; the modal itself is
+    // covered by its own suite, so a quiet stub keeps this mock complete (see the missing-export trap).
+    useLakeAccessView: () => ({ data: undefined, isLoading: false, isError: false }),
+    downloadLakeAccessCsv: vi.fn(),
   };
 });
 
@@ -116,6 +134,11 @@ const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }
 const useUnderChunkedCount = vi.fn(() => ({
   data: undefined as { underChunkedCount: number; failedCount: number } | undefined,
 }));
+const useLakeConvergencePlan = vi.fn(() => ({
+  data: undefined as
+    | { refusal: 'policyInherited' | null; convergeableCount: number; waveSize: number; requiresConfirmation: boolean }
+    | undefined,
+}));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();
@@ -131,6 +154,10 @@ vi.mock('./DataLakeArticlePanel', () => ({
 vi.mock('./DataLakeSettingsModal', () => ({
   DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
     lake ? <div data-testid="mock-settings">{lake.name}</div> : null,
+}));
+vi.mock('./FallbackLakeSettingsModal', () => ({
+  FallbackLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
+    lake ? <div data-testid="mock-fallback-settings">{lake.name}</div> : null,
 }));
 // The public catalog has its own suite; here we only assert the manager routes to it.
 vi.mock('./DataLakeDiscoverPanel', () => ({
@@ -210,6 +237,9 @@ beforeEach(() => {
   useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
   useUnderChunkedCount.mockReset();
   useUnderChunkedCount.mockReturnValue({ data: undefined });
+  useLakeConvergencePlan.mockReset();
+  useLakeConvergencePlan.mockReturnValue({ data: undefined });
+  convergeMutate.mockClear();
   archiveMutate.mockClear();
   deleteMutate.mockClear();
   cleanupMutate.mockClear();
@@ -682,6 +712,49 @@ describe('DataLakeManagerPanel - canRebuild is narrower than canManage (fallback
   });
 });
 
+describe('DataLakeManagerPanel - canManageSettings gates the fallback-lake settings editor', () => {
+  it('shows the fallback Settings button (not the DB-lake one) for an admin, and opens the narrower modal', async () => {
+    useGetDataLakes.mockReturnValue({
+      data: [{ ...fallbackLakeAsAdmin, canManageSettings: true }],
+      isLoading: false,
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+    expect(screen.queryByTestId('datalake-settings-btn-opti-knowledge')).toBeNull();
+
+    const fallbackSettingsBtn = screen.getByTestId('datalake-fallback-settings-btn-opti-knowledge');
+    await user.click(fallbackSettingsBtn);
+
+    expect(screen.getByTestId('mock-fallback-settings')).toHaveTextContent('Optimization Knowledge Base');
+  });
+
+  it('hides the fallback Settings button for a non-admin on the same lake (canManageSettings false)', async () => {
+    useGetDataLakes.mockReturnValue({
+      data: [{ ...fallbackLakeAsAdmin, canManageSettings: false }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    await screen.findByTestId('datalake-manager-lake-opti-knowledge');
+    fireEvent.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+
+    expect(await screen.findByTestId('datalake-manager-nav')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-fallback-settings-btn-opti-knowledge')).toBeNull();
+  });
+
+  it('does NOT show the fallback Settings button on a DB lake the caller manages (it already has the full editor)', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-fallback-settings-btn-mine')).toBeNull();
+  });
+});
+
 /**
  * The taxonomy-status UI (queued/analyzing/ready/failed chips + review panel) used to live only
  * in the orphaned DataLakeListPanel - this is the port of that functionality into the panel
@@ -879,5 +952,150 @@ describe('DataLakeManagerPanel - purge confirmation', () => {
 
     expect(screen.queryByTestId('datalake-purge-drive-warning')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-purge-drive-unknown')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Owner-triggered convergence (#1681). Two rules the button carries and nothing else enforces on
+ * the client: it must not appear for a lake with no chunk policy of its own (an `inherited` lake is
+ * measured by health but never repaired - epic decision 5), and `confirm: true` must leave ONLY the
+ * dialog that showed the share, since the bulk-change guard exists to stop a mass rewrite nobody
+ * looked at.
+ */
+describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
+  const plan = (over: Record<string, unknown> = {}) => ({
+    data: {
+      refusal: null,
+      convergeableCount: 3,
+      waveSize: 3,
+      requiresConfirmation: false,
+      membersConsidered: 40,
+      changeShare: 0.075,
+      policy: { requiredTarget: 512, effectiveRequiredTarget: 512, policyChars: 3072 },
+      crossLakeConflictCount: 0,
+      ...over,
+    },
+  });
+
+  it('offers the action for an explicit-policy lake with drift, and runs it without a dialog', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(plan() as never);
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-converge-policy-btn-mine'));
+
+    expect(convergeMutate).toHaveBeenCalledWith({});
+  });
+
+  it('hides the action for a lake with no chunk policy of its own', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(plan({ refusal: 'policyInherited', convergeableCount: 0 }) as never);
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.queryByTestId('datalake-converge-policy-btn-mine')).toBeNull();
+  });
+
+  it('hides the action when the lake is already converged', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(plan({ convergeableCount: 0, waveSize: 0 }) as never);
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.queryByTestId('datalake-converge-policy-btn-mine')).toBeNull();
+  });
+
+  // A reader of someone else's lake must not be offered a repair the server would refuse.
+  it('hides the action on a lake the caller cannot rebuild', async () => {
+    useGetDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(plan() as never);
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-theirs'));
+
+    expect(screen.queryByTestId('datalake-converge-policy-btn-theirs')).toBeNull();
+  });
+
+  it('opens the guard dialog instead of running when the change is bulk, and sends nothing yet', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ requiresConfirmation: true, changeShare: 0.9, convergeableCount: 36 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-converge-policy-btn-mine'));
+
+    expect(convergeMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-converge-confirm')).toHaveTextContent('90%');
+  });
+
+  it('sends confirm only from the dialog that showed the share', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ requiresConfirmation: true, changeShare: 0.9, convergeableCount: 36 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-converge-policy-btn-mine'));
+    await user.click(screen.getByTestId('datalake-converge-confirm-btn'));
+
+    expect(convergeMutate).toHaveBeenCalledWith({ confirm: true }, expect.anything());
+  });
+
+  // Verified live on a preview: a lake whose entire remaining drift is cross-lake conflicted reports
+  // convergeableCount 1 and a wave of 0. Labelling the action with the former gives a button that
+  // repairs nothing on every click, forever, and says nothing about why.
+  it('offers no action when every remaining off-policy file is blocked, and explains why instead', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ convergeableCount: 1, waveSize: 0, crossLakeConflictCount: 1 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.queryByTestId('datalake-converge-policy-btn-mine')).toBeNull();
+    expect(screen.getByTestId('datalake-converge-blocked-chip-mine')).toHaveTextContent('1 blocked by another lake');
+  });
+
+  it('labels the action with what a run would actually repair, not whole-lake drift', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ convergeableCount: 9, waveSize: 4, crossLakeConflictCount: 5 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.getByTestId('datalake-converge-policy-btn-mine')).toHaveTextContent('Converge to policy (4)');
+  });
+
+  it('names the excluded cross-lake members in the dialog rather than silently dropping them', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ requiresConfirmation: true, changeShare: 0.9, convergeableCount: 36, crossLakeConflictCount: 4 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-converge-policy-btn-mine'));
+
+    expect(screen.getByTestId('datalake-converge-confirm')).toHaveTextContent(
+      '4 file(s) are excluded because another data lake requires a different passage target'
+    );
   });
 });

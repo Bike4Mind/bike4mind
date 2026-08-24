@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { SettingScopeLevel, type IDataLakeDocument, type IScopedSetting, type ScopeRef } from '@bike4mind/common';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { toggleTags } from './toggleTags';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -628,5 +629,133 @@ describe('toggleTags - static-registry prefix (e.g. opti:), no owning lake docum
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The admission contract at this door (#1680). Every test above uses a lake declaring no
+ * `requiredPassageTokenTarget`, so the gate short-circuits and their behavior is unchanged. These
+ * cover both membership signals this door can create, and the leave it must never refuse.
+ */
+describe('toggleTags - admission contract', () => {
+  const MODEL = 'text-embedding-3-small';
+
+  const settingsDb = (platform: Record<string, string>, overrides: Array<Partial<IScopedSetting>> = []) => ({
+    adminSettings: {
+      findBySettingNames: vi.fn(async (names: string[]) =>
+        names.filter(n => platform[n] != null).map(n => ({ settingName: n, settingValue: platform[n] }))
+      ),
+      findAll: vi.fn(async () =>
+        Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+      ),
+    },
+    scopedSettings: {
+      findOverrides: vi.fn(
+        async (scopes: ScopeRef[], names: string[]) =>
+          overrides.filter(
+            o =>
+              names.includes(o.settingName as string) &&
+              scopes.some(s => s.scopeLevel === o.scopeLevel && s.scopeId === o.scopeId)
+          ) as IScopedSetting[]
+      ),
+    },
+  });
+
+  const enforcing: Partial<IScopedSetting> = {
+    scopeLevel: SettingScopeLevel.Lake as IScopedSetting['scopeLevel'],
+    scopeId: 'lake1',
+    settingName: 'EnforceLakeAdmission',
+    settingValue: 'true',
+  };
+
+  /**
+   * A lake that REQUIRES 1000 while the owner policy is 512, with the lever ON unless `off`.
+   * `dataLakes.find` returns the lake so the prefix-arm candidate resolution can see it - the
+   * default harness returns [], which would make a prefix-arm join undetectable.
+   */
+  const withPolicy = (files: ReturnType<typeof file>[], { off = false }: { off?: boolean } = {}) => {
+    const lakeDoc = lake({ requiredPassageTokenTarget: 1000 });
+    const base = makeAdapters(files, lakeDoc);
+    base.db.dataLakes.find = vi.fn().mockResolvedValue([lakeDoc]);
+    return {
+      ...base,
+      db: {
+        ...base.db,
+        ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, off ? [] : [enforcing]),
+      },
+    };
+  };
+
+  beforeEach(() => {
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('refuses a META-TAG join when the lake enforces and the chunk policy disagrees', async () => {
+    const adapters = withPolicy([file('f1')]);
+
+    await expect(run(adapters as never, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /requires passages of 1000/
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a PREFIX-ARM join too - the membership signal with no meta-tag involved', async () => {
+    // This is the half that gating only `datalake:*` would have left open.
+    const adapters = withPolicy([file('f1')]);
+
+    await expect(run(adapters as never, { ids: ['f1'], tags: ['lk:invoices'] })).rejects.toThrow(
+      /requires passages of 1000/
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('never refuses a LEAVE, even while the file fails the contract for the lake it is exiting', async () => {
+    // The regression that matters most: a refused removal would trap content in a lake it cannot
+    // be retrieved from. This door is direction-neutral, so only the join branch may be graded.
+    const adapters = withPolicy([file('f1', [{ name: 'datalake:lake', strength: 1 }])]);
+
+    await run(adapters as never, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('allows the join when the lever is off - report-only is the default', async () => {
+    const adapters = withPolicy([file('f1')], { off: true });
+
+    await run(adapters as never, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalled();
+  });
+
+  it('refuses a multi-file batch WHOLE - a conforming file must not be joined before the refusal', async () => {
+    // Files are toggled concurrently, so grading next to the write would let f1's join land and then
+    // throw for f2, leaving the caller an error that reads as "nothing happened" over a partly
+    // applied request. f1's chunks were built at 1000 so it conforms; f2 is unchunked and predicts
+    // 512 against the lake's required 1000.
+    const conforming = { ...file('f1'), chunkedPassageTokenTarget: 1000 };
+    const adapters = withPolicy([conforming as never, file('f2')]);
+
+    await expect(run(adapters as never, { ids: ['f1', 'f2'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /requires passages of 1000/
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('grades a chunked file on its recorded target rather than the owner chunk policy', async () => {
+    // Owner policy is 512 and the lake requires 1000; this file's chunks were built at 1000, so it
+    // conforms even though a prediction from policy would have refused it.
+    const chunked = { ...file('f1'), chunkedPassageTokenTarget: 1000 };
+    const lakeDoc = lake({ requiredPassageTokenTarget: 1000 });
+    const base = makeAdapters([chunked as never], lakeDoc);
+    base.db.dataLakes.find = vi.fn().mockResolvedValue([lakeDoc]);
+    const adapters = {
+      ...base,
+      db: { ...base.db, ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcing]) },
+    };
+
+    await run(adapters as never, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalled();
   });
 });

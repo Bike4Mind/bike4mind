@@ -161,6 +161,21 @@ export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
 };
 
 /**
+ * Storage-time bounds for one AI-inferred taxonomy category, shared by `sanitizeCategories`
+ * (utils/dataLakeTaxonomy.ts, the write path) and `ApplyTaxonomyRequestInput`'s Zod schema
+ * (schemas/dataLake.ts, the apply request's validation). These MUST agree: a category
+ * `sanitizeCategories` accepts and stores as `taxonomyStatus: 'ready'` has to be one apply's
+ * request schema will also accept, or the batch becomes permanently un-applyable - accepted at
+ * analysis time, then rejected on every apply attempt. Importing one shared source instead of
+ * two independently-hardcoded numbers is what keeps that from silently drifting.
+ */
+export const MAX_TAXONOMY_TAGS = 100;
+export const MAX_TAXONOMY_TAG_SUFFIX_LENGTH = 100;
+export const MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH = 150;
+export const MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG = 100;
+export const MAX_TAXONOMY_MATCHING_FOLDER_LENGTH = 512;
+
+/**
  * Length bounds for a `fileTagPrefix`, measured on the TRIMMED value INCLUDING its trailing ":" -
  * the same string `CreateDataLakeRequestInput` sizes after its own `.trim()`, so a value that is
  * exactly at the limit is judged identically on both sides.
@@ -286,6 +301,16 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   systemPrompt?: string;
   /**
+   * The passage size (TOKENS) this lake requires of its members, when it declares one. Editor-only,
+   * same gate as the fields above, and surfaced so the settings form can seed the current value.
+   *
+   * ABSENT means the lake declares no target and inherits the platform default - which is not a
+   * cosmetic difference: an explicit target is the sole trigger for convergence (epic decision 5),
+   * so it is the difference between a lake that can be repaired toward its policy and one that is
+   * only ever measured. Absent for a non-editor too, who never renders the field.
+   */
+  requiredPassageTokenTarget?: number;
+  /**
    * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
@@ -351,6 +376,22 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * the affordance rather than exposing it), so this is a precision note, not a safety concern.
    */
   canRebuild: boolean;
+  /**
+   * Whether the requesting caller may edit this lake's admin-settable session-default OVERLAY
+   * (currently `groundingMode` only - see `IFallbackLakeSetting`). Same shape as `canRebuild`, for
+   * the same reason: a fallback (built-in) lake has no document, so `canManage` stays `false` for
+   * it, but the overlay attaches to no lake document either - see
+   * `assertFallbackLakeSettingsWriteAccess`. For a DB lake the two are identical
+   * (`canManageSettings === canManage`, and a DB lake's settings live on the document itself, so
+   * this flag gates nothing extra there); for a fallback lake `canManageSettings` is `ctx.isAdmin`
+   * directly, NOT `resolveCanManageLake` - an org-scoped registry lake must not let a customer-side
+   * org admin pass, mirroring `assertLakeRebuildAccess`'s reasoning exactly.
+   *
+   * REQUIRED, not optional - same reasoning as `canRebuild`: both producers (toManageableConfig,
+   * toFallbackConfig) must set it unconditionally, or an absent field silently hides the affordance
+   * (fails closed) rather than surfacing a compile error at the one spot that forgot it.
+   */
+  canManageSettings: boolean;
 }
 
 /**

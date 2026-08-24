@@ -70,6 +70,19 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * per-run cap on no-op queue round-trips and stamp historical media files with a misleading
  * 'No extractable text' note. Query must stay in sync with isAudioMimeType and
  * SmartChunker.chunkImage / chunkFile's default branch.
+ *
+ * ONE exception, and it is why the exclusion is an `$or` arm rather than a flat key: a media file
+ * carrying `chunkRebuildRequestedAt` (#1939) is swept anyway. That stamp means a reset took the
+ * file's state away and the enqueue that should have followed never landed - and this sweep is the
+ * only door that reaches a file outside every data lake, so excluding it by mimeType would leave
+ * the stamp with no automatic exit at all. `partitionByIndexAvailability` withholds a stamped file,
+ * so the cost of no exit is a search that reports the file as "being re-indexed, returns on its
+ * own" forever: a permanently false partial-results warning, which is the cries-wolf failure this
+ * whole feature is built to avoid, reached from the other side.
+ *
+ * Bounded to one pass per file: the sweep enqueues, the chunker returns 0 chunks as it always would,
+ * and `commitFabFileChunks` clears the stamp and writes the rollups - after which the handler's own
+ * 'No extractable text' note excludes the file here again.
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
@@ -78,31 +91,37 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
   chunkCount: 0,
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  mimeType: { $not: /^(audio|image|video)\// },
   notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
   error: { $in: [null, ''] },
-  // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
-  // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
-  // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is
-  // the BACKFILL: any file already stuck isChunking:true before chunkClaimedAt existed has no stamp,
-  // which a `$lt` skips - so without it those files would stay unrescuable forever. It's safe
-  // because every code path that sets isChunking:true now stamps chunkClaimedAt in the same write,
-  // so a null stamp on an isChunking:true file can only be a pre-migration straggler, never a
-  // legitimately in-flight one. The sweep does NOT re-claim before enqueue - it sends what this
-  // filter selected, and a file already in flight loses the chunk worker's compare-and-set
-  // (fabFileChunk.ts) and returns without re-chunking. Consequence worth knowing: a file that has
-  // been reset and enqueued but not yet picked up still matches here, so a sweep pass landing in
-  // that window re-sends it. The duplicate is harmless - it loses the CAS, or hits the `chunked`
-  // guard after a successful run - but it does spend one of CHUNK_SCAN_BATCH's slots. The window is
-  // normally sub-second, and the hosted sweep runs daily (infra/cron.ts), so this is a self-host
-  // consideration in practice.
-  ...(staleClaimBefore
-    ? {
-        $or: [
-          { isChunking: { $ne: true } },
-          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
-          { isChunking: true, chunkClaimedAt: null },
-        ],
-      }
-    : { isChunking: { $ne: true } }),
+  // Both clauses below are `$or`s, so they are nested under ONE `$and` rather than written as
+  // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key
+  // wins), which here would drop either the media exclusion or the in-flight exclusion entirely.
+  $and: [
+    // Media exclusion, with the stamped-file exception - see the doc comment above.
+    { $or: [{ mimeType: { $not: /^(audio|image|video)\// } }, { chunkRebuildRequestedAt: { $ne: null } }] },
+    // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
+    // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
+    // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is
+    // the BACKFILL: any file already stuck isChunking:true before chunkClaimedAt existed has no stamp,
+    // which a `$lt` skips - so without it those files would stay unrescuable forever. It's safe
+    // because every code path that sets isChunking:true now stamps chunkClaimedAt in the same write,
+    // so a null stamp on an isChunking:true file can only be a pre-migration straggler, never a
+    // legitimately in-flight one. The sweep does NOT re-claim before enqueue - it sends what this
+    // filter selected, and a file already in flight loses the chunk worker's compare-and-set
+    // (fabFileChunk.ts) and returns without re-chunking. Consequence worth knowing: a file that has
+    // been reset and enqueued but not yet picked up still matches here, so a sweep pass landing in
+    // that window re-sends it. The duplicate is harmless - it loses the CAS, or hits the `chunked`
+    // guard after a successful run - but it does spend one of CHUNK_SCAN_BATCH's slots. The window is
+    // normally sub-second, and the hosted sweep runs daily (infra/cron.ts), so this is a self-host
+    // consideration in practice.
+    staleClaimBefore
+      ? {
+          $or: [
+            { isChunking: { $ne: true } },
+            { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+            { isChunking: true, chunkClaimedAt: null },
+          ],
+        }
+      : { isChunking: { $ne: true } },
+  ],
 });

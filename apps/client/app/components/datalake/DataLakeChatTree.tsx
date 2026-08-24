@@ -292,6 +292,7 @@ export default function DataLakeChatTree({
         </Typography>
       </ListItemButton>
     ),
+    backRowPlacement: 'sticky',
     stickyBackSx: TREE_BACK_STICKY_SX,
     scrollSx: { ...TREE_SCROLL_SX, px: '8px' },
     nodeListSx: TREE_LIST_SX,
@@ -299,7 +300,7 @@ export default function DataLakeChatTree({
     renderNodeRow: (node, depth, onOpen) => {
       const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
       return (
-        <ListItem key={node.segment}>
+        <ListItem>
           <ListItemButton
             onClick={onOpen}
             sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
@@ -317,7 +318,7 @@ export default function DataLakeChatTree({
       );
     },
     renderFileRow: (file, selected) => (
-      <ListItem key={file.id}>
+      <ListItem>
         {/* Clicking the row runs the View action - the same ListItemButton the folder rows use,
             so the two lists share their geometry and hover treatment. The actions trigger
             reveals on hover/focus, stays visible on touch (no-hover) devices, and pins while its

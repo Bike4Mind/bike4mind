@@ -4,6 +4,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, fabFileRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 /**
  * DELETE /api/data-lakes/:id/files/:fabFileId
@@ -29,7 +30,13 @@ const handler = baseApi()
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fabFiles: fabFileRepository,
+        // Without these, `recordLakeConfigChange` returns at its `if (!events) return` guard, so the
+        // draft -> active flip a removal can trigger records nothing AND the threaded logger below
+        // has nothing to report. Every other audited lake-write route spreads this; omitting it fails
+        // silently, which is why it lives in one shared helper.
+        ...lakeConfigAuditDb,
       },
+      logger: req.logger,
     });
 
     return res.json(result);
