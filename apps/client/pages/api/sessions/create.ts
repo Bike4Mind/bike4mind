@@ -16,7 +16,6 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, ProjectEvents, redactSessionForClient } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { ActivityType } from '@client/config/activities';
 import { CreateSessionRequestBody } from '../../../types/api';
 
@@ -70,7 +69,13 @@ const handler = baseApi().post(
       logger: req.logger,
       // See the update route: the ownership reader cannot see a lake-membership file, so without
       // this a session started from a teammate's org-lake file derives no scope at all.
-      resolveLakeAccess: () => resolveRetrievalLakeScope(req),
+      //
+      // Imported at CALL time, not module load: the resolver's dependency graph reaches the Mongoose
+      // models, which pulls schema construction into the import graph of every consumer of this
+      // route. It is only needed when files are actually attached, so paying for it lazily keeps the
+      // route's static imports as they were.
+      resolveLakeAccess: async () =>
+        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
     });
 
     await User.findByIdAndUpdate(userId, { lastNotebookId: newSession.id });
