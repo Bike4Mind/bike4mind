@@ -118,8 +118,14 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   scopedTagPrefixes: string[];
   lakes: ResolvedLakeAccess[];
   /**
-   * True when this answer is the WHOLE picture: the dynamic-lake read either succeeded or was never
-   * configured. False when the read failed and the sets below are the static registry alone.
+   * True when the dynamic-lake read either succeeded or was never configured. False when it failed
+   * and the sets below are the static registry alone.
+   *
+   * Precisely: it records that THIS RESOLVER saw everything it was asked to see. It is not a claim
+   * that the lists are exhaustive of the caller's access forever after - a later transform may
+   * deliberately reduce them (narrowLakeAccessToSession) while carrying the flag - so a consumer
+   * that treats it as "this list is complete" must be reading the resolver's own output, not a
+   * derived one.
    *
    * Exists because "this lake is not in your access" and "I could not see your lakes just now" are
    * indistinguishable in the tag lists, and one consumer must tell them apart: a caller that treats

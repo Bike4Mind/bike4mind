@@ -42,6 +42,11 @@ export interface DeriveRetrievalTagsAdapters {
  * Shared by session create AND update: attaching a lake file to an already-open session is the most
  * ordinary way a user reaches a lake, and deriving only at create left that whole path unscoped.
  *
+ * WRITTEN ONCE. `sessionService.update` re-derives only while `retrievalTags` is still empty, and no
+ * client route writes the field, so whatever this returns is effectively permanent for that session.
+ * That is why the intersection below refuses to narrow against an incomplete lake view: a derivation
+ * made during a degraded read would be pinned for the session's lifetime with nothing to correct it.
+ *
  * Permission-correct by construction. The ownership arm resolves through
  * `shareable.findAllAccessibleByIds` (the reader `addFilesToProjects` uses); the lake arm passes
  * `restrictToFileIds` with the caller's own resolved lake args and NO `skipOwnership`, so every id

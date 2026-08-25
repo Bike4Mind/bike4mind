@@ -49,8 +49,10 @@ export function withStaticRegistryBypass(
 ): RetrievalLakeScope {
   return {
     // Carried through: widening a privileged caller's reach says nothing about whether the dynamic
-    // read succeeded. Rebuilding this object without it would report an incomplete view and turn
-    // OFF the session-scope narrowing that keys on it, for admins only.
+    // read succeeded. Rebuilding this object without it would report an incomplete view to the one
+    // thing that reads it - sessionService's retrieval-tag derivation, NOT narrowLakeAccessToSession
+    // despite the similar name - and so skip that derivation's reachability intersection, for
+    // admin/developer callers only.
     lakeViewComplete: scope.lakeViewComplete,
     dataLakeTags: dedupe([...scope.dataLakeTags, ...registry.map(lake => lake.datalakeTag)]),
     dataLakeTagPrefixes: dedupe([...scope.dataLakeTagPrefixes, ...registry.map(lake => lake.fileTagPrefix)]),

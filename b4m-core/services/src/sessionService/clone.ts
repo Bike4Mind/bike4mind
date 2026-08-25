@@ -33,8 +33,9 @@ type CloneSessionAdapters = {
 export const cloneSession = async (
   userId: string,
   parameters: CloneSessionParameters,
-  { db }: CloneSessionAdapters
+  adapters: CloneSessionAdapters
 ) => {
+  const { db } = adapters;
   const { id } = secureParameters(parameters, cloneSessionSchema);
 
   const user = await db.users.findById(userId);
@@ -65,19 +66,26 @@ export const cloneSession = async (
     //
     // OWNER ONLY, unlike fork/snip which read the source with `findByIdAndUserId` and so are
     // same-user by construction. A share grant lets you read this session, not inherit its lake
-    // scope: the cloner may not reach that lake at all, and because the explicit-wins arm skips the
-    // derivation there is no reachability check on this path to catch it. Inheriting it would narrow
-    // the clone to a lake it cannot read AND - since a non-empty retrievalTags reads as
-    // "already lake-scoped" - switch off its personal-corpus fallback too. Undoing that is not
-    // something the user can do from the UI, so a non-owner's clone derives its own scope instead.
+    // scope: the cloner may not reach that lake at all.
+    //
+    // This gate is half the mechanism and does nothing on its own. `createSession`'s explicit-wins
+    // arm skips the derivation whenever tags are supplied, so a copied tag gets NO reachability
+    // check; the gate's only job is to route a non-owner into the derivation instead, where the
+    // intersection against their own reachable lakes can drop a tag they cannot use. That
+    // intersection needs `resolveLakeAccess`, which is why this function now forwards the whole
+    // adapters object and the route supplies one. Without both halves a non-owner ends up narrowed
+    // to a lake they cannot read, with their personal-corpus fallback off (a non-empty
+    // retrievalTags reads as "already lake-scoped") and no way to clear either from the UI.
     ...(isOwner ? { retrievalTags: session.retrievalTags } : {}),
   };
   if (session.summary) buildCloneSession.summary = session.summary;
   if (session.summaryAt) buildCloneSession.summaryAt = session.summaryAt;
 
-  const clonedSession = await createSession(user, buildCloneSession, {
-    db,
-  });
+  // Forward the WHOLE adapters object, not just `db`: `resolveLakeAccess` and `logger` live on
+  // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
+  // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
+  // reach. fork/snip already forwarded; this brings clone in line.
+  const clonedSession = await createSession(user, buildCloneSession, adapters);
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);
 

@@ -67,8 +67,9 @@ export function narrowLakeAccessToSession(
 
   return {
     // Carried through: narrowing changes WHICH lakes are in scope, never whether the underlying read
-    // saw them all. Dropping it here would tell a consumer the view was incomplete and silently
-    // disable any narrowing keyed on it.
+    // saw them all. No consumer downstream of THIS function reads it today (the only reader is the
+    // session-creation tag derivation, which never receives a narrowed set) - it is carried so the
+    // value keeps meaning the same thing wherever the set travels, not to satisfy a live caller.
     lakeViewComplete: access.lakeViewComplete,
     dataLakeTags: access.dataLakeTags.filter(tag => wanted.has(tag)),
     dataLakeTagPrefixes: access.dataLakeTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),
