@@ -21,7 +21,12 @@ vi.mock('../../client.js', () => ({
 import { registerPageTools } from '../../tools/pages.js';
 import { notionRequest } from '../../client.js';
 import { getConfig } from '../../config.js';
-import { TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE } from '../../constants.js';
+import {
+  TOOL_NOTION_CREATE_PAGE,
+  TOOL_NOTION_APPEND_BLOCKS,
+  TOOL_NOTION_READ_PAGE,
+  TOOL_DESCRIPTIONS,
+} from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
 
 /**
@@ -68,6 +73,13 @@ describe('Page Tools', () => {
     const mock = createMockServer();
     registeredTools = mock.registeredTools;
     registerPageTools(mock.server);
+  });
+
+  it('all page tools should have descriptions matching TOOL_DESCRIPTIONS', () => {
+    for (const toolName of [TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE]) {
+      const tool = registeredTools.get(toolName)!;
+      expect(tool.description).toBe(TOOL_DESCRIPTIONS[toolName]);
+    }
   });
 
   describe(TOOL_NOTION_CREATE_PAGE, () => {
