@@ -1065,4 +1065,22 @@ describe('useAgentExecutionStore -- keyed entries that can never match do not de
     expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-orphan')).toBeUndefined();
     expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([{ sessionId: 'sess-probe' }]);
   });
+
+  // The arm the found:false comment in useAgentExecution.ts reasons about, and the
+  // one it used to get wrong: a keyed sweep request whose run is gone server-side
+  // is answered by a BARE found:false, which drains the un-keyed probe entry it
+  // does not answer. The residual is documented there; this pins the behaviour so
+  // the next reader cannot re-derive the comfortable version of it.
+  it('a found:false drains the oldest un-keyed entry even when a keyed entry is queued', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('sess-stale', 'exec-gone'); // sweep entry, run gone server-side
+    registerPendingReconnect('sess-probe'); // concurrent mount probe
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect(undefined)).toBe('sess-probe');
+    // The probe's entry is gone, so its own response has nothing left to pair with.
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'sess-stale', executionId: 'exec-gone' },
+    ]);
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-live')).toBeUndefined();
+  });
 });

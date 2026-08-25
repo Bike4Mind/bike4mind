@@ -409,11 +409,20 @@ export function useAgentExecutionSubscriptions(): void {
         // Always drain a pending entry, even on a `found: false` response;
         // otherwise the queue would carry a stale entry and pair it with the
         // next reconnect, mis-attributing the execution to the wrong session.
-        // A found:false carries no executionId on the wire, so what it drains
-        // is the oldest UN-KEYED entry - the mount-time probe's own, which is
-        // the caller a found:false answers. A keyed sweep entry whose run was
-        // deleted server-side stays queued; it can only ever match its own id,
-        // so it pairs with nothing and is dropped with the session's store.
+        //
+        // A found:false carries no executionId on the wire - `handleReconnect`
+        // sends a bare {action, found:false} on EITHER miss branch (no such run,
+        // or a userId mismatch) - so what it drains is the oldest UN-KEYED entry.
+        // That is NOT necessarily the caller it answers: a keyed sweep request
+        // whose run is gone server-side comes back un-keyed too, and drains a
+        // concurrent mount probe's entry instead. The probe's own response then
+        // finds nothing queued, so its run stays unattributed until the next
+        // reconnect. A residual, not a steal: no session is stamped onto the
+        // wrong run, which is the failure this queue exists to prevent.
+        //
+        // It goes away when the server echoes `sessionId` on `reconnect_result`
+        // and the correlation queue can be deleted outright; `handleReconnect`
+        // already holds `execution.sessionId`. Follow-up, not this change.
         const sessionId = store().consumePendingReconnect(msg.executionId);
         if (!msg.found || !msg.executionId || !msg.status) return;
         const executionId = msg.executionId;
@@ -727,9 +736,11 @@ export function useAgentExecutionDispatch() {
         // carrying a sessionId. A request sent WITHOUT an entry is the dangerous
         // case: its keyed response would miss on the id and drain the oldest
         // un-keyed entry - a concurrent mount-time probe's - stamping that session
-        // onto the wrong run. An entry with no sessionId is harmless by contrast:
-        // consuming it returns undefined and hydrate falls back to the execution's
-        // own stored sessionId.
+        // onto the wrong run. An entry with no sessionId takes nothing from anyone
+        // by contrast: consuming it returns undefined and hydrate falls back to
+        // the execution's own stored sessionId - which for a synthesised orphan is
+        // also undefined, so the run stays unattributed rather than being
+        // recovered. Harmless, not a recovery.
         if (sessionId || executionId) {
           useAgentExecutionStore.getState().registerPendingReconnect(sessionId, executionId);
         }
