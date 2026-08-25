@@ -35,9 +35,6 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // Cheap existence check - used by the voice proxy to decide whether to emit
   // an initial buffer chunk for brand-new sessions (no prior turns).
   existsBySessionId: (sessionId: string) => Promise<boolean>;
-  // Quests stuck at 'running' past the liveness threshold. Used by the
-  // questTimeoutSweep cron to recover orphaned quests server-side.
-  findStaleRunning: (opts: { olderThan: Date; limit?: number }) => Promise<IChatHistoryItemDocument[]>;
 }
 
 /**

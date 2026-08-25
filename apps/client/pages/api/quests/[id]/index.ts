@@ -40,14 +40,33 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
+  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
+  // tools touched on the owner's behalf - see redactPromptMetaForViewer. It also gates the
+  // recovery write below.
+  const isOwner = session.userId === userId;
+
   // Recover a stuck quest on read so API clients (CLI, MCP, automated harnesses) that poll
   // this endpoint get a terminal status without needing the browser-only check-timeout POST.
   // See resolveQuestTimeoutRecovery for the liveness-based decision.
-  const recovery = resolveQuestTimeoutRecovery(quest, Date.now());
+  //
+  // Owner-only: a sharee's read must not stamp a terminal status onto someone else's quest.
+  // The sweep cron is the backstop for a quest only sharees ever poll, so nothing stays stuck.
+  const recovery = isOwner ? resolveQuestTimeoutRecovery(quest, Date.now()) : null;
   if (recovery) {
-    const recovered = await questRepository.update({ id: quest.id, ...recovery });
-    if (recovered) {
-      Object.assign(quest, recovery, { updatedAt: recovered.updatedAt });
+    try {
+      // Conditional on the quest still being unfinished so a real answer that landed between
+      // the read above and this write keeps it. Best-effort: writes fail for reasons reads do
+      // not (a primary stepdown, a write-concern timeout), and letting that turn a GET that can
+      // still answer into a 500 is strictly worse than the pre-recovery behaviour. Recovery is
+      // idempotent, so the next poll or the next sweep redoes it.
+      const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
+      if (applied) {
+        // `updatedAt` is maintained by mongoose timestamps on that write, so report the write
+        // rather than the stale value the read returned.
+        Object.assign(quest, recovery, { updatedAt: new Date() });
+      }
+    } catch (err) {
+      req.logger.warn('Timeout recovery write failed; returning quest as-is', { questId: quest.id, err });
     }
   }
 
@@ -60,9 +79,6 @@ const handler = baseApi({
   const images = quest.images ?? [];
   const files = toGeneratedFiles(images);
 
-  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
-  // tools touched on the owner's behalf - see redactPromptMetaForViewer.
-  const isOwner = session.userId === userId;
   const promptMeta = redactPromptMetaForViewer(quest.promptMeta, isOwner);
 
   // Structured tool output for this turn. This is the poll step for BOTH the async chat path and
@@ -75,6 +91,9 @@ const handler = baseApi({
   return res.json({
     id: quest.id,
     status: quest.status,
+    // A recovered timeout is `status: 'done'` carrying an error message, so a headless client
+    // needs `type` to machine-distinguish it from a genuine success.
+    type: quest.type,
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,

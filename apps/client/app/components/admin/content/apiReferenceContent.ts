@@ -126,12 +126,15 @@ GET /api/quests/[id]
 
 **Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access — an AI scope works so the chat→poll flow needs a single key).
 
+Not a pure read: polling a quest whose run died without writing a terminal status settles it, so the poll that crosses the liveness threshold returns \`status: "done"\` instead of spinning on \`running\` forever. Whatever the run produced is preserved; \`type: "error"\` marks the case where it produced nothing, which is how a client machine-distinguishes a timeout from a genuine answer. Only the session owner's poll can settle a quest - a shared-session viewer reads it as-is, and a background sweep settles it instead.
+
 **Response:**
 
 \`\`\`json
 {
   "id": "quest_abc123",
   "status": "completed",
+  "type": "message",
   "reply": {
     "content": "Here is the AI response...",
     "model": "gpt-4o",

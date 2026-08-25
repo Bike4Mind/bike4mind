@@ -810,22 +810,47 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Returns quests stuck at `status: 'running'` whose `updatedAt` is older than `olderThan`.
-   * Projects only the fields the timeout-recovery decision reads (status, reply, replies, images,
-   * videos, updatedAt) plus `_id` so the caller can write back.
+   * Quests stuck at `status: 'running'` whose `updatedAt` has gone stale, oldest first.
+   * Shape is `StaleRunningQuestView`, declared below the class.
    *
-   * Used by the questTimeoutSweep cron to recover orphaned quests server-side.
+   * Used by the questTimeoutSweep cron to give a terminal state to runs no client
+   * will ever poll again. `newerThan` is a floor rather than an optimization:
+   * unbounded, the first sweeps after deploy would rewrite every quest ever
+   * abandoned at `running`, wearing the same metric as steady-state recovery.
+   *
+   * Sorted so a run that hits `limit` takes the oldest candidates rather than an
+   * arbitrary slice, which also makes a deliberate backlog drain deterministic.
    */
-  async findStaleRunning(opts: { olderThan: Date; limit?: number }): Promise<IChatHistoryItemDocument[]> {
-    const result = await this.model
-      .find({ status: 'running', updatedAt: { $lt: opts.olderThan } })
-      .select('_id status reply replies images videos updatedAt')
+  async findStaleRunning(opts: {
+    olderThan: Date;
+    newerThan?: Date;
+    limit?: number;
+  }): Promise<StaleRunningQuestView[]> {
+    // MUST STAY IN SYNC with `QuestTimeoutView` in questTimeoutRecovery.ts: a
+    // content field the decision reads but this does not project reads as
+    // absent, and a run that produced that content gets stamped as a failure.
+    const docs = await this.model
+      .find(
+        {
+          status: 'running',
+          updatedAt: { $lt: opts.olderThan, ...(opts.newerThan ? { $gt: opts.newerThan } : {}) },
+        },
+        {
+          _id: 1,
+          status: 1,
+          updatedAt: 1,
+          reply: 1,
+          replies: 1,
+          images: 1,
+          videos: 1,
+          structuredReplies: 1,
+          toolResults: 1,
+        }
+      )
+      .sort({ updatedAt: 1 })
       .limit(opts.limit ?? 500)
-      .lean();
-
-    return result
-      .filter(doc => doc._id != null)
-      .map(doc => ({ ...doc, id: doc._id.toString() }) as IChatHistoryItemDocument);
+      .lean<Array<Omit<StaleRunningQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...quest }) => ({ ...quest, id: _id.toString() }));
   }
 
   // Returns the most recent quest in the session that has no reply yet, or
@@ -895,7 +920,13 @@ function initializeQuestModel() {
     // lack the field - a dense index would waste space on nulls.
     ChatHistoryItemSchema.index({ agentExecutionId: 1 }, { name: 'agentExecutionId', sparse: true });
 
-    // Index for findStaleRunning (questTimeoutSweep cron + read-time recovery)
+    // Serves findStaleRunning (questTimeoutSweep cron). No existing index has a
+    // usable `status` prefix - `id_status` is `{_id: 1, status: 1}` - so without
+    // this the sweep collection-scans the largest collection every 5 minutes.
+    // Dense on purpose: both fields exist on every quest. Pre-built by
+    // 20260825000000_ensure-quest-status-updatedat-index rather than left to
+    // autoIndex, because prod runs DocumentDB where the build takes a foreground
+    // collection lock and would otherwise land on a request path.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
   } catch (error) {
     // Plugin already applied, ignore error
@@ -921,4 +952,18 @@ export const questRepository = new QuestRepository(Quest);
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
   'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;
+
+/**
+ * Everything the liveness recovery decision reads, plus the id it writes back to.
+ *
+ * Picked from `IChatHistoryItem` rather than restated so this and
+ * `QuestTimeoutView` (questTimeoutRecovery.ts) cannot drift on field types.
+ * `updatedAt` is declared here because it lives on the mongo document, not on
+ * `IChatHistoryItem`. The projection in the query above still lists the same
+ * fields by hand.
+ */
+export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
+  IChatHistoryItem,
+  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
 >;
