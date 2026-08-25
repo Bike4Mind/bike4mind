@@ -1,0 +1,115 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { addSessions } from './addSessions';
+import {
+  createMockProjectRepository,
+  createMockSessionRepository,
+  createMockFabFileRepository,
+} from '../__tests__/utils/testUtils';
+import type {
+  IFabFileDocument,
+  IFabFileRepository,
+  IProjectDocument,
+  IProjectRepository,
+  ISessionDocument,
+  ISessionRepository,
+  IUserDocument,
+} from '@bike4mind/common';
+import * as addFilesModule from './addFiles';
+
+/**
+ * Pins WHICH ids `addSessions` copies into `project.fileIds`. The larger `addSessions.test.ts`
+ * suite is skipped, so without this the only behaviour change on this path is untested.
+ *
+ * The set pushed is what `findAllByIds` RESOLVED, which is narrower than "the castable ids":
+ * `softDeletePlugin` adds `deletedAt: null` to every `find`, so a soft-deleted row is missing
+ * from the result too. Both exclusions are asserted below so a future change to either one is
+ * a failing test rather than a silent change in what a project inherits.
+ */
+
+const USER_ID = 'user-1';
+const PROJECT_ID = 'project-1';
+const SESSION_ID = 'session-1';
+
+const LIVE_ID = '67dbe18a7f9cf1fa5d968600';
+// Castable, but its row is soft-deleted, so findAllByIds does not return it.
+const SOFT_DELETED_ID = '67dbe18a7f9cf1fa5d968601';
+// Not castable at all: the shape a session row written before the id filtering can still hold.
+const JUNK_ID = 'legacy-uuid-not-an-objectid';
+
+let projects: IProjectRepository;
+let sessions: ISessionRepository;
+let fabFiles: IFabFileRepository;
+let project: IProjectDocument;
+let session: ISessionDocument;
+
+const user = { id: USER_ID, groups: [] } as unknown as IUserDocument;
+
+beforeEach(() => {
+  projects = createMockProjectRepository();
+  sessions = createMockSessionRepository();
+  fabFiles = createMockFabFileRepository();
+
+  vi.spyOn(addFilesModule, 'updateShareableFiles').mockResolvedValue(undefined as never);
+
+  project = {
+    id: PROJECT_ID,
+    userId: USER_ID,
+    sessionIds: [],
+    fileIds: [],
+    users: [],
+  } as unknown as IProjectDocument;
+
+  session = {
+    id: SESSION_ID,
+    userId: USER_ID,
+    knowledgeIds: [JUNK_ID, LIVE_ID, SOFT_DELETED_ID],
+    users: [],
+  } as unknown as ISessionDocument;
+
+  (sessions.shareable.findAllAccessibleByIds as ReturnType<typeof vi.fn>).mockResolvedValue([session]);
+  (projects.shareable.findAccessibleById as ReturnType<typeof vi.fn>).mockResolvedValue(project);
+  (sessions.update as ReturnType<typeof vi.fn>).mockResolvedValue(session);
+  (projects.update as ReturnType<typeof vi.fn>).mockResolvedValue(project);
+  // What the guarded repository actually returns: the junk id is dropped by usableObjectIds and
+  // the soft-deleted row is dropped by softDeletePlugin, leaving only the live file.
+  (fabFiles.findAllByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+    { id: LIVE_ID } as unknown as IFabFileDocument,
+  ]);
+});
+
+describe('addSessions - which knowledge ids reach project.fileIds', () => {
+  it('copies the id that resolved to a row', async () => {
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.fileIds).toEqual([LIVE_ID]);
+  });
+
+  it('does not copy an id that cannot address a row, so it is not spread to the project', async () => {
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.fileIds).not.toContain(JUNK_ID);
+  });
+
+  it('also drops a castable id whose row did not come back, e.g. soft-deleted', async () => {
+    // Documents a real divergence from the pre-guard behaviour, which copied the raw list: a file
+    // soft-deleted while still listed in knowledgeIds no longer reappears in the project when it
+    // is restored. Change this expectation only together with the push in updateShareableSessions.
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.fileIds).not.toContain(SOFT_DELETED_ID);
+  });
+
+  it('queries the repository with the session raw list, leaving the filtering to the guard', async () => {
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(fabFiles.findAllByIds).toHaveBeenCalledWith([JUNK_ID, LIVE_ID, SOFT_DELETED_ID]);
+  });
+});

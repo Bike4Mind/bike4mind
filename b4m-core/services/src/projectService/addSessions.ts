@@ -85,9 +85,10 @@ const updateShareableSessions = async (
       const files = await db.fabFiles.findAllByIds(session.knowledgeIds);
 
       await updateShareableFiles(user.id, { project, files }, adapters);
-      // The ids that RESOLVED, not the session's raw list. findAllByIds now skips entries that
-      // cannot address a row rather than throwing, so pushing the raw list would copy a legacy
-      // unusable id into project.fileIds and spread it to another document.
+      // The ids that RESOLVED, not the session's raw list, so a legacy unusable id is not copied
+      // into project.fileIds and spread to another document. Note this is narrower than "the
+      // castable ids": softDeletePlugin adds `deletedAt: null` to the find, so a soft-deleted row
+      // is absent too and its id stops being inherited. Pinned in addSessions.fileIds.test.ts.
       fileIds.push(...files.map((file: { id: string }) => file.id));
     }
   }
