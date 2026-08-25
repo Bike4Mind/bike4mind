@@ -6,16 +6,32 @@ import { finalizeBatchIfComplete, enqueueTaxonomyAnalysisIfWanted } from '@serve
 import { Request } from 'express';
 import { z } from 'zod';
 
+/**
+ * Bounds the two client-supplied per-file arrays. Unbounded, the 1 MB body cap admitted roughly 38k
+ * ids, and the cleanup below would then be a single request doing tens of thousands of round trips -
+ * a Lambda timeout that leaves the batch non-terminal, because it fires BEFORE the status flip and
+ * finalize at the bottom of this handler. Generous relative to any real batch's failure count.
+ */
+const MAX_FAILED_FILE_ENTRIES = 2000;
+
+/** A 24-char hex Mongo ObjectId string. Unvalidated, one malformed id made the id-scoped read throw
+ * a Mongoose CastError, surfacing as a 500 before the batch was ever finalized. */
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+
 const UploadCompleteInput = z.object({
   batchId: z.string(),
   // Count of files whose browser upload PUT failed. These never reach S3, so the
   // server pipeline emits no event for them - the client is the only source of truth
   // for this tally, and it must count toward completion or the batch hangs.
   failedFiles: z.number().int().nonnegative().optional(),
-  failedFileNames: z.array(z.string()).optional(),
+  failedFileNames: z.array(z.string()).max(MAX_FAILED_FILE_ENTRIES).optional(),
   // FabFile ids the failed uploads left behind (created at presign, 0 chunks, no S3
-  // object). Removed here so they don't inflate the lake's file count.
-  failedFileIds: z.array(z.string()).optional(),
+  // object). Removed here so they don't inflate the lake's file count. Shape-validated so a
+  // malformed id is a 400 from this parse rather than a 500 from the cleanup read.
+  failedFileIds: z
+    .array(z.string().regex(OBJECT_ID_RE, 'failedFileIds must be 24-character hex ids'))
+    .max(MAX_FAILED_FILE_ENTRIES)
+    .optional(),
 });
 
 /**
@@ -48,11 +64,10 @@ const handler = baseApi()
     // landed), and unreferenced (just created). Scope to files that are BOTH owned by the
     // caller AND stamped with this batch (presign sets FabFile.batchId), so a stale or
     // retried client sending stray ids can never delete the caller's other files.
-    for (const fileId of failedFileIds ?? []) {
-      const owned = await fabFileRepository.findByIdAndUserId(fileId, userId);
-      if (owned && owned.batchId === batchId) {
-        await fabFileRepository.update({ id: fileId, deletedAt: new Date() });
-      }
+    // One scoped updateMany rather than two queries per id: the previous per-id loop ran before the
+    // status flip and finalize below, so a long list timed the request out and left the batch hanging.
+    if (failedFileIds?.length) {
+      await fabFileRepository.softDeleteByIdsForUserBatch(failedFileIds, userId, batchId);
     }
 
     // failedFileNames is client-only (the pipeline never writes it), so a plain set

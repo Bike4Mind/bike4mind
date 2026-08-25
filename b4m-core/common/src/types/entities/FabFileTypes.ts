@@ -624,6 +624,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to void.
    */
   deleteManyInIds(ids: string[]): Promise<void>;
+  /**
+   * Soft-delete the given ids, scoped to BOTH an owner and an upload batch, in one write. Exists for
+   * the upload-complete cleanup of browser-failed presign orphans: the scope is the security
+   * property (a stale or retried client sending stray ids must not be able to delete the caller's
+   * other files), and doing it as one `updateMany` rather than two queries per id keeps a large
+   * failure list from timing the request out before the batch is finalized. Returns how many rows
+   * were actually deleted.
+   */
+  softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number>;
 
   /**
    * Find all files in the given IDs.

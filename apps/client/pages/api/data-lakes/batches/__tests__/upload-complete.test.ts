@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   fabFindByIdAndUserId: vi.fn(),
   fabUpdate: vi.fn(),
+  fabSoftDeleteScoped: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the lifecycle test).
@@ -33,6 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {
     findByIdAndUserId: h.fabFindByIdAndUserId,
     update: h.fabUpdate,
+    softDeleteByIdsForUserBatch: h.fabSoftDeleteScoped,
   },
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
@@ -48,6 +50,8 @@ const makeRes = () => {
   return { res, json };
 };
 const req = (body: unknown) => ({ method: 'POST', user: { id: 'u1' }, body, logger: { error: vi.fn() } }) as never;
+/** A syntactically valid 24-char hex ObjectId - failedFileIds is shape-validated at the schema. */
+const FID_A = '0123456789abcdef01234567';
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
 
 describe('POST /api/data-lakes/batches/upload-complete', () => {
@@ -121,36 +125,52 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
 
   it('soft-deletes the owned orphan FabFiles BEFORE finalize (so the recompute is honest)', async () => {
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 2 });
-    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'fid', batchId: 'b1' });
     const order: string[] = [];
-    h.fabUpdate.mockImplementation(async () => order.push('delete'));
+    h.fabSoftDeleteScoped.mockImplementation(async () => (order.push('delete'), 1));
     h.finalizeBatchIfComplete.mockImplementation(async () => order.push('finalize'));
     const { res } = makeRes();
-    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['fid'] }, res);
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: [FID_A] }, res);
 
-    expect(h.fabFindByIdAndUserId).toHaveBeenCalledWith('fid', 'u1');
-    expect(h.fabUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'fid', deletedAt: expect.any(Date) }));
+    // The owner AND batch scope must both reach the query - they are the guard, not a refinement
+    // (see softDeleteByIdsForUserBatch, whose own tests pin what the filter refuses).
+    expect(h.fabSoftDeleteScoped).toHaveBeenCalledWith([FID_A], 'u1', 'b1');
     // The orphan must be gone before finalize recomputes lake stats.
     expect(order).toEqual(['delete', 'finalize']);
   });
 
-  it('never soft-deletes a FabFile the user does not own', async () => {
+  it('does not touch FabFiles at all when the client reports no failed ids', async () => {
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
-    h.fabFindByIdAndUserId.mockResolvedValue(null); // not owned by this user
     const { res } = makeRes();
-    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['someone-elses-file'] }, res);
+    await run({ batchId: 'b1', failedFiles: 1 }, res);
 
-    expect(h.fabFindByIdAndUserId).toHaveBeenCalledWith('someone-elses-file', 'u1');
-    expect(h.fabUpdate).not.toHaveBeenCalled();
+    expect(h.fabSoftDeleteScoped).not.toHaveBeenCalled();
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('never soft-deletes an owned FabFile that belongs to a different batch', async () => {
+  it('rejects a malformed file id with a 400 instead of 500ing before finalize (#2090)', async () => {
+    // Unvalidated, this reached findOne({_id: 'not-an-id'}) and threw a Mongoose CastError - a 500
+    // raised BEFORE the status flip and finalize below, leaving the batch non-terminal until the
+    // stuck reconciler fired.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
-    // Owned by the caller, but stamped with a different batch - a stray/retried id.
-    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'other', batchId: 'someOtherBatch' });
     const { res } = makeRes();
-    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['other'] }, res);
+    // The parse throws; baseApi's error middleware renders it as a 400 in production. What matters
+    // here is that it throws BEFORE any of the work below, so the batch is left untouched rather
+    // than half-processed.
+    await expect(run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['not-an-object-id'] }, res)).rejects.toThrow();
 
-    expect(h.fabUpdate).not.toHaveBeenCalled();
+    expect(h.fabSoftDeleteScoped).not.toHaveBeenCalled();
+    expect(h.setStatusIfActive).not.toHaveBeenCalled();
+    expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized failed-id list rather than letting it time the request out (#2090)', async () => {
+    // The 1 MB body cap admitted ~38k ids; the request timed out before finalize, same hang.
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
+    const { res } = makeRes();
+    const tooMany = Array.from({ length: 2001 }, () => FID_A);
+    await expect(run({ batchId: 'b1', failedFiles: 1, failedFileIds: tooMany }, res)).rejects.toThrow();
+
+    expect(h.fabSoftDeleteScoped).not.toHaveBeenCalled();
+    expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
   });
 });
