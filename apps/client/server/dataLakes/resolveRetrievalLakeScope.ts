@@ -48,6 +48,10 @@ export function withStaticRegistryBypass(
   registry: DataLakeConfig[] = DATA_LAKES
 ): RetrievalLakeScope {
   return {
+    // Carried through: widening a privileged caller's reach says nothing about whether the dynamic
+    // read succeeded. Rebuilding this object without it would report an incomplete view and turn
+    // OFF the session-scope narrowing that keys on it, for admins only.
+    lakeViewComplete: scope.lakeViewComplete,
     dataLakeTags: dedupe([...scope.dataLakeTags, ...registry.map(lake => lake.datalakeTag)]),
     dataLakeTagPrefixes: dedupe([...scope.dataLakeTagPrefixes, ...registry.map(lake => lake.fileTagPrefix)]),
     scopedTagPrefixes: scope.scopedTagPrefixes,
@@ -79,7 +83,15 @@ export function withStaticRegistryBypass(
  * Admin/developer callers additionally get the whole static registry in the OPEN bucket,
  * preserving the reach this endpoint has always given them. That widening lives HERE and not
  * in the core resolver on purpose: pushing it down would hand every admin's chat session
- * cross-tenant retrieval.
+ * cross-tenant retrieval by default.
+ *
+ * It does NOT follow that chat can no longer see it. A session-creation path reaches this function
+ * (sessionCrud -> deriveRetrievalTagsFromFiles), so a privileged caller's derivation runs against
+ * the widened set and can persist a registry tag they hold no real lake for. That is bounded rather
+ * than a leak: both consumers of `retrievalTags` use it to NARROW against an independently resolved
+ * access scope, so the worst outcome is a privileged user's own session retrieving nothing. Keeping
+ * the widening here still buys the thing that matters - it is not in the scope every chat turn
+ * resolves for every caller.
  */
 export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Promise<RetrievalLakeScope> {
   const user = req.user!;
@@ -101,15 +113,26 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
 /**
  * The same retrieval scope, resolved WITHOUT a request.
  *
- * Exists because most session-creation call sites are not request-scoped - a manager taking
+ * Exists because many session-creation call sites are not request-scoped - a manager taking
  * `{ user, ability, logger }`, a queue handler, an overlay service - and the request-shaped resolver
- * above cannot serve them. Deriving a session's lake scope only where a `req` happened to be in hand
- * meant the lake-aware derivation ran on one of ten `createSession` call sites.
+ * above cannot serve them.
+ *
+ * COVERAGE, stated precisely because an earlier version of this comment overstated it: of the four
+ * call sites wired to this function, only `sessionCrud.getOrCreateSession` currently reaches the
+ * derivation. The three route sites (voice-sessions, voice/v2/sessions, quest-plans continue) create
+ * sessions with no `knowledgeIds`, and `sessionService.createSession` skips the derivation entirely
+ * for an empty list - so their thunks cannot fire today. They are wired deliberately, so a route that
+ * later attaches files is correct by default rather than silently unscoped; do not read them as four
+ * live derivation paths. The mainline public-API path is covered separately by the request-shaped
+ * wrapper above, via `POST /api/sessions/create`.
  *
  * Everything the request version added was MEMOIZATION, not authority: `getRequestEntitlements` is
- * `req.entitlements ??= getUserEntitlements(req.user)`, and the membership memo already falls back to
- * the repository for any id it has not cached. So this resolves the same values from the same
- * sources; a caller with a request should still prefer the wrapper above so one request pays once.
+ * `req.entitlements ??= getUserEntitlements(req.user)`, and nothing else in the tree writes that
+ * memo, so it cannot hold a narrower set than `getUserEntitlements(user)` would return. Membership is
+ * the same story by a different route: `getRequestMembershipOrgIds` takes no id and always resolves
+ * `req.user.id`, and it is the WRAPPER's ternary above - not the memo - that sends any other id to the
+ * repository. So this resolves the same values from the same sources; a caller with a request should
+ * still prefer the wrapper above so one request pays once.
  */
 export async function resolveRetrievalLakeScopeForUser(
   user: NonNullable<RetrievalScopeRequest['user']>,

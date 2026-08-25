@@ -18,6 +18,19 @@ const access = (): ResolvedLakeAccessSet => ({
 });
 
 describe('narrowLakeAccessToSession', () => {
+  /**
+   * This function REBUILDS the access object, so the completeness flag has to be carried across
+   * deliberately. Dropping it would report a degraded view to every consumer downstream of a
+   * session-scoped narrowing and silently disable any narrowing that keys on it.
+   */
+  it('carries lakeViewComplete through a narrowing, in both states', () => {
+    const degraded = { ...access(), lakeViewComplete: false };
+    expect(narrowLakeAccessToSession(degraded, ['datalake:beta']).lakeViewComplete).toBe(false);
+
+    const complete = { ...access(), lakeViewComplete: true };
+    expect(narrowLakeAccessToSession(complete, ['datalake:beta']).lakeViewComplete).toBe(true);
+  });
+
   it('keeps only the session lake, dropping the other lake from every bucket', () => {
     const out = narrowLakeAccessToSession(access(), ['datalake:beta']);
     expect(out.dataLakeTags).toEqual(['datalake:beta']);

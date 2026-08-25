@@ -4,11 +4,11 @@ import type { DataLakeConfig } from '@bike4mind/common';
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockGetDynamicDataLakeAccess, mockGetRequestEntitlements, mockGetUserEntitlements, mockFindMembershipOrgIds } =
   vi.hoisted(() => ({
-  mockGetDynamicDataLakeAccess: vi.fn(),
-  mockGetRequestEntitlements: vi.fn(),
-  mockGetUserEntitlements: vi.fn(),
-  mockFindMembershipOrgIds: vi.fn().mockResolvedValue([]),
-}));
+    mockGetDynamicDataLakeAccess: vi.fn(),
+    mockGetRequestEntitlements: vi.fn(),
+    mockGetUserEntitlements: vi.fn(),
+    mockFindMembershipOrgIds: vi.fn().mockResolvedValue([]),
+  }));
 
 // The services barrel is mocked with a factory rather than vi.spyOn: under ESM a spy on a
 // re-exported binding does not reliably intercept the consumer's reference.
@@ -54,6 +54,16 @@ const asReq = (user: { id: string; tags?: string[] | null; organizationId?: stri
   ({ user }) as unknown as EntitlementRequest;
 
 describe('withStaticRegistryBypass', () => {
+  /**
+   * The bypass rebuilds the scope object, so the completeness flag needs carrying across. Losing it
+   * here would report an incomplete lake view for ADMINS ONLY - turning off the session-scope
+   * narrowing that keys on it for exactly the accounts that reach the most lakes.
+   */
+  it('carries lakeViewComplete through the widening, in both states', () => {
+    expect(withStaticRegistryBypass(scopeOf({ lakeViewComplete: false }), REGISTRY).lakeViewComplete).toBe(false);
+    expect(withStaticRegistryBypass(scopeOf({ lakeViewComplete: true }), REGISTRY).lakeViewComplete).toBe(true);
+  });
+
   it('returns scopedTagPrefixes byte-identical - privilege never promotes a dynamic prefix', () => {
     const scoped = ['tenantx:'];
     const out = withStaticRegistryBypass(scopeOf({ scopedTagPrefixes: scoped }), REGISTRY);
@@ -285,7 +295,6 @@ describe('resolveRetrievalLakeScope', () => {
     expect(organizationRepository.findMembershipOrgIds).toHaveBeenCalledWith('other-user');
   });
 });
-
 
 /**
  * The request-free entry point. It exists because most session-creation call sites are not

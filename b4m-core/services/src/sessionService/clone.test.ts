@@ -58,6 +58,29 @@ describe('cloneSession - redaction at the copy boundary', () => {
     };
   };
 
+  /**
+   * Same reason as the fork case: a clone is a NEW session holding the source's lake files, so it must
+   * carry the source's scope rather than re-derive it through the ownership arm alone (which cannot
+   * see a teammate-authored organization-lake file, derives [], and an empty list reads downstream as
+   * NO tag filter). Asserts the PERSISTED payload, so it also pins that secureParameters keeps the
+   * field and that createSession's explicit-wins arm does not re-derive over it.
+   */
+  it('carries the source session retrievalTags onto the clone', async () => {
+    const { db } = makeAdapters();
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
+
   it('strips returnValue/error when the caller only holds a share, not ownership', async () => {
     const { db, created } = makeAdapters('owner-1');
 

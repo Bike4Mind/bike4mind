@@ -66,6 +66,10 @@ export function narrowLakeAccessToSession(
   const retainedPrefixes = new Set(retainedLakes.map(lake => lake.fileTagPrefix));
 
   return {
+    // Carried through: narrowing changes WHICH lakes are in scope, never whether the underlying read
+    // saw them all. Dropping it here would tell a consumer the view was incomplete and silently
+    // disable any narrowing keyed on it.
+    lakeViewComplete: access.lakeViewComplete,
     dataLakeTags: access.dataLakeTags.filter(tag => wanted.has(tag)),
     dataLakeTagPrefixes: access.dataLakeTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),
     scopedTagPrefixes: access.scopedTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),

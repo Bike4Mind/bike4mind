@@ -7,6 +7,13 @@ export interface LakeAccessForDerivation {
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   scopedTagPrefixes: string[];
+  /**
+   * True only when the resolver saw the caller's WHOLE lake picture. Absent or false means the tag
+   * list above may be missing lakes the caller really does reach, so it cannot be used to prove a
+   * tag unreachable. Requiring a positive `true` keeps a resolver that never sets it on the safe
+   * path. See getDynamicDataLakeAccess.
+   */
+  lakeViewComplete?: boolean;
 }
 
 export interface DeriveRetrievalTagsAdapters {
@@ -19,7 +26,12 @@ export interface DeriveRetrievalTagsAdapters {
    * lake widens reach via the lake creator's identity, so a member's teammate-authored lake file is
    * invisible to it. A host that can resolve lake access lets the derivation ask through the lake arm
    * as well; a host that cannot degrades to the ownership read, which under-derives rather than
-   * over-deriving, so the failure direction is "no narrowing" and never "wrong narrowing".
+   * over-deriving.
+   *
+   * "Under-derives" is only safe while the DERIVED tags are kept. An empty result is not a narrow
+   * scope - `fabFileSearchQuery` skips its tag clause on an empty list, so downstream it reads as
+   * NO filter and widens to every reachable lake. That is why the intersection below narrows only
+   * against a lake view that reports itself complete.
    */
   resolveLakeAccess?: () => Promise<LakeAccessForDerivation>;
 }
@@ -47,16 +59,19 @@ export async function deriveRetrievalTagsFromFiles(
     const owned = await adapters.db.fabFiles.shareable.findAllAccessibleByIds(user, knowledgeIds);
     tagNames.push(...owned.flatMap(f => f.tags?.map(t => t.name) ?? []));
   } catch (err) {
-    adapters.logger?.warn(
-      `[sessionService] ownership-arm lake-tag derivation failed: ${(err as Error)?.message}`
-    );
+    adapters.logger?.warn(`[sessionService] ownership-arm lake-tag derivation failed: ${(err as Error)?.message}`);
   }
 
   let reachable: Set<string> | undefined;
   if (adapters.resolveLakeAccess) {
     try {
       const access = await adapters.resolveLakeAccess();
-      reachable = new Set(access.dataLakeTags);
+      // ONLY a complete lake view can prove a tag unreachable. A degraded read returns the static
+      // registry alone (see getDynamicDataLakeAccess's catch), so a real organization lake looks
+      // unreachable and the intersection below would drop a correct tag - persisting an EMPTY scope,
+      // which reads as "no filter" downstream and restores the exact cross-lake bleed this
+      // derivation exists to prevent. Leaving `reachable` unset keeps the derived tags instead.
+      if (access.lakeViewComplete) reachable = new Set(access.dataLakeTags);
       if (access.dataLakeTags.length > 0) {
         const res = await adapters.db.fabFiles.search(
           user.id,
