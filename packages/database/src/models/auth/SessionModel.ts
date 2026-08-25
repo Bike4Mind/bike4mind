@@ -398,7 +398,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (!session) {
       throw new NotFoundError('Session not found');
     }
-    return session.agentIds || [];
+    // Callers resolve these by `_id` one at a time, so a single legacy entry that cannot address
+    // a row made findById throw and took the whole attached-agent list down with it.
+    return usableObjectIds(session.agentIds, 'SessionModel.getAttachedAgents');
   }
 
   async addArtifact(sessionId: string, artifactId: string) {
