@@ -41,7 +41,13 @@ export const AgentExecutionStartRequestSchema = z.object({
    * non-member gets 404. Omit to bill the caller personally.
    */
   organization_id: z.string().optional(),
-  /** Tool-id allowlist for the run. Omit to use the resolved profile's own list. */
+  /**
+   * Tool-id allowlist for the run. Omit to use the resolved profile's own list.
+   *
+   * Doubles as pre-approval: REST runs have no interactive client to answer a
+   * permission prompt, so tools named here are treated as approved. A run that calls
+   * an approval-gated tool NOT named here fails with that tool named in `error`.
+   */
   tools: z.array(z.string()).optional(),
   /**
    * Hard ceiling on ReAct iterations. Each one is a full LLM round-trip, so the cap is

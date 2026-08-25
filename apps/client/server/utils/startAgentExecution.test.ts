@@ -201,6 +201,26 @@ describe('startAgentExecution', () => {
     expect(mockCleanupStaleActive).toHaveBeenCalledTimes(1);
   });
 
+  it('pre-approves the caller-named tools on a headless run, so the first gated tool does not kill it', async () => {
+    await startAgentExecution(
+      input({ userId: 'headless-approves', enabledTools: ['web_search', 'current_datetime'] }),
+      logger
+    );
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ approvedTools: ['web_search', 'current_datetime'] })
+    );
+  });
+
+  it('leaves approvedTools empty for an interactive run, which can approve per-tool instead', async () => {
+    await startAgentExecution(
+      input({ userId: 'interactive-run', connectionId: 'real-ws-conn', enabledTools: ['web_search'] }),
+      logger
+    );
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: [] }));
+  });
+
   it('refuses before creating anything when the executor is not linked to this deployment', async () => {
     // The frontend server links the executor's NAME, not the function, so a
     // hard-coded `Resource.AgentExecutor` resolves in the WebSocket Lambda and throws

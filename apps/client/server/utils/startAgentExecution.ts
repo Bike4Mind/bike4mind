@@ -26,6 +26,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { resolveAgentExecutorFunctionName } from '@server/utils/agentExecutorFunctionName';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
+import { isHeadlessConnection } from '@server/utils/headlessConnection';
 
 const lambdaClient = new LambdaClient({});
 
@@ -214,7 +215,14 @@ export async function startAgentExecution(
     model: input.model,
     status: 'pending' as AgentExecutionStatus,
     connectionId: input.connectionId,
-    approvedTools: [],
+    // A headless run has nobody to answer a permission prompt, so naming a tool in the
+    // request IS the caller's approval - otherwise the first gated tool the agent
+    // reaches for kills the run, and tools as ordinary as `current_datetime` are gated
+    // (only ALWAYS_SAFE_TOOLS bypass it). Without this the REST surface can run a
+    // prompt but barely any real tool use. An interactive run keeps the empty set: it
+    // has a client that can approve per-tool, which is strictly better than trusting
+    // the dispatch payload.
+    approvedTools: isHeadlessConnection(input.connectionId) ? (input.enabledTools ?? []) : [],
     deniedTools: [],
     iterationBilling: [],
     totalCreditsUsed: 0,

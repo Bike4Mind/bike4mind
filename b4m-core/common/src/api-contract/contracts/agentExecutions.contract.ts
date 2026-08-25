@@ -36,7 +36,10 @@ export const startAgentExecutionContract = defineEndpoint({
     'iteration events, use the WebSocket route instead. Omit `agent_id` to get the profile the ' +
     "session's own surface resolves to, which is what reproduces the in-app toggle. The final " +
     'reply is also written to the session as a normal chat message, so it appears in history. ' +
-    'Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'Naming a tool in `tools` also PRE-APPROVES it for the run: there is no interactive client to ' +
+    'answer a permission prompt, so a run that calls an approval-gated tool you did not name fails ' +
+    'with that tool named in `error` rather than hanging. Authenticate with an API key ' +
+    '(`b4m_live_`) or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
