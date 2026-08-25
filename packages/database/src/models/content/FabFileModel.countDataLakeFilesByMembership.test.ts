@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, fabFileRepository } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -26,7 +26,7 @@ const makeFile = (overrides: {
     ...(overrides.archived ? { archivedAt: new Date() } : {}),
   });
 
-const scope = (slug: string, prefix = '', creator: string | undefined = CREATOR) => ({
+const scope = (slug: string, prefix = '', creator: string = CREATOR) => ({
   datalakeTag: `datalake:${slug}`,
   fileTagPrefix: prefix,
   creatorUserId: creator,
@@ -101,6 +101,56 @@ describe('FabFileRepository.countDataLakeFilesByMembership', () => {
     ]);
 
     expect(counts).toEqual({ 'datalake:papers': 1, 'datalake:books': 1, 'datalake:empty': 0 });
+  });
+
+  it('counts a file that belongs to two lakes once for EACH of them', async () => {
+    // `addFileToLake` has no exclusivity check, so one file can carry two lakes' meta-tags. The
+    // counts are per-scope independent: batching them into one query must not make this file
+    // land on a single lake.
+    await makeFile({ tags: ['datalake:papers', 'datalake:books'] });
+
+    const counts = await fabFileRepository.countDataLakeFilesByMembership([
+      scope('papers', 'papers:'),
+      scope('books', 'books:'),
+    ]);
+
+    expect(counts).toEqual({ 'datalake:papers': 1, 'datalake:books': 1 });
+  });
+
+  it('falls back to meta-tag-only matching for a scope with no creator', async () => {
+    // A static-registry lake has no document and so no `createdByUserId`; the prefix arm has
+    // nothing to anchor to and must drop out rather than match every `books:` file.
+    await makeFile({ tags: ['datalake:books'], fileName: 'meta' });
+    await makeFile({ tags: ['books:business'], fileName: 'prefix-only' });
+
+    // Built inline, not through `scope`: a default parameter would put the creator back.
+    const counts = await fabFileRepository.countDataLakeFilesByMembership([
+      { datalakeTag: 'datalake:books', fileTagPrefix: 'books:', creatorUserId: undefined },
+    ]);
+
+    expect(counts).toEqual({ 'datalake:books': 1 });
+  });
+
+  it('issues a bounded number of database operations for a large lake set', async () => {
+    // The fan-out this batching exists to remove: an admin's lake set is every lake of every
+    // tenant, and one count per lake is thousands of round trips through a pool of two. The
+    // bound is what matters here, not the exact chunk size.
+    const scopes = Array.from({ length: 60 }, (_, i) => scope(`lake-${i}`, `lake${i}:`));
+    await makeFile({ tags: ['datalake:lake-7'] });
+
+    const countDocuments = vi.spyOn(FabFile, 'countDocuments');
+    const aggregate = vi.spyOn(FabFile, 'aggregate');
+    try {
+      const counts = await fabFileRepository.countDataLakeFilesByMembership(scopes);
+
+      expect(countDocuments.mock.calls.length + aggregate.mock.calls.length).toBeLessThanOrEqual(5);
+      expect(Object.keys(counts)).toHaveLength(60);
+      expect(counts['datalake:lake-7']).toBe(1);
+      expect(counts['datalake:lake-8']).toBe(0);
+    } finally {
+      countDocuments.mockRestore();
+      aggregate.mockRestore();
+    }
   });
 
   it('returns an empty map when asked for no lakes', async () => {

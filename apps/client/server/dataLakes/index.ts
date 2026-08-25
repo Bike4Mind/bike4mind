@@ -244,12 +244,19 @@ export async function queryDataLakeTagCounts(
   // the config the browse surfaces receive deliberately carries no owner id. A static registry
   // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
   // safe direction (see buildDataLakeMembershipFilter).
-  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
-  const membershipScopes = lakes.map((lake, i) => ({
-    datalakeTag: lake.datalakeTag,
-    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
-    creatorUserId: lakeDocs[i]?.createdByUserId,
-  }));
+  //
+  // ONE batched read, never one per lake: an admin's lake set is every lake of every tenant, and
+  // the per-lake fan-out this replaced issued that many concurrent findOnes against a pool of two.
+  const lakeDocs = await dataLakeRepository.findByDatalakeTags(dataLakeTags);
+  const lakeDocsByTag = new Map(lakeDocs.map(doc => [doc.datalakeTag, doc]));
+  const membershipScopes = lakes.map(lake => {
+    const doc = lakeDocsByTag.get(lake.datalakeTag);
+    return {
+      datalakeTag: lake.datalakeTag,
+      fileTagPrefix: doc?.fileTagPrefix ?? lake.fileTagPrefix,
+      creatorUserId: doc?.createdByUserId,
+    };
+  });
 
   const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),

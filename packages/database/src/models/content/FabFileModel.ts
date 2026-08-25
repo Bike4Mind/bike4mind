@@ -426,6 +426,11 @@ const METADATA_PAGE_CAP = 500;
  *  (maxPoolSize defaults to 2) so a wave cannot monopolize every connection in the process. */
 const RESET_CONCURRENCY = 10;
 
+// Membership scopes per `$facet` aggregate in countDataLakeFilesByMembership. Each branch is an
+// extra in-memory pass over the chunk's matched union, so this trades round trips against the
+// server-side work one query does.
+const MEMBERSHIP_COUNT_CHUNK = 25;
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -1525,19 +1530,42 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     });
   }
 
+  /**
+   * Per-lake live file counts, keyed by membership tag. A lake with no members counts 0 rather
+   * than dropping out of the map.
+   *
+   * Batched into `$facet` aggregates rather than one `countDocuments` per scope: the tag-count
+   * surface hands this every lake an ADMIN can see - every lake of every tenant - and a fan-out
+   * that wide is thousands of round trips through a pool that defaults to two connections
+   * (b4m-core/db-core/src/utils/mongo.ts), which is what times the request out.
+   *
+   * Each facet branch re-applies its OWN scope filter to the chunk's union, so the counts stay
+   * per-scope INDEPENDENT: a file that belongs to two lakes (co-owned meta-tags, or a colliding
+   * prefix) counts once for each, exactly as the per-scope counts did. A `$group` on a single
+   * matched lake would have undercounted it.
+   */
   async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
     if (scopes.length === 0) return {};
-    const counts = await Promise.all(
-      scopes.map(scope =>
-        this.fabFileModel.countDocuments({
-          ...buildDataLakeMembershipFilter(scope),
-          deletedAt: null,
-          archivedAt: null,
-          status: { $ne: 'pending' },
-        })
-      )
-    );
-    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < scopes.length; i += MEMBERSHIP_COUNT_CHUNK) {
+      const chunk = scopes.slice(i, i + MEMBERSHIP_COUNT_CHUNK);
+      const filters = chunk.map(scope => ({
+        ...buildDataLakeMembershipFilter(scope),
+        deletedAt: null,
+        archivedAt: null,
+        status: { $ne: 'pending' },
+      }));
+      // Synthetic branch keys: a facet field name may not contain a '.' or start with a '$',
+      // and `datalakeTag` is a user-derived string. Mapped back positionally.
+      const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
+        { $match: { $or: filters } },
+        { $facet: Object.fromEntries(filters.map((filter, j) => [`s${j}`, [{ $match: filter }, { $count: 'n' }]])) },
+      ]);
+      chunk.forEach((scope, j) => {
+        counts[scope.datalakeTag] = row?.[`s${j}`]?.[0]?.n ?? 0;
+      });
+    }
+    return counts;
   }
 
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared

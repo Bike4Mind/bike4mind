@@ -311,6 +311,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
+  /**
+   * Batched `findByDatalakeTag`, for callers holding a whole lake set (the tag-count surface):
+   * one read instead of one per lake. Lakes with no document are simply absent from the result,
+   * so the caller must key by `datalakeTag` rather than assume a positional match.
+   */
+  findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Entitlement-aware variant of `findActiveByUserTags`: active lakes the user can reach by
