@@ -18,7 +18,8 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { search: vi.fn() },
 }));
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: { settings: true },
+  dataLakeAccessGrantRepository: { grants: true },
   dataLakeRepository: {},
   fabFileRepository: {},
   projectRepository: {},
@@ -78,5 +79,39 @@ describe('resolveAccessibleLakes', () => {
     expect(mockListAllDataLakes).toHaveBeenCalledTimes(1);
     expect(mockListDataLakes).not.toHaveBeenCalled();
     expect(mockGetRequestEntitlements).not.toHaveBeenCalled();
+  });
+
+  // Both grant reads inside listDataLakes degrade to empty when the repo is absent, so a lake held
+  // by an owner or curator grant was missing from every browse surface - articles, tag-counts, the
+  // rlm-answer gate, and the file-access check in pages/api/files/[id] - while the read gate
+  // admitted it. Asserted on BOTH branches: an admin takes listAllDataLakes, so a fix applied to
+  // one call site only would leave the other silently degraded.
+  it.each([
+    ['non-admin', { id: 'u1', tags: [] }, () => mockListDataLakes],
+    ['admin', { id: 'admin', tags: [], isAdmin: true }, () => mockListAllDataLakes],
+  ])('threads the grants and settings adapters on the %s path', async (_label, user, getMock) => {
+    await resolveAccessibleLakes(asReq(user));
+
+    expect(getMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          dataLakeAccessGrants: { grants: true },
+          // Settings too, unlike the Slack `list` reply which omits it on purpose: browse is a READ
+          // surface, so it must follow the EnforceLakeReadGrants cutover instead of freezing at
+          // owner/curator and hiding a reader-granted lake the gate would admit.
+          settings: { settings: true },
+        }),
+      })
+    );
+  });
+
+  it('still passes no `users` adapter, which browse must not pay for', async () => {
+    // The owner-name lookup exists for the manager list, which renders an owner; browse never does.
+    // Pinned because the grants/settings addition edits exactly this adapter object.
+    await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));
+
+    const [, adapters] = mockListDataLakes.mock.calls[0] as [unknown, { db: Record<string, unknown> }];
+    expect(adapters.db).not.toHaveProperty('users');
   });
 });
