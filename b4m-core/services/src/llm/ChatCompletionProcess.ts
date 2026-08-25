@@ -1604,8 +1604,26 @@ export class ChatCompletionProcess {
       // fetch below instead of serializing in front of it - folded into that Promise.all. Skips
       // the lookup entirely when there's nothing to check (no attachment) or the offer is skipped
       // anyway (promptMode).
+      // Gated on `hasAnyAttachment` ONLY - deliberately not on `skipAutoOffers` any more. This
+      // lookup feeds two consumers: the tool-offer gate (which a promptMode turn does not need,
+      // since the offer is suppressed anyway) and the personal-corpus CLASSIFICATION, which such a
+      // turn very much does. Skipping it under promptMode made `resolvePersonalCorpusOnly` see a
+      // null file list and return false at its "cannot judge" guard on EVERY promptMode turn - so
+      // the suppression was structurally dead on `POST /api/chat`'s documented grounded mode, which
+      // forces retrieval on (resolveForcedRetrieval returns `mode !== 'raw'`). The cost is one
+      // memoized read on promptMode turns that previously skipped it.
+      // Two consumers now, and they need this on different turns. The tool-offer gate does not need
+      // it under promptMode (the offer is suppressed anyway) - but the personal-corpus
+      // CLASSIFICATION does, whenever forced retrieval is actually running. Gating on
+      // `!skipAutoOffers` alone left `resolvePersonalCorpusOnly` seeing a null file list on every
+      // promptMode turn, so it returned false at its "cannot judge" guard and the suppression was
+      // structurally dead on `POST /api/chat`'s grounded mode - which forces retrieval ON.
+      //
+      // `raw` is the one mode that needs neither: it is the only mode resolveForcedRetrieval turns
+      // retrieval OFF for, so there is no classification to make and the read stays skipped.
+      const needFilesForClassification = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       const attachedKnowledgeFilesPromise: Promise<IFabFileDocument[] | null> =
-        hasAnyAttachment && !skipAutoOffers
+        hasAnyAttachment && (!skipAutoOffers || needFilesForClassification)
           ? this.getAttachedKnowledgeFiles(session.knowledgeIds!)
           : Promise.resolve(null);
 

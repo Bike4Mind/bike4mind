@@ -91,6 +91,12 @@ describe('resolvePersonalCorpusOnly', () => {
     await expect(resolvePersonalCorpusOnly({ ...base, countLakeReachableAttachments: async () => null })).resolves.toBe(false);
   });
 
+  it('tolerates a duplicated id - the reader returns distinct docs, so raw lengths would never match', async () => {
+    await expect(
+      resolvePersonalCorpusOnly({ ...base, requestedKnowledgeIds: ['f1', 'f1'], resolvedFiles: [file('f1')] })
+    ).resolves.toBe(true);
+  });
+
   it('is false with nothing attached', async () => {
     await expect(resolvePersonalCorpusOnly({ ...base, requestedKnowledgeIds: [], resolvedFiles: [] })).resolves.toBe(false);
   });

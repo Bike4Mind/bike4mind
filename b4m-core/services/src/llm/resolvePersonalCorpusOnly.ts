@@ -58,7 +58,9 @@ export async function resolvePersonalCorpusOnly(input: PersonalCorpusInput): Pro
   // either (skipAutoOffers), so that turn would have NO retrieval at all - silently.
   //
   // Anything short of full resolution therefore means "cannot judge", never "personal".
-  if (resolvedFiles.length !== requestedKnowledgeIds.length) return false;
+  // Deduplicated: `knowledgeIds` is client-writable and the reader returns distinct documents, so a
+  // repeated id would make requested > resolved and read as an unresolvable corpus forever.
+  if (resolvedFiles.length !== new Set(requestedKnowledgeIds).size) return false;
 
   // The authoritative half of the same question: the lake arm can see files the reader above
   // cannot, so a nonzero count means lake content is attached even when `resolvedFiles` showed none

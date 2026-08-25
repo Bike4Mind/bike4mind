@@ -2338,7 +2338,13 @@ describe('search_knowledge_base personal-corpus scoping', () => {
     // The unscoped semantic arm still runs: collectScopedFiles admits the caller's own and shared
     // files via includeShared, so the corpus is real - it simply carries no lake tags.
     expect(semanticDataLakeSearchMock).toHaveBeenCalled();
-    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({ dataLakeTags: [] });
+    // `ownFilesOnly` is the half that makes the empty-tag case actually search rather than bail.
+    // Asserting only `dataLakeTags: []` left the wiring untested: deleting the flag at the call site
+    // passed the entire suite, so R3 could regress to its original broken state with CI green.
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      dataLakeTags: [],
+      ownFilesOnly: true,
+    });
   });
 
   it('does NOT restrict to the attached files - the rest of the owner library stays searchable', async () => {

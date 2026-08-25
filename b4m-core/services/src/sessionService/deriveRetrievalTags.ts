@@ -52,9 +52,11 @@ export async function deriveRetrievalTagsFromFiles(
     );
   }
 
+  let reachable: Set<string> | undefined;
   if (adapters.resolveLakeAccess) {
     try {
       const access = await adapters.resolveLakeAccess();
+      reachable = new Set(access.dataLakeTags);
       if (access.dataLakeTags.length > 0) {
         const res = await adapters.db.fabFiles.search(
           user.id,
@@ -79,5 +81,12 @@ export async function deriveRetrievalTagsFromFiles(
     }
   }
 
-  return datalakeTagsFrom(tagNames);
+  const derived = datalakeTagsFrom(tagNames);
+  if (!reachable) return derived;
+  // Intersected against the caller's reachable lakes. The ownership arm collects tags off any file
+  // the caller can merely READ, so a 1:1-shared file carrying a stale or foreign lake tag would
+  // otherwise persist a scope pointing at a lake they cannot reach - which narrows the session to
+  // nothing rather than to that lake, and (because a non-empty tag list reads as "already
+  // lake-scoped") also switches off the personal-corpus suppression permanently.
+  return derived.filter(tag => reachable.has(tag));
 }
