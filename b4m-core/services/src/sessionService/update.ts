@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { updateShareableFiles } from '../projectService';
-import { usableObjectIds } from '../utils/objectIds';
+import { usableSessionIds } from '../utils/objectIds';
 import {
   ICacheRepository,
   IFabFileRepository,
@@ -57,8 +57,8 @@ export const updateSession = async (
     propagateToProjects,
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
-  // Dropped, not rejected - a rename PUTs the whole session, so see usableObjectIds.
-  const knowledgeIds = rawIds && usableObjectIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
+  // Dropped, not rejected - a rename PUTs the whole session, so see usableSessionIds.
+  const knowledgeIds = rawIds && usableSessionIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
 
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 

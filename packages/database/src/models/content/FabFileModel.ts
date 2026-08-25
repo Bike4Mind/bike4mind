@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
-import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
@@ -587,7 +587,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async findAllInIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllInIds') } });
     return result.map(d => d.toObject());
   }
 
@@ -669,8 +669,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return await super.find(filter, { content: 0 });
   }
 
+  /** Without this guard a CastError here is remapped by the API error handler into a confusing 404 on the notebook file list. */
   async findAllByIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
   }
 
