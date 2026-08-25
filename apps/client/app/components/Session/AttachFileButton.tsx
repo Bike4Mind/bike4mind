@@ -12,6 +12,7 @@ import CasinoIcon from '@mui/icons-material/Casino';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import {
   Box,
+  Chip,
   IconButton,
   List,
   ListItem,
@@ -52,6 +53,12 @@ import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePick
 import type { AttachScopeMode } from '@bike4mind/common';
 
 ensureGoogleDrivePickerStyles();
+
+const ATTACH_SCOPE_OPTIONS: { value: AttachScopeMode; label: string }[] = [
+  { value: 'auto', label: 'Smart' },
+  { value: 'notebook', label: 'Whole notebook' },
+  { value: 'message', label: 'Just this message' },
+];
 
 interface IProps {
   onUploadFromComputer: () => void;
@@ -363,9 +370,27 @@ const AttachFileButton = ({
               onChange={event => onAttachScopeModeChange(event.target.value as AttachScopeMode)}
               sx={{ gap: 1.5, flexWrap: 'wrap' }}
             >
-              <Radio value="auto" label="Smart" data-testid="attach-file-scope-auto-radio" />
-              <Radio value="notebook" label="Whole notebook" data-testid="attach-file-scope-notebook-radio" />
-              <Radio value="message" label="Just this message" data-testid="attach-file-scope-message-radio" />
+              {ATTACH_SCOPE_OPTIONS.map(option => {
+                const selected = attachScopeMode === option.value;
+                return (
+                  <Chip
+                    key={option.value}
+                    variant={selected ? 'solid' : 'outlined'}
+                    color={selected ? 'primary' : 'neutral'}
+                    size="sm"
+                  >
+                    {/* disableIcon + overlay turns the whole chip into the hit target
+                        instead of just the radio dot. */}
+                    <Radio
+                      disableIcon
+                      overlay
+                      value={option.value}
+                      label={option.label}
+                      data-testid={`attach-file-scope-${option.value}-radio`}
+                    />
+                  </Chip>
+                );
+              })}
             </RadioGroup>
           </Box>
           <Box sx={{ mb: 1.5 }}>
