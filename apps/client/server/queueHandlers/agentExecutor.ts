@@ -2396,14 +2396,18 @@ async function processExecution(
           // and potentially retry it indefinitely. Checkpoint persistence and
           // iteration billing already happened above the branch.
           logger.warn(`[Permission] Tool "${toolName}" is denied — failing execution`);
-          await agentExecutionRepository.markFailed(executionId, {
-            message: `Execution stopped: tool "${toolName}" is not permitted`,
-          });
+          const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+          await agentExecutionRepository.markFailed(executionId, { message: deniedMessage });
           await sendWs('failed', {
             executionId,
             reason: 'tool_denied',
             toolName,
           });
+          // Settle the dispatch-time Quest, as the hard-error path below does. Without
+          // this the prompt bubble stays `pending` with an empty reply forever - the
+          // status is deliberately `pending` at dispatch so Slack pollers don't fire on
+          // an empty `replies`, and only `persistRunAsQuest` ever flips it to `done`.
+          await persistRunAsQuest(executionId, `${deniedMessage}.`, logger);
           return;
         }
 
@@ -2420,12 +2424,14 @@ async function processExecution(
             executionId,
             toolName,
           });
-          await agentExecutionRepository.markFailed(executionId, {
-            message:
-              `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
-              'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
-              'excludes approval-gated tools, or start the run over the WebSocket route.',
-          });
+          const headlessMessage =
+            `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
+            'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
+            'excludes approval-gated tools, or start the run over the WebSocket route.';
+          await agentExecutionRepository.markFailed(executionId, { message: headlessMessage });
+          // Settle the dispatch-time Quest so chat history shows the reason instead of a
+          // permanently `pending` empty bubble - same reasoning as the denied branch above.
+          await persistRunAsQuest(executionId, `${headlessMessage}`, logger);
           return;
         }
 
