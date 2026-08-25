@@ -225,7 +225,10 @@ ArtifactSchema.virtual('isDeleted').get(function () {
 
 // Virtual for checking if artifact is public
 ArtifactSchema.virtual('isPublic').get(function () {
-  return this.visibility === 'public' || this.permissions.isPublic;
+  // `permissions` has no default, so a stored row can lack it entirely. Virtuals run on every
+  // toObject()/toJSON(), so dereferencing it unguarded turned one such row into a 500 for the
+  // whole notebook export rather than a missing field on one artifact.
+  return this.visibility === 'public' || this.permissions?.isPublic;
 });
 
 // Method to soft delete
