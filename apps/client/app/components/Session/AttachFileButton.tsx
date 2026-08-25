@@ -50,15 +50,26 @@ import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
-import type { AttachScopeMode } from '@bike4mind/common';
+import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
 
 ensureGoogleDrivePickerStyles();
 
-const ATTACH_SCOPE_OPTIONS: { value: AttachScopeMode; label: string }[] = [
-  { value: 'auto', label: 'Smart' },
-  { value: 'notebook', label: 'Whole notebook' },
-  { value: 'message', label: 'Just this message' },
-];
+// Keyed by the union, so adding a mode to ATTACH_SCOPE_MODES fails the build here
+// until it has copy, rather than rendering an unlabeled chip.
+const ATTACH_SCOPE_COPY: Record<AttachScopeMode, { label: string; description: string }> = {
+  auto: {
+    label: 'Smart',
+    description: 'Documents stay available to this notebook; images attach to one message.',
+  },
+  notebook: {
+    label: 'Whole notebook',
+    description: 'Everything is kept for this notebook and re-sent with every message.',
+  },
+  message: {
+    label: 'Just this message',
+    description: 'Nothing is kept - files attach to one message only.',
+  },
+};
 
 interface IProps {
   onUploadFromComputer: () => void;
@@ -370,11 +381,11 @@ const AttachFileButton = ({
               onChange={event => onAttachScopeModeChange(event.target.value as AttachScopeMode)}
               sx={{ gap: 1.5, flexWrap: 'wrap' }}
             >
-              {ATTACH_SCOPE_OPTIONS.map(option => {
-                const selected = attachScopeMode === option.value;
+              {ATTACH_SCOPE_MODES.map(mode => {
+                const selected = attachScopeMode === mode;
                 return (
                   <Chip
-                    key={option.value}
+                    key={mode}
                     variant={selected ? 'solid' : 'outlined'}
                     color={selected ? 'primary' : 'neutral'}
                     size="sm"
@@ -384,9 +395,9 @@ const AttachFileButton = ({
                     <Radio
                       disableIcon
                       overlay
-                      value={option.value}
-                      label={option.label}
-                      data-testid={`attach-file-scope-${option.value}-radio`}
+                      value={mode}
+                      label={ATTACH_SCOPE_COPY[mode].label}
+                      data-testid={`attach-file-scope-${mode}-radio`}
                     />
                   </Chip>
                 );
@@ -395,11 +406,7 @@ const AttachFileButton = ({
           </Box>
           <Box sx={{ mb: 1.5 }}>
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {attachScopeMode === 'auto'
-                ? 'Documents stay available to this notebook; images attach to one message.'
-                : attachScopeMode === 'notebook'
-                  ? 'Everything is kept for this notebook and re-sent with every message.'
-                  : 'Nothing is kept - files attach to one message only.'}
+              {ATTACH_SCOPE_COPY[attachScopeMode].description}
             </Typography>
           </Box>
 
