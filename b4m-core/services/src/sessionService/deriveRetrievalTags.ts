@@ -42,10 +42,15 @@ export interface DeriveRetrievalTagsAdapters {
  * Shared by session create AND update: attaching a lake file to an already-open session is the most
  * ordinary way a user reaches a lake, and deriving only at create left that whole path unscoped.
  *
- * WRITTEN ONCE. `sessionService.update` re-derives only while `retrievalTags` is still empty, and no
- * client route writes the field, so whatever this returns is effectively permanent for that session.
- * That is why the intersection below refuses to narrow against an incomplete lake view: a derivation
- * made during a degraded read would be pinned for the session's lifetime with nothing to correct it.
+ * WRITTEN ONCE, once it is non-empty. `sessionService.update` re-derives only while `retrievalTags`
+ * is still empty, and NO POST-CREATE path writes the field - `SessionUpdateRequestSchema` does not
+ * carry it, so a client can supply it only at CREATE, where the explicit-wins arm means no derivation
+ * ran to be overwritten. (It IS client-suppliable there: see `CreateSessionRequestSchema`.)
+ *
+ * So a non-empty result is effectively permanent for that session, which is why the intersection
+ * below refuses to narrow against an incomplete lake view: a derivation made during a degraded read
+ * would be pinned for the session's lifetime with nothing to correct it. An EMPTY result is not
+ * permanent - create omits the key entirely, so the next `knowledgeIds` change re-derives.
  *
  * Permission-correct by construction. The ownership arm resolves through
  * `shareable.findAllAccessibleByIds` (the reader `addFilesToProjects` uses); the lake arm passes

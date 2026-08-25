@@ -107,14 +107,20 @@ describe('cloneSession - redaction at the copy boundary', () => {
 
     await cloneSession('caller-1', { id: 'session-1' }, { db });
 
-    expect(db.sessions.create).toHaveBeenCalledWith(expect.not.objectContaining({ retrievalTags: ['datalake:acme'] }));
+    // Exact: `not.objectContaining` would also pass if some OTHER tag had been written, which is a
+    // different (and worse) outcome than the absence this asserts.
+    expect(db.sessions.create.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
   });
 
   /**
    * The two halves together. The ownership gate routes a non-owner into the derivation rather than
    * letting them inherit the owner's tags; forwarding `resolveLakeAccess` is what gives that
-   * derivation a reachability check. Each half is inert without the other, so both cases below are
-   * asserted on the PERSISTED payload.
+   * derivation a reachability check.
+   *
+   * Only the FIRST case below pins both halves - it fails if either the gate or the forwarding is
+   * removed. The second passes at the parent commit too (with no resolver the derivation returns its
+   * tags unintersected, which is the same result); it earns its place by pinning the intersection's
+   * POLARITY, so an inverted predicate cannot pass the pair. Both assert the PERSISTED payload.
    */
   it('drops an inherited-looking lake tag when the share-holder cannot reach that lake', async () => {
     const { db } = makeAdapters('owner-1');
@@ -141,7 +147,9 @@ describe('cloneSession - redaction at the copy boundary', () => {
     await cloneSession('caller-1', { id: 'session-1' }, { db, resolveLakeAccess } as never);
 
     expect(resolveLakeAccess).toHaveBeenCalled();
-    expect(db.sessions.create).toHaveBeenCalledWith(expect.not.objectContaining({ retrievalTags: ['datalake:acme'] }));
+    // Exact: `not.objectContaining` would also pass if some OTHER tag had been written, which is a
+    // different (and worse) outcome than the absence this asserts.
+    expect(db.sessions.create.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
   });
 
   it('keeps the derived lake tag when the share-holder CAN reach that lake', async () => {
