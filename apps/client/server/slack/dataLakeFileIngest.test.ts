@@ -47,6 +47,7 @@ let downloadFile: ReturnType<typeof vi.fn>;
 let findByContentHashesInDataLake: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
 let resolveMembershipOrgIds: ReturnType<typeof vi.fn>;
+let resolveAdministeredOrgIds: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,6 +57,7 @@ beforeEach(() => {
   findByContentHashesInDataLake = vi.fn().mockResolvedValue([]);
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
   resolveMembershipOrgIds = vi.fn().mockResolvedValue(['org-1']);
+  resolveAdministeredOrgIds = vi.fn().mockResolvedValue(['org-2']);
 
   assertLakeWriteAccess.mockResolvedValue(lake);
   assertCanWriteDataLakeTags.mockResolvedValue(undefined);
@@ -73,6 +75,7 @@ beforeEach(() => {
     createLakeFile,
     resolveEntitlementKeys,
     resolveMembershipOrgIds,
+    resolveAdministeredOrgIds,
     downloadFile,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -197,6 +200,7 @@ describe('AccessContext is built server-side', () => {
 
     expect(resolveEntitlementKeys).toHaveBeenCalledWith(actor);
     expect(resolveMembershipOrgIds).toHaveBeenCalledWith('user-1');
+    expect(resolveAdministeredOrgIds).toHaveBeenCalledWith('user-1');
     expect(assertLakeWriteAccess).toHaveBeenCalledWith(
       'sales',
       expect.objectContaining({
@@ -205,6 +209,10 @@ describe('AccessContext is built server-side', () => {
         userTags: ['beta'],
         organizationIds: ['org-1'],
         entitlementKeys: ['ent-a'],
+        // Distinct from organizationIds on purpose: membership grants read, org-ADMIN rights are
+        // what fire canManageLake's org rungs, and a fake that reused one set for both would pass
+        // even if the gate received the wrong one.
+        administeredOrgIds: ['org-2'],
       }),
       expect.anything()
     );
