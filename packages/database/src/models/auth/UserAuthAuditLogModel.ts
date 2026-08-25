@@ -9,6 +9,11 @@ import BaseRepository from '@bike4mind/db-core';
  *
  * `session_revoked` records an admin force-logout (revoke all of a user's sessions
  * via the tokenVersion kill switch); written by the admin revoke-sessions route.
+ *
+ * `session_reuse_revoked`, `session_recovered` and `refresh_replay_capped` record the refresh
+ * endpoint's involuntary-session outcomes (theft detection, lost-response recovery, coalesce cap);
+ * emitted by rotateSession's audit hook. They exist so a "user was logged out" report can be
+ * answered from one query instead of code archaeology.
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -19,6 +24,9 @@ export type UserAuthAuditEvent =
   | 'oauth_link'
   | 'oauth_unlink'
   | 'session_revoked'
+  | 'session_reuse_revoked'
+  | 'session_recovered'
+  | 'refresh_replay_capped'
   | 'trusted_device_granted'
   | 'trusted_device_used'
   | 'trusted_device_revoked';
@@ -32,6 +40,9 @@ const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'oauth_link',
   'oauth_unlink',
   'session_revoked',
+  'session_reuse_revoked',
+  'session_recovered',
+  'refresh_replay_capped',
   'trusted_device_granted',
   'trusted_device_used',
   'trusted_device_revoked',
