@@ -114,9 +114,12 @@ const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
  *     be presented instead). Recovery: rotate forward FROM the previous secret via its own CAS,
  *     discarding the never-delivered current. The client gets a fresh token; the session lives.
  *     Cost, accepted deliberately: a thief holding the superseded secret can take the chain and
- *     work until the next collision with the real holder revokes the session - the same
- *     collision-detection timescale as before, in exchange for never killing a healthy session on
- *     a lost response. Every recovery is surfaced through `audit` so abuse is observable.
+ *     work until the next collision with the real holder revokes the session. Detection fires at
+ *     that collision - within one refresh interval for an active client, but deferred until an
+ *     idle victim returns, and each re-recovery in between is visible only in the audit log. Before
+ *     this change the thief's own attempt tripped detection immediately - and killed every
+ *     lost-response victim with it. Every recovery is surfaced through `audit` so abuse is
+ *     observable.
  *  4. Anything else -> an already-rotated or forged token was replayed. Treated as theft: the
  *     session is revoked and the caller rejected.
  *
@@ -211,13 +214,17 @@ export const rotateSession = async (
   // closed, so the successor's response never made it to the client. Rotate forward from what the
   // client actually holds. The CAS (previous match + closed window, re-opened by the winner) makes
   // exactly one recovery win; losers fall through to a coalesce inside the fresh window.
-  const recover = async (): Promise<RotateSessionResult> => {
+  /**
+   * Takes the freshest row + clock the caller holds so the slid expiry never regresses behind a
+   * concurrent winner's write.
+   */
+  const recover = async (row: IAuthSessionDocument, at: Date): Promise<RotateSessionResult> => {
     const nextSecret = generateRefreshSecret();
     const updated = await db.authSessions.recoverRotateHash(sid, {
       expectedPreviousHash: presentedHash,
       nextHash: hashRefreshSecret(nextSecret),
       replayExpiresAt: new Date(Date.now() + replayWindowMs),
-      newExpiresAt: slideExpiresAt(session, now),
+      newExpiresAt: slideExpiresAt(row, at),
     });
     if (updated) {
       emit('session_recovered');
@@ -241,7 +248,7 @@ export const rotateSession = async (
     }
     // Case 2a: one generation behind, inside the window. A sibling rotated; do not fork the chain.
     if (isReplayable(session, presentedHash, now)) return finish(null);
-    return recover();
+    return recover(session, now);
   }
 
   const nextSecret = generateRefreshSecret();
@@ -263,7 +270,10 @@ export const rotateSession = async (
   // seen the winner's token yet.
   if (isReplayable(current, presentedHash, after)) return finish(null);
   // Previous matches but the window already closed underneath us (this call slept past the whole
-  // grace period mid-flight) - same lost-response semantics as the pre-CAS branch.
-  if (presentedHash === current.previousRefreshTokenHash) return recover();
+  // grace period mid-flight) - same lost-response semantics as the pre-CAS branch. A sibling's
+  // token MAY have been delivered in that gap; recovering anyway is never worse than the old
+  // instant revoke (the jar's next refresh collides either way) and strictly better for
+  // long-timeout non-browser callers.
+  if (presentedHash === current.previousRefreshTokenHash) return recover(current, after);
   return revokeAsTheft();
 };
