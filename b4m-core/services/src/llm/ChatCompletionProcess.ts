@@ -88,6 +88,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { settleToolCallCredits } from './settleToolCredits';
+import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
@@ -754,6 +755,23 @@ export class ChatCompletionProcess {
    * NEVER set from cached static options - it is a per-request, per-user value.
    */
   public entitlementKeys: string[] = [];
+  /**
+   * True when everything attached to this session is a PERSONAL file - nothing that belongs to a
+   * data lake the caller can reach. The signal for "this notebook is about its own uploads, not the
+   * curated library", read by KnowledgeRetrievalFeature to skip forced retrieval.
+   *
+   * Keyed on lake MEMBERSHIP rather than on `retrievalTags` being empty, which is the weaker test it
+   * replaced: attaching a lake file to an EXISTING session goes through sessionService.update, which
+   * derives no tags (only create does), so an empty tag list cannot distinguish a personal upload
+   * from a lake file-click and the weaker test would cut lake browsing off from its own lake.
+   * Monotone by construction - it can only ever withhold retrieval from a session where nothing
+   * attached belongs to any reachable lake.
+   *
+   * Defaults false so an unresolvable lake lookup keeps today's behavior instead of silently
+   * suppressing retrieval (fail toward grounding, mirroring the tool-offer gate below).
+   */
+  public personalCorpusOnly = false;
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -911,6 +929,52 @@ export class ChatCompletionProcess {
       }
     }
     return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * How many of `ids` are reachable AS LAKE CONTENT by this caller.
+   *
+   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`, whose CASL scope has
+   * no lake arm: an organization lake widens reach through the lake creator's identity, so a member
+   * attaching a teammate's lake file is invisible to an ownership/share-based reader. Classifying a
+   * corpus as "personal" off that reader alone is how such a session lost its grounding.
+   *
+   * Runs LAKE-ONLY: `restrictToDataLake` makes buildOwnershipConditions start from no ownership
+   * arms at all (fabFileSearchQuery: `restrictToDataLake ? [] : [...baseAccess]`), so only the lake
+   * tag/prefix arms select. That is narrower than an ownership-OR-lake read and is what we want -
+   * the question is "is this file lake content", not "can the caller read it by any route".
+   * `restrictToFileIds` bounds it to the requested ids. Returns `null` when it cannot
+   * tell, which callers must treat as "cannot judge".
+   */
+  private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
+    if (ids.length === 0) return 0;
+    try {
+      const access = await this.getAccessibleDataLakeAccess();
+      if (access.dataLakeTags.length === 0) return null;
+      const res = await this.db.fabfiles!.search(
+        this.user.id,
+        '',
+        { tags: [], shared: false, restrictToFileIds: ids },
+        { page: 1, limit: ids.length },
+        { by: 'fileName', direction: 'asc' },
+        {
+          textSearch: false,
+          includeShared: true,
+          userGroups: this.user.groups || [],
+          dataLakeTags: access.dataLakeTags,
+          dataLakeTagPrefixes: access.dataLakeTagPrefixes,
+          scopedTagPrefixes: access.scopedTagPrefixes,
+          restrictToDataLake: true,
+          excludeContent: true,
+        }
+      );
+      return res.data.length;
+    } catch (err) {
+      this.logger.warn(
+        `[knowledge] lake-reachability check failed; treating the corpus as unclassifiable: ${(err as Error)?.message}`
+      );
+      return null;
+    }
   }
 
   /**
@@ -1537,11 +1601,21 @@ export class ChatCompletionProcess {
       // Any promptMode is an eval/passthrough that must not receive our server-side offers.
       const skipAutoOffers = Boolean(promptMode);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
-      // fetch below instead of serializing in front of it - folded into that Promise.all. Skips
-      // the lookup entirely when there's nothing to check (no attachment) or the offer is skipped
-      // anyway (promptMode).
+      // fetch below instead of serializing in front of it - folded into that Promise.all.
+      //
+      // Two consumers now, and they need this on different turns. The tool-offer gate does not need
+      // it under promptMode (the offer is suppressed anyway) - but the personal-corpus
+      // CLASSIFICATION does, whenever forced retrieval is actually running. Gating on
+      // `!skipAutoOffers` alone left `resolvePersonalCorpusOnly` seeing a null file list on every
+      // promptMode turn, so it returned false at its "cannot judge" guard and the suppression was
+      // structurally dead on `POST /api/chat`'s grounded mode - which forces retrieval ON.
+      //
+      // `raw` is the one mode that needs neither: it is the only mode resolveForcedRetrieval turns
+      // retrieval OFF for, so there is no classification to make and the read stays skipped. The
+      // cost is one memoized read on the promptMode turns that previously skipped it.
+      const needFilesForClassification = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       const attachedKnowledgeFilesPromise: Promise<IFabFileDocument[] | null> =
-        hasAnyAttachment && !skipAutoOffers
+        hasAnyAttachment && (!skipAutoOffers || needFilesForClassification)
           ? this.getAttachedKnowledgeFiles(session.knowledgeIds!)
           : Promise.resolve(null);
 
@@ -1578,6 +1652,26 @@ export class ChatCompletionProcess {
       // is the array reference handed to buildTools, so splice the result back in place rather
       // than reassigning the binding.
       //
+      // Resolved here because this is where `attachedKnowledgeFiles` is already in hand. The lake
+      // lookup is memoized (accessibleDataLakeAccessMemo) and degrades to empty tags, so an empty
+      // set is treated as "cannot judge" rather than as "belongs to no lake" - otherwise a transient
+      // failure would read as personal-only and suppress retrieval.
+      const accessibleLakeTags = hasAnyAttachment
+        ? new Set((await this.getAccessibleDataLakeAccess()).dataLakeTags)
+        : new Set<string>();
+      this.personalCorpusOnly = await resolvePersonalCorpusOnly({
+        requestedKnowledgeIds: session.knowledgeIds ?? [],
+        resolvedFiles: attachedKnowledgeFiles,
+        accessibleLakeTags,
+        retrievalTags: session.retrievalTags,
+        corpusGroundingMode: session.corpusGroundingMode,
+        // A THUNK, not a value: this costs a db.fabfiles.search, and the predicate discards it on
+        // four cheap guards before ever reaching that clause. Passing it eagerly made every
+        // lake-scoped session - the population this whole fix serves - pay the round-trip on every
+        // attachment-bearing turn for a result that was thrown away.
+        countLakeReachableAttachments: () => this.countLakeReachableAttachments(session.knowledgeIds ?? []),
+      });
+
       // "Attached knowledge" for the offer means the caller has an attachment the tool can
       // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
       // content already inlined by processFabFilesServer, so offering the tool for it can only
@@ -2302,6 +2396,9 @@ export class ChatCompletionProcess {
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
+        suppressLakeArms: this.personalCorpusOnly,
+        // Narrows the knowledge tools' lake access to the lake this session is FOR.
+        sessionRetrievalTags: session.retrievalTags,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
