@@ -3,26 +3,97 @@ import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
 
 /**
- * Page object for the Data Lakes surface: the `/data-lakes` explorer, the management
- * panel (list + lifecycle), the create/append wizard, the settings modal, and the
- * lake viewer. Selectors mirror the data-testid attributes in
+ * Page object for the Data Lakes surface. The standalone `/data-lakes` route is retired, so
+ * every UI path starts in a chat: the header's Data Lake pill turns the session into the
+ * tree-left/chat-right surface, and the tree's footer opens the create wizard and the
+ * two-pane management modal. Selectors mirror the data-testid attributes in
  * `app/components/datalake/*` and `app/components/DataLakeWizard/*`.
  */
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite against the in-chat Data Lake header toggle once the Phase 3 surface settles.
 export class DataLakePage extends BasePage {
   constructor(page: Page) {
     super(page);
   }
 
-  // ── Explorer / manager ──────────────────────────────────────────────────
+  // ── In-chat surface ───────────────────────────────────────────────────────
+  /** Header pill that turns Data Lake mode on. Hidden once mode is already on. */
+  get modeToggle(): Locator {
+    return this.page.getByTestId('datalake-mode-toggle');
+  }
+  /** The in-chat explorer. Both hosts emit the same id (see DataLakeExplorer). */
+  get explorer(): Locator {
+    return this.page.getByTestId('opti-datalake-explorer');
+  }
+  get sortToggle(): Locator {
+    return this.explorer.getByTestId('datalake-sort-toggle');
+  }
+  /** Tree footer: opens the management modal. */
   get manageBtn(): Locator {
-    return this.page.getByTestId('datalake-manage-btn');
+    return this.explorer.getByTestId('datalake-manage-btn');
   }
-  get listPanel(): Locator {
-    return this.page.getByTestId('datalake-list-panel');
-  }
+  /** Tree footer: opens the create wizard. */
   get createBtn(): Locator {
-    return this.listPanel.getByRole('button', { name: 'Create' });
+    return this.explorer.getByTestId('datalake-create-btn');
+  }
+  /** Tree header X: turns Data Lake mode back off. */
+  get modeCloseBtn(): Locator {
+    return this.explorer.getByTestId('datalake-close-btn');
+  }
+  fileRow(fabFileId: string): Locator {
+    return this.explorer.getByTestId(`datalake-file-${fabFileId}`);
+  }
+  treeNode(segment: string): Locator {
+    return this.explorer.getByTestId(`datalake-node-${segment}`);
+  }
+
+  // ── Management modal ──────────────────────────────────────────────────────
+  get managerModal(): Locator {
+    return this.page.getByTestId('data-lake-manager-modal');
+  }
+  get managerPanel(): Locator {
+    return this.page.getByTestId('datalake-manager-panel');
+  }
+  get managerNav(): Locator {
+    return this.page.getByTestId('datalake-manager-nav');
+  }
+  get managerSearch(): Locator {
+    return this.managerNav.getByTestId('datalake-manager-search').locator('input');
+  }
+  get managerCreateBtn(): Locator {
+    return this.managerNav.getByTestId('datalake-manager-create-btn');
+  }
+  /** Right pane at root: the "pick a lake" hint. */
+  get managerOverview(): Locator {
+    return this.page.getByTestId('datalake-manager-overview');
+  }
+  /** Right pane with a lake selected: name, chips and the per-lake actions. */
+  get lakeInfo(): Locator {
+    return this.page.getByTestId('datalake-manager-lakeinfo');
+  }
+  /** Right pane with a file selected. */
+  get managerArticle(): Locator {
+    return this.managerPanel.getByTestId('datalake-article');
+  }
+  /** Sidebar row for one lake (root level of the nav). */
+  lakeRow(id: string): Locator {
+    return this.managerNav.getByTestId(`datalake-manager-lake-${id}`);
+  }
+  /** Category folder row inside a lake's tree. */
+  managerNode(segment: string): Locator {
+    return this.managerNav.getByTestId(`datalake-manager-node-${segment}`);
+  }
+  managerFileRow(fabFileId: string): Locator {
+    return this.managerNav.getByTestId(`datalake-manager-file-${fabFileId}`);
+  }
+
+  // ── Per-lake actions (right pane; require the lake to be selected) ─────────
+  addFilesBtn(id: string): Locator {
+    return this.lakeInfo.getByTestId(`datalake-addfiles-btn-${id}`);
+  }
+  settingsBtn(id: string): Locator {
+    return this.lakeInfo.getByTestId(`datalake-settings-btn-${id}`);
+  }
+  archiveBtn(id: string): Locator {
+    return this.lakeInfo.getByTestId(`datalake-archive-btn-${id}`);
   }
 
   // ── Wizard ────────────────────────────────────────────────────────────────
@@ -49,10 +120,14 @@ export class DataLakePage extends BasePage {
   get sourceNameInput(): Locator {
     return this.page.getByTestId('source-name-input').locator('input');
   }
-  /** Opt-in checkboxes for the two skippable steps; only rendered once files are selected. */
+  /** Opt-in checkboxes, only rendered once files are selected. */
   get previewToggle(): Locator {
     return this.page.getByTestId('source-toggle-preview').locator('input');
   }
+  /**
+   * AI tag suggestion. NOT a wizard step any more - it opts into a background job that runs
+   * after the upload and is reviewed from the manager, so ticking it never splices a step in.
+   */
   get taxonomyToggle(): Locator {
     return this.page.getByTestId('source-toggle-taxonomy').locator('input');
   }
@@ -62,67 +137,63 @@ export class DataLakePage extends BasePage {
     return this.page.getByTestId('datalake-settings-modal');
   }
 
-  // ── Viewer ─────────────────────────────────────────────────────────────
-  get viewer(): Locator {
-    return this.page.getByTestId('datalake-viewer');
-  }
-  get viewerSearch(): Locator {
-    return this.viewer.getByPlaceholder('Filter...');
-  }
-  /** The tag tree scoped to the viewer modal (the explorer behind it renders its own). */
-  get viewerTree(): Locator {
-    return this.viewer.getByTestId('datalake-tree');
-  }
-
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  /** Open the `/data-lakes` explorer home and clear startup modals. */
-  async gotoDataLakes() {
-    // Navigate on 'domcontentloaded', not the default 'load'. Under parallel load the preview's
-    // heavy SPA bundles can delay the 'load' event 60s+, hanging goto() on about:blank even though
-    // the shell responds in ~2s and the app is otherwise fine. The explorer-visible assertion below
-    // is the real readiness gate, so we don't need to block navigation on full 'load'.
-    await this.page.goto('/data-lakes', { waitUntil: 'domcontentloaded' });
+  /**
+   * Land on a fresh chat and turn Data Lake mode on, leaving the in-chat tree open.
+   *
+   * Navigate on 'domcontentloaded', not the default 'load'. Under parallel load the preview's
+   * heavy SPA bundles can delay the 'load' event 60s+, hanging goto() on about:blank even though
+   * the shell responds in ~2s and the app is otherwise fine. The explorer-visible assertion below
+   * is the real readiness gate, so we don't need to block navigation on full 'load'.
+   *
+   * Mode lives in an in-memory store, so it is off again after every navigation - each entry
+   * point has to flip it, which is also what makes the toggle itself visible to click.
+   */
+  async openChatSurface() {
+    await this.page.goto('/new', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    await expect(this.page.getByTestId('datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await expect(this.modeToggle).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await this.modeToggle.click();
+    await expect(this.explorer).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
-  /** From the explorer, open the management panel (list of lakes + lifecycle). */
+  /** From the in-chat tree footer, open the two-pane management modal. */
   async openManager() {
     await this.manageBtn.click();
-    await expect(this.listPanel).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(this.managerModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(this.managerPanel).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
-  /** Convenience: land on `/data-lakes` and open the manager panel. */
-  async openManagerFromHome() {
-    await this.gotoDataLakes();
+  /** Convenience: open the in-chat surface and go straight into the manager. */
+  async openManagerFromChat() {
+    await this.openChatSurface();
     await this.openManager();
   }
 
-  // ── Card lookups (by lake id) ────────────────────────────────────────────
-  card(id: string): Locator {
-    return this.page.getByTestId(`datalake-card-${id}`);
+  /** Select a lake in the manager sidebar so its details pane (and actions) render. */
+  async selectLake(id: string) {
+    await expect(this.lakeRow(id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await this.lakeRow(id).click();
+    await expect(this.lakeInfo).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
-  addFilesBtn(id: string): Locator {
-    return this.page.getByTestId(`datalake-addfiles-btn-${id}`);
-  }
-  settingsBtn(id: string): Locator {
-    return this.page.getByTestId(`datalake-settings-btn-${id}`);
-  }
-  archiveBtn(id: string): Locator {
-    return this.page.getByTestId(`datalake-archive-btn-${id}`);
+
+  /** Convenience: manager open, lake selected. */
+  async openLakeInManager(id: string) {
+    await this.openManagerFromChat();
+    await this.selectLake(id);
   }
 
   // ── Wizard flows ──────────────────────────────────────────────────────────
 
-  /** Open the create wizard from the manager panel. */
+  /** Open the create wizard from the in-chat tree footer. */
   async startCreate() {
     await this.createBtn.click();
     await expect(this.wizardModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
     await expect(this.wizardSourceStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
-  /** Open the append ("Add files") wizard for an existing lake. */
+  /** Open the append ("Add files") wizard for the lake selected in the manager. */
   async startAppend(id: string) {
     await this.addFilesBtn(id).click();
     await expect(this.wizardModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
@@ -138,15 +209,6 @@ export class DataLakePage extends BasePage {
     await this.fillMuiInput(this.sourceNameInput, name);
   }
 
-  /**
-   * Opt into the AI Taxonomy step, which is off by default. The toggle only renders once
-   * files are selected, so call this after selectFiles().
-   */
-  async enableTaxonomyStep() {
-    await expect(this.taxonomyToggle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    await this.taxonomyToggle.check();
-  }
-
   async wizardNext() {
     await expect(this.wizardNextBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await this.wizardNextBtn.click();
@@ -159,9 +221,6 @@ export class DataLakePage extends BasePage {
   get previewStep(): Locator {
     return this.page.getByTestId('wizard-preview-step');
   }
-  get taxonomyStep(): Locator {
-    return this.page.getByTestId('wizard-taxonomy-step');
-  }
   get uploadStep(): Locator {
     return this.page.getByTestId('wizard-upload-step');
   }
@@ -169,69 +228,34 @@ export class DataLakePage extends BasePage {
   get configSummaryName(): Locator {
     return this.page.getByTestId('config-summary-name');
   }
-  /** Config-step inputs have no testids; locate them by placeholder within the config step. */
   get configTagPrefixInput(): Locator {
-    return this.configStep.getByPlaceholder('e.g. legal:');
+    return this.configStep.getByTestId('config-tag-prefix-input').locator('input');
   }
+  /** The two gate fields carry no testid; locate them by placeholder within the config step. */
   get configAccessTagInput(): Locator {
     return this.configStep.getByPlaceholder('e.g. LegalTeam');
   }
   get configEntitlementInput(): Locator {
     return this.configStep.getByPlaceholder('e.g. product:pro');
   }
-  get taxonomyTagCards(): Locator {
-    return this.taxonomyStep.getByTestId('taxonomy-tag-card');
-  }
 
   /**
-   * Click Next until the Config step is reached. Preview and AI Taxonomy are opt-in, so the
-   * default create path is a single click from source; the loop still handles the opted-in
-   * steps, including Taxonomy's Next staying disabled until analysis completes (AI_RESPONSE
-   * budget). In create mode the lake name must already be set - Next is gated on it.
+   * Click Next until the Config step is reached. Preview is the only optional step left, so the
+   * default create path is a single click from source; the loop still handles it when opted in.
+   * In create mode the lake name must already be set - Next is gated on it.
    */
   async advanceToConfig() {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 4; i++) {
       if (await this.configStep.isVisible().catch(() => false)) return;
-      await expect(this.wizardNextBtn).toBeEnabled({ timeout: TIMEOUTS.AI_RESPONSE });
+      await expect(this.wizardNextBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
       await this.wizardNextBtn.click();
     }
     await expect(this.configStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
-  /** Wait for the taxonomy step's AI analysis to finish (tag cards rendered, Next enabled). */
-  async waitForTaxonomyReady() {
-    await expect(this.taxonomyStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    await expect(this.taxonomyTagCards.first()).toBeVisible({ timeout: TIMEOUTS.AI_RESPONSE });
-  }
-
-  /**
-   * Click Next until the Taxonomy step is reached and its analysis has finished. Requires
-   * enableTaxonomyStep() first - the step is opt-in and absent from the flow otherwise. Any
-   * opted-in Preview step is clicked through. We check visibility BEFORE clicking so we stop
-   * ON taxonomy rather than advancing past it to Config.
-   */
-  async advanceToTaxonomy() {
-    for (let i = 0; i < 4; i++) {
-      if (await this.taxonomyStep.isVisible().catch(() => false)) {
-        await this.waitForTaxonomyReady();
-        return;
-      }
-      await expect(this.wizardNextBtn).toBeEnabled({ timeout: TIMEOUTS.AI_RESPONSE });
-      await this.wizardNextBtn.click();
-    }
-    await this.waitForTaxonomyReady();
-  }
-
-  /** Delete the first taxonomy tag card and return the card count before deletion. */
-  async deleteFirstTaxonomyTag(): Promise<number> {
-    const before = await this.taxonomyTagCards.count();
-    await this.taxonomyStep.getByTestId('taxonomy-tag-delete').first().click();
-    return before;
-  }
-
   /**
    * Start the upload and wait for it to reach the completed state (fires when the S3 puts
-   * finish — it does NOT wait for vectorization). Races the success toast against an error
+   * finish - it does NOT wait for vectorization). Races the success toast against an error
    * toast so a create/batch/upload failure fails fast with the server message instead of
    * timing out on the success matcher. Uses the AI_RESPONSE budget because presign + S3 puts
    * can exceed the 30s ACTION window on a loaded stage.
@@ -264,29 +288,6 @@ export class DataLakePage extends BasePage {
     await expect(success).toBeVisible({ timeout: TIMEOUTS.POST_ACTION });
   }
 
-  // ── Explorer article (deep-linked) ────────────────────────────────────────
-  get explorer(): Locator {
-    // Both surface modes: the page emits 'datalake-explorer', chat mode 'opti-datalake-explorer'
-    // (DataLakeExplorer.tsx) - a bare page-mode id would strand chat-mode specs.
-    return this.page.getByTestId(/^(opti-)?datalake-explorer$/);
-  }
-  get article(): Locator {
-    return this.page.getByTestId('datalake-article');
-  }
-  get askAboutBtn(): Locator {
-    return this.page.getByTestId('datalake-ask-about');
-  }
-  get sortToggle(): Locator {
-    return this.explorer.getByTestId('datalake-sort-toggle');
-  }
-
-  /** Open a lake article directly via the explorer's deep-link search param. */
-  async gotoArticle(fabFileId: string) {
-    await this.page.goto(`/data-lakes?article=${fabFileId}`);
-    await this.dismissModals();
-    await expect(this.article).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-  }
-
   /** Close the wizard via the footer Cancel, accepting the unsaved-progress confirm dialog. */
   async closeWizardAcceptingConfirm() {
     this.page.once('dialog', dialog => dialog.accept());
@@ -295,6 +296,7 @@ export class DataLakePage extends BasePage {
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
+  /** Open the settings modal for the lake currently selected in the manager. */
   async openSettings(id: string) {
     await this.settingsBtn(id).click();
     await expect(this.settingsModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
@@ -302,7 +304,7 @@ export class DataLakePage extends BasePage {
 
   /**
    * Fill a MUI Joy field in the settings modal. The data-testid sits on the Joy Input
-   * wrapper, so we target the inner native <input> — calling the value setter on the
+   * wrapper, so we target the inner native <input> - calling the value setter on the
    * wrapper div throws "Illegal invocation".
    */
   async fillSettingsField(testid: string, value: string) {
@@ -325,14 +327,15 @@ export class DataLakePage extends BasePage {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+  /** Archive the lake selected in the manager; the panel falls back to the root overview. */
   async archive(id: string) {
     await this.archiveBtn(id).click();
 
     // Archive cancels in-flight batches and soft-hides files server-side, then invalidates and
-    // refetches the active-lakes query before the card leaves the list. On a loaded stage that
+    // refetches the active-lakes query before the lake leaves the list. On a loaded stage that
     // round-trip exceeds the VISIBLE budget, so gate on the success toast first (racing an error
     // toast so a real archive failure fails fast with the server message instead of timing out on
-    // toBeHidden), then assert the card is gone on the larger ACTION budget.
+    // toBeHidden), then assert the row is gone on the larger ACTION budget.
     const success = this.page.locator('[data-sonner-toast]').filter({ hasText: 'Data lake archived' });
     const errorToast = this.page.locator('[data-sonner-toast][data-type="error"]');
     const outcome = await Promise.race([
@@ -353,34 +356,58 @@ export class DataLakePage extends BasePage {
       throw new Error(`Data lake archive failed: ${message}`);
     }
 
-    await expect(this.card(id)).toBeHidden({ timeout: TIMEOUTS.ACTION });
+    await expect(this.lakeRow(id)).toBeHidden({ timeout: TIMEOUTS.ACTION });
+  }
+
+  /**
+   * Expand a lifecycle accordion. An EMPTY section renders as a static row (no chevron, a
+   * trailing "No files") whose click does nothing, so wait for the refetched list to turn it
+   * into a real toggle first - otherwise a just-archived lake races the invalidation and the
+   * click lands on the dead row.
+   */
+  private async expandLifecycleSection(testid: string) {
+    const toggle = this.managerNav.getByTestId(testid);
+    await expect(toggle).not.toContainText('No files', { timeout: TIMEOUTS.ACTION });
+    await toggle.click();
   }
 
   async expandArchived() {
-    await this.page.getByTestId('datalake-archived-section-toggle').click();
+    await this.expandLifecycleSection('datalake-archived-section-toggle');
   }
 
   async expandDeleted() {
-    await this.page.getByTestId('datalake-deleted-section-toggle').click();
+    await this.expandLifecycleSection('datalake-deleted-section-toggle');
   }
 
-  /** From the Deleted section, purge a lake permanently (through the confirm dialog). */
+  archivedCard(id: string): Locator {
+    return this.managerNav.getByTestId(`datalake-archived-section-card-${id}`);
+  }
+
+  deletedCard(id: string): Locator {
+    return this.managerNav.getByTestId(`datalake-deleted-section-card-${id}`);
+  }
+
+  /**
+   * From the Deleted section, purge a lake permanently (through the confirm dialog). The row's
+   * actions live behind a three-dots menu, which portals to the body - so the menu item is
+   * located on the page, not inside the nav.
+   */
   async purge(id: string) {
+    await this.managerNav.getByTestId(`datalake-deleted-section-menu-btn-${id}`).click();
     await this.page.getByTestId(`datalake-purge-btn-${id}`).click();
     const confirm = this.page.getByTestId('datalake-purge-confirm');
     await expect(confirm).toBeVisible({ timeout: TIMEOUTS.MODAL });
     await this.page.getByTestId('datalake-purge-confirm-btn').click();
   }
 
-  // ── Viewer ─────────────────────────────────────────────────────────────
+  // ── In-chat file actions ──────────────────────────────────────────────────
 
-  /** Open a lake's viewer by clicking its card. */
-  async openViewer(id: string) {
-    await this.card(id).click();
-    await expect(this.viewer).toBeVisible({ timeout: TIMEOUTS.MODAL });
-  }
-
-  async searchViewer(query: string) {
-    await this.viewerSearch.fill(query);
+  /**
+   * Attach a lake file to the chat from its row menu. On /new this mints the grounded session
+   * and swaps the URL for the real notebook, which is what the caller usually asserts on.
+   */
+  async attachFileToChat(fabFileId: string) {
+    await this.explorer.getByTestId(`datalake-row-menu-btn-${fabFileId}`).click();
+    await this.page.getByTestId(`datalake-attach-item-${fabFileId}`).click();
   }
 }

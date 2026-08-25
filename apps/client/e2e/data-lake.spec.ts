@@ -10,7 +10,6 @@ import {
   apiListDataLakes,
   apiListDataLakesStatus,
   apiLakeLifecycle,
-  apiSeedLakeArticle,
   apiUpdateDataLake,
   apiSetDataLakeVisibility,
   type DataLake,
@@ -27,7 +26,7 @@ const FIXTURE = path.resolve(__dirname, 'fixtures/uploads/recipe.txt');
  * upload registered the hash and every later one got "All files are duplicates (skipped)".
  * Appending a unique marker gives each test a distinct hash. Use FIXTURE (verbatim) only
  * where a duplicate is intentional (the conflict-resolution test) or nothing is uploaded
- * (taxonomy/source steps).
+ * (the step-gating steps).
  */
 function uniqueUpload(label: string): { name: string; mimeType: string; buffer: Buffer }[] {
   const bytes = fs.readFileSync(FIXTURE);
@@ -41,7 +40,7 @@ const created: string[] = [];
 function ownerToken(): string {
   const { specUsers } = getTestUsers();
   const owner = specUsers.dataLake;
-  if (!owner) throw new Error('data-lake spec user missing — data-lake.setup.ts must run first');
+  if (!owner) throw new Error('data-lake spec user missing - data-lake.setup.ts must run first');
   return owner.accessToken;
 }
 
@@ -67,11 +66,18 @@ async function trackLakeByName(
   return lake;
 }
 
+/**
+ * Purge every lake the suite made. Concurrent, and on its own enlarged budget: each purge is a
+ * delete + cleanup round-trip plus a poll until the server's sweep finishes, and the suite makes
+ * ~18 lakes - serially that is well past the 60s a hook gets by default. Hooks take their timeout
+ * from test.setTimeout called inside them.
+ */
 test.afterAll(async ({ request }) => {
+  test.setTimeout(4 * TIMEOUTS.TEST);
   const token = ownerToken();
-  for (const id of created) {
-    await apiDeleteDataLake(request, token, id);
-  }
+  // Never reject: a lake that resists teardown must not fail the run (global-teardown sweeps the
+  // spec user anyway), and one rejection would abandon the lakes still queued behind it.
+  await Promise.all(created.map(id => apiDeleteDataLake(request, token, id).catch(() => {})));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,41 +91,88 @@ test.describe('Data Lake - feature gate', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// List panel & management UI
+// In-chat surface - the only entry point now that /data-lakes is retired
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - management panel', () => {
-  test('opens the manager and lists a seeded lake with its tag-prefix chip', async ({ request, dataLakePage }) => {
+test.describe('Data Lake - in-chat surface', () => {
+  test('the header pill turns a chat into the Data Lake surface', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+
+    // Tree left, chat right, with the footer actions that replace the old page header.
+    await expect(dataLakePage.manageBtn).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.createBtn).toBeVisible();
+    // The pill is the on-switch only; once mode is on the tree's X is the way back out.
+    await expect(dataLakePage.modeToggle).toBeHidden();
+    await expect(dataLakePage.modeCloseBtn).toBeVisible();
+  });
+
+  test('the tree close button turns Data Lake mode back off', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+
+    await dataLakePage.modeCloseBtn.click();
+    await expect(dataLakePage.explorer).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.modeToggle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('the sort toggle flips sort state', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+
+    // Sort state is exposed via the stable data-sort attribute (defaults to count, flips to alpha).
+    await expect(dataLakePage.sortToggle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.sortToggle).toHaveAttribute('data-sort', 'count');
+    await dataLakePage.sortToggle.click();
+    await expect(dataLakePage.sortToggle).toHaveAttribute('data-sort', 'alpha');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Management modal (two-pane: lakes/files nav left, lake details right)
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('Data Lake - management panel', () => {
+  test('opens the manager and shows a seeded lake with its tag-prefix chip', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E List ${RUN}`,
       fileTagPrefix: `e2elist${RUN}:`,
     });
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openManagerFromChat();
 
-    const card = dataLakePage.card(lake.id);
-    await expect(card).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    await expect(card).toContainText(`E2E List ${RUN}`);
-    await expect(card).toContainText(`e2elist${RUN}:`);
+    // Root pane is the pick-a-lake hint; the lake's own chips live in its details pane.
+    await expect(dataLakePage.managerOverview).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.selectLake(lake.id);
+
+    await expect(dataLakePage.lakeInfo).toContainText(`E2E List ${RUN}`);
+    await expect(dataLakePage.lakeInfo).toContainText(`e2elist${RUN}:`);
   });
 
-  test('Create button opens the wizard', async ({ dataLakePage }) => {
-    await dataLakePage.openManagerFromHome();
-    await dataLakePage.startCreate();
-    await expect(dataLakePage.wizardModal).toBeVisible();
+  test('the sidebar search narrows the lake list', async ({ request, dataLakePage }) => {
+    const lake = await seedLake(request, ownerToken(), {
+      name: `E2E Search ${RUN}`,
+      fileTagPrefix: `e2esearch${RUN}:`,
+    });
+
+    await dataLakePage.openManagerFromChat();
+    await expect(dataLakePage.lakeRow(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await dataLakePage.fillMuiInput(dataLakePage.managerSearch, `nope-${RUN}`);
+    await expect(dataLakePage.lakeRow(lake.id)).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+
+    await dataLakePage.fillMuiInput(dataLakePage.managerSearch, `E2E Search ${RUN}`);
+    await expect(dataLakePage.lakeRow(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('the sidebar Create button opens the wizard', async ({ dataLakePage }) => {
+    await dataLakePage.openManagerFromChat();
+    await dataLakePage.managerCreateBtn.click();
+    await expect(dataLakePage.wizardModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Create wizard (drive the steps we can without a live S3/vectorize upload)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite the entry point
-// (openManagerFromHome) against the in-chat Data Lake header toggle + manager modal.
-// Skipped to keep CI green; the assertions below already match the three-step wizard.
-test.describe.skip('Data Lake - create wizard', () => {
+test.describe('Data Lake - create wizard', () => {
   test('step gating: Next needs both files and a valid name, then advances', async ({ dataLakePage }) => {
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openChatSurface();
     await dataLakePage.startCreate();
 
     await expect(dataLakePage.wizardStepIndicator).toBeVisible();
@@ -131,15 +184,15 @@ test.describe.skip('Data Lake - create wizard', () => {
     await dataLakePage.selectFiles([FIXTURE]);
     await expect(dataLakePage.wizardNextBtn).toBeDisabled();
 
-    // Name it -> Next enables and advances straight to Config (both optional steps are off).
+    // Name it -> Next enables and advances straight to Config (the optional step is off).
     await dataLakePage.fillLakeName(`E2E Gating ${RUN}`);
     await dataLakePage.wizardNext();
     await expect(dataLakePage.wizardSourceStep).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
     await expect(dataLakePage.configStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 
-  test('opting into a step splices it into the flow before Config', async ({ dataLakePage }) => {
-    await dataLakePage.openManagerFromHome();
+  test('opting into Preview splices it into the flow before Config', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
     await dataLakePage.startCreate();
     await dataLakePage.selectFiles([FIXTURE]);
     await dataLakePage.fillLakeName(`E2E Optin ${RUN}`);
@@ -149,8 +202,22 @@ test.describe.skip('Data Lake - create wizard', () => {
     await expect(dataLakePage.previewStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 
+  test('AI tagging is a background opt-in, not a wizard step', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+    await dataLakePage.startCreate();
+    await dataLakePage.selectFiles([FIXTURE]);
+    await dataLakePage.fillLakeName(`E2E Taxonomy ${RUN}`);
+
+    // Ticking it must NOT add a step: taxonomy now runs after the upload and is reviewed from
+    // the manager, so the flow still goes source -> config. (The review panel itself needs a
+    // completed AI batch, so it is out of reach of a deterministic UI test.)
+    await dataLakePage.taxonomyToggle.check();
+    await dataLakePage.wizardNext();
+    await expect(dataLakePage.configStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+
   test('closing with loaded files prompts the unsaved-progress confirm', async ({ dataLakePage }) => {
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openChatSurface();
     await dataLakePage.startCreate();
     // Files can be gathered without leaving the source step now, so the confirm has to fire
     // here - this is exactly the case that would otherwise discard a selection silently.
@@ -164,19 +231,17 @@ test.describe.skip('Data Lake - create wizard', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Append mode
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - append mode', () => {
+test.describe('Data Lake - append mode', () => {
   test('add-files wizard opens titled for the target lake', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Append ${RUN}`,
       fileTagPrefix: `e2eappend${RUN}:`,
     });
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openLakeInManager(lake.id);
     await dataLakePage.startAppend(lake.id);
 
-    // Header reads "Add Files — <name>" (em-dash); match loosely to avoid dash-char pitfalls.
+    // Header reads "Add Files \u2014 <name>"; matched loosely to avoid dash-char pitfalls.
     await expect(dataLakePage.wizardModal).toContainText('Add Files', { timeout: TIMEOUTS.MODAL });
     await expect(dataLakePage.wizardModal).toContainText(`E2E Append ${RUN}`);
   });
@@ -185,9 +250,7 @@ test.describe.skip('Data Lake - append mode', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle (archive → deleted → purge) through the UI
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - lifecycle', () => {
+test.describe('Data Lake - lifecycle', () => {
   test('archive moves the lake to the Archived section', async ({ request, dataLakePage }) => {
     test.setTimeout(2 * TIMEOUTS.TEST);
     const lake = await seedLake(request, ownerToken(), {
@@ -195,14 +258,14 @@ test.describe.skip('Data Lake - lifecycle', () => {
       fileTagPrefix: `e2earch${RUN}:`,
     });
 
-    await dataLakePage.openManagerFromHome();
-    await expect(dataLakePage.card(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.openLakeInManager(lake.id);
 
     await dataLakePage.archive(lake.id);
+    // Archiving drops the lake, so the panel falls back to the root overview on its own.
+    await expect(dataLakePage.managerOverview).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
     await dataLakePage.expandArchived();
-    await expect(dataLakePage.page.getByTestId(`datalake-archived-section-card-${lake.id}`)).toBeVisible({
-      timeout: TIMEOUTS.VISIBLE,
-    });
+    await expect(dataLakePage.archivedCard(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 
   test('purge confirmation dialog appears and irreversibly removes a deleted lake', async ({
@@ -217,25 +280,19 @@ test.describe.skip('Data Lake - lifecycle', () => {
     expect(await apiLakeLifecycle(request, ownerToken(), lake.id, 'archive')).toBe(200);
     expect(await apiLakeLifecycle(request, ownerToken(), lake.id, 'delete')).toBe(200);
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openManagerFromChat();
     await dataLakePage.expandDeleted();
-    await expect(dataLakePage.page.getByTestId(`datalake-deleted-section-card-${lake.id}`)).toBeVisible({
-      timeout: TIMEOUTS.VISIBLE,
-    });
+    await expect(dataLakePage.deletedCard(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
 
     await dataLakePage.purge(lake.id);
-    await expect(dataLakePage.page.getByTestId(`datalake-deleted-section-card-${lake.id}`)).toBeHidden({
-      timeout: TIMEOUTS.ACTION,
-    });
+    await expect(dataLakePage.deletedCard(lake.id)).toBeHidden({ timeout: TIMEOUTS.ACTION });
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings modal (rename + gate can't-clear rule)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - settings', () => {
+test.describe('Data Lake - settings', () => {
   test('rename a lake via the settings modal', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Rename ${RUN}`,
@@ -243,14 +300,14 @@ test.describe.skip('Data Lake - settings', () => {
     });
     const renamed = `E2E Renamed ${RUN}`;
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openLakeInManager(lake.id);
     await dataLakePage.openSettings(lake.id);
 
     await dataLakePage.fillSettingsField('datalake-settings-name', renamed);
     await dataLakePage.saveSettings();
     await dataLakePage.waitForToast('Data lake updated');
 
-    await expect(dataLakePage.card(lake.id)).toContainText(renamed, { timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.lakeInfo).toContainText(renamed, { timeout: TIMEOUTS.VISIBLE });
   });
 
   test('an existing access gate can be cleared from settings', async ({ request, dataLakePage }) => {
@@ -260,10 +317,10 @@ test.describe.skip('Data Lake - settings', () => {
       requiredUserTag: 'e2e-datalake',
     });
 
-    await dataLakePage.openManagerFromHome();
-    await expect(dataLakePage.card(lake.id)).toContainText('e2e-datalake', { timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.openLakeInManager(lake.id);
+    await expect(dataLakePage.lakeInfo).toContainText('e2e-datalake', { timeout: TIMEOUTS.VISIBLE });
 
-    // Blank the previously-set access tag and save — an empty value removes the gate.
+    // Blank the previously-set access tag and save - an empty value removes the gate.
     await dataLakePage.openSettings(lake.id);
     await dataLakePage.fillSettingsField('datalake-settings-usertag', '');
     await dataLakePage.saveSettings();
@@ -271,7 +328,7 @@ test.describe.skip('Data Lake - settings', () => {
 
     // The gate chip is gone, and the un-gated lake is now publishable (the server refuses
     // publishing a gated lake, so this is the end-to-end proof the gate really cleared).
-    await expect(dataLakePage.card(lake.id)).not.toContainText('e2e-datalake', { timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.lakeInfo).not.toContainText('e2e-datalake', { timeout: TIMEOUTS.VISIBLE });
     await dataLakePage.openSettings(lake.id);
     await expect(dataLakePage.publicVisibilityRadioInput).toBeEnabled();
   });
@@ -282,7 +339,7 @@ test.describe.skip('Data Lake - settings', () => {
       fileTagPrefix: `e2evis${RUN}:`,
     });
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openLakeInManager(lake.id);
     await dataLakePage.openSettings(lake.id);
 
     // The seeded spec user has no team org, so promotion to "Organization" is not offered.
@@ -291,31 +348,42 @@ test.describe.skip('Data Lake - settings', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Viewer
+// Browsing a lake's files (the manager's nav replaces the old viewer modal)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - viewer', () => {
-  test('opens the viewer with a filterable tree', async ({ request, dataLakePage }) => {
+test.describe('Data Lake - file browser', () => {
+  test("a lake's files are browsable and open in the reader pane", async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Viewer ${RUN}`,
       fileTagPrefix: `e2eview${RUN}:`,
     });
+    // Tag the file explicitly. Seeding with the meta-tag ALONE does not reach the nav's
+    // synthetic Uncategorized bucket: the server's fallback tagger stamps `<prefix>uncategorized`
+    // on a lake file that carries no content tag (see createDataLakeFallbackTagger), so it
+    // arrives already categorised - under a folder literally named "uncategorized". Naming the
+    // category here keeps the test off that server-owned name.
+    const fileId = await apiCreateFile(request, ownerToken(), {
+      fileName: `viewer-${RUN}.txt`,
+      content: 'Sinigang is a sour Filipino soup made with tamarind, pork, and vegetables.',
+      tags: [
+        { name: lake.datalakeTag, strength: 1 },
+        { name: `e2eview${RUN}:recipes`, strength: 1 },
+      ],
+    });
 
-    await dataLakePage.openManagerFromHome();
-    await dataLakePage.openViewer(lake.id);
+    await dataLakePage.openLakeInManager(lake.id);
 
-    await expect(dataLakePage.viewer).toBeVisible();
-    await expect(dataLakePage.viewerTree).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.managerNode('recipes')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.managerNode('recipes').click();
 
-    // The filter input is present and accepts input (empty lake shows no categories).
-    await dataLakePage.searchViewer('nothing-matches-this');
-    await expect(dataLakePage.viewer).toContainText(/No matches|No categories|No files/i);
+    await expect(dataLakePage.managerFileRow(fileId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.managerFileRow(fileId).click();
+    await expect(dataLakePage.managerArticle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.managerArticle).toContainText(`viewer-${RUN}`);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group N — Sharing & permissions (server-side boundary, asserted via API tokens)
+// Group N - Sharing & permissions (server-side boundary, asserted via API tokens)
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - sharing & permissions', () => {
   test('a private lake is not visible to another user', async ({ request }) => {
@@ -386,19 +454,16 @@ test.describe('Data Lake - sharing & permissions', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group A/E — Full create-to-upload through the wizard UI
-// (Upload "complete" fires when the S3 puts finish — it does NOT wait for
-// vectorization — so this is fast with a small file. Taxonomy runs a real AI call.)
+// Group A/E - Full create-to-upload through the wizard UI
+// (Upload "complete" fires when the S3 puts finish - it does NOT wait for
+// vectorization - so this is fast with a small file.)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite the entry point
-// (openManagerFromHome) against the in-chat Data Lake header toggle + manager modal.
-// Skipped to keep CI green; the assertions below already match the three-step wizard.
-test.describe.skip('Data Lake - create wizard (full upload)', () => {
+test.describe('Data Lake - create wizard (full upload)', () => {
   test('creates a lake end-to-end: source -> config -> upload complete', async ({ request, dataLakePage }) => {
     test.setTimeout(3 * TIMEOUTS.TEST);
     const name = `E2E Create Full ${RUN}`;
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openChatSurface();
     await dataLakePage.startCreate();
     await dataLakePage.selectFiles(uniqueUpload('full'));
     await dataLakePage.fillLakeName(name);
@@ -418,7 +483,7 @@ test.describe.skip('Data Lake - create wizard (full upload)', () => {
     test.setTimeout(3 * TIMEOUTS.TEST);
     const name = `E2E Create Gated ${RUN}`;
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openChatSurface();
     await dataLakePage.startCreate();
     await dataLakePage.selectFiles(uniqueUpload('gated'));
     await dataLakePage.fillLakeName(name);
@@ -433,7 +498,7 @@ test.describe.skip('Data Lake - create wizard (full upload)', () => {
     expect(lake, 'gated lake should be listed').toBeTruthy();
 
     // Reopen its settings and confirm the gates were persisted.
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openLakeInManager(lake!.id);
     await dataLakePage.openSettings(lake!.id);
     await expect(dataLakePage.settingsModal.getByTestId('datalake-settings-usertag').locator('input')).toHaveValue(
       'e2e-datalake'
@@ -459,7 +524,7 @@ test.describe.skip('Data Lake - create wizard (full upload)', () => {
       contentHash,
     });
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openChatSurface();
     await dataLakePage.startCreate();
     await dataLakePage.selectFiles([FIXTURE]);
     await dataLakePage.fillLakeName(`E2E Dup ${RUN}`);
@@ -473,89 +538,60 @@ test.describe.skip('Data Lake - create wizard (full upload)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group D — Taxonomy tag editing
+// Group G - Append: full upload into an existing lake
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - taxonomy', () => {
-  test('deleting a suggested tag removes it from the list', async ({ dataLakePage }) => {
-    test.setTimeout(3 * TIMEOUTS.TEST);
-
-    await dataLakePage.openManagerFromHome();
-    await dataLakePage.startCreate();
-    await dataLakePage.selectFiles([FIXTURE]);
-    await dataLakePage.fillLakeName(`E2E Taxonomy ${RUN}`);
-    // The step is opt-in now; without this it is absent from the flow entirely.
-    await dataLakePage.enableTaxonomyStep();
-    await dataLakePage.advanceToTaxonomy();
-
-    const before = await dataLakePage.deleteFirstTaxonomyTag();
-    expect(before).toBeGreaterThan(0);
-    await expect(dataLakePage.taxonomyTagCards).toHaveCount(before - 1, { timeout: TIMEOUTS.VISIBLE });
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Group G — Append: full upload into an existing lake
-// ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - append (full upload)', () => {
-  test('uploads a file into an existing lake (no taxonomy step)', async ({ request, dataLakePage }) => {
+test.describe('Data Lake - append (full upload)', () => {
+  test('uploads a file into an existing lake', async ({ request, dataLakePage }) => {
     test.setTimeout(2 * TIMEOUTS.TEST);
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Append Full ${RUN}`,
       fileTagPrefix: `e2eappf${RUN}:`,
     });
 
-    await dataLakePage.openManagerFromHome();
+    await dataLakePage.openLakeInManager(lake.id);
     await dataLakePage.startAppend(lake.id);
     await dataLakePage.selectFiles(uniqueUpload('appendf'));
-    await dataLakePage.advanceToConfig(); // append skips taxonomy; config is pre-filled + locked
+    await dataLakePage.advanceToConfig(); // config is pre-filled + locked in append mode
     await dataLakePage.startUploadAndWaitComplete();
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group J — Viewer / explorer article (seeded via API to avoid the upload pipeline)
+// Group J - In-chat file actions (articles seeded via API to avoid the upload pipeline)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - explorer article', () => {
-  test('"Ask about" an article prefills chat and navigates to a new session', async ({
+test.describe('Data Lake - in-chat file actions', () => {
+  test('attaching a lake file on /new mints the grounded session and navigates to it', async ({
     request,
     dataLakePage,
     page,
   }) => {
     const lake = await seedLake(request, ownerToken(), {
-      name: `E2E AskAbout ${RUN}`,
-      fileTagPrefix: `e2eask${RUN}:`,
+      name: `E2E Attach ${RUN}`,
+      fileTagPrefix: `e2eattach${RUN}:`,
     });
-    const fileId = await apiSeedLakeArticle(request, ownerToken(), lake, {
-      fileName: `ask-about-${RUN}.txt`,
+    // A prefixed content tag as well as the lake meta-tag: the chat tree has no Uncategorized
+    // bucket, so the file has to sit under a real category folder to be reachable at all.
+    const fileId = await apiCreateFile(request, ownerToken(), {
+      fileName: `attach-${RUN}.txt`,
       content: 'Sinigang is a sour Filipino soup made with tamarind, pork, and vegetables.',
+      tags: [
+        { name: lake.datalakeTag, strength: 1 },
+        { name: `e2eattach${RUN}:recipes`, strength: 1 },
+      ],
     });
 
-    await dataLakePage.gotoArticle(fileId);
-    await dataLakePage.askAboutBtn.click();
-    await expect(page).toHaveURL(/\/new/, { timeout: TIMEOUTS.NAVIGATION });
-  });
+    await dataLakePage.openChatSurface();
 
-  test('the sort toggle flips sort state', async ({ request, dataLakePage }) => {
-    const lake = await seedLake(request, ownerToken(), {
-      name: `E2E Sort ${RUN}`,
-      fileTagPrefix: `e2esort${RUN}:`,
-    });
-    // Two articles so the tree has content to sort.
-    await apiSeedLakeArticle(request, ownerToken(), lake, { fileName: `sort-a-${RUN}.txt`, content: 'alpha one' });
-    await apiSeedLakeArticle(request, ownerToken(), lake, { fileName: `sort-b-${RUN}.txt`, content: 'beta two' });
+    // Drill into the lake's category to reach the file row.
+    await expect(dataLakePage.treeNode(`e2eattach${RUN}`)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.treeNode(`e2eattach${RUN}`).click();
+    await dataLakePage.treeNode('recipes').click();
 
-    await dataLakePage.gotoDataLakes();
-    await expect(dataLakePage.sortToggle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.fileRow(fileId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.attachFileToChat(fileId);
 
-    // Sort state is exposed via the stable data-sort attribute (defaults to count, flips to alpha).
-    await expect(dataLakePage.sortToggle).toHaveAttribute('data-sort', 'count');
-    await dataLakePage.sortToggle.click();
-    await expect(dataLakePage.sortToggle).toHaveAttribute('data-sort', 'alpha');
+    // /new defers session creation to the first send; attaching a lake file creates the
+    // grounded session up front and swaps the URL for the real notebook.
+    await expect(page).toHaveURL(/\/notebooks\//, { timeout: TIMEOUTS.NAVIGATION });
   });
 });
