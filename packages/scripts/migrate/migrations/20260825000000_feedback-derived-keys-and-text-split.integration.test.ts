@@ -5,7 +5,7 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260820000000_feedback-derived-keys-and-text-split';
+import migration from './20260825000000_feedback-derived-keys-and-text-split';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
