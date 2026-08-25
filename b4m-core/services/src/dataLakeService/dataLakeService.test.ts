@@ -1517,6 +1517,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
       activateIfDraft: vi.fn(),
     };
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
@@ -1548,6 +1549,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: STAMP })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
       activateIfDraft: vi.fn(),
     };
 
@@ -1569,19 +1571,55 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: new Date('2026-05-01') })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
       activateIfDraft: vi.fn(),
     };
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
 
-    // Both calls, not just the last: reading only `.at(-1)` would let someone add
-    // `...lakeConfigWriteStamp(actor)` to the transitional 'restoring' hop without any test failing,
-    // which is exactly the one-stamp-per-operator-action rule this design exists to hold. Archive and
-    // delete already pin their transitional payload this way.
-    const [transitional] = dataLakes.update.mock.calls[0];
-    expect(transitional).toEqual({ id: 'lake1', status: 'restoring' });
+    // The transitional 'restoring' hop is a CLAIM, not an update, so it carries no operator stamp by
+    // construction - which is the one-stamp-per-operator-action rule this block exists to hold.
+    // Asserting `update` never wrote a transitional status keeps that rule pinned: reinstating a
+    // plain $set here (the race in #2086) would fail this.
+    expect(dataLakes.claimUnarchiving).toHaveBeenCalledWith('lake1');
+    expect(dataLakes.update.mock.calls.map(([arg]) => arg.status)).not.toContain('restoring');
 
     const settle = dataLakes.update.mock.calls.at(-1)?.[0];
     expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null, lastUpdatedByUserId: 'owner' });
+  });
+
+  it('refuses the restore when claimUnarchiving LOSES to a delete accepted mid-call (#2086)', async () => {
+    // deleteDataLake accepts 'archived' too, so it can run to completion between this caller's
+    // status read and its transitional write. Before the claim, that write was a blind $set: the
+    // unarchive carried on to settle 'active' over a lake whose members were already soft-deleted,
+    // and restoreDeletedDataLake refuses an 'active' lake - the files had no route back.
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn(),
+      findByContentHashesInDataLake: vi.fn(),
+      unarchiveByDataLakeTag: vi.fn(),
+      deleteManyInIds: vi.fn(),
+      computeDataLakeStats: vi.fn(),
+    };
+    const dataLakes = {
+      // Read as 'archived' (the guard passes), but the delete won the race and it is now 'deleted'.
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'deleted' })),
+      claimUnarchiving: vi.fn().mockResolvedValue(false),
+      update: vi.fn(),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
+    };
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } } as never)
+    ).rejects.toThrow(/Cannot restore a data lake in 'deleted' status/i);
+
+    // Losing the claim must abort before any file work AND before the terminal 'active' write -
+    // settling 'active' is what made the delete's soft-deleted members unreachable.
+    expect(fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(fabFiles.deleteManyInIds).not.toHaveBeenCalled();
+    expect(dataLakes.update).not.toHaveBeenCalled();
   });
 });
 
