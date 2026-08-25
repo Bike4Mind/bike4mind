@@ -81,6 +81,29 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
 
+  /**
+   * Same boundary as this file's docblock, one field further along: a share grant lets you READ the
+   * source, not inherit its lake scope. The cloner may not reach that lake, and the explicit-wins arm
+   * in createSession skips the derivation, so nothing on this path would check. Inheriting it would
+   * narrow the clone to a lake it cannot read and switch off its personal-corpus fallback (a
+   * non-empty retrievalTags reads as "already lake-scoped"), which the user cannot undo from the UI.
+   */
+  it('does NOT inherit the lake scope when the caller only holds a share', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.not.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
+
   it('strips returnValue/error when the caller only holds a share, not ownership', async () => {
     const { db, created } = makeAdapters('owner-1');
 
