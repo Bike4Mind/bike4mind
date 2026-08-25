@@ -14,6 +14,7 @@ const {
   mockQuestDeleteOne,
   mockSettleStrandedQuests,
   mockPersistLinkedQuestId,
+  mockResolveExecutorName,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockSessionFindById: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockQuestDeleteOne: vi.fn(),
   mockSettleStrandedQuests: vi.fn(),
   mockPersistLinkedQuestId: vi.fn(),
+  mockResolveExecutorName: vi.fn(),
 }));
 
 vi.mock('@aws-sdk/client-lambda', () => ({
@@ -50,6 +52,10 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
+}));
+
+vi.mock('@server/utils/agentExecutorFunctionName', () => ({
+  resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
 import { startAgentExecution } from './startAgentExecution';
@@ -95,6 +101,7 @@ beforeEach(() => {
   mockQuestDeleteOne.mockResolvedValue(undefined);
   mockSend.mockResolvedValue(undefined);
   mockPersistLinkedQuestId.mockResolvedValue(undefined);
+  mockResolveExecutorName.mockReturnValue('agent-executor-fn');
 });
 
 describe('startAgentExecution', () => {
@@ -192,6 +199,34 @@ describe('startAgentExecution', () => {
     await startAgentExecution(input({ userId: 'repeat-caller' }), logger);
 
     expect(mockCleanupStaleActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses before creating anything when the executor is not linked to this deployment', async () => {
+    // The frontend server links the executor's NAME, not the function, so a
+    // hard-coded `Resource.AgentExecutor` resolves in the WebSocket Lambda and throws
+    // in the web one - a 502 in exactly one transport. Bail before any write so a
+    // deployment gap cannot leave an orphan execution or a reply-less prompt bubble.
+    mockResolveExecutorName.mockReturnValue(undefined);
+
+    const result = await startAgentExecution(input({ userId: 'unlinked-deploy' }), logger);
+
+    expect(result).toMatchObject({ ok: false, reason: 'dispatch_failed' });
+    expect(mockCreateExecution).not.toHaveBeenCalled();
+    expect(mockQuestCreate).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('not linked to this deployment'),
+      expect.anything()
+    );
+  });
+
+  it('dispatches to the resolved executor function name', async () => {
+    mockResolveExecutorName.mockReturnValue('resolved-executor-name');
+
+    await startAgentExecution(input({ userId: 'resolves-name' }), logger);
+
+    const command = mockSend.mock.calls.at(-1)?.[0] as { input: { FunctionName: string } };
+    expect(command.input.FunctionName).toBe('resolved-executor-name');
   });
 
   it('tears down the dispatch-time Quest when the Lambda invoke fails', async () => {

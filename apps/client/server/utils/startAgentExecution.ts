@@ -23,8 +23,8 @@ import {
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-import { Resource } from 'sst';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
+import { resolveAgentExecutorFunctionName } from '@server/utils/agentExecutorFunctionName';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 
 const lambdaClient = new LambdaClient({});
@@ -191,6 +191,20 @@ export async function startAgentExecution(
     return { ok: false, reason: 'concurrent_limit', message };
   }
 
+  // Resolved BEFORE anything is created: an unlinked executor is a deployment gap,
+  // and failing here leaves no orphan AgentExecution/Quest behind for a run that was
+  // never going to start. The name comes from a different SST link depending on which
+  // Lambda we are in - see resolveAgentExecutorFunctionName.
+  const executorFunctionName = resolveAgentExecutorFunctionName();
+  if (!executorFunctionName) {
+    logger.error('[Start] Agent executor is not linked to this deployment - cannot dispatch', { userId });
+    return {
+      ok: false,
+      reason: 'dispatch_failed',
+      message: 'Agent execution is not available in this deployment.',
+    };
+  }
+
   const execution = await agentExecutionRepository.create({
     userId,
     organizationId: input.organizationId,
@@ -275,7 +289,7 @@ export async function startAgentExecution(
   try {
     await lambdaClient.send(
       new InvokeCommand({
-        FunctionName: Resource.AgentExecutor.name,
+        FunctionName: executorFunctionName,
         InvocationType: 'Event',
         Payload: Buffer.from(
           JSON.stringify({
