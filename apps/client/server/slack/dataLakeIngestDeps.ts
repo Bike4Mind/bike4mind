@@ -90,6 +90,7 @@ export function buildSlackLakeIngestDeps(args: {
         emailVerified: actor.emailVerified,
       }),
     resolveMembershipOrgIds: userId => organizationRepository.findMembershipOrgIds(userId),
+    resolveAdministeredOrgIds: userId => organizationRepository.findIdsWithAdminRights(userId),
     createLakeFile: (userId, params) =>
       withTransaction(async () =>
         fabFilesService.createFabFile(
