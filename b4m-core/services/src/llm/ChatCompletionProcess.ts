@@ -2173,6 +2173,9 @@ export class ChatCompletionProcess {
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
+        // A raw completion must carry the caller's message exactly once. On a session's first turn
+        // history otherwise retains the in-flight quest, which is then re-sent as the user prompt.
+        excludeCurrentPrompt: promptMode === 'raw',
         // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
         // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
         model: modelInfo.id,
