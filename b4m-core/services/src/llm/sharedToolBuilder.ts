@@ -311,6 +311,7 @@ export function buildSharedTools(
       suppressLakeArms,
       sessionRetrievalTags,
       questId: callbacks.questId,
+      getAbortSignal,
     },
     storage,
     imageGenerateStorage,

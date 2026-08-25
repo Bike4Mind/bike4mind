@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
-import { ChatModels, ClaudeArtifactMimeTypes } from '@bike4mind/common';
+import { ChatModels, ClaudeArtifactMimeTypes, isUserInitiatedAbort } from '@bike4mind/common';
 import { ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { sanitizeJsonString } from '../../utils/jsonSanitize';
@@ -274,6 +274,9 @@ export const blogDraftTool: ToolDefinition = {
           {
             temperature: 0.7,
             stream: false,
+            // Without this the turn's Stop settles the chat but leaves this sub-call
+            // generating (and billing) until the provider finishes. See ToolContext.getAbortSignal.
+            abortSignal: context.getAbortSignal?.(),
           },
           async (texts, info) => {
             llmResponse = texts.filter(t => t !== null && t !== undefined).join('');
@@ -299,7 +302,14 @@ export const blogDraftTool: ToolDefinition = {
         // drafts created in the same millisecond can't collide.
         return wrapDraftAsArtifact(result, `blog-draft-${randomUUID()}`);
       } catch (error) {
-        logger.error('Blog draft creation failed:', error);
+        // Now that the sub-call above is cancellable, a user Stop lands here as an AbortError.
+        // That is the request working as intended, so keep it out of the error logs - otherwise
+        // every Stop looks like a blog_draft fault. The caller still needs the throw.
+        if (error instanceof Error && isUserInitiatedAbort(error, context.getAbortSignal?.())) {
+          logger.debug('Blog draft cancelled by the caller');
+        } else {
+          logger.error('Blog draft creation failed:', error);
+        }
         throw error;
       }
     },

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ClaudeArtifactMimeTypes } from '@bike4mind/common';
-import { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact } from './index';
+import { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact, blogDraftTool } from './index';
+import type { ToolContext } from '../../base/types';
 
 // Mirror the production artifact-parsing regexes (sharedToolBuilder.ts / client artifactParser.ts)
 const ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/i;
@@ -303,5 +304,50 @@ Line 3",
       expect(JSON.parse(parsed.body)).toEqual(tricky);
       expect(JSON.parse(parsed.body).content).toContain('</artifact>');
     });
+  });
+});
+
+/**
+ * Consumer half of the cancellation seam (the producer half is
+ * ToolBuilder.abortSignal.test.ts). A tool that never forwards
+ * `context.getAbortSignal()` into its own llm.complete keeps generating - and billing - after
+ * the user presses Stop, because the turn's controller only reaches the outer completion.
+ *
+ * blog_draft stands in for all four tools that run their own generation (blog_draft,
+ * deep_research, edit_file, jupyter_notebook); each opts in with the same one-liner.
+ */
+describe('blogDraftTool forwards the turn abort signal to its own llm.complete', () => {
+  function runTool(getAbortSignal?: () => AbortSignal | undefined) {
+    const complete = vi.fn(async (_model, _messages, _options, callback) => {
+      await callback([JSON.stringify({ title: 'T', content: 'C', summary: 'S', suggestedTags: [] })], undefined);
+    });
+    const context = {
+      userId: 'u1',
+      user: {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      db: {},
+      llm: { complete },
+      model: 'test-model',
+      getAbortSignal,
+    } as unknown as ToolContext;
+
+    const run = blogDraftTool
+      .implementation(context, undefined)
+      .toolFn({ sourceContent: 'hello', outputFormat: 'blog' }, {} as never);
+
+    return { run, optionsOf: () => complete.mock.calls[0]?.[2] };
+  }
+
+  it('passes the live signal through as abortSignal', async () => {
+    const controller = new AbortController();
+    const { run, optionsOf } = runTool(() => controller.signal);
+    await run;
+    expect(optionsOf()?.abortSignal).toBe(controller.signal);
+  });
+
+  it('sends no signal when the host supplies no getter', async () => {
+    const { run, optionsOf } = runTool(undefined);
+    await run;
+    expect(optionsOf()?.abortSignal).toBeUndefined();
   });
 });

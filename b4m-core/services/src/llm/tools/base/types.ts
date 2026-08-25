@@ -247,6 +247,24 @@ export interface ToolContext {
   allowedDirectories?: string[];
   /** Optional code minifier for `file_read`'s opt-in `minified` mode. See CodeMinifier. */
   codeMinifier?: CodeMinifier;
+  /**
+   * Cancellation signal for the turn that invoked this tool, for tools that run their own
+   * `llm.complete()` (deep_research, blog_draft, edit_file, jupyter_notebook, ...). Pass the
+   * result as `abortSignal` on those sub-calls, or pressing Stop settles the chat turn while
+   * the tool's nested generation keeps billing until the provider finishes on its own.
+   *
+   * A getter, not an `AbortSignal`: tools are built before the turn's AbortController exists
+   * (ChatCompletionProcess builds tools during `tool_setup` and only creates the controller
+   * once it is about to call the model), so a captured value would be a permanent `undefined`.
+   * Hosts supply a closure over a mutable holder they fill in later - the shape the
+   * delegate_to_agent / coordinate_task path already uses.
+   *
+   * Absent on hosts that have no per-turn controller to hand over - among them the top-level
+   * agent-executor loop, which cancels via a polled `AgentExecution` abort flag rather than an
+   * AbortSignal, and the headless deep-agent runner. Those paths get nothing until they grow a
+   * controller of their own; the dispatched-subagent path already has one and passes it.
+   */
+  getAbortSignal?: () => AbortSignal | undefined;
 }
 
 export interface ToolDefinition {
