@@ -848,6 +848,7 @@ export class ToolBuilder {
           return undefined; // Use default simplified result
         },
         sessionId: quest.sessionId,
+        questId: quest.id,
         onSubagentCredits: (credits, meta) => {
           this.reserveToolCredits('delegate_to_agent', credits);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.

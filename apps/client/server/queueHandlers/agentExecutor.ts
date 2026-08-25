@@ -86,6 +86,7 @@ import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/service
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
@@ -106,7 +107,7 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
-import { applySessionToolPolicy, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -940,9 +941,18 @@ async function processExecution(
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
+        toolsetIsExclusive: orchestrationProfile.toolsetIsExclusive ?? false,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
         isContinuation: !isNewExecution,
       });
+      // An exclusive toolset voids the payload's tool selection by design - but silently
+      // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
+      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+        logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
+          profileId: orchestrationProfile.id,
+          ignoredToolCount: startPayload.enabledTools.length,
+        });
+      }
     }
 
     // Build tools - per-request agent store (unified agent model).
@@ -1024,6 +1034,10 @@ async function processExecution(
           organizationId: execution.organizationId,
           sessionId: execution.sessionId,
           questId: execution.questId,
+          // Inherited alongside `questId` so a child's own audit rows can join to the turn its
+          // parent belongs to. Distinct from `questId` above, which means different things per
+          // dispatch lineage and must never be read as a Quest id (#1867).
+          linkedQuestId: execution.linkedQuestId,
           query: info.task,
           model: info.model,
           approvedTools: [] as string[],
@@ -1259,6 +1273,8 @@ async function processExecution(
         organizationId: execution.organizationId,
         sessionId: execution.sessionId,
         questId: execution.questId,
+        // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
+        linkedQuestId: execution.linkedQuestId,
         spawnedByExecutionId: executionId,
       },
       logger,
@@ -1279,6 +1295,20 @@ async function processExecution(
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     };
+
+    // Whether this run may offer each delegation surface - decided from the profile's
+    // denials and the session contract, and consumed below at the dependency level.
+    const delegation = delegationOffer({
+      profileDeniedTools: orchestrationProfile?.deniedTools,
+      session,
+    });
+    if (!delegation.offerDelegate || !delegation.offerDag) {
+      logger.info('[Orchestration] Delegation surfaces withheld for this run', {
+        offerDelegate: delegation.offerDelegate,
+        offerDag: delegation.offerDag,
+        profileId: orchestrationProfile?.id,
+      });
+    }
 
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
@@ -1323,11 +1353,20 @@ async function processExecution(
         models,
       },
       apiKeyTable: apiKeyTable as ApiKeyTable,
-      agentStore,
+      // The delegation tools are injected as OBJECTS keyed on these two deps, never on
+      // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
+      // profile denies both to keep its loop single-agent - or a session whose
+      // disableUserIntegrations promises no delegation, is enforced HERE or nowhere.
+      // Observed before this gate: an optimizer run registered delegate_to_agent and
+      // coordinate_task against its own profile's deniedTools. The `agentStore` local
+      // stays intact above for exclusive-MCP resolution; only the injection key is
+      // withheld - the same shape the chat path uses (`agentStore: undefined` in
+      // ChatCompletionProcess) and `agentExecutor.latticeTools` uses for its pool.
+      agentStore: delegation.offerDelegate ? agentStore : undefined,
       getRemainingTimeMs: () => context.getRemainingTimeInMillis(),
       handoffSignal,
       dagHandoffSignal,
-      dagDispatcher,
+      dagDispatcher: delegation.offerDag ? dagDispatcher : undefined,
       getCurrentExecutionId: () => executionId,
       // In-process delegate_to_agent/coordinate_task have no pre-flight reservation of
       // their own (unlike ChatCompletionProcess), so without this a member who crosses
@@ -1429,6 +1468,10 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
+      questId: resolveExecutionQuestId({
+        startPayloadQuestId: startPayload?.questId,
+        executionLinkedQuestId: execution.linkedQuestId,
+      }),
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -2962,6 +3005,11 @@ async function processSubagentDispatch(
       onToolStart: async () => {},
       onToolFinish: async () => {},
       sessionId: child.sessionId,
+      // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
+      // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
+      // a lake-access row - but wired now so the native-tool path anticipated below does not
+      // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
+      questId: child.linkedQuestId,
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: child.model,

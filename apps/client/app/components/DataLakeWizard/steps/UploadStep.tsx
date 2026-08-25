@@ -5,6 +5,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
+import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
 /**
  * Background AI-tag suggestion status, shown only while the wizard's Complete screen
@@ -337,8 +338,8 @@ export default function UploadStep() {
           {progress.errorKind === 'validation' && !isAppendMode && (
             <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
               <Typography level="body-xs">
-                <strong>Common fixes:</strong> The {DATA_LAKE} Name needs at least 2 letters or numbers, and the Tag
-                Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
+                <strong>Common fixes:</strong> The {DATA_LAKE} Name needs at least {MIN_DATA_LAKE_SLUG_LENGTH} letters
+                or numbers, and the Tag Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
               </Typography>
             </Alert>
           )}

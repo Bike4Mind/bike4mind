@@ -186,6 +186,10 @@ export interface ToolBuilderCallbacks {
   /** Session ID for entity extraction from tool results */
   sessionId?: string;
 
+  /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
+   * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
+  questId?: string;
+
   /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
   onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
 
@@ -292,7 +296,7 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope, inlinedAttachmentIds, fullyInlinedAttachmentIds },
+    { db, retrievalFilter, kbScope, inlinedAttachmentIds, fullyInlinedAttachmentIds, questId: callbacks.questId },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,

@@ -8,6 +8,7 @@ import {
   resolveIdentifyEffect,
   shouldAdoptIdentifyToken,
   shouldRevokeForTokenVersion,
+  applyUserPush,
 } from './UserContext';
 
 // Builds a JWT-shaped string (unsigned - decodeTokenVersion never verifies the
@@ -183,6 +184,58 @@ describe('shouldRevokeForTokenVersion — JWT kill switch (legacy-token gap fix)
   it('does not revoke a legacy token while the DB version is still 0/unset', () => {
     const legacyToken = fakeToken({ id: 'u1' });
     expect(shouldRevokeForTokenVersion({ accessToken: legacyToken, userTokenVersion: 0 })).toBe(false);
+  });
+});
+
+describe('applyUserPush - merge a users WS push onto the store user (#1632)', () => {
+  it('preserves fields absent from the push (the projection-wipe bug)', () => {
+    // A full document from /api/identify, then a push carrying only the projected subset.
+    const existing = fakeUser({
+      lastNotebookId: 'nb-1',
+      blogIntegration: { enabled: true },
+      isBanned: true,
+    } as Partial<IUserDocument>);
+    const pushed = { id: 'u1', currentCredits: 42 } as unknown as IUserDocument;
+
+    const merged = applyUserPush(existing, pushed) as unknown as Record<string, unknown>;
+
+    // Projected field updates...
+    expect(merged.currentCredits).toBe(42);
+    // ...while every non-projected field survives instead of being wiped to undefined.
+    expect(merged.lastNotebookId).toBe('nb-1');
+    expect(merged.blogIntegration).toEqual({ enabled: true });
+    expect(merged.isBanned).toBe(true);
+  });
+
+  it('lets a field present in the push win, so server-side clears still propagate', () => {
+    const existing = fakeUser({ lastNotebookId: 'nb-1' } as Partial<IUserDocument>);
+    // The field is in the projection and was cleared server-side: present-as-null overwrites.
+    const pushed = { id: 'u1', lastNotebookId: null } as unknown as IUserDocument;
+
+    const merged = applyUserPush(existing, pushed) as unknown as Record<string, unknown>;
+
+    expect(merged.lastNotebookId).toBeNull();
+  });
+
+  it('adopts the pushed subset as-is when there is no existing user', () => {
+    const pushed = { id: 'u1', currentCredits: 7 } as unknown as IUserDocument;
+
+    const merged = applyUserPush(null, pushed) as unknown as Record<string, unknown>;
+
+    expect(merged).toEqual({ id: 'u1', currentCredits: 7 });
+  });
+
+  it('keeps store-derived flags (isBanned/isModerated) intact when the push omits them', () => {
+    // The blast-radius trap: these flags are not in the projection, so a replace reset them to
+    // false. Fed through setCurrentUser, the merged object must keep the real values.
+    useUser.setState({ currentUser: null, isHydrated: false });
+    const existing = fakeUser({ isBanned: true, isModerated: true } as Partial<IUserDocument>);
+    const pushed = { id: 'u1', currentCredits: 1 } as unknown as IUserDocument;
+
+    useUser.getState().setCurrentUser(applyUserPush(existing, pushed));
+
+    expect(useUser.getState().isBanned).toBe(true);
+    expect(useUser.getState().isModerated).toBe(true);
   });
 });
 

@@ -355,6 +355,9 @@ interface SemanticArmResult {
   lakeIds: string[];
   /** Chunk ids of the matched passages, for the same audit event. */
   chunkIds: string[];
+  /** Per-chunk similarity score, index-aligned with `chunkIds` - required (not optional) so
+   *  every construction site must supply it, including the empty-result ones below. */
+  scores: number[];
 }
 
 /** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
@@ -365,6 +368,7 @@ const NO_SEMANTIC_RESULT: SemanticArmResult = {
   fileHits: [],
   lakeIds: [],
   chunkIds: [],
+  scores: [],
 };
 
 /**
@@ -451,7 +455,7 @@ async function trySemanticKbSearch(
           `📚 [semantic] 0 results at relevance floor ${budgets.kbMinRelevance.toFixed(2)} (candidates existed above 0 but none cleared the floor)`
         );
       }
-      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
+      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [], scores: [] };
     }
 
     // Bound by token budget (the primary lever once configured), with the passage ceiling as a
@@ -498,6 +502,7 @@ async function trySemanticKbSearch(
         { allowFullScopeFallback: false }
       ),
       chunkIds: ranked.map(r => r.chunkId),
+      scores: ranked.map(r => r.score),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
@@ -577,7 +582,7 @@ async function tryScopedSemanticKbSearch(
           `📚 [semantic] 0 scoped results at relevance floor ${budgets.kbMinRelevance.toFixed(2)} (candidates existed above 0 but none cleared the floor)`
         );
       }
-      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
+      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [], scores: [] };
     }
 
     const bound = await boundPassagesByTokenBudget(search.results, {
@@ -608,6 +613,7 @@ async function tryScopedSemanticKbSearch(
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
       lakeIds: [],
       chunkIds: ranked.map(r => r.chunkId),
+      scores: ranked.map(r => r.score),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
@@ -956,8 +962,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 // route does, so this counts files read, not chunks matched.
                 fileIds: [...new Set(semantic.fileHits.map(f => f.id))],
                 chunkIds: semantic.chunkIds,
+                scores: semantic.scores,
                 surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
                 queryText: query,
+                questId: context.questId,
+                sessionId: context.sessionId,
               },
               context.logger,
               context.db.adminSettings
@@ -1192,6 +1201,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                   fileIds: rankedResults.map((f: IFabFileDocument) => f.id),
                   surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
                   queryText: query,
+                  questId: context.questId,
+                  sessionId: context.sessionId,
                 },
                 context.logger,
                 context.db.adminSettings

@@ -38,6 +38,43 @@ describe('assertContractConventions', () => {
     expect(() => assertContractConventions(CONTRACTS)).not.toThrow();
   });
 
+  // Assertions about the real CONTRACTS array rather than the gate's behaviour.
+  // These pin promises the docs make, which the gate itself cannot check: it only
+  // asks "is there a scope", never "is it the same scope as the sibling route".
+  describe('the published surface', () => {
+    // The exemption set is empty and meant to stay that way: /api/ai/tts held the
+    // last two (402 for credits, no required scope) and both were retired. Pinning
+    // it means the next exemption has to be argued for in review rather than added
+    // on the precedent of an existing one.
+    it('carries NO convention exemptions', () => {
+      const exempted = CONTRACTS.filter(c => c.conventionExemptions).map(c => c.operationId);
+      expect(exempted).toEqual([]);
+    });
+
+    // All three are credit-metered audio generation, so a key that can drive one
+    // can drive all three. TTS shipped scope-less and was the odd one out; this
+    // fails if any of them drifts onto a different scope.
+    it('gates every audio-generation route on the same scope', () => {
+      const audioPaths = ['/api/ai/tts', '/api/ai/music', '/api/ai/sound-effects'];
+      const scopesByPath = audioPaths.map(path => {
+        const found = CONTRACTS.find(c => c.path === path);
+        expect(found, `no contract for ${path}`).toBeDefined();
+        return [path, found?.scopes] as const;
+      });
+
+      expect(scopesByPath).toEqual(audioPaths.map(path => [path, [ApiKeyScope.AI_GENERATE]]));
+    });
+
+    // A 402 anywhere would mean two statuses for "out of credits" again, which is
+    // the whole reason the shared table exists. ALLOWED_STATUSES already rejects it,
+    // but only for a contract with no `status-table` exemption - and exemptions are
+    // grantable, so this pins the outcome rather than the mechanism.
+    it('declares no 402 anywhere: insufficient credits is a classified 422', () => {
+      const with402 = CONTRACTS.filter(c => 402 in c.responses).map(c => c.operationId);
+      expect(with402).toEqual([]);
+    });
+  });
+
   describe('operationId', () => {
     it.each(['create_widget', 'CreateWidget', '2ndWidget', ''])('rejects %o', id => {
       expect(() => assertContractConventions([contract({ operationId: id })])).toThrow(/is not camelCase/);

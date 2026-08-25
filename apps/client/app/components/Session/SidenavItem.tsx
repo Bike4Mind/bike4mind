@@ -52,7 +52,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import { FC, memo, useRef, useState, useCallback, useMemo, useEffect } from 'react';
+import { FC, ReactNode, memo, useRef, useState, useCallback, useMemo, useEffect } from 'react';
 
 import SessionMetadataModal from '@client/app/components/common/SessionMetadataModal';
 import ShareDocumentModal from '@client/app/components/common/ShareModal';
@@ -102,6 +102,9 @@ const SessionSidenavItem: FC<{
    *  not `currentSessionId`) pass this so the highlight matches the open chat rather than a
    *  stale/foreign context value. Omit it to keep the default context-driven behavior. */
   selected?: boolean;
+  /** Optional icon/badge rendered before the session name. Surface-scoped rails use it to
+   *  mark rows that carry a surface-specific artifact; omitted rows render unchanged. */
+  leadingDecorator?: ReactNode;
 }> = ({
   session,
   onClick,
@@ -114,6 +117,7 @@ const SessionSidenavItem: FC<{
   showMessageCount = true,
   displayNameOverride,
   selected,
+  leadingDecorator,
 }): React.JSX.Element => {
   const { currentSessionId } = useSessions();
   const { currentUser, isAdmin } = useUser();
@@ -403,6 +407,7 @@ const SessionSidenavItem: FC<{
                     minWidth: 0,
                   }}
                 >
+                  {leadingDecorator}
                   <Typography
                     ref={textRef}
                     level="body-xs"
@@ -690,6 +695,7 @@ const SessionSidenavItem: FC<{
                         </Box>
                       </Tooltip>
                     )}
+                    {leadingDecorator}
                     <Typography
                       ref={textRef}
                       level="body-xs"

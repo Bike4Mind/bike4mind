@@ -2079,10 +2079,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const sections: string[] = [];
       const sourceFileIds: string[] = [];
       const injectedChunkIds: string[] = [];
+      const injectedScores: number[] = [];
       // `scored` is already floor-filtered during the scan, so the walk only enforces the budget.
       for (const candidate of scored) {
         if (used >= forcedRetrievalCharBudget) break;
         injectedChunkIds.push(candidate.id);
+        injectedScores.push(candidate.score);
         const file = fileById.get(candidate.fabFileId);
         const remaining = forcedRetrievalCharBudget - used;
         // Defang BEFORE the budget slice, not after: the defang adds one space per line-initial
@@ -2265,8 +2267,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             resolvedLakeIds: forcedRetrievalLakeIds,
             fileIds: sourceFileIds,
             chunkIds: injectedChunkIds,
+            scores: injectedScores,
             surface: 'forced-retrieval',
             queryText: query,
+            questId: quest.id,
+            sessionId: quest.sessionId,
           },
           this.logger,
           this.chatCompletion.db.adminSettings
