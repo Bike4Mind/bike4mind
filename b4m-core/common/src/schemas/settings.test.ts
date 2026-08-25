@@ -589,3 +589,16 @@ describe('AbstentionPrompt default carries the anti-invention licence', () => {
     expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
   });
 });
+
+describe('bflApiKey spells the vendor the way the rest of the app does', () => {
+  // The vendor's own name is three words, and two client surfaces already render it that way
+  // (ApiKeysSection.tsx's PROVIDER_LABELS, ModelSelection.tsx's FLUX section header). This admin
+  // label is a third independent hardcoding of the same string with nothing forcing it to agree,
+  // so pin the spelling here rather than let it drift back.
+  for (const field of ['name', 'description'] as const) {
+    it(`${field} says "Black Forest Labs", not "BlackForest"`, () => {
+      expect(settingsMap.bflApiKey[field]).toContain('Black Forest Labs');
+      expect(settingsMap.bflApiKey[field]).not.toContain('BlackForest');
+    });
+  }
+});
