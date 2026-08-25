@@ -453,6 +453,95 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
   });
 });
 
+/**
+ * Both of this function's grant reads degrade to empty when no grant repo is wired - correct for a
+ * caller that has not threaded one, and invisible when a caller forgets to. The degradation had no
+ * coverage at all, so a caller could pass the repo, stop passing it, and every test still pass while
+ * grant-held lakes silently dropped out of its list (#2034).
+ */
+describe('listDataLakes - grant-reachable lakes (#2034)', () => {
+  const theirs = lake({ id: 'granted', slug: 'granted', createdByUserId: 'other', organizationId: 'orgA' });
+
+  const grantRepo = (role: 'owner' | 'curator' | 'reader') => ({
+    listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: 'granted', role }]),
+    listActiveByLakes: vi
+      .fn()
+      .mockResolvedValue([{ dataLakeId: 'granted', principalType: 'user', principalId: 'me', role }]),
+  });
+
+  // findAccessible's non-owner id arm is driven ENTIRELY by grantedLakeIds, so a fake that returns
+  // the lake unconditionally could not tell a threaded repo from a missing one.
+  const dbFor = (grants?: ReturnType<typeof grantRepo>) => ({
+    dataLakes: {
+      findAccessible: vi.fn().mockImplementation(async (_ctx, opts) => (opts?.grantedLakeIds?.length ? [theirs] : [])),
+      find: vi.fn(),
+    },
+    ...(grants ? { dataLakeAccessGrants: grants } : {}),
+  });
+
+  it('omits the lake entirely when no grant repo is wired', async () => {
+    const db = dbFor();
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'granted')).toBeUndefined();
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
+      statuses: ['draft', 'active'],
+      grantedLakeIds: [],
+    });
+  });
+
+  it('returns a curator-granted lake the caller did not create, labelled manageable', async () => {
+    const db = dbFor(grantRepo('curator'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'granted');
+
+    expect(row).toBeDefined();
+    // Reaching the row set is only half of it: without the per-lake grant load the row would come
+    // back canManage:false, which a write-gated caller like the Slack `list` reply then drops.
+    expect(row?.canManage).toBe(true);
+    // A curator is not an owner, so the manage right must not be reported as ownership.
+    expect(row?.isOwn).toBe(false);
+  });
+
+  it('reports a transferred owner as both manageable and own', async () => {
+    const db = dbFor(grantRepo('owner'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'granted');
+
+    expect(row?.canManage).toBe(true);
+    // An owner grant supersedes createdByUserId, so this is the one grant role that is ownership.
+    expect(row?.isOwn).toBe(true);
+  });
+
+  it('excludes a reader-only granted lake while the read-grant cutover is off', async () => {
+    // No settings adapter, so resolveEnforceReadGrants is false and reader rows are not admitted.
+    // This is the guard on a caller that must not advertise what it cannot write: a reader grant
+    // never satisfies canManageLake, so listing it would promise a write that gets refused.
+    const db = dbFor(grantRepo('reader'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'granted')).toBeUndefined();
+  });
+
+  it('labels a reader-granted lake unmanageable even when another arm returns it', async () => {
+    // The org/public arms can surface the same lake independently of grantedLakeIds, so the reader
+    // exclusion above is not the only thing standing between a reader and a write-gated list.
+    const grants = grantRepo('reader');
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakeAccessGrants: grants,
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect(result.find(l => l.id === 'granted')?.canManage).toBe(false);
+  });
+});
+
 // systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
 // creator or an admin may read the wording. The list endpoint is where the editor UI gets the
 // value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
