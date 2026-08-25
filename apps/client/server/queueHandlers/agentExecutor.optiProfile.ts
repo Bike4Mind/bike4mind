@@ -129,6 +129,11 @@ export function buildOptiOrchestrationProfile(
     maxIterations: { ...OPTI_MAX_ITERATIONS },
     defaultThoroughness: 'very_thorough',
     isSynthetic: true,
+    // The walk needs its whole toolbelt: decompose plans it, formulate/solve advance it, and a
+    // caller's per-run tool selection narrowing that set strands the loop midway. Observed in
+    // production - a classifier-routed send carried a payload naming a single optimizer tool, so
+    // the agent had no way to decompose the scenario it had just been asked to break down.
+    toolsetIsExclusive: true,
     systemPrompt,
     // Disable the confidence gate for the autonomous optimizer loop. The opti tools are
     // sandboxed (LLM/solver + undoable /opti side-effect, no external mutation) and the

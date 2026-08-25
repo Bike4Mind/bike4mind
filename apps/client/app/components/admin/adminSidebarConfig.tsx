@@ -40,7 +40,7 @@ import SummarizeIcon from '@mui/icons-material/Summarize';
 export enum AdminTab {
   Users = 0,
   AdminSettings = 1,
-  Feedbacks = 2,
+  Feedback = 2,
   Analytics = 3,
   Accounts = 4,
   RegistrationInvites = 5,
@@ -138,7 +138,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: PeopleIcon, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: EmailIcon, tab: AdminTab.EmailVerification, label: 'Email Verification' },
-      { Icon: ContactSupportIcon, tab: AdminTab.Feedbacks, label: 'Feedbacks' },
+      { Icon: ContactSupportIcon, tab: AdminTab.Feedback, label: 'Feedback' },
       { Icon: PersonAddIcon, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
       { Icon: QueryStatsIcon, tab: AdminTab.Analytics, label: 'Analytics' },
       {

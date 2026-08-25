@@ -96,10 +96,15 @@ export type ConventionRule = 'status-table' | 'scope-required' | 'version-root';
  * Exemptions from {@link ConventionRule}, each carrying WHY.
  *
  * `status-table` is keyed by the individual status it excuses, not granted
- * contract-wide: TTS needs `402` tolerated, and that must not also wave through
- * an unrelated `418` on the same endpoint. The other two rules are contract-wide
+ * contract-wide: tolerating one off-table status must not also wave through an
+ * unrelated `418` on the same endpoint. The other two rules are contract-wide
  * because that is genuinely their scope - a path has one shape, and an endpoint
  * either gates on a scope or does not.
+ *
+ * NO contract carries an exemption today (`assertContractConventions.test.ts` pins
+ * that). The type stays because the next rule added to an already-published
+ * surface will need it - but an empty set is the steady state, so adding an entry
+ * means arguing for it, not following precedent.
  */
 export type ConventionExemptions = {
   /** HTTP status -> why this endpoint may keep returning it. */

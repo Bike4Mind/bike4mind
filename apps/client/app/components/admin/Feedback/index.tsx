@@ -201,7 +201,10 @@ const FeedbackTab: React.FC = () => {
                     </Stack>
 
                     <Stack direction="row" spacing={1} alignItems="center">
-                      <ContextHelpButton helpId="admin/feedbacks" tooltipText="Feedbacks Help" />
+                      {/* helpId stays "admin/feedbacks" to match the published help slug
+                          (docs-site/docs/admin/feedbacks.md + generated help-index/embeddings);
+                          renaming it is a content migration tracked separately, not a label edit. */}
+                      <ContextHelpButton helpId="admin/feedbacks" tooltipText="Feedback Help" />
                       <Tooltip title="Refresh">
                         <IconButton disabled={loading} onClick={refreshFeedback} variant="outlined" size="sm">
                           <RefreshIcon />

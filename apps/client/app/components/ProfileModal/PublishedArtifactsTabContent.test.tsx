@@ -579,6 +579,62 @@ describe('PublishedArtifactsTabContent - review regressions', () => {
     confirm.mockRestore();
   });
 
+  it('self-heals when two rapid deletes both read the same stale click-time count', async () => {
+    // The real race: fire delete on BOTH rows before either's invalidation has settled, so
+    // `wasLastOnPage` reads the same stale 2-row count for both clicks (2 <= 1 is false each
+    // time) and never steps back on its own. Once the server has processed both deletes, ANY
+    // later refetch of this page observes it empty - the settle-driven clamp reacts to that
+    // real response instead of either click-time guess.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const survivorRow = { ...bundleRow, publicId: 'pub-3', title: 'Survivor' };
+    let raced = false;
+    mockList.mockImplementation((q?: { skip?: number }) =>
+      Promise.resolve(
+        raced
+          ? q?.skip === 25
+            ? page([], { total: 25, skip: 25 })
+            : page([survivorRow], { total: 25, skip: 0 })
+          : page([bundleRow, replyRow], { total: 27, skip: q?.skip ?? 0 })
+      )
+    );
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+    await waitFor(() => expect(lastQuery().skip).toBe(25));
+
+    expandRow('pub-1');
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-1'));
+    expandRow('pub-2');
+    fireEvent.click(screen.getByTestId('published-artifact-delete-pub-2'));
+    raced = true; // both clicks are in flight against the stale count before either settles
+
+    await waitFor(() => expect(lastQuery().skip).toBe(0));
+    // A real row from the recovered page renders - not just a skip value flipping in isolation.
+    await screen.findByTestId('published-artifact-pub-3');
+
+    // No re-clamp loop: once settled, the query stops being re-issued.
+    const callsAtSettle = mockList.mock.calls.length;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(mockList.mock.calls.length).toBe(callsAtSettle);
+    confirm.mockRestore();
+  });
+
+  it('does not clamp back to page 1 when the page query errors', async () => {
+    // A failed fetch also resolves with no `artifacts`, which looks identical to a genuinely
+    // empty page unless the clamp checks the response actually belongs to this page. Silently
+    // bouncing the owner to page 1 on a 500 would hide the failure instead of showing it.
+    mockList.mockResolvedValue(page([bundleRow, replyRow], { total: 27 }));
+    renderTab();
+    await screen.findByTestId('published-artifacts-pager');
+
+    mockList.mockRejectedValueOnce(new Error('boom'));
+    fireEvent.click(screen.getByTestId('published-artifacts-next'));
+
+    await screen.findByTestId('published-artifacts-error');
+    expect(lastQuery().skip).toBe(25);
+  });
+
   it('never shows the never-published copy while the library still has artifacts', async () => {
     // An empty PAGE is not an empty library. Telling an owner with 25 live artifacts that they
     // have published nothing is the worst version of this bug.

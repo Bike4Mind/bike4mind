@@ -473,6 +473,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             fileIds: retrievedFiles.map(f => f.id),
             surface: 'chat-kb-retrieve' as const,
             ...(query ? { queryText: query } : {}),
+            questId: context.questId,
+            sessionId: context.sessionId,
           };
           if (scope) {
             // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is

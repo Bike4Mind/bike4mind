@@ -75,6 +75,18 @@ export interface ToolContext {
    * Optional because some non-chat tool harnesses build a context without a session.
    */
   sessionId?: string;
+  /**
+   * Quest (turn) id of the current chat, for lake-access audit rows (recordLakeAccessEvent) to
+   * join back to their turn - a diagnostic join key, never authorization data. Optional for the
+   * same reason as `sessionId`, plus one agent-mode-specific case: an agent execution's real Quest
+   * id is only known from the point `agentExecutor` resolves it (see the dispatch-time capture in
+   * `agentExecute.ts` and its resume-path fallback) - a tool call before that point genuinely has
+   * none to supply. On the agent path this must come from that resolved id
+   * (`AgentExecution.linkedQuestId`), never from `AgentExecution.questId`, which holds different
+   * things depending on which dispatcher created the execution and so cannot be interpreted by any
+   * consumer - see its own doc comment.
+   */
+  questId?: string;
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {
     latticeModels?: {

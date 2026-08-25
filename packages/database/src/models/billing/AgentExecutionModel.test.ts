@@ -173,6 +173,25 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('persistLinkedQuestId (#1867 turn linkage)', () => {
+    it('is absent on a fresh execution', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.linkedQuestId).toBeUndefined();
+    });
+
+    it('persists the real Quest id separately from questId (which holds the sessionId)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ questId: 'session-id-back-ref-hack' }));
+      await agentExecutionRepository.persistLinkedQuestId(exec.id, 'the-real-quest-id');
+
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.linkedQuestId).toBe('the-real-quest-id');
+      // The two fields must never collapse into one another - questId keeps whatever it was
+      // created with, regardless of what persistLinkedQuestId writes.
+      expect(loaded?.questId).toBe('session-id-back-ref-hack');
+    });
+  });
+
   describe('addChildExecution', () => {
     it('links a child id to the parent without duplicating', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution());

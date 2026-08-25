@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import type { IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
+import { releaseDriveConnection } from '@server/integrations/google/drive/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { NotFoundError } from '@server/utils/errors';
 import { Request } from 'express';
@@ -38,7 +39,8 @@ async function resolveOrgLake(req: Request): Promise<{ lakeId: string; organizat
 
 /**
  * GET    /api/data-lakes/:id/drive-connection -> { connection: SafeConnection | null }
- * DELETE /api/data-lakes/:id/drive-connection -> 204 (releases the folder claim so it can be re-used)
+ * DELETE /api/data-lakes/:id/drive-connection -> 204 (revokes the Google grant and releases the
+ *        folder claim so it can be re-used)
  *
  * Org owner/manager (or platform admin) only. The connect + ingest trigger lives in POST
  * /api/data-lakes/drive-sync; this route is the per-lake status + disconnect surface.
@@ -62,7 +64,9 @@ const handler = baseApi()
           .status(409)
           .json({ error: 'A sync is in progress for this folder. Try disconnecting again once it finishes.' });
       }
-      await orgGoogleDriveConnectionRepository.release(conn.id, organizationId);
+      // Through the release seam, not the bare repo delete: it revokes the org-owned credential at
+      // Google first, so disconnecting here does not leave the grant live behind a deleted row.
+      await releaseDriveConnection(conn.id, organizationId);
     }
     return res.status(204).send();
   });

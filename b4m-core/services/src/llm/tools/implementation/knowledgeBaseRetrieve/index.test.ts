@@ -58,6 +58,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
     userId: 'u1',
     user: { id: 'u1', groups: [] } as never,
     sessionId: 's1',
+    questId: 'q1',
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     retrievalFilter: { excludeFilenameMarkers: ['MARK'], vectorizedOnly: true },
@@ -1001,6 +1002,9 @@ describe('retrieve_knowledge_content access-event audit', () => {
         resolvedLakeIds: ['lake-x'],
         fileIds: [FILE_ID],
         surface: 'chat-kb-retrieve',
+        // #1867 turn linkage: no scores here - direct file_id lookup, not a ranked search.
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });
