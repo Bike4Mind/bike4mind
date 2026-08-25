@@ -14,7 +14,7 @@
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
-import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
+import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
 
@@ -83,33 +83,62 @@ export function withStaticRegistryBypass(
  */
 export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Promise<RetrievalLakeScope> {
   const user = req.user!;
-  // Resolved for every caller, including admins. The bypass above covers only STATIC lakes,
-  // so an admin given no keys would lose an entitlement-gated DYNAMIC lake that a plain
-  // subscriber holding the same key keeps. Memoized on the request by getRequestEntitlements.
-  const entitlementKeys = await getRequestEntitlements(req);
+  // Thin memoizing wrapper over the request-free resolver below - the two MUST NOT drift, which is
+  // why this holds no resolution logic of its own. All it adds is per-request memoization:
+  // `getRequestEntitlements` and `getRequestMembershipOrgIds` each resolve once per request across
+  // every consumer, rather than once per call.
+  return resolveRetrievalLakeScopeForUser(user, {
+    logger: req.logger,
+    entitlementKeys: await getRequestEntitlements(req),
+    // The resolver derives membership itself from user.id; serve that lookup from the request memo
+    // so one request resolves membership once across toAccessContext and this scope. Any other id
+    // (defense-in-depth - the resolver only asks about user.id today) falls through to the repo.
+    findMembershipOrgIds: (uid: string) =>
+      uid === user.id ? getRequestMembershipOrgIds(req) : organizationRepository.findMembershipOrgIds(uid),
+  });
+}
 
-  // Projected field-for-field to what ToolContext hands the same function in the chat tool,
-  // so "same lake set" is a property of the call, not a coincidence. Membership is resolved
-  // INSIDE the shared resolver from user.id, not from user.organizationId (the selected-org
-  // display pointer) - see DataLakeAccessContext (#1674).
+/**
+ * The same retrieval scope, resolved WITHOUT a request.
+ *
+ * Exists because most session-creation call sites are not request-scoped - a manager taking
+ * `{ user, ability, logger }`, a queue handler, an overlay service - and the request-shaped resolver
+ * above cannot serve them. Deriving a session's lake scope only where a `req` happened to be in hand
+ * meant the lake-aware derivation ran on one of ten `createSession` call sites.
+ *
+ * Everything the request version added was MEMOIZATION, not authority: `getRequestEntitlements` is
+ * `req.entitlements ??= getUserEntitlements(req.user)`, and the membership memo already falls back to
+ * the repository for any id it has not cached. So this resolves the same values from the same
+ * sources; a caller with a request should still prefer the wrapper above so one request pays once.
+ */
+export async function resolveRetrievalLakeScopeForUser(
+  user: NonNullable<RetrievalScopeRequest['user']>,
+  opts: {
+    logger?: Logger;
+    /** Pre-resolved keys (the request path passes its memo); resolved from the user when absent. */
+    entitlementKeys?: string[];
+    /** Pre-memoized membership lookup; falls back to the repository when absent. */
+    findMembershipOrgIds?: (uid: string) => Promise<string[]>;
+  } = {}
+): Promise<RetrievalLakeScope> {
+  // Resolved for every caller, including admins. The static-registry bypass below covers only STATIC
+  // lakes, so an admin given no keys would lose an entitlement-gated DYNAMIC lake that a plain
+  // subscriber holding the same key keeps.
+  const entitlementKeys = opts.entitlementKeys ?? (await getUserEntitlements(user));
+
+  // Projected field-for-field to what ToolContext hands the same function in the chat tool, so
+  // "same lake set" is a property of the call, not a coincidence. Membership is resolved INSIDE the
+  // shared resolver from user.id, not from user.organizationId (the selected-org display pointer).
   const scope = await dataLakeService.getDynamicDataLakeAccess({
     db: {
       dataLakes: dataLakeRepository,
-      // The resolver derives membership itself from user.id; serve that lookup from the
-      // request memo so one request resolves membership once across toAccessContext and this
-      // scope. Any other id (defense-in-depth - the resolver only asks about user.id today)
-      // falls through to the repository.
       organizations: {
-        findMembershipOrgIds: (uid: string) =>
-          uid === user.id ? getRequestMembershipOrgIds(req) : organizationRepository.findMembershipOrgIds(uid),
+        findMembershipOrgIds: opts.findMembershipOrgIds ?? (uid => organizationRepository.findMembershipOrgIds(uid)),
       },
     },
-    user: {
-      id: user.id,
-      tags: user.tags ?? [],
-    },
+    user: { id: user.id, tags: user.tags ?? [] },
     entitlementKeys,
-    logger: req.logger,
+    logger: opts.logger,
   });
 
   const isPrivileged = !!user.isAdmin || hasDeveloperUserTag(user.tags);
