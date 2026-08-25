@@ -49,8 +49,13 @@ export interface LakeAuthzDeps {
    * owner may ingest and not only the original creator. Declared on the shared prologue rather than
    * on one ingest path, so FILE and LINK cannot diverge on who is allowed to write - the same reason
    * this module exists at all.
+   *
+   * `listByLake` is the write gate's method; the other two are `listDataLakes`' (see `GrantLookup`
+   * there), so the `list` reply labels and reaches the same grant-held lakes `add` accepts. The
+   * three live on one member because a surface that gated on grants while listing without them
+   * reported lakes `add` takes as unavailable, which is what #2034 was.
    */
-  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes' | 'listByPrincipal'>;
   /**
    * Settings stores the meta-tag write gate needs for the admission contract (#1680). This module
    * names no admission members - the Slack file does not exist yet and `createFabFile` runs the
@@ -62,6 +67,13 @@ export interface LakeAuthzDeps {
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
   /** Authoritative org membership set for the actor, mirroring `toAccessContext` (#1674). */
   resolveMembershipOrgIds(userId: string): Promise<string[]>;
+  /**
+   * The orgs the actor holds ADMIN rights in, mirroring `toAccessContext`. Distinct from membership
+   * above and not derivable from it: membership grants read, admin rights feed the org rungs of
+   * `canManageLake`. `ManageActor` defaults the field to `[]` for callers that have not threaded it,
+   * so leaving it unresolved kills both rungs on this surface with no error and no log line.
+   */
+  resolveAdministeredOrgIds(userId: string): Promise<string[]>;
   logger: {
     info: (message: string, meta?: unknown) => void;
     warn: (message: string, ...args: unknown[]) => void;
@@ -76,20 +88,37 @@ export interface LakeAuthzDeps {
  */
 export async function buildSlackAccessContext(
   actor: SlackIngestActor,
-  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds'>,
+  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds' | 'resolveAdministeredOrgIds'>,
   opts?: { resolveEntitlementsForAdmin?: boolean }
 ): Promise<AccessContext> {
   const isAdmin = !!actor.isAdmin;
+
+  // All three reads are independent, so they go in parallel rather than in an object literal's
+  // sequential await order. Unlike toAccessContext, whose two heavy reads are memoized per request,
+  // nothing memoizes here and the prologue runs TWICE on a message carrying both a file and a link.
+  //
+  // Each skip below is a resolution the actor's role makes pointless, not an optimization:
+  //  - keys: the write gates grant an admin outright and never read them. `resolveEntitlementsForAdmin`
+  //    exists for the one caller that deliberately evaluates an admin through the NON-admin arms (the
+  //    `list` reply in handleDataLakeCommand), where the keys decide whether an entitlement-gated
+  //    lake is reachable.
+  //  - org-admin ids: canManageLake grants an admin on its platform rung and never reaches the org
+  //    rungs these ids feed. No opt-in twin to the flag above is needed - `handleList` does evaluate
+  //    an admin with isAdmin suppressed, but these ids only affect a per-row manage LABEL, which its
+  //    own `isWritable` restores from the unsuppressed context.
+  const [organizationIds, entitlementKeys, administeredOrgIds] = await Promise.all([
+    deps.resolveMembershipOrgIds(actor.id),
+    isAdmin && !opts?.resolveEntitlementsForAdmin ? [] : deps.resolveEntitlementKeys(actor),
+    isAdmin ? [] : deps.resolveAdministeredOrgIds(actor.id),
+  ]);
+
   return {
     userId: actor.id,
     isAdmin,
     userTags: actor.tags ?? [],
-    organizationIds: await deps.resolveMembershipOrgIds(actor.id),
-    // Skipped for an admin by default, mirroring toAccessContext: the write gates grant an admin
-    // outright and never read the keys. `resolveEntitlementsForAdmin` exists for the one caller
-    // that deliberately evaluates an admin through the NON-admin arms (the `list` reply in
-    // handleDataLakeCommand), where the keys decide whether an entitlement-gated lake is reachable.
-    entitlementKeys: isAdmin && !opts?.resolveEntitlementsForAdmin ? [] : await deps.resolveEntitlementKeys(actor),
+    organizationIds,
+    entitlementKeys,
+    administeredOrgIds,
   };
 }
 
