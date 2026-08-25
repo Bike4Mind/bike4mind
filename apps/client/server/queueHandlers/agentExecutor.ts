@@ -2407,6 +2407,28 @@ async function processExecution(
           return;
         }
 
+        // A headless run (REST dispatch) has nobody to ask: there is no client to
+        // render a permission card, and `permission_response` is a WebSocket-only
+        // command. Pausing would wedge the run in `awaiting_permission` until the
+        // 20-minute stale sweep, holding one of the caller's concurrency slots the
+        // whole time - and the caller cannot avoid it, because the AGENT chooses to
+        // call a gated tool. Treat "no approver" as denial, the same fail-safe
+        // reading the `denied` branch above takes, so the run terminates with a
+        // message naming the tool instead of hanging.
+        if (isHeadlessConnection(connectionId)) {
+          logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
+            executionId,
+            toolName,
+          });
+          await agentExecutionRepository.markFailed(executionId, {
+            message:
+              `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
+              'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
+              'excludes approval-gated tools, or start the run over the WebSocket route.',
+          });
+          return;
+        }
+
         // verdict === 'needs_approval' - pause and ask the user. Note: the tool
         // has already executed (Phase 1 limitation) - approval gates future
         // iterations, not this one. Checkpoint persistence and iteration

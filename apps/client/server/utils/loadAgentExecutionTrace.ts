@@ -16,6 +16,8 @@ export type AgentExecutionTrace = {
   status: AgentExecutionStatus;
   sessionId: string | null;
   answer: string | null;
+  /** Failure reason from `markFailed`; null unless the run failed. */
+  error: string | null;
   steps: IAgentStep[];
   totalIterations: number | null;
   createdAt: Date;
@@ -57,6 +59,7 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     status: execution.status,
     sessionId: execution.sessionId ?? null,
     answer: result?.answer ?? null,
+    error: execution.error?.message ?? null,
     steps: result?.steps ?? checkpoint?.steps ?? [],
     totalIterations: result?.totalIterations ?? checkpoint?.iteration ?? null,
     createdAt: execution.createdAt,

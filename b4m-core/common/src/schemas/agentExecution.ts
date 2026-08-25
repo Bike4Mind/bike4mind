@@ -118,13 +118,20 @@ export type AgentExecutionStep = z.infer<typeof AgentExecutionStepSchema>;
  *
  * `steps` is the live trace: it grows while the run is in flight (read from the
  * checkpoint) and freezes at the final one. `answer` is null until the run reaches a
- * terminal status, and stays null on `failed` / `aborted`.
+ * terminal status, and stays null on `failed` / `aborted` - where `error` carries the
+ * reason instead.
  */
 export const AgentExecutionStatusResponseSchema = z.object({
   id: z.string(),
   status: z.enum(AGENT_EXECUTION_STATUSES),
   session_id: z.string().nullable(),
   answer: z.string().nullable(),
+  /**
+   * Why the run ended without an answer. Set only on `failed`; null otherwise.
+   * Without this a caller polling a terminal run sees `failed` + a null answer and
+   * cannot tell an approval-gated tool from a model error from a timeout.
+   */
+  error: z.string().nullable(),
   steps: z.array(AgentExecutionStepSchema),
   total_iterations: z.number().nullable(),
   created_at: z.string(),

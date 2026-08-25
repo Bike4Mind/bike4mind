@@ -184,6 +184,7 @@ describe('GET /api/v1/agent-executions/{id}', () => {
     status: 'completed' as const,
     sessionId: 's1',
     answer: 'done',
+    error: null,
     steps: [
       { type: 'thought' as const, content: 'thinking', metadata: { timestamp: 1, iteration: 0 } },
       { type: 'action' as const, content: 'calling', metadata: { timestamp: 2, iteration: 1, toolName: 'web_search' } },
@@ -208,6 +209,7 @@ describe('GET /api/v1/agent-executions/{id}', () => {
       status: 'completed',
       session_id: 's1',
       answer: 'done',
+      error: null,
       steps: [
         { type: 'thought', content: 'thinking', iteration: 0 },
         { type: 'action', content: 'calling', iteration: 1, tool_name: 'web_search' },
@@ -217,6 +219,25 @@ describe('GET /api/v1/agent-executions/{id}', () => {
       created_at: '2026-08-24T00:00:00.000Z',
       updated_at: '2026-08-24T00:01:00.000Z',
     });
+  });
+
+  it('publishes the failure reason so a failed run is not an opaque null answer', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      status: 'failed' as const,
+      answer: null,
+      error: 'Execution stopped: tool "delegate_to_agent" requires approval',
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.status).toBe('failed');
+    expect(body.answer).toBeNull();
+    expect(body.error).toContain('requires approval');
   });
 
   it('404s when the run is missing or not visible to the caller', async () => {

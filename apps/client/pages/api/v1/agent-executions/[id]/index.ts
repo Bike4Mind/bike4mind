@@ -36,6 +36,7 @@ const handler = nextRouteForContract(getAgentExecutionContract, {
     status: trace.status,
     session_id: trace.sessionId,
     answer: trace.answer,
+    error: trace.error,
     steps,
     total_iterations: trace.totalIterations,
     created_at: trace.createdAt.toISOString(),
