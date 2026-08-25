@@ -1,7 +1,7 @@
 import type { IFabFileChunkDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BaseSearchIndex } from './BaseSearchIndex';
-import { OpenSearchClient, isIndexAlreadyExistsError } from './opensearchClient';
+import { OpenSearchClient, isIndexAlreadyExistsError, isIndexNotFoundError } from './opensearchClient';
 import { getEmbeddingDimensions, atlasVectorIndexName } from './atlasSearchIndex';
 import { SearchDocument, buildSearchIndexSettings } from './config';
 
@@ -165,9 +165,24 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
     const indexName = selfHostVectorIndexName(embeddingModel);
     if (!indexName) return;
     const osClient = await this.loadSearchIndexClient();
-    await osClient.deleteDocumentByQuery(indexName, {
-      query: { term: { 'metadata.fabFileId': fabFileId } },
-    });
+    try {
+      await osClient.deleteDocumentByQuery(indexName, {
+        query: { term: { 'metadata.fabFileId': fabFileId } },
+      });
+    } catch (error) {
+      // A model whose index was never created is a SATISFIED removal, not a failure: only
+      // `indexChunks` ever calls `ensureIndexForModel`, so an install that enabled OpenSearch after
+      // chunks already existed has `FabFileChunk.embeddingModel` set in Mongo with no index behind
+      // it (the case documented at the top of this file). `isTransientOpenSearchError` treats the
+      // 404 as non-transient, so before this the error escaped `withRetry`, and because the phase-2
+      // purge does not catch (see ports.ts `strictIndexRemove`) it aborted the sweep and left the
+      // lake in 'purging' with no route back - every DLQ replay failing identically.
+      //
+      // Narrow on purpose. A missing index cannot be hiding documents, so swallowing THIS says
+      // nothing about any other failure; every other error still propagates and still aborts the
+      // purge, which is what keeps it from hard-deleting Mongo rows whose vectors are still live.
+      if (!isIndexNotFoundError(error as Error)) throw error;
+    }
   }
 
   /**
