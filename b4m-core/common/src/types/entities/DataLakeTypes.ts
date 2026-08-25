@@ -643,6 +643,19 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Guarded status transition to ANY status, terminal or not, carrying the client-supplied failure
+   * tallies in the same atomic write. The route variant of the two methods above: the PUT endpoint
+   * accepts any `BatchStatus` plus `failedFiles`/`failedFileNames`, which neither of them can
+   * express, and an unguarded `update` there could resurrect a batch the pipeline already settled.
+   * Returns the post-update doc to the single winner and null to a caller whose batch was already
+   * terminal, so the caller can tell a real transition from a no-op instead of inferring it from a
+   * stale read.
+   */
+  updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
    * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which

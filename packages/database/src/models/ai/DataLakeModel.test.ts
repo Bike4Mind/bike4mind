@@ -774,6 +774,47 @@ describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal trans
   });
 });
 
+describe('DataLakeBatchRepository.updateIfActive - guarded multi-field transition (#2089)', () => {
+  setupMongoTest();
+
+  const activeBatch = () => dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+  it('applies status and the failure tallies together on a non-terminal batch', async () => {
+    const batch = await activeBatch();
+    const moved = await dataLakeBatchRepository.updateIfActive(batch.id, {
+      status: 'completed_with_errors',
+      failedFiles: 2,
+      failedFileNames: ['a.pdf', 'b.pdf'],
+    });
+    expect(moved?.status).toBe('completed_with_errors');
+    expect(moved?.failedFiles).toBe(2);
+    expect(moved?.failedFileNames).toEqual(['a.pdf', 'b.pdf']);
+  });
+
+  it('is a no-op on a terminal batch, so a PUT cannot write a settled one back to in-flight', async () => {
+    // The resurrection the PUT route allowed before it was guarded: the batch would reappear in
+    // findActiveByUserId and reconcileStuckBatches would later force-fail a batch that succeeded.
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const moved = await dataLakeBatchRepository.updateIfActive(batch.id, { status: 'uploading' });
+    expect(moved).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.status).toBe('completed');
+  });
+
+  it('refuses the whole write when it loses, not just the status', async () => {
+    // The fields ride one atomic $set, so a lost claim must leave the tallies alone too - a partial
+    // apply would report failures against a batch this caller never actually moved.
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    await dataLakeBatchRepository.updateIfActive(batch.id, { status: 'uploading', failedFiles: 7 });
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.failedFiles).toBe(0);
+  });
+});
+
 describe('DataLakeBatchRepository.claimFileStatus - from-set gating', () => {
   setupMongoTest();
 
