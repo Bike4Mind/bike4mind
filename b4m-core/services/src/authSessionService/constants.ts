@@ -10,19 +10,16 @@ export const DEFAULT_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
  * a fresh refresh token - meaning a thief and the victim could re-promote each other indefinitely
  * and reuse detection never fired at all.
  *
- * It has to cover two things, both short:
- *  - concurrent siblings (tabs sharing one cookie jar) arriving just after the winner committed;
- *  - a client retry after a rotation response was lost in flight, leaving the client on the old
- *    secret while the server advanced. The client's refresh is bounded at 10s and its caller
- *    re-drives immediately on the next 401, so a couple of minutes is generous.
+ * It has to cover concurrent siblings (tabs sharing one cookie jar) arriving just after the
+ * winner committed - the burst case where serving an access token WITHOUT rotating is what lets
+ * N callers converge on the winner's token.
  *
- * Honest accounting of the two costs of widening this from the original 60s:
- *  - A superseded secret replayed 61-120s after supersession used to revoke the session on the
- *    spot and now returns an access token instead, so the theft alarm is suppressed for an extra
- *    minute.
- *  - Each accepted replay mints an access token whose own lifetime outlives the window, so the
- *    reachable access from one stale secret is this window PLUS one access-token lifetime.
- * MAX_REFRESH_REPLAY_USES below bounds how many such tokens a single secret can mint.
+ * Since recovery rotation landed (see rotateSession), this window no longer gates revocation:
+ * presenting the previous secret AFTER it closes now recovers the chain (the successor's response
+ * provably never arrived) instead of revoking the session. So the window only separates "burst -
+ * coalesce, do not fork" from "lost response - rotate forward from what the client actually
+ * holds". It must comfortably exceed one in-flight response lifetime (the client aborts at 10s),
+ * and 2 minutes is that with margin.
  */
 export const REFRESH_REPLAY_WINDOW_MS = 2 * 60 * 1000;
 
@@ -41,3 +38,14 @@ export const REFRESH_REPLAY_WINDOW_MS = 2 * 60 * 1000;
  * because a large legitimate burst and abuse look identical here.
  */
 export const MAX_REFRESH_REPLAY_USES = 10;
+
+/**
+ * Hard ceiling on one session's total lifetime, measured from its createdAt.
+ *
+ * expiresAt SLIDES to now + DEFAULT_REFRESH_TTL_MS on every rotation (see rotateSession), so an
+ * actively used session never dies mid-work - the 30d default is an IDLE timeout, not a total
+ * lifetime. This cap is what bounds the total: a session that never re-authenticates is forced
+ * back through login within 90 days no matter how active it is. Enforced server-side only; the
+ * refresh cookie's Max-Age keeps mirroring the idle window (see refreshCookie.ts).
+ */
+export const ABSOLUTE_SESSION_MAX_MS = 90 * 24 * 60 * 60 * 1000;
