@@ -6,7 +6,7 @@ import {
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
-import { getDynamicDataLakeAccess, type ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import type { ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
  * How many documents a library holds - the one knowledge-base question ranked passage retrieval

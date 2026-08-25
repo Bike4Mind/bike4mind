@@ -17,7 +17,6 @@ import {
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
-import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
