@@ -3,35 +3,116 @@ import mongoose from 'mongoose';
 import { IUserDocument, KnowledgeType } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
+import { Project, projectRepository } from './ProjectModel';
+import { Session, sessionRepository } from '../auth/SessionModel';
+import { Agent, agentRepository } from '../ai/AgentModel';
+import { Skill, skillRepository } from '../ai/SkillModel';
+import { Tool, toolRepository } from '../ai/ToolModel';
+import { Organization, organizationRepository } from '../infra/admin/OrganizationModel';
 
 /**
  * Real server, because the behaviour under test is Mongo's casting: an unguarded
- * `_id: { $in: [...] }` here rejects the whole query, and /api/files/byIds turns that CastError
- * into a 404 on the notebook file list. Stubs would encode the assumption instead of checking it.
+ * `_id: { $in: [...] }` rejects the whole query, and /api/files/byIds turns that CastError into a
+ * 404 on the notebook file list. Stubs would encode the assumption instead of checking it.
+ *
+ * Every model below shares ONE `findAllAccessibleByIds` on ShareableDocumentRepository, so the
+ * guard lands on all of them at once - including the lookups no manual pass exercises. They are
+ * covered here rather than by hand for exactly that reason.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
-let liveId: string;
 
-const OWNER = 'owner-1';
+// A real user id, i.e. an ObjectId hex string. It has to be castable: ToolModel declares
+// `userId` as an ObjectId ref, so the `$or: [{ userId: user.id }]` ACL clause casts it too, and a
+// non-hex owner would throw there for reasons unrelated to the `_id` guard under test.
+const OWNER = '67cbd75e2415ca84138fada7';
 // The shape a session row written before the id filtering can still hold.
 const JUNK_ID = 'legacy-uuid-not-an-objectid';
 
 const user = { id: OWNER, groups: [] } as unknown as IUserDocument;
 
+/** One owned row per model, plus the repository whose shareable guard resolves it. */
+const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: string[]) => Promise<unknown[]> }> = [
+  {
+    name: 'FabFile',
+    create: async () => {
+      const d = await FabFile.create({
+        userId: OWNER,
+        fileName: 'live.txt',
+        type: KnowledgeType.FILE,
+        mimeType: 'text/plain',
+        fileSize: 4,
+      });
+      return String(d._id);
+    },
+    find: ids => fabFileRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+  {
+    name: 'Session',
+    create: async () => {
+      const d = await Session.create({
+        name: 'live session',
+        userId: OWNER,
+        lastUpdated: new Date(),
+        firstCreated: new Date(),
+      });
+      return String(d._id);
+    },
+    find: ids => sessionRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+  {
+    name: 'Project',
+    create: async () => {
+      const d = await Project.create({ name: 'live project', description: 'd', userId: OWNER });
+      return String(d._id);
+    },
+    find: ids => projectRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+  {
+    name: 'Agent',
+    create: async () => {
+      const d = await Agent.create({ name: 'live agent', description: 'd', userId: OWNER });
+      return String(d._id);
+    },
+    find: ids => agentRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+  {
+    name: 'Skill',
+    create: async () => {
+      const d = await Skill.create({ name: 'live skill', description: 'd', body: 'b', userId: OWNER });
+      return String(d._id);
+    },
+    find: ids => skillRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+  {
+    name: 'Tool',
+    create: async () => {
+      // userId is an ObjectId ref here, unlike the string userId the other models use.
+      const d = await Tool.create({
+        name: 'live tool',
+        userId: new mongoose.Types.ObjectId(OWNER),
+        workBenchFiles: [],
+        llmParams: {},
+      });
+      return String(d._id);
+    },
+    find: ids => toolRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+  {
+    name: 'Organization',
+    create: async () => {
+      const d = await Organization.create({ name: 'live org', userId: OWNER });
+      return String(d._id);
+    },
+    find: ids => organizationRepository.shareable.findAllAccessibleByIds(user, ids),
+  },
+];
+
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
-  const file = await FabFile.create({
-    userId: OWNER,
-    fileName: 'live.txt',
-    type: KnowledgeType.FILE,
-    mimeType: 'text/plain',
-    fileSize: 4,
-  });
-  liveId = String(file._id);
 });
 
 afterAll(async () => {
@@ -39,19 +120,22 @@ afterAll(async () => {
   await server.stop();
 });
 
-describe('findAllAccessibleByIds', () => {
+describe.each(cases)('findAllAccessibleByIds - $name', ({ create, find }) => {
   it('resolves the row when every id is castable', async () => {
-    const rows = await fabFileRepository.shareable.findAllAccessibleByIds(user, [liveId]);
+    const liveId = await create();
+    const rows = (await find([liveId])) as Array<{ id: string }>;
     expect(rows.map(r => String(r.id))).toEqual([liveId]);
   });
 
   it('keeps the valid row when one id cannot address a row by _id', async () => {
-    const rows = await fabFileRepository.shareable.findAllAccessibleByIds(user, [JUNK_ID, liveId]);
+    const liveId = await create();
+    const rows = (await find([JUNK_ID, liveId])) as Array<{ id: string }>;
     expect(rows.map(r => String(r.id))).toEqual([liveId]);
   });
 
   it('matches nothing rather than throwing when every id is unusable', async () => {
-    const rows = await fabFileRepository.shareable.findAllAccessibleByIds(user, [JUNK_ID]);
+    await create();
+    const rows = await find([JUNK_ID]);
     expect(rows).toEqual([]);
   });
 });
