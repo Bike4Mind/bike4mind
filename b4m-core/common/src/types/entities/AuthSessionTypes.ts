@@ -33,9 +33,11 @@ export interface IAuthSessionDevice {
  *
  * Replay window: on rotation the prior hash moves to `previousRefreshTokenHash` and stays
  * REPLAYABLE until `graceExpiresAt`. Presenting it there yields an access token ONLY - it does not
- * rotate and issues no refresh token, so the chain cannot fork and a replayer gains nothing
- * durable. A token matching neither the current nor the (in-window) previous hash is treated as
- * theft and revokes the session. See rotateSession in @bike4mind/services for the full rule set.
+ * rotate and issues no refresh token, so the chain cannot fork during a concurrent-sibling burst.
+ * Presenting it AFTER the window means the successor's response never reached the client (responses
+ * land in seconds or never), so the chain is rotated forward from the previous hash instead
+ * (recovery). Only a token matching neither the current nor the previous hash is treated as theft
+ * and revokes the session. See rotateSession in @bike4mind/services for the full rule set.
  */
 export interface IAuthSession {
   /** Stable session id, embedded as `sid` in the access + refresh tokens. */
@@ -101,13 +103,34 @@ export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocu
    * trips reuse detection, revoking a healthy session. The CAS makes at most one rotation win per
    * generation, so exactly one refresh token can exist and there is nothing to strand.
    *
+   * `newExpiresAt`, when given, slides the session expiry forward with this use (the sliding
+   * window is computed by the caller, which holds the row's createdAt; see rotateSession).
+   *
    * Returns the updated doc, or null when the swap did not apply - either the session is
    * revoked/expired, or a concurrent rotation won. Callers must re-read to tell those apart; see
    * rotateSession in @bike4mind/services.
    */
   rotateHash: (
     sid: string,
-    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date }
+    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt?: Date }
+  ) => Promise<IAuthSessionDocument | null>;
+  /**
+   * Compare-and-swap recovery rotation: advance the chain FROM the previous hash, for a client
+   * whose last rotation response never arrived (it still presents the superseded secret after the
+   * coalesce window closed). Discards the never-delivered current hash.
+   *
+   * The CAS is `previousRefreshTokenHash == expectedPreviousHash AND graceExpiresAt <= now`: the
+   * winner re-opens graceExpiresAt, so a concurrent second recovery fails the `$lte` filter and
+   * falls back to a coalesce inside the fresh window. `previousRefreshTokenHash` is deliberately
+   * left pinned to the presented hash for the same reason rotateHash pins it: siblings still
+   * holding it must coalesce, not fork the chain.
+   *
+   * Returns the updated doc, or null when the swap did not apply (dead session, hash mismatch, or
+   * a concurrent recovery won). Callers re-read to distinguish; see rotateSession.
+   */
+  recoverRotateHash: (
+    sid: string,
+    params: { expectedPreviousHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt?: Date }
   ) => Promise<IAuthSessionDocument | null>;
   /**
    * Atomically claim one unit of the superseded secret's replay allowance, bumping lastUsedAt with

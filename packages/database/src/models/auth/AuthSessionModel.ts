@@ -66,7 +66,7 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
 
   async rotateHash(
     sid: string,
-    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date }
+    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt?: Date }
   ): Promise<IAuthSessionDocument | null> {
     const now = new Date();
     // `refreshTokenHash` in the FILTER is the compare-and-swap: it makes this a conditional write
@@ -82,6 +82,38 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
           lastUsedAt: now,
           // A fresh generation gets a fresh allowance; see registerReplayUse.
           replayUses: 0,
+          // Sliding session window, computed by the caller (it holds createdAt for the cap).
+          ...(params.newExpiresAt ? { expiresAt: params.newExpiresAt } : {}),
+        },
+      },
+      { new: true }
+    ).exec();
+  }
+
+  async recoverRotateHash(
+    sid: string,
+    params: { expectedPreviousHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt?: Date }
+  ): Promise<IAuthSessionDocument | null> {
+    const now = new Date();
+    // Recovery CAS (see IAuthSessionRepository doc): the grace window being CLOSED is part of the
+    // filter, so inside the window this never fires (coalesce handles that), and the winner
+    // re-opening graceExpiresAt is what makes a racing second recovery lose. previous stays
+    // pinned to the presented hash so siblings still holding it coalesce instead of forking.
+    return AuthSessionModel.findOneAndUpdate(
+      {
+        sid,
+        previousRefreshTokenHash: params.expectedPreviousHash,
+        graceExpiresAt: { $lte: now },
+        revokedAt: null,
+        expiresAt: { $gt: now },
+      },
+      {
+        $set: {
+          refreshTokenHash: params.nextHash,
+          graceExpiresAt: params.replayExpiresAt,
+          lastUsedAt: now,
+          replayUses: 0,
+          ...(params.newExpiresAt ? { expiresAt: params.newExpiresAt } : {}),
         },
       },
       { new: true }
