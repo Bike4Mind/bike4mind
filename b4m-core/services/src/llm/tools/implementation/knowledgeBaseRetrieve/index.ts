@@ -492,7 +492,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           } else if (context.db.lakeAccessEvents) {
             const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
-            dynamicAccess()
+            // Deliberately NOT dynamicAccess(): that is the session-narrowed set, and attribution
+            // asks a different question - "what lake was this content", not "what may this session
+            // search". A file served by the ownership fast path consults no lake state, so under a
+            // narrowed or suppressed session it attributes to zero lakes and the row is dropped by
+            // the guard below - losing the audit trail for access that still happened.
+            getDynamicDataLakeAccess(context)
               .then(({ lakes }) => {
                 // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
                 // Path B's search is owner+shared+org+lake too), so a retrieved file with no

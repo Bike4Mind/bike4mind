@@ -53,9 +53,11 @@ export function narrowLakeAccessToSession(
   );
   if (lakeTags.length === 0 && prefixMatched.length === 0) return access;
 
+  // UNION, not either/or: a session may name one lake by identity and another by prefix, and
+  // dropping the prefix-named one would narrow it further than it asked for.
   const wantedTags = new Set(lakeTags);
-  const retainedLakes =
-    lakeTags.length > 0 ? access.lakes.filter(lake => wantedTags.has(lake.datalakeTag)) : prefixMatched;
+  const byIdentity = access.lakes.filter(lake => wantedTags.has(lake.datalakeTag));
+  const retainedLakes = [...byIdentity, ...prefixMatched.filter(lake => !byIdentity.includes(lake))];
 
   const wanted = new Set(retainedLakes.map(lake => lake.datalakeTag));
   // Prefixes are matched by VALUE against the retained lakes, so a lake dropped from scope also

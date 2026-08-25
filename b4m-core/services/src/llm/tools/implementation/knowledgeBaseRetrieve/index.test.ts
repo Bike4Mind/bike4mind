@@ -1120,22 +1120,56 @@ describe('retrieve_knowledge_content honours the personal-corpus scope', () => {
 });
 
 describe('retrieve_knowledge_content narrows lake access to the session lake', () => {
-  it('resolves lake access through the session narrowing, not owner-wide', async () => {
-    getDynamicDataLakeAccessMock.mockResolvedValue({
-      dataLakeTags: ['datalake:mine', 'datalake:other'],
-      dataLakeTagPrefixes: ['mine:', 'other:'],
-      scopedTagPrefixes: [],
-      lakes: [
-        { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
-        { id: 'l2', name: 'other', datalakeTag: 'datalake:other', fileTagPrefix: 'other:', source: 'registry' },
-      ],
-    });
+  /**
+   * The earlier versions of these two used makeContext's DEFAULT bare vi.fn() readers, so `files`
+   * stayed empty and dynamicAccess() - the code under test - was never invoked; one of them wrapped
+   * its only assertion in an always-false `if`. Both passed while asserting nothing. Setting up a
+   * real served file is what makes them exercise the path.
+   */
+  const twoLakes = {
+    dataLakeTags: ['datalake:mine', 'datalake:unrelated'],
+    dataLakeTagPrefixes: ['mine:', 'unrel:'],
+    scopedTagPrefixes: [],
+    lakes: [
+      { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+      {
+        id: 'l2',
+        name: 'Unrelated-Product-KB',
+        datalakeTag: 'datalake:unrelated',
+        fileTagPrefix: 'unrel:',
+        source: 'registry',
+      },
+    ],
+  };
+
+  it("serves the caller's own file without consulting owner-wide lake access", async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, suppressLakeArms: true } as never);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    const out = await runById(ctx);
+
+    // Suppression removes the LAKE arms only - the caller's own documents stay retrievable, which is
+    // what routing this through kbScope used to break.
+    expect(ctx.db.fabfiles!.findByIdAndUserId).toHaveBeenCalled();
+    expect(out).not.toContain('No document found');
+  });
+
+  it('attributes the audit against OWNER-WIDE lakes, not the narrowed set', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    const record = vi.fn();
     const ctx = makeContext({ retrievalFilter: undefined, sessionRetrievalTags: ['datalake:mine'] } as never);
+    // The audit block is gated on this repository being present - without it the assertion below
+    // would pass vacuously by never entering the branch at all.
+    (ctx.db as Record<string, unknown>).lakeAccessEvents = { record };
+    // Owner-served (the fast path consults no lake state) and tagged to a lake OUTSIDE the session
+    // scope. Attributing against the narrowed set finds nothing and drops the row; attributing
+    // against owner-wide access records it. That difference is the finding.
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ tags: [{ name: 'datalake:unrelated' }] })
+    );
+
     await runById(ctx);
-    // The narrowing runs on the resolved set; the other lake must not survive into the search args.
-    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
-    if (searchMock?.mock.calls.length) {
-      expect(searchMock.mock.calls[0][5]?.dataLakeTags ?? []).not.toContain('datalake:other');
-    }
+
+    expect(record).toHaveBeenCalled();
   });
 });

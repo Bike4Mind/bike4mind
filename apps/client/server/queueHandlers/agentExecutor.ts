@@ -1319,10 +1319,14 @@ async function processExecution(
       retrievalFilter: toRetrievalFilter(session),
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
-      // `personalCorpusFileIds` is deliberately NOT threaded here: it is computed on the chat path
-      // from a per-turn attachment read this surface does not perform, so passing a stale or absent
-      // value would be worse than passing none.
       sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
@@ -2940,10 +2944,14 @@ async function processSubagentDispatch(
       retrievalFilter: toRetrievalFilter(session),
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
-      // `personalCorpusFileIds` is deliberately NOT threaded here: it is computed on the chat path
-      // from a per-turn attachment read this surface does not perform, so passing a stale or absent
-      // value would be worse than passing none.
       sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,

@@ -434,6 +434,9 @@ async function trySemanticKbSearch(
         dataLakeTags,
         dataLakeTagPrefixes,
         scopedTagPrefixes,
+        // Without this the arm below returns empty for a suppressed session and the turn silently
+        // falls to metadata-only keyword search - see ownFilesOnly.
+        ownFilesOnly: context.suppressLakeArms === true,
         budgets,
         vectorSearchEnabled,
         // Retrieval exclusion (opt-in) - agree with the surface's listing predicate. No-op when unset.

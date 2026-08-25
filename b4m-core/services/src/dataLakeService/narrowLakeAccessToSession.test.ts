@@ -87,3 +87,18 @@ describe('narrowLakeAccessToSession with non-lake retrievalTags', () => {
     expect(out.dataLakeTags).toEqual(['datalake:beta']);
   });
 });
+
+describe('narrowLakeAccessToSession prefix identity', () => {
+  it('narrows on a lake named by its FILE-TAG PREFIX, not just by identity', () => {
+    // The branch the docstring says exists to stop a prefix-scoped session falling back to the full
+    // owner-wide union. Every other test names lakes by identity, so this path shipped untested.
+    const out = narrowLakeAccessToSession(access(), ['beta:']);
+    expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:beta']);
+    expect(out.scopedTagPrefixes).toEqual(['beta:']);
+  });
+
+  it('unions identity and prefix matches rather than letting identity win alone', () => {
+    const out = narrowLakeAccessToSession(access(), ['datalake:alpha', 'beta:']);
+    expect(out.lakes.map(l => l.datalakeTag).sort()).toEqual(['datalake:alpha', 'datalake:beta']);
+  });
+});

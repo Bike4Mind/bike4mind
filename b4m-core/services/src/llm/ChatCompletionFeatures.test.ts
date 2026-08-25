@@ -5,8 +5,7 @@ import {
   MementoFeature,
   SessionPromptFeature,
   shouldSummarizeSession,
-  SUMMARIZATION_CONFIG,
-} from './ChatCompletionFeatures';
+  SUMMARIZATION_CONFIG, LakeMemoryFeature } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
@@ -1833,5 +1832,33 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
   it('does not skip when the flag is absent, so an unwired host keeps grounding', async () => {
     const { messages } = await run(undefined);
     expect(messages).not.toEqual([]);
+  });
+});
+
+describe('LakeMemoryFeature personal-corpus skip', () => {
+  it('injects nothing when the session corpus is personal files', async () => {
+    // Without this the card takes its empty-retrievalTags branch and falls back to the FULL entitled
+    // set - and personalCorpusOnly is only ever true when retrievalTags IS empty, so the two compose
+    // into exactly the always-on lake injection this change exists to stop.
+    const ctx = {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      personalCorpusOnly: true,
+      db: {},
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+      recallLakeMemory: vi.fn(),
+    };
+    const feature = new LakeMemoryFeature(
+      ctx as unknown as ConstructorParameters<typeof LakeMemoryFeature>[0],
+      []
+    );
+    const messages = await feature.getContextMessages({ id: 'q1' } as never);
+
+    expect(messages).toEqual([]);
+    // The LOG is the discriminator, deliberately. With a minimal fixture the un-skipped path also
+    // returns [] (no entitled tags to resolve), so asserting the empty result alone would pass
+    // whether or not the skip fired - which is exactly the vacuity this assertion replaces.
+    expect(ctx.logger.log).toHaveBeenCalledWith(expect.stringContaining('[lakeMemory] skipped'));
   });
 });

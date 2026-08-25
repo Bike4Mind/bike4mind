@@ -14,7 +14,7 @@ import {
 import { z } from 'zod';
 import type { Logger } from '@bike4mind/observability';
 import { projectService } from '..';
-import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
@@ -64,39 +64,8 @@ export interface CreateSessionAdapters {
   };
   /** Optional so existing callers compile; without it a failed lake-tag derivation is silent. */
   logger?: Logger;
-}
-
-/**
- * Scope a new session's retrieval to the lake(s) its starting files belong to.
- *
- * `resolveLakeSessionDefaults` covers only the `dataLakeId` path ("start chat with this lake").
- * The surfaces that mint a grounded session from a FILE instead - the Data Lake tree's
- * open/attach-on-/new, and a product surface's own create route - name no lake, so `retrievalTags`
- * stays empty. An empty tag list is NOT a narrow scope: the search's tag clause is skipped outright
- * (`filters.tags.length > 0` in fabFileSearchQuery) and retrieval falls through to EVERY lake the
- * caller can reach. Deriving the tag here is what keeps `session.retrievalTags` an honest
- * description of the session's scope, which both forced retrieval and LakeMemoryFeature read.
- *
- * Resolves through `shareable.findAllAccessibleByIds` - the same reader `addFilesToProjects` uses -
- * so a caller naming a file id they cannot read contributes no tag. `knowledgeIds` is
- * client-writable, so a reader without that filter would make this a cross-tenant read.
- */
-async function deriveRetrievalTagsFromFiles(
-  user: IUserDocument,
-  knowledgeIds: string[],
-  adapters: CreateSessionAdapters
-): Promise<string[]> {
-  try {
-    const files = await adapters.db.fabFiles.shareable.findAllAccessibleByIds(user, knowledgeIds);
-    return datalakeTagsFrom(files.flatMap(f => f.tags?.map(t => t.name) ?? []));
-  } catch (err) {
-    // Never fail session creation over a scoping optimization. The degrade is today's behavior
-    // (unscoped retrieval), which is why it is reported rather than swallowed.
-    adapters.logger?.warn(
-      `[sessionService] lake-tag derivation failed; session will retrieve unscoped: ${(err as Error)?.message}`
-    );
-    return [];
-  }
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
 }
 
 export const createSession = async (

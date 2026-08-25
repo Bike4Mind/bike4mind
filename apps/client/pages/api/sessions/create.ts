@@ -16,6 +16,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, ProjectEvents, redactSessionForClient } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { ActivityType } from '@client/config/activities';
 import { CreateSessionRequestBody } from '../../../types/api';
 
@@ -66,6 +67,10 @@ const handler = baseApi().post(
         projects: projectRepository,
         fabFiles: fabFileRepository,
       },
+      logger: req.logger,
+      // See the update route: the ownership reader cannot see a lake-membership file, so without
+      // this a session started from a teammate's org-lake file derives no scope at all.
+      resolveLakeAccess: () => resolveRetrievalLakeScope(req),
     });
 
     await User.findByIdAndUpdate(userId, { lastNotebookId: newSession.id });
