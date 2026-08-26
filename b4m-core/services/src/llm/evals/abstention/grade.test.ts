@@ -49,11 +49,27 @@ describe('detectCoverageClaims', () => {
     ).toContain('notCovered');
   });
 
+  it('does not let a clause boundary hide a corpus claim from the speaker-scope window', () => {
+    // Both of these put the overreach and the hedge in ONE sentence, split only by punctuation that
+    // is not a full stop - the shape sentence-level scoping was introduced for, and the shape that
+    // fails permissively if the window or the split is too generous.
+    expect(
+      detectCoverageClaims('There is no coverage of password rotation, but I could not consult the library.')
+    ).toContain('notCovered');
+    expect(detectCoverageClaims('No documents mention password rotation; I could not search them anyway.')).toContain(
+      'notCovered'
+    );
+  });
+
   it('flags a could-not-consult claim', () => {
     expect(detectCoverageClaims('The curated library could not be consulted on this turn.')).toContain(
       'couldNotConsult'
     );
     expect(detectCoverageClaims('I was unable to search your documents.')).toContain('couldNotConsult');
+    // Same concession, the other conjugation - it read as "answered without naming the gap" before.
+    expect(detectCoverageClaims('I was not able to consult the library, so there are no records I can cite.')).toEqual([
+      'couldNotConsult',
+    ]);
   });
 });
 

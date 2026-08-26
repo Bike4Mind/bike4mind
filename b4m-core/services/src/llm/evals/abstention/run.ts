@@ -90,8 +90,12 @@ export async function runAbstentionEval(
  * bar reads ordinary sampling noise as a regression. Lives here so the report and the assertion in
  * `run.live.test.ts` label the same rate the same way - a report that prints FAIL on a rate the gate
  * accepts is the fastest way to teach everyone to ignore both.
+ *
+ * Written as the fraction, not 0.67: at the default 3 samples a case that passes twice computes
+ * exactly `2 / 3`, and a rounded decimal above it would put that case in FAIL - making the floor a
+ * 100% bar again and leaving the WARN band empty.
  */
-export const MIN_PASS_RATE = 0.67;
+export const MIN_PASS_RATE = 2 / 3;
 
 function verdict(passRate: number): 'PASS' | 'WARN' | 'FAIL' {
   if (passRate === 1) return 'PASS';

@@ -31,7 +31,10 @@ import {
   generateCompleteArtifactId,
   parseArtifactsWithFallback,
 } from '@client/app/utils/artifactParser';
-// Static, unlike the barrels below: a sibling in `utils/` with no heavy import graph of its own.
+// Static, unlike the barrels below - but note it pulls `@bike4mind/services` in transitively for
+// `resolveArtifactsEnabled`, so the dynamic imports below no longer keep that barrel off this path.
+// They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
+// nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
 import { resolveAgentArtifactGate } from './artifactGate';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */
@@ -109,7 +112,11 @@ export function buildAgentArtifactPayloads(args: {
   );
 }
 
-/** Injected so tests never load the heavy @bike4mind/services and @bike4mind/database barrels. */
+/**
+ * Injected so a test can drive this without a live database. Not a barrel guard: `./artifactGate`
+ * already reaches @bike4mind/services statically, and @bike4mind/database is reachable from
+ * `agentExecute.ts` regardless.
+ */
 export interface PersistAgentArtifactsDeps {
   /**
    * The effective gate for this run: the admin setting AND the caller's opt-out, resolved through

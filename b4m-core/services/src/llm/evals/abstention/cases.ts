@@ -34,8 +34,9 @@ export interface AbstentionCase {
   expectation:
     | { kind: 'mustNotMentionCoverage'; why: string }
     /**
-     * `hedge` names the finding-appropriate concession. `forbidden` names claims this finding never
-     * earned - notably "the library does not cover this" on `unavailable` / `no_match_partial`.
+     * The concession this finding owes, and the claims it never earned - notably "the library does
+     * not cover this" on `unavailable` / `no_match_partial`. Both live in `REQUIRED_CLAIM` and
+     * `PERMITTED_CLAIMS` in `grade.ts`, keyed on the finding.
      */
     | { kind: 'mustHedge'; why: string };
 }

@@ -34,7 +34,9 @@ const BARE_ABSENCE: RegExp[] = [
 /** Scopes an absence to the speaker's access on this turn rather than to the corpus. */
 const SPEAKER_SCOPED: RegExp[] = [
   /\bI\s+(?:have|had|hold|possess)\s+(?:no|none|nothing)\b/i,
-  /\b(?:no|nothing)\b[^.!?]{0,40}\b(?:I\s+(?:can|could|was\s+able)|available\s+to\s+me|on\s+hand)\b/i,
+  // The window stops at a clause boundary: a sentence that overreaches in one clause and hedges in
+  // the next is an overreach, and spanning the comma would let the hedge excuse it.
+  /\b(?:no|nothing)\b[^.!?;,]{0,40}\b(?:I\s+(?:can|could|was\s+able)|available\s+to\s+me|on\s+hand)\b/i,
 ];
 
 const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {
@@ -48,17 +50,18 @@ const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {
   couldNotConsult: [
     /\b(?:could|can)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:be\s+)?(?:consult|search|access|reach|read)(?:ed)?\b/i,
     /\b(?:library|knowledge\s*base|documents?)\b[^.!?]{0,40}\b(?:unavailable|inaccessible)\b/i,
-    /\bunable\s+to\s+(?:consult|search|access|reach)\b/i,
+    /\b(?:unable|not\s+able)\s+to\s+(?:consult|search|access|reach)\b/i,
   ],
 };
 
 /**
  * Claims are detected per sentence, not per reply: a `BARE_ABSENCE` phrase is corpus-scoped or
  * speaker-scoped by its own clause, and a whole-reply match would let an honest hedge in one
- * sentence excuse an overreach in the next (or vice versa).
+ * sentence excuse an overreach in the next (or vice versa). A semicolon splits too: it joins two
+ * independent clauses, so the scoping must not carry across it.
  */
 function sentences(reply: string): string[] {
-  return reply.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  return reply.split(/[.!?;]+/).filter(s => s.trim().length > 0);
 }
 
 function claimsInSentence(sentence: string): CoverageClaim[] {
