@@ -149,42 +149,6 @@ const handler = baseApi()
 
     const stageClass = classifyStage(Config.STAGE);
 
-    // Reading the settings store is the last post-save await that could still propagate: the
-    // feedback is already durable here, so a settings-store outage must not surface as a 5xx that
-    // makes the client retry and file the report twice. Neither channel's configuration is
-    // knowable without it, so both are reported failed (alarm-worthy) rather than silently
-    // 'disabled', and the submission still answers 201.
-    let settings: Record<string, string>;
-    try {
-      settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    } catch (error) {
-      req.logger.error('Failed to load admin settings for feedback delivery', error);
-      const unavailable: FeedbackChannelDelivery = { outcome: 'failed', reason: 'error' };
-      const delivery: FeedbackDeliveryResult = {
-        delivered: false,
-        channels: { slack: unavailable, email: unavailable },
-      };
-      await emitFeedbackDeliveryMetrics([
-        ...buildFeedbackDeliveryFailureMetrics('slack', stageClass, 'settings_unavailable', Config.STAGE),
-        ...buildFeedbackDeliveryFailureMetrics('email', stageClass, 'settings_unavailable', Config.STAGE),
-      ]);
-      Logger.error('[feedback] delivery skipped: admin settings unavailable', {
-        feedbackId: newFeedback.id,
-        delivery,
-      });
-      return res.status(201).json({ ...newFeedback.toJSON(), delivery });
-    }
-
-    // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
-    // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
-    // private corpus chunks, file contents - that the reporter never chose to disclose to those
-    // destinations just by clicking "report a bug". Redact only for these two egress points; the
-    // FeedbackModel record saved above keeps the full promptMeta, gated by the existing
-    // admin-only read check on this same route.
-    const promptMetaForExternalEgress = promptMeta
-      ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
-      : promptMeta;
-
     // Use the same resolved id already computed for the saved document, not the raw request-body
     // userId: an untrusted body value that isn't a valid ObjectId threw a Mongoose CastError deep
     // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already
@@ -205,6 +169,42 @@ const handler = baseApi()
         req.logger.error('Failed to log feedback analytics event', error);
       }
     }
+
+    // Reading the settings store is the last post-save await that could still propagate: the
+    // feedback is already durable here, so a settings-store outage must not surface as a 5xx that
+    // makes the client retry and file the report twice. Neither channel's configuration is
+    // knowable without it, so both are reported failed (alarm-worthy) rather than silently
+    // 'disabled', and the submission still answers 201.
+    let settings: Record<string, string>;
+    try {
+      settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    } catch (error) {
+      req.logger.error('Failed to load admin settings for feedback delivery', error);
+      const unavailable: FeedbackChannelDelivery = { outcome: 'failed', reason: 'error' };
+      const delivery: FeedbackDeliveryResult = {
+        delivered: false,
+        channels: { slack: unavailable, email: unavailable },
+      };
+      await emitFeedbackDeliveryMetrics([
+        ...buildFeedbackDeliveryFailureMetrics('slack', stageClass, 'settings_unavailable', Config.STAGE),
+        ...buildFeedbackDeliveryFailureMetrics('email', stageClass, 'settings_unavailable', Config.STAGE),
+      ]);
+      Logger.error('[feedback] delivery failed: admin settings unavailable', {
+        feedbackId: newFeedback.id,
+        delivery,
+      });
+      return res.status(201).json({ ...newFeedback.toJSON(), delivery });
+    }
+
+    // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
+    // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
+    // private corpus chunks, file contents - that the reporter never chose to disclose to those
+    // destinations just by clicking "report a bug". Redact only for these two egress points; the
+    // FeedbackModel record saved above keeps the full promptMeta, gated by the existing
+    // admin-only read check on this same route.
+    const promptMetaForExternalEgress = promptMeta
+      ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
+      : promptMeta;
 
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is

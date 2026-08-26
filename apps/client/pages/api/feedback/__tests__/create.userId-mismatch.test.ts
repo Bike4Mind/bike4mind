@@ -308,7 +308,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
   it('still returns 201 with the feedback saved when the admin settings read fails', async () => {
     // getSettingsMap is the only post-save await left that can propagate out of the handler; a
     // settings-store outage there used to turn an already-durable submission into a 5xx.
-    const settingsSpy = vi.mocked(getSettingsMap).mockRejectedValueOnce(new Error('settings store unavailable'));
+    vi.mocked(getSettingsMap).mockRejectedValueOnce(new Error('settings store unavailable'));
 
     const realUser = await User.create({
       username: 'e2e-settings-failure-user',
@@ -343,6 +343,14 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     const saved = await FeedbackModel.findOne({ content: 'settings outage should not mask this save' });
     expect(saved).not.toBeNull();
 
+    // The analytics write does not depend on settings, so a settings outage must not cost us the
+    // event: the early return that answers 201 has to happen after logEvent, not before it.
+    const counter = await UserActivityCounter.findOne({
+      userId: realUser.id,
+      action: FeedbackEvents.CREATE_FEEDBACK,
+    });
+    expect(counter?.count).toBe(1);
+
     // Neither channel's configuration is knowable without settings, so both must report a failure
     // the alarm can see rather than the silent 'disabled' an empty settings fallback would give.
     const { delivery } = JSON.parse(res._getData());
@@ -352,7 +360,5 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     });
     expect(mockPostFeedbackToSlack).not.toHaveBeenCalled();
     expect(mockEmailPublish).not.toHaveBeenCalled();
-
-    settingsSpy.mockClear();
   });
 });
