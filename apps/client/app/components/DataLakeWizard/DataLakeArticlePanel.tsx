@@ -41,10 +41,10 @@ interface DataLakeArticlePanelProps {
    */
   canManage?: boolean;
   /**
-   * Whether the caller may DESTROY a document of this lake - one rung narrower than `canManage`:
-   * a curator or org admin manages membership, but permanent deletion is the owner's (or a
-   * platform admin's) call, and `purgeDataLakeDocument` enforces the same rule. Separate prop
-   * rather than reusing `canManage`, so a curator never meets a red button that 400s after the
+   * Whether the caller may DESTROY this document - one rung narrower than `canManage`: a curator or
+   * org admin manages membership, but permanent deletion needs lake ownership AND ownership of the
+   * file itself (or platform admin), which is exactly what `purgeDataLakeDocument` enforces. Separate
+   * prop rather than reusing `canManage`, so nobody meets a red button that 400s after the
    * confirmation. Absent -> no purge door (fail-safe).
    */
   canPurge?: boolean;

@@ -797,7 +797,8 @@ export interface SyncDelta {
  * The evidence a permanent deletion leaves behind: a deletion which silently did nothing and one
  * that destroyed everything must not look the same to the caller. `chunksRemaining` and
  * `documentDeleted` are READ BACK after the writes and are what `verified` is made of;
- * `retrievalIndexPurged` is not read back, and `verified` makes no claim about the index.
+ * `retrievalIndexOutcome` and `storageObjectDeleted` are not read back, and `verified` makes no
+ * claim about either.
  */
 export interface DataLakeDocumentPurgeReceipt {
   dataLakeId: string;
@@ -815,8 +816,18 @@ export interface DataLakeDocumentPurgeReceipt {
   embeddingModels: string[];
   /** The FabFile row is gone, confirmed by re-reading it. */
   documentDeleted: boolean;
-  /** A retrieval index was wired and accepted the removal. False means vectors lived only in the chunks. */
-  retrievalIndexPurged: boolean;
+  /**
+   * The stored object was deleted, or the row carried none. False means the bytes are retained and
+   * now unreferenced - the quota refund is withheld in that case rather than counting them back.
+   */
+  storageObjectDeleted: boolean;
+  /**
+   * What happened to the separate retrieval index. NOT read back - the port has no read operation.
+   * `purged`: a wired index accepted the removal without throwing. `collocated`: this deployment
+   * keeps vectors on the chunk documents, so the chunk delete already removed them. `unwired`:
+   * neither, which means this door was left unwired and vectors may survive.
+   */
+  retrievalIndexOutcome: 'purged' | 'collocated' | 'unwired';
   /** documentDeleted AND no chunks left. The single claim a caller may repeat back to a user. */
   verified: boolean;
   purgedAt: string;

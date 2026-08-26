@@ -28,6 +28,7 @@ import { LakeInfoPanel, ManagerOverview } from './manager/LakeInfoPanel';
  */
 export default function DataLakeManagerPanel() {
   const isAdmin = useUser(state => state.isAdmin);
+  const currentUserId = useUser(state => state.currentUser?.id);
   const { data: dataLakes, isLoading } = useGetDataLakes();
   const { data: activeBatches } = useActiveDataLakeBatches();
   // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
@@ -210,8 +211,9 @@ export default function DataLakeManagerPanel() {
             canManage={activeLake.canManage}
             // Narrower than canManage on purpose - see DataLakeArticlePanel's canPurge. `isOwn` is
             // the DTO's effective-owner flag (grant-aware), and it is false for an admin acting on
-            // someone else's lake, whom the service does allow.
-            canPurge={activeLake.isOwn || isAdmin}
+            // someone else's lake, whom the service does allow. The FILE-ownership conjunct is the
+            // service's rule too: a lake owner may not destroy a contributor's document.
+            canPurge={(activeLake.isOwn && selectedFile.userId === currentUserId) || isAdmin}
             onRemoved={() => setSelectedFile(null)}
           />
         ) : (

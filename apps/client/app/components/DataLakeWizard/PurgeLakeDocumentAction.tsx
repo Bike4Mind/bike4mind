@@ -24,9 +24,10 @@ interface PurgeLakeDocumentActionProps {
  * verdict rather than assuming a 200 means the content is gone.
  *
  * Owner-or-admin only, and one rung narrower than the reversible Remove beside it: hosts gate it on
- * the lake's effective ownership (`canPurge`), not on `canManage`, so a curator or org admin never
- * meets a red button that refuses after the confirmation. `purgeDataLakeDocument` enforces the same
- * rule server-side.
+ * the lake's effective ownership AND the caller owning the file (`canPurge`), not on `canManage`, so
+ * neither a curator nor a lake owner looking at a contributor's document meets a red button that
+ * refuses after the confirmation. `purgeDataLakeDocument` enforces the same two-part rule
+ * server-side.
  */
 export default function PurgeLakeDocumentAction({ file, title, dataLakeId, onPurged }: PurgeLakeDocumentActionProps) {
   const purgeFile = usePurgeDataLakeDocument(dataLakeId);
@@ -103,6 +104,15 @@ export default function PurgeLakeDocumentAction({ file, title, dataLakeId, onPur
                 ? `Vector indexes reached: ${receipt.embeddingModels.join(', ')}.`
                 : 'This document had no vectors.'}
             </Typography>
+            {receipt && !receipt.storageObjectDeleted && (
+              <Typography
+                level="body-xs"
+                data-testid="datalake-purgefile-receipt-storage"
+                sx={{ mt: 0.5, color: 'warning.500' }}
+              >
+                The stored copy of the original file could not be removed and has been reported for cleanup.
+              </Typography>
+            )}
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.tertiary' }}>
               Recorded at {receipt?.purgedAt}
             </Typography>

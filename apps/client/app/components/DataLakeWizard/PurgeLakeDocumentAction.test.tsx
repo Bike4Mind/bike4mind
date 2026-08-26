@@ -26,7 +26,8 @@ const RECEIPT: DataLakeDocumentPurgeReceipt = {
   chunksRemaining: 0,
   embeddingModels: ['text-embedding-3-small'],
   documentDeleted: true,
-  retrievalIndexPurged: false,
+  storageObjectDeleted: true,
+  retrievalIndexOutcome: 'collocated' as const,
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',
   fileCount: 4,
@@ -86,6 +87,34 @@ describe('PurgeLakeDocumentAction', () => {
     expect(summary.textContent).toContain('not fully destroyed');
     expect(summary.textContent).toContain('5 chunk(s)');
     expect(summary.textContent).not.toContain('is gone');
+  });
+
+  it('says so when the stored copy of the file was left behind', async () => {
+    // The document is gone but the bytes are not, and nothing else can name them any more.
+    const user = userEvent.setup();
+    h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
+      opts.onSuccess({ ...RECEIPT, storageObjectDeleted: false })
+    );
+    renderAction();
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
+
+    expect((await screen.findByTestId('datalake-purgefile-receipt-storage')).textContent).toContain(
+      'could not be removed'
+    );
+  });
+
+  it('leaves the storage note out of a clean receipt', async () => {
+    const user = userEvent.setup();
+    h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
+      opts.onSuccess(RECEIPT)
+    );
+    renderAction();
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
+
+    await screen.findByTestId('datalake-purgefile-receipt-summary');
+    expect(screen.queryByTestId('datalake-purgefile-receipt-storage')).toBeNull();
   });
 
   it('tells the host to drop its selection only after the receipt is dismissed', async () => {

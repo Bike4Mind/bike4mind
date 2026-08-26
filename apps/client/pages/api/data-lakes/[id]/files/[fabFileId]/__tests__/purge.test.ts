@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   changeStorageSize: vi.fn(async () => {}),
   userSave: vi.fn(async () => {}),
   userFindById: vi.fn(),
+  storageDelete: vi.fn(async () => {}),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: h.storageDelete }) }));
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
@@ -65,7 +67,8 @@ const RECEIPT = {
   chunksRemaining: 0,
   embeddingModels: ['text-embedding-3-small'],
   documentDeleted: true,
-  retrievalIndexPurged: false,
+  storageObjectDeleted: true,
+  retrievalIndexOutcome: 'collocated',
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',
   fileCount: 4,
@@ -87,7 +90,13 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
-    h.purgeDataLakeDocument.mockResolvedValue(RECEIPT);
+    // The real service files the receipt through `onReceipt` before returning; the mock has to do
+    // the same or the route's audit wiring goes untested.
+    h.purgeDataLakeDocument.mockImplementation(async (...args: unknown[]) => {
+      const adapters = args[3] as { onReceipt?: (r: unknown) => Promise<void> };
+      await adapters.onReceipt?.(RECEIPT);
+      return RECEIPT;
+    });
     h.userFindById.mockReturnValue({ session: () => ({ save: h.userSave }) });
   });
 
@@ -174,7 +183,12 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   });
 
   it('records an unverified sweep as unverified rather than as a success', async () => {
-    h.purgeDataLakeDocument.mockResolvedValue({ ...RECEIPT, chunksRemaining: 2, verified: false });
+    const unverified = { ...RECEIPT, chunksRemaining: 2, verified: false };
+    h.purgeDataLakeDocument.mockImplementation(async (...args: unknown[]) => {
+      const adapters = args[3] as { onReceipt?: (r: unknown) => Promise<void> };
+      await adapters.onReceipt?.(unverified);
+      return unverified;
+    });
     const { res, json } = makeRes();
     await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
 
@@ -193,6 +207,50 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
     await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
     expect(h.purgeDataLakeDocument.mock.calls[1][3].retrievalIndex).toBeDefined();
+  });
+
+  it('tells the service which of the two reasons there is no retrieval index', async () => {
+    // A bare `undefined` cannot distinguish collocated vectors from a door left unwired, and the
+    // receipt is persisted into every audit row.
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    expect(h.purgeDataLakeDocument.mock.calls[0][3].vectorsCollocated).toBe(true);
+
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    expect(h.purgeDataLakeDocument.mock.calls[1][3].vectorsCollocated).toBe(false);
+  });
+
+  it('wires the object store, so the refunded bytes are bytes that really went', async () => {
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    expect(h.purgeDataLakeDocument.mock.calls[0][3].storage).toBeDefined();
+  });
+
+  it('files an unverified audit record when the sweep throws mid-destruction', async () => {
+    // The writes are not transactional: a throw can leave a destroyed document behind, and an
+    // irreversible destruction with no durable record is the exact failure the receipt exists for.
+    h.purgeDataLakeDocument.mockRejectedValue(new Error('mongo down'));
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res)).rejects.toThrow('mongo down');
+    expect(h.logAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'LAKE_DOCUMENT_PURGED',
+        metadata: expect.objectContaining({ fabFileId: 'f1', verified: false, error: 'mongo down' }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('does not file an audit record for a request the service refused', async () => {
+    // A refusal destroyed nothing, so an audit row for it would be noise rather than evidence.
+    const { BadRequestError } = await import('@bike4mind/utils');
+    h.purgeDataLakeDocument.mockRejectedValue(new BadRequestError('Only the owner'));
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res)).rejects.toThrow('Only the owner');
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 
   it('refuses a lake the caller cannot even see, before touching anything', async () => {

@@ -824,8 +824,9 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       } else {
         toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
       }
-      // Same invalidation set as membership removal - the file leaves every tag-derived view too.
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      // `filesRoot`, not `filesOf(dataLakeId)`: membership removal is lake-scoped and this is not,
+      // so any OTHER lake's cached file list is stale too.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
