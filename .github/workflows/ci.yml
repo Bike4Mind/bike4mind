@@ -36,9 +36,9 @@ jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
   # merge-base diff on pull_request, push range on push) and emit two
   # orthogonal signals: `deployable` (run the build/test legs) and `docs-changed`
-  # (currently unconsumed: the Docusaurus build verification was removed
+  # (gates `help-docs` below - the Docusaurus build verification was removed
   # because this repo carries only docs-site markdown, not the site
-  # scaffolding; the output stays wired for when the check returns).
+  # scaffolding, but the help guards still have to run on a docs-only change).
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on both.
@@ -776,12 +776,79 @@ jobs:
         env:
           CI: true
 
+  # Help guards for docs-touching runs. The help suites assert invariants that span
+  # docs-site/ and apps/client (every hard-coded help slug names a real article; the
+  # generated index covers exactly the corpus), and until now they only ran inside
+  # `test-shards` - which `needs: core-build`, gated on `deployable == 'true'`. Since
+  # `docs-site/**` is on the non-deployable exclude list, a docs-only PR skipped every
+  # shard, and a skipped required check counts as passing. So the guard fired in one
+  # direction only: break a helpId in a .tsx and CI caught it; rename or delete an
+  # article and forget the helpId and it shipped green. That second direction is exactly
+  # how the admin feedback help slug came to disagree with the component that names it.
+  #
+  # Gated on `docs-changed` (not `!deployable`) so "docs changed => help guards ran"
+  # holds regardless of deployability. On a deployable docs PR the suites also run in
+  # the shards; the duplicate is ~1 min and worth the unconditional guarantee.
+  #
+  # Deliberately does NOT need core-build: the help tooling imports only glob/gray-matter
+  # (see loadHelpArticles.ts), so this stays a light, standalone leg that a non-deployable
+  # run can satisfy on its own.
+  help-docs:
+    name: Help Docs Guards
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Run help corpus and help-id suites
+        run: pnpm --filter @bike4mind/scripts exec vitest run help/__tests__
+        env:
+          CI: true
+
+      # The index-vs-embeddings half of this script reads the two committed artifacts
+      # and ignores the staging area, so it works unchanged in CI. It was pre-commit
+      # only, which `--no-verify` bypasses; this is the first time the Help AI chat's
+      # "every indexed article has a vector" invariant is enforced anywhere else.
+      - name: Check help artifacts agree
+        run: sh .husky/check-help-content.sh
+
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed
   # here and was failing the required CI Complete check on every docs-touching PR.
-  # Markdown content is still validated by the help-content tests in the test
-  # suite. Restore the job (and .github/workflows/_verify-docs-build.yml) when
-  # the scaffolding lands.
+  # Markdown content is still validated by the help-content tests, which the
+  # `help-docs` job above runs on every docs-touching change. Restore the job
+  # (and .github/workflows/_verify-docs-build.yml) when the scaffolding lands.
 
   # ============================================================
   # CI gate aggregation. The branch rulesets (main-protection + prod-protection)
@@ -789,7 +856,7 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e)
+  # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
@@ -802,7 +869,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -815,11 +882,12 @@ jobs:
           OPENAPI: ${{ needs.openapi.result }}
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
+          HELP_DOCS: ${{ needs.help-docs.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
