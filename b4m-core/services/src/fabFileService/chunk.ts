@@ -3,7 +3,6 @@ import {
   countCodePoints,
   IFabFileChunkDocument,
   IFabFileRepository,
-  isConvergencePausedNote,
   IUserDocument,
   SupportedEmbeddingModelSchema,
 } from '@bike4mind/common';
@@ -94,13 +93,6 @@ export interface PreparedFabFileChunks {
   previousChunkEmbeddingModels: string[];
   /** `null` (not `undefined`) when the file has no extractable text - see the write below. */
   serverTextHash: string | null;
-  /**
-   * True when the file carried a convergence kill-switch marker in `notes` at prepare time, so the
-   * commit can clear exactly that marker and nothing else - see the `notes` write in
-   * `commitFabFileChunks`. A boolean rather than the raw `notes` string so the commit cannot be
-   * tempted to write any other note back.
-   */
-  clearsConvergencePausedNote: boolean;
 }
 
 /**
@@ -166,7 +158,6 @@ export const prepareFabFileChunks = async (
     fabFileId: fabFile.id,
     embeddingModel,
     chunkClaimedAt,
-    clearsConvergencePausedNote: isConvergencePausedNote(fabFile.notes),
     chunks,
     chunkCharLengths,
     effectivePassageTokenTarget,
@@ -266,21 +257,22 @@ export const commitFabFileChunks = async (
     // in prepareFabFileChunks.
     serverTextHash: prepared.serverTextHash,
 
-    // Clear the convergence kill-switch marker, because this run is the repair it was waiting for.
-    // Nothing else on the success path used to clear it, and the RESCUE SWEEP enqueues without a
-    // reset (resetChunkStateByIds is the only other writer of `notes: ''`), so a fully re-chunked and
-    // re-vectorized file kept its marker and every reader keying on the note went on treating it as
-    // broken - retrieval withheld it permanently and reported the whole lake partial forever.
+    // Clear the convergence kill-switch stall reason, because this run is the repair it was waiting
+    // for. Nothing else on the success path clears it, and the RESCUE SWEEP enqueues without a reset,
+    // so a fully re-chunked and re-vectorized file would keep its marker and every reader keying on
+    // it would go on treating the file as broken - retrieval withholding it permanently and reporting
+    // the whole lake partial forever.
     //
-    // Conditional and spread, not written unconditionally: this payload is a `$set` of named fields,
-    // so a bare `notes: ''` would also erase an unrelated note the file legitimately carries (e.g.
-    // NO_EXTRACTABLE_TEXT_NOTE_PREFIX) on every ordinary re-chunk. `prepared` decides, because it
-    // read the file; the commit only writes.
-    //
-    // This is the root-cause half of the fix. The readers keep their own guards (see
-    // partitionByIndexAvailability and lakeHealth's abandonedByKillSwitch) so a lost marker-clear
-    // degrades to a stale note rather than to a permanently unsearchable file.
-    ...(prepared.clearsConvergencePausedNote ? { notes: '' } : {}),
+    // Unconditional, unlike the `notes` write this replaced (#2016): the field carries exactly one
+    // fact, so clearing it cannot erase anything else. The readers keep their own guards (see
+    // partitionByIndexAvailability and lakeHealth's abandonedByKillSwitch) so a lost clear degrades
+    // to a stale marker rather than to a permanently unsearchable file.
+    chunkStallReason: null,
+
+    // Text came out this time, so the zero-chunk stamp (if any) no longer describes the file. Guarded
+    // on the count because `chunkFabfile` also commits an empty result, and the chunk handler stamps
+    // that case immediately after.
+    ...(chunks.length > 0 ? { noExtractableTextAt: null } : {}),
 
     // Clear the pending-rebuild stamp (#1939): this run IS the rebuild it recorded. Unconditional,
     // unlike the note above, because the field carries exactly one fact and nothing else writes it -

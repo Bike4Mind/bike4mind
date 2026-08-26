@@ -55,7 +55,7 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * already-chunked and in-progress files.
  *
  * Two more churn guards, matching how the chunk handler records a terminal outcome
- * (fabFileChunk.ts): a file that chunked to zero gets a 'No extractable text' note, and a file
+ * (fabFileChunk.ts): a file that chunked to zero gets a `noExtractableTextAt` stamp, and a file
  * whose chunking exhausted its SQS retries gets `error` set. Both are terminal for this scan -
  * re-enqueueing them would re-fail identically every cycle; recovery for those is the explicit
  * reprocess path, which clears the markers. `error` is deliberately NOT set on a non-final
@@ -68,7 +68,7 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * BY DESIGN (audio is never vectorizable; images are passed to models as URLs; video has no
  * extraction path and falls to the unsupported-type default), so sweeping them would burn the
  * per-run cap on no-op queue round-trips and stamp historical media files with a misleading
- * 'No extractable text' note. Query must stay in sync with isAudioMimeType and
+ * `noExtractableTextAt`. Query must stay in sync with isAudioMimeType and
  * SmartChunker.chunkImage / chunkFile's default branch.
  *
  * ONE exception, and it is why the exclusion is an `$or` arm rather than a flat key: a media file
@@ -82,16 +82,16 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  *
  * Bounded to one pass per file: the sweep enqueues, the chunker returns 0 chunks as it always would,
  * and `commitFabFileChunks` clears the stamp and writes the rollups - after which the handler's own
- * 'No extractable text' note excludes the file here again.
+ * `noExtractableTextAt` stamp excludes the file here again.
  */
-export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
-
 export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
   status: 'complete' as const,
   chunkCount: 0,
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
+  // `null` matches an absent field too, so a file that has never chunked to zero still qualifies.
+  // A stored stamp rather than a prefix match on `notes` (#2016), which is the owner's own text.
+  noExtractableTextAt: null,
   error: { $in: [null, ''] },
   // Both clauses below are `$or`s, so they are nested under ONE `$and` rather than written as
   // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key

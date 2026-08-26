@@ -26,7 +26,7 @@
  *    already gone. "Serve stale" is not available. Every refusal here is a member the caller must
  *    report, never one it may quietly drop.
  */
-import { isChunkRebuildPending, isConvergencePausedNote } from './chunking';
+import { type ChunkStallReason, isChunkRebuildPending, isChunkStalled } from './chunking';
 
 /**
  * Why a member of a convergeable lake was NOT rewritten. Every skipped member lands in exactly one
@@ -96,8 +96,8 @@ export type ConvergenceMemberInput = {
   /** Terminal (embedded or unembeddable) chunk rows; below `chunkCount` means still indexing. */
   vectorizedChunkCount?: number | null;
   error?: string | null;
-  /** Read only to detect `CONVERGENCE_PAUSED_NOTE` - see `isMemberIndexingInFlight`. */
-  notes?: string | null;
+  /** Set when the convergence kill switch stalled the file - see `isMemberIndexingInFlight`. */
+  chunkStallReason?: ChunkStallReason | string | null;
   /** Set while a passage rebuild is outstanding (#1939) - see `isMemberIndexingInFlight`. */
   chunkRebuildRequestedAt?: Date | string | null;
   /** Largest chunk's `charLength`; `null` until the #1665 backfill reaches the file. */
@@ -169,8 +169,8 @@ export function isConvergeablePolicy(policy: { source: 'explicit' | 'inherited' 
 /**
  * Whether a member's vectorization is still in flight, mirroring `evaluateMemberHealth`'s own
  * settled test so convergence, health and retrieval cannot disagree about what "still indexing"
- * means. A file carrying an error, or abandoned by the convergence kill switch (which writes
- * `CONVERGENCE_PAUSED_NOTE` and never sets `error`), is SETTLED - permanently stalled, not in
+ * means. A file carrying an error, or abandoned by the convergence kill switch (which stamps
+ * `chunkStallReason` and never sets `error`), is SETTLED - permanently stalled, not in
  * flight - and is classified by its own reason instead of hiding here forever.
  *
  * Exported because the RETRIEVAL path needs the same predicate, for the constraint that shapes this
@@ -185,17 +185,17 @@ export function isMemberIndexingInFlight(member: {
   chunkCount: number;
   vectorizedChunkCount?: number | null;
   error?: string | null;
-  notes?: string | null;
+  chunkStallReason?: ChunkStallReason | string | null;
   chunkRebuildRequestedAt?: Date | string | null;
 }): boolean {
   const settledByFailure = typeof member.error === 'string' && member.error.length > 0;
-  const settledByKillSwitch = isConvergencePausedNote(member.notes);
+  const settledByKillSwitch = isChunkStalled(member.chunkStallReason);
   if (settledByFailure || settledByKillSwitch) return false;
   // A REQUESTED-but-uncommitted rebuild (#1939) is in flight by the same argument as an unfinished
   // vectorize, and it is the only arm that can fire on a CHUNKLESS member: the reset that stamps it
   // zeroes `chunkCount` and `vectorizedChunkCount` together, so the count comparison below reads
   // 0 < 0 and would call it settled. Checked AFTER the two settled arms deliberately - `error` and
-  // the paused note both describe a rebuild that has STOPPED, and a stopped rebuild whose stamp was
+  // the stall reason both describe a rebuild that has STOPPED, and a stopped rebuild whose stamp was
   // never cleared must not read as one still running.
   if (isChunkRebuildPending(member.chunkRebuildRequestedAt)) return true;
   // A null count predates the field; treat it as settled so legacy files stay gradable.
@@ -263,7 +263,7 @@ export function decideMemberConvergence(
   // repaired to the policy before the halt reads as `conformant` and nothing ever rebuilds it - it
   // is simply absent from search, from health's denominator and from this plan at the same time.
   // A proven violation, and repairable by precisely the rewrite convergence performs.
-  if (member.chunkCount === 0 && isConvergencePausedNote(member.notes)) {
+  if (member.chunkCount === 0 && isChunkStalled(member.chunkStallReason)) {
     return { converge: true, fabFileId, userId, fileName, overshootChars: 0, passagesRemoved: true };
   }
 
@@ -309,7 +309,7 @@ export function planLakeConvergence(
   // reset it is presumed to still be running - so it is REPORTED in the skip tally rather than
   // re-rewritten underneath a worker that is about to commit.
   const gradable = members.filter(
-    m => m.chunkCount > 0 || isConvergencePausedNote(m.notes) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+    m => m.chunkCount > 0 || isChunkStalled(m.chunkStallReason) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
   const skipped: Record<ConvergenceSkipReason, number> = {
     conformant: 0,

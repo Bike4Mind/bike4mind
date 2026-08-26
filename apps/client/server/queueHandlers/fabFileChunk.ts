@@ -12,7 +12,7 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
+import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
 import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
@@ -26,7 +26,7 @@ import {
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { isChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
+import { CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { Resource } from 'sst';
@@ -60,7 +60,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // the wave's chunk state, so the file sits at chunkCount 0 with no error. The reset stamps
   // `chunkRebuildRequestedAt` (#1939), so that state is not invisible - but it reads as "rebuilding,
   // returns on its own", which is now false: nothing will rebuild this file until an administrator
-  // lifts the switch. So upgrade the stamp to `CONVERGENCE_PAUSED_CHUNK_NOTE`, the marker every
+  // lifts the switch. So upgrade the stamp to `chunkStallReason: 'rechunkPaused'`, the marker every
   // reader keys on to say "halted, needs intervention". Mirrors what the vectorize handler already
   // does for its half of the same switch.
   if (
@@ -98,7 +98,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // keeps reading as "rebuild in flight" (mislabelled, since nothing is going to rebuild it until
     // the switch comes off) rather than as an image.
     //
-    // The stamp is cleared in the SAME `$set` as the note, so the two states can never both be
+    // The stamp is cleared in the SAME `$set` as the stall reason, so the two states can never both be
     // present: this file is paused, not pending. Clearing it here rather than leaving it also stops
     // the "Rebuild passages" door's stale-pending arm from double-counting a file its paused arm
     // already selects.
@@ -106,7 +106,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       try {
         await fabFileRepository.update({
           id: fabFileId,
-          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+          chunkStallReason: 'rechunkPaused',
           chunkRebuildRequestedAt: null,
         });
         break;
@@ -204,7 +204,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
     // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
     // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
-    if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
+    if (fabFile.chunked || fabFile.noExtractableTextAt) {
       logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
       return;
     }
@@ -402,16 +402,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // instead of silently completing. We still close the batch below so it
       // doesn't hang.
       logger.log(`fabFile ${fabFileId} produced 0 chunks - no extractable text`);
-      // The prefix doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter),
-      // so the rescue sweep never re-enqueues a file that deterministically chunks to zero.
-      await FabFile.updateOne(
-        { _id: fabFileId },
-        {
-          $set: {
-            notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
-          },
-        }
-      ).catch(err => logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`));
+      // The stamp doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter), so
+      // the rescue sweep never re-enqueues a file that deterministically chunks to zero. Its own
+      // field rather than prose in `notes` (#2016), which is the owner's text.
+      await FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
+        logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
+      );
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the
       // reconciler. Account for it as complete here so batch math closes immediately.

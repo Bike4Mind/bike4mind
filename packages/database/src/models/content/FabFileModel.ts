@@ -1,6 +1,6 @@
 import {
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
-  CONVERGENCE_PAUSED_NOTES,
+  CHUNK_STALL_REASONS,
+  type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   FabFileChunkPolicyConflict,
@@ -1202,7 +1202,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
@@ -1225,7 +1225,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never enqueued. It grades as in-flight, not as a failure; see evaluateMemberHealth.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkStallReason: 'rechunkPaused' },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
         }),
@@ -1247,10 +1247,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // hidden as still-indexing. Preserve null so "no error" stays distinct.
           error: { $ifNull: ['$error', null] },
           // The SECOND terminal-stall marker. The convergence kill switch abandons a vectorize by
-          // writing CONVERGENCE_PAUSED_NOTE to `notes` and never sets `error`, so omitting this here
-          // would leave the evaluator's arm reading undefined and silently never firing - the same
-          // shape as the contract gap that disabled the vectorizedChunkCount gate.
-          notes: { $ifNull: ['$notes', null] },
+          // stamping `chunkStallReason` and never sets `error`, so omitting this here would leave the
+          // evaluator's arm reading undefined and silently never firing - the same shape as the
+          // contract gap that disabled the vectorizedChunkCount gate.
+          chunkStallReason: { $ifNull: ['$chunkStallReason', null] },
           // The FOURTH stall/in-flight input. A member reset by a wave carries none of the three
           // above, so omitting this would admit it at the $match and then grade it as a settled
           // zero - worse than dropping it, because it would fail P3 on a rebuild that is merely
@@ -1281,7 +1281,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       chunkRebuildRequestedAt: Date | null;
       maxChunkCharLength: number | null;
       chunkedPassageTokenTarget: number | null;
@@ -1305,7 +1305,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never-enqueued rebuild disappear from the plan that would have re-driven it.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkStallReason: 'rechunkPaused' },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
           // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
@@ -1331,7 +1331,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // #1665 backfill has not run.
           vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
           error: { $ifNull: ['$error', null] },
-          notes: { $ifNull: ['$notes', null] },
+          chunkStallReason: { $ifNull: ['$chunkStallReason', null] },
           // See findDataLakeHealthMembers: without it a member admitted by the stamp above would be
           // graded on stale facts instead of being reported as `indexingInFlight`.
           chunkRebuildRequestedAt: { $ifNull: ['$chunkRebuildRequestedAt', null] },
@@ -1444,14 +1444,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    *    (#1939). The producer died between the reset and its sends, or the message was lost; either
    *    way there is no marker to upgrade and nothing scheduled to rebuild it. Shaped like the CHUNK
    *    arm and invisible in exactly the same way, so it belongs behind the same door - it is simply
-   *    identified by an OLD stamp instead of a note. The age bound is what keeps this door off a
+   *    identified by an OLD stamp instead of a stall reason. The age bound is what keeps this door off a
    *    rebuild that is merely in flight; REBUILD_PENDING_STALE_MS derives it from the chunk queue's
    *    visibility timeout, so a message still awaiting its first redelivery is never re-driven.
    *
    * Selected by the marker plus "nothing of it is retrievable", the same condition
    * `partitionByIndexAvailability` withholds on, rather than by chunk count - so this door offers a
    * repair for exactly the population search refuses to serve. `$in` over the shared
-   * CONVERGENCE_PAUSED_NOTES so it cannot drift from `isConvergencePausedNote`.
+   * CHUNK_STALL_REASONS so it cannot drift from `isChunkStalled`.
    */
   async findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
     const docs = await this.fabFileModel
@@ -1463,8 +1463,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           deletedAt: null,
           archivedAt: null,
           $or: [
-            { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } },
-            // `error` empty on this arm, unlike the note arm where it is empty by construction: a
+            { chunkStallReason: { $in: [...CHUNK_STALL_REASONS] } },
+            // `error` empty on this arm, unlike the stall-reason arm where it is empty by construction: a
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
@@ -1525,8 +1525,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 chunkCount: 0,
                 vectorized: false,
                 vectorizedChunkCount: 0,
-                notes: '',
                 error: null,
+                // The two machine-written pipeline markers, and NOT `notes` (#2016). `notes` is the
+                // owner's own text: blanking it here silently deleted whatever they had typed on
+                // every "Rebuild passages" wave and every per-file reprocess. Clearing these two is
+                // what makes reprocess the documented way back in for a file the rescue sweep has
+                // written off (`noExtractableTextAt`) or the kill switch halted (`chunkStallReason`).
+                chunkStallReason: null,
+                noExtractableTextAt: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
@@ -1970,6 +1976,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     fileUrlExpireAt: { type: Date },
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
+    // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
+    // IFabFile.notes. Enum-validated so a typo in a writer fails loudly instead of producing a value
+    // `isChunkStalled` silently reads as "not stalled".
+    chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
+    noExtractableTextAt: { type: Date, default: null },
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from

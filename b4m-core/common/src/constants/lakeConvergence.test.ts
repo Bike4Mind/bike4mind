@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from './chunking';
 import {
   BULK_CHANGE_MIN_MEMBERS,
   decideMemberConvergence,
@@ -128,7 +127,7 @@ describe('decideMemberConvergence', () => {
   it('treats a kill-switch-abandoned member as settled, so it can converge', () => {
     expect(
       decideMemberConvergence(
-        member({ notes: CONVERGENCE_PAUSED_NOTE, vectorizedChunkCount: 0, chunkedPassageTokenTarget: 2100 }),
+        member({ chunkStallReason: 'vectorizePaused', vectorizedChunkCount: 0, chunkedPassageTokenTarget: 2100 }),
         policy
       )
     ).toMatchObject({ converge: true });
@@ -151,7 +150,7 @@ describe('decideMemberConvergence', () => {
           chunkCount: 0,
           vectorizedChunkCount: 0,
           maxChunkCharLength: null,
-          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+          chunkStallReason: 'rechunkPaused',
         }),
         policy
       )
@@ -187,9 +186,10 @@ describe('decideMemberConvergence', () => {
       maxChunkCharLength: null,
       chunkRebuildRequestedAt: new Date('2026-08-20T00:00:00Z'),
     };
-    expect(
-      decideMemberConvergence(member({ ...stranded, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }), policy)
-    ).toMatchObject({ converge: true, passagesRemoved: true });
+    expect(decideMemberConvergence(member({ ...stranded, chunkStallReason: 'rechunkPaused' }), policy)).toMatchObject({
+      converge: true,
+      passagesRemoved: true,
+    });
     expect(decideMemberConvergence(member({ ...stranded, error: 'boom' }), policy)).toMatchObject({
       converge: false,
       reason: 'previouslyFailed',
@@ -226,7 +226,7 @@ describe('planLakeConvergence', () => {
           chunkCount: 0,
           vectorizedChunkCount: 0,
           maxChunkCharLength: null,
-          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+          chunkStallReason: 'rechunkPaused',
         }),
       ],
       policy
@@ -365,8 +365,8 @@ describe('isMemberIndexingInFlight', () => {
   it('is settled when a stopped rebuild left its stamp behind', () => {
     const stamped = { chunkCount: 0, vectorizedChunkCount: 0, chunkRebuildRequestedAt: new Date() };
     expect(isMemberIndexingInFlight({ ...stamped, error: 'boom' })).toBe(false);
-    expect(isMemberIndexingInFlight({ ...stamped, notes: CONVERGENCE_PAUSED_CHUNK_NOTE })).toBe(false);
-    expect(isMemberIndexingInFlight({ ...stamped, notes: CONVERGENCE_PAUSED_NOTE })).toBe(false);
+    expect(isMemberIndexingInFlight({ ...stamped, chunkStallReason: 'rechunkPaused' })).toBe(false);
+    expect(isMemberIndexingInFlight({ ...stamped, chunkStallReason: 'vectorizePaused' })).toBe(false);
   });
 
   it('treats an absent stamp as no rebuild outstanding', () => {

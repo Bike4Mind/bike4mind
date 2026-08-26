@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
+import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -61,17 +61,6 @@ const VectorizePayload = z.object({
   // => user work, which is never halted.
   ...provenancePayloadShape,
 });
-
-/**
- * Marker set on a data-lake file whose vectorize work was dropped by the convergence kill switch
- * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed;
- * this note makes the abandoned set enumerable (query the prefix) and signals a reprocess is needed.
- * `POST /api/files/reprocess` clears it as part of its `notes` reset. Distinct from
- * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which excludes a file from the chunk-rescue sweep; this does not.
- */
-// Re-exported, not defined here: the lake-health evaluator in b4m-core reads this marker to tell a
-// permanently-stalled file from one still indexing, and b4m-core cannot import from apps/client.
-export { CONVERGENCE_PAUSED_NOTE };
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -152,7 +141,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // the already-vectorized guard above means a resumed file is never re-embedded.
     for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
       try {
-        await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false });
+        await fabFileRepository.update({ id: fabFileId, chunkStallReason: 'vectorizePaused', isVectorizing: false });
         break;
       } catch (err) {
         if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {

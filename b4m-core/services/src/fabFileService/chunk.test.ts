@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
-import { ChunkClaimLostError, CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
+import { ChunkClaimLostError } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -310,13 +310,12 @@ describe('chunkFabfile', () => {
   });
 
   // The root-cause half of the "repaired file stays withheld forever" defect. The RESCUE SWEEP
-  // enqueues without a reset, and resetChunkStateByIds is the only other writer of `notes: ''`, so
-  // before this a fully re-chunked and re-vectorized file kept its kill-switch marker - and every
-  // reader keying on that note went on treating it as broken.
+  // enqueues without a reset, so before this a fully re-chunked and re-vectorized file kept its
+  // kill-switch marker - and every reader keying on it went on treating the file as broken.
   it('clears a convergence kill-switch marker when a rebuild succeeds', async () => {
-    for (const marker of [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE]) {
+    for (const chunkStallReason of ['vectorizePaused', 'rechunkPaused'] as const) {
       mockAdapter.db.fabFiles.update.mockClear();
-      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes: marker });
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, chunkStallReason });
 
       await chunkFabfile(
         mockUser,
@@ -324,17 +323,20 @@ describe('chunkFabfile', () => {
         mockAdapter as never
       );
 
-      const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { notes?: string };
-      expect(updatedFile.notes).toBe('');
+      const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { chunkStallReason?: string | null };
+      expect(updatedFile.chunkStallReason).toBeNull();
     }
   });
 
-  // The payload is a `$set` of named fields, so an unconditional `notes: ''` would erase an unrelated
-  // note on EVERY ordinary re-chunk. The key must be absent, not empty - `toBeUndefined` alone would
-  // also pass for `notes: undefined`, which Mongoose would still strip, so assert the key is missing.
-  it('leaves an unrelated note untouched - the clear is conditional, not an unconditional wipe', async () => {
-    const unrelated = 'No extractable text: scanned image';
-    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes: unrelated });
+  // #2016: the markers moved off `notes` precisely so no pipeline write can touch the owner's own
+  // text. The key must be ABSENT, not empty - `toBeUndefined` alone would also pass for
+  // `notes: undefined`, and this asserts the commit never names the field at all.
+  it("never writes notes - the owner's note survives a re-chunk", async () => {
+    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+      ...mockFabFile,
+      notes: 'my own note about this contract',
+      chunkStallReason: 'rechunkPaused',
+    });
 
     await chunkFabfile(
       mockUser,
@@ -346,13 +348,13 @@ describe('chunkFabfile', () => {
     expect('notes' in updatedFile).toBe(false);
   });
 
-  // #1939. Unconditional, unlike the note clear above: the field carries exactly one fact and this
-  // run IS the rebuild it recorded. Left set, a fully rebuilt file reads as in-flight forever -
+  // #1939. Unconditional, like the stall-reason clear above: the field carries exactly one fact and
+  // this run IS the rebuild it recorded. Left set, a fully rebuilt file reads as in-flight forever -
   // withheld from search, parked as unmeasured in health, skipped by convergence.
   it('always clears the pending-rebuild stamp, whether or not a marker was present', async () => {
-    for (const notes of ['', CONVERGENCE_PAUSED_CHUNK_NOTE, 'No extractable text: scanned image']) {
+    for (const chunkStallReason of [null, 'rechunkPaused'] as const) {
       mockAdapter.db.fabFiles.update.mockClear();
-      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, notes });
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({ ...mockFabFile, chunkStallReason });
 
       await chunkFabfile(
         mockUser,

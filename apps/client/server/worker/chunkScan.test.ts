@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
+import { buildFabFileChunkScanFilter } from './chunkScan';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
@@ -73,7 +73,7 @@ describe('buildFabFileChunkScanFilter', () => {
       isChunking: false,
       createdAt: old,
       deletedAt: null,
-      notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
+      noExtractableTextAt: new Date('2025-12-31T12:00:00Z'),
     };
     expect(matches(doc, filter)).toBe(false);
   });
@@ -150,7 +150,7 @@ describe('buildFabFileChunkScanFilter', () => {
     };
     expect(matches(stamped, filter)).toBe(true);
     expect(matches({ ...stamped, error: 'chunker gave up' }, filter)).toBe(false);
-    expect(matches({ ...stamped, notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image` }, filter)).toBe(false);
+    expect(matches({ ...stamped, noExtractableTextAt: new Date() }, filter)).toBe(false);
   });
 });
 

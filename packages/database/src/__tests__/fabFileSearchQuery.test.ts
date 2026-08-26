@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_NOTES } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
   buildOwnershipConditions,
@@ -741,12 +741,12 @@ describe('buildFabFileSearchQuery', () => {
     const findMarkerClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(c => 'fileNameLower' in c) as
         { fileNameLower: { $not: RegExp } } | undefined;
-    // Structural, not a hardcoded literal: the clause's `notes` arm is asserted against
-    // CONVERGENCE_PAUSED_NOTES in the test below, so adding a stall marker fails there rather than
+    // Structural, not a hardcoded literal: the clause's stall-reason arm is asserted against
+    // CHUNK_STALL_REASONS in the test below, so adding a stall reason fails there rather than
     // making this matcher silently stop finding the clause.
     const findVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(
-        (c): c is { $or: [{ vectorized: boolean }, { notes: { $in: string[] } }] } =>
+        (c): c is { $or: [{ vectorized: boolean }, { chunkStallReason: { $in: string[] } }] } =>
           Array.isArray((c as { $or?: unknown[] }).$or) &&
           (c as { $or: Record<string, unknown>[] }).$or.some(arm => 'vectorized' in arm)
       );
@@ -793,16 +793,16 @@ describe('buildFabFileSearchQuery', () => {
       // partitionByIndexAvailability - so a vectorizedOnly lake would answer around the hole and
       // report full coverage. Must stay in sync with isRetrievalExcluded's own arm.
       //
-      // Asserted against CONVERGENCE_PAUSED_NOTES itself rather than a literal, so adding a third
-      // stall marker cannot leave this passing while the query silently stops exempting it.
+      // Asserted against CHUNK_STALL_REASONS itself rather than a literal, so adding a third stall
+      // reason cannot leave this passing while the query silently stops exempting it.
       const result = buildFabFileSearchQuery(makeParams({ options: { vectorizedOnly: true } }));
       const clause = findVectorizedClause(result);
       expect(clause).toBeDefined();
       expect(clause!.$or[0]).toEqual({ vectorized: true });
-      expect(clause!.$or[1].notes.$in).toEqual([...CONVERGENCE_PAUSED_NOTES]);
-      expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_CHUNK_NOTE);
-      expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_NOTE);
-      // Third arm (#1939): the window between the reset and the consumer's marker carries NO note,
+      expect(clause!.$or[1].chunkStallReason.$in).toEqual([...CHUNK_STALL_REASONS]);
+      expect(clause!.$or[1].chunkStallReason.$in).toContain('rechunkPaused');
+      expect(clause!.$or[1].chunkStallReason.$in).toContain('vectorizePaused');
+      // Third arm (#1939): the window between the reset and the consumer's marker carries no reason,
       // so the two arms above cannot cover it. `$ne: null` also excludes a missing field, which is
       // what keeps this from matching every legacy row.
       expect(clause!.$or[2]).toEqual({ chunkRebuildRequestedAt: { $ne: null } });
