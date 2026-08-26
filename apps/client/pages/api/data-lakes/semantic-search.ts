@@ -22,9 +22,17 @@ import {
   ModelBackend,
   OpenAIEmbeddingModel,
   isSupportedEmbeddingModel,
+  insufficientCreditsError,
+  usdToCredits,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import {
+  createTokenizer,
+  getSettingsByNames,
+  getSettingsMap,
+  getSettingsValue,
+  type ITokenizer,
+} from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 
@@ -58,6 +66,11 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * One deliberate difference from chat: admin/developer callers additionally get
  * the whole static registry (see resolveRetrievalLakeScope), preserving the reach
  * this endpoint has always given them.
+ *
+ * Billing: the query embedding is real spend, so a credit pre-flight (per-member cap, then the
+ * pool) runs before the embed whenever operational billing is enabled; settlement is
+ * recordOperationalUsage, which owns the debit itself. A rejected caller gets a 422 tagged
+ * `insufficient_credits` and no ledger row.
  *
  * Unlike the chat tool this route passes no `retrievalFilter` - that filter is
  * session-derived and there is no session here, so a file chat would exclude is
@@ -216,6 +229,18 @@ const handler = baseApi()
       });
       const isAborted = () => clientAborted;
 
+      // The pre-flight needs a token count on the request path, where the old best-effort
+      // recording could just skip one; a length estimate keeps a tokenizer failure from
+      // turning a working search into a 500.
+      const countQueryTokens = async (): Promise<number> => {
+        try {
+          return await getSharedTokenizer(req.logger).countTokens(query, embedding_model);
+        } catch (err) {
+          req.logger?.warn('[semantic-search] query token count failed; estimating from query length', err);
+          return Math.ceil(query.length / 4);
+        }
+      };
+
       // --- Resolve accessible data lakes (this IS the access gate) ---
       const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
 
@@ -238,6 +263,53 @@ const handler = baseApi()
           embedding_mismatch: toMismatchPayload(dataLakeService.emptyEmbeddingMismatchReport()),
           scan: toScanPayload(dataLakeService.emptyScanAccounting(budgets)),
         });
+      }
+
+      // --- Credit pre-flight: per-member cap, then the pool the charge would land on ---
+      // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
+      // never bills must not start rejecting searches. This is a CHECK, not the reservation
+      // music/sound-effects do: settlement here runs through recordOperationalUsage, which
+      // moves the balance itself, so reserving would charge the same query twice.
+      const queryTokens = await countQueryTokens();
+      const billingSettings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['billOperationalUsage', 'enforceCredits'], logger: req.logger }
+      );
+      const shouldBill =
+        (getSettingsValue('billOperationalUsage', billingSettings) ?? false) &&
+        (getSettingsValue('enforceCredits', billingSettings) ?? false);
+
+      // Resolved once and reused by the settlement below, so the pre-flight and the charge
+      // can never disagree about which holder pays.
+      const billingUser = await userRepository.findById(req.user.id);
+      const billingOrg = billingUser?.organizationId
+        ? await organizationRepository.findById(billingUser.organizationId)
+        : null;
+
+      if (shouldBill && billingUser) {
+        // Deterministic round-up, never the stochastic settlement rounding: eligibility must
+        // not turn on a coin flip.
+        const requiredCredits = usdToCredits(getEmbeddingModelCost(embedding_model, queryTokens));
+
+        // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
+        // rejected even when the org pool is flush.
+        if (billingOrg?.maxCreditsPerMember != null) {
+          const usedCredits = billingOrg.userDetails?.find(member => member.id === req.user.id)?.usedCredits ?? 0;
+          if (usedCredits + requiredCredits > billingOrg.maxCreditsPerMember) {
+            throw insufficientCreditsError(
+              'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
+            );
+          }
+        }
+
+        const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
+        if (availableCredits < requiredCredits) {
+          throw insufficientCreditsError(
+            billingOrg
+              ? `Your organization does not have enough credits for semantic search. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+              : `You do not have enough credits for semantic search. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+          );
+        }
       }
 
       // --- Get the embedding-provider API key (OpenAI or VoyageAI) for the requested model ---
@@ -314,15 +386,12 @@ const handler = baseApi()
       // Record the query-embedding spend (the embed ran inside the search above).
       // Best-effort: never let a recording failure fail the search response.
       try {
-        const user = await userRepository.findById(req.user.id);
-        if (user) {
-          const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
-          const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, embedding_model);
+        if (billingUser) {
           await recordOperationalUsage(
             {
               requestId: req.user.id,
-              user,
-              organization,
+              user: billingUser,
+              organization: billingOrg,
               feature: 'embedding',
               provider: embeddingProvider,
               model: embedding_model,

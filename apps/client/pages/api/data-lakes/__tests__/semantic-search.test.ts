@@ -10,6 +10,9 @@ const {
   mockGetSettingsValue,
   mockResolveSearchBudgets,
   mockGetProviderFromModel,
+  mockFindOrgById,
+  mockGetSettingsMap,
+  mockRecordOperationalUsage,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -19,6 +22,9 @@ const {
   mockGetSettingsValue: vi.fn(),
   mockResolveSearchBudgets: vi.fn(),
   mockGetProviderFromModel: vi.fn(),
+  mockFindOrgById: vi.fn(),
+  mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
+  mockRecordOperationalUsage: vi.fn(),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -45,6 +51,10 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: vi.fn(async () => 3) }),
   getSettingsByNames: vi.fn(),
+  getSettingsMap: mockGetSettingsMap,
+  // Real lookup semantics over whatever map getSettingsMap returned - the billing gate is a
+  // plain read of two keys, and stubbing the read would only prove the stub.
+  getSettingsValue: (name: string, settings: Record<string, unknown>) => settings?.[name],
 }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
@@ -52,7 +62,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   creditTransactionRepository: {},
-  organizationRepository: { findById: vi.fn() },
+  organizationRepository: { findById: mockFindOrgById },
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
 }));
@@ -91,10 +101,10 @@ vi.mock('@bike4mind/services', async () => ({
       budgets: { maxFiles: b?.maxFiles ?? 20000, maxChunks: b?.maxChunks ?? 100000 },
     }),
   },
-  recordOperationalUsage: vi.fn(),
+  recordOperationalUsage: mockRecordOperationalUsage,
 }));
 
-import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
+import { BedrockEmbeddingModel, getQuestErrorCode, ModelBackend } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 
@@ -587,5 +597,107 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+});
+
+// The endpoint spends org credits on the query embedding, so it has to answer the same two
+// questions the other standalone spend paths do before doing any work: is this member capped,
+// and is there a pool to draw from.
+describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
+  const BILLING_ON = { billOperationalUsage: true, enforceCredits: true };
+  const user = (over: Record<string, unknown> = {}) => ({ id: 'u1', currentCredits: 1000, ...over });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsMap.mockResolvedValue(BILLING_ON);
+    mockFindUserById.mockResolvedValue(user());
+    mockFindOrgById.mockResolvedValue(null);
+  });
+
+  it('rejects a member who has spent their organization cap, before embedding anything', async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'u1', usedCredits: 500 }],
+    });
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(/member credit limit/i);
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the organization pool is exhausted', async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({ id: 'org1', currentCredits: 0, userDetails: [] });
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
+      /organization does not have enough credits/i
+    );
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('rejects an org-less user with no credits of their own', async () => {
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
+      /you do not have enough credits/i
+    );
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('rejects with the 422 insufficient-credits classifier the Add Credits CTA keys off', async () => {
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    const err = await handler(makeReq({ query: 'onboarding' }), makeRes()).catch((e: unknown) => e);
+
+    expect(getQuestErrorCode(err)).toBe('insufficient_credits');
+    expect((err as { statusCode?: number }).statusCode).toBe(422);
+  });
+
+  it('lets a funded member through and settles the spend', async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'u1', usedCredits: 1 }],
+    });
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not gate a deployment that never bills, however empty the balance', async () => {
+    // The debit needs billOperationalUsage AND enforceCredits; with either off nothing is
+    // charged, so a zero balance must not start refusing searches.
+    mockGetSettingsMap.mockResolvedValue({ billOperationalUsage: false, enforceCredits: true });
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('still searches when the caller has no user record to bill', async () => {
+    mockFindUserById.mockResolvedValue(null);
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
   });
 });
