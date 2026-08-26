@@ -24,6 +24,14 @@ This is the sequence that avoids that, and the mechanism that supports it.
 Steps 3 and 4 are ordered by the staging mechanism below. Steps 1 and 2 are safe to
 land on their own: a scope nobody requires yet changes no request's outcome.
 
+Two generated/declared files trail step 1 and are gated in CI, not locally:
+
+- `apps/client/public/openapi.json` is committed, and its `info.description` publishes
+  the enum verbatim (`ALL_API_KEY_SCOPES`). Adding a value drifts the snapshot - run
+  `pnpm turbo:openapi:generate` and commit the result, or the `OpenAPI Spec` job fails.
+- `infra/deploy-contract.json` must name any `process.env` that `infra/` reads at deploy
+  time. Threading a new lever through `infra/web.ts` alone fails `Core Build`.
+
 ## Splitting read from spend
 
 Where a surface both reads state and commissions billable work, give it two scopes,
