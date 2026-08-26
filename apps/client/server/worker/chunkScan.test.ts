@@ -90,28 +90,6 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(doc, filter)).toBe(false);
   });
 
-  it.each([
-    ['the chunk-handler pause marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
-    ['the convergence pause marker', CONVERGENCE_PAUSED_NOTE],
-  ])('skips a file paused by the convergence kill switch - %s (#2120)', (_label, note) => {
-    // A paused file matches every OTHER clause: the reset zeroed chunkCount, the pause writes no
-    // error, and it clears chunkRebuildRequestedAt - which is also what drops it out of the media
-    // clause's stamped-file exception. So without this exclusion it is re-selected on every pass,
-    // re-enqueued, and bounced straight back by the chunk handler's own kill-switch check. While
-    // the switch is on, enough paused files consume the whole rescue cap and genuine lost-webhook
-    // candidates are never reached - the sweep silently stops working while reporting healthy.
-    const paused = {
-      status: 'complete',
-      chunkCount: 0,
-      isChunking: false,
-      createdAt: old,
-      deletedAt: null,
-      chunkRebuildRequestedAt: null,
-      notes: note,
-    };
-    expect(matches(paused, filter)).toBe(false);
-  });
-
   it('still selects a file with unrelated user notes', () => {
     const doc = {
       status: 'complete',
@@ -185,6 +163,81 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(stamped, filter)).toBe(true);
     expect(matches({ ...stamped, error: 'chunker gave up' }, filter)).toBe(false);
     expect(matches({ ...stamped, notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image` }, filter)).toBe(false);
+  });
+});
+
+describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', () => {
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const old = new Date('2025-12-31T00:00:00Z');
+  // chunkRebuildRequestedAt is left UNSET rather than null: only the chunk-handler path clears it,
+  // the vectorize path (fabFileVectorize.ts) writes its marker without touching it, so a fixture
+  // that pins it to null would only reproduce one of the two marker paths.
+  const paused = (note: string) => ({
+    status: 'complete',
+    chunkCount: 0,
+    isChunking: false,
+    createdAt: old,
+    deletedAt: null,
+    notes: note,
+  });
+
+  describe('while the kill switch is ON', () => {
+    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: true });
+
+    it.each([
+      ['the chunk-handler marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
+      ['the vectorize marker', CONVERGENCE_PAUSED_NOTE],
+    ])('skips a paused file - %s', (_label, note) => {
+      // A paused file matches every OTHER clause (the reset zeroed chunkCount, the pause writes no
+      // error), so without the exclusion it is re-selected every pass and consumes the rescue cap,
+      // starving genuine lost-webhook candidates while the sweep still reports a healthy count.
+      expect(matches(paused(note), filter)).toBe(false);
+    });
+
+    it('still selects an ordinary un-chunked file, so the exclusion is not over-broad', () => {
+      expect(matches({ ...paused('quarterly report for the board deck') }, filter)).toBe(true);
+    });
+
+    it('still selects a file with no notes at all', () => {
+      const { notes, ...noNotes } = paused('x');
+      expect(matches(noNotes, filter)).toBe(true);
+    });
+
+    it('still selects a file whose notes are explicitly null', () => {
+      // $nin matches a null/missing field (null is not in a list of note strings). Pinned because
+      // getting this wrong would silently drop every un-noted file from the sweep - the opposite,
+      // and far worse, failure than the churn this exclusion fixes.
+      expect(matches({ ...paused('x'), notes: null }, filter)).toBe(true);
+    });
+  });
+
+  describe('while the kill switch is OFF', () => {
+    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
+
+    it.each([
+      ['the chunk-handler marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
+      ['the vectorize marker', CONVERGENCE_PAUSED_NOTE],
+    ])('SELECTS a paused file so it is rebuilt - %s', (_label, note) => {
+      // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a paused
+      // file has: the other two recovery paths are human-driven and lake-scoped, so neither reaches a
+      // file outside every lake - exactly what the sweep exists to catch. And the re-enqueue really
+      // does rebuild it: a batchId-less file is sent without an `origin`, and isConvergenceHalted
+      // defaults a missing origin to 'user' and returns false, so it is genuinely re-chunked rather
+      // than bounced. Excluding it unconditionally would break the marker's user-visible promise
+      // that passages are "rebuilt when convergence resumes".
+      expect(matches(paused(note), filter)).toBe(true);
+    });
+
+    it('still excludes the no-extractable-text note, which is terminal either way', () => {
+      expect(matches(paused(`${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image`), filter)).toBe(false);
+    });
+  });
+
+  it('defaults to NOT excluding when no options are passed', () => {
+    // The safer default: a caller that forgets the flag keeps the pre-existing rescue behaviour
+    // rather than silently stranding paused files.
+    const filter = buildFabFileChunkScanFilter(cutoff);
+    expect(matches(paused(CONVERGENCE_PAUSED_CHUNK_NOTE), filter)).toBe(true);
   });
 });
 

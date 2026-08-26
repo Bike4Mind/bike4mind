@@ -22,6 +22,7 @@ import {
   CHUNK_CLAIM_STALE_MS,
 } from './chunkScan';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -146,7 +147,12 @@ async function main() {
     const now = Date.now();
     const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
     const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
+    // Platform flag only - see the hosted counterpart in cron/dataLakeBatchReconcile.ts for why the
+    // exclusion is conditional in both directions.
+    const convergencePaused = (await adminSettingsRepository.getSettingsValue(CONVERGENCE_PAUSE_SETTING_KEY)) === true;
+    const candidates = await FabFile.find(
+      buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: convergencePaused })
+    )
       .select('_id userId batchId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();

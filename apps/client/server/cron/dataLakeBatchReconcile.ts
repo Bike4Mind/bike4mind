@@ -29,6 +29,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { sendToQueue } from '@server/utils/sqs';
@@ -54,7 +55,13 @@ async function rescueUnchunkedFiles(): Promise<number> {
   const now = Date.now();
   const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
   const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
+  // Platform flag only: this sweep is global, so there is no lake to resolve a scoped override
+  // against. While it is ON, paused files are excluded so they cannot consume the rescue cap; while
+  // it is OFF they are swept back in, which is the automatic rebuild their marker promises.
+  const convergencePaused = (await adminSettingsRepository.getSettingsValue(CONVERGENCE_PAUSE_SETTING_KEY)) === true;
+  const candidates = await FabFile.find(
+    buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: convergencePaused })
+  )
     .select('_id userId batchId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
