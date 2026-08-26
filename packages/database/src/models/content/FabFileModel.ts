@@ -73,6 +73,20 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     });
   }
 
+  async embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>> {
+    if (fabFileIds.length === 0) return {};
+    // Same filter as distinctEmbeddingModelsByFabFileIds (so it rides the same
+    // { fabFileId: 1, _id: 1 } index), grouped instead of flattened. `$addToSet` dedupes per file,
+    // matching `distinct`'s semantics within each group.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; models: string[] }>([
+      { $match: { fabFileId: { $in: fabFileIds }, embeddingModel: { $ne: null } } },
+      { $group: { _id: '$fabFileId', models: { $addToSet: '$embeddingModel' } } },
+    ]);
+    const byFile: Record<string, string[]> = {};
+    for (const row of rows) byFile[String(row._id)] = row.models;
+    return byFile;
+  }
+
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
     const result = await this.fabFileChunkModel.insertMany(chunks);
 

@@ -437,6 +437,13 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
    */
   distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * The same fact as above, but resolved PER FILE: `{ [fabFileId]: models }`, omitting any file with
+   * no model-bearing chunks. A per-model retrieval index needs the pairing, not the union - pairing
+   * every file with every model seen across the batch issues one request per (file, model) cell, so
+   * a two-model lake doubles its removal traffic and most of it matches nothing.
+   */
+  embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**

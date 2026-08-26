@@ -33,6 +33,7 @@ import {
   OpenSearchClient,
   isTransientOpenSearchError,
   isIndexAlreadyExistsError,
+  isIndexNotFoundError,
   getOpenSearchRetryAfterMs,
 } from './opensearchClient';
 
@@ -103,6 +104,42 @@ describe('isIndexAlreadyExistsError', () => {
 
   it('does not flag a transient error', () => {
     expect(isIndexAlreadyExistsError(responseError(503))).toBe(false);
+  });
+});
+
+describe('isIndexNotFoundError', () => {
+  it('detects a 404 with an index_not_found_exception body', () => {
+    const err = Object.assign(new Error('no such index [x]'), {
+      statusCode: 404,
+      body: { error: { type: 'index_not_found_exception' } },
+    });
+    expect(isIndexNotFoundError(err)).toBe(true);
+  });
+
+  it('detects it from the message alone when the body is absent', () => {
+    expect(isIndexNotFoundError(new Error('index_not_found_exception: no such index'))).toBe(true);
+  });
+
+  it('does not flag an unrelated 404', () => {
+    // The purge treats this error as a satisfied removal, so keeping it keyed to the TYPE rather
+    // than the status code is what stops it swallowing a genuine failure (#2087).
+    const err = Object.assign(new Error('resource_not_found_exception'), {
+      statusCode: 404,
+      body: { error: { type: 'resource_not_found_exception' } },
+    });
+    expect(isIndexNotFoundError(err)).toBe(false);
+  });
+
+  it('does not flag a transient error', () => {
+    expect(isIndexNotFoundError(responseError(503))).toBe(false);
+  });
+
+  it('is disjoint from isIndexAlreadyExistsError', () => {
+    const exists = Object.assign(new Error('resource_already_exists_exception'), {
+      statusCode: 400,
+      body: { error: { type: 'resource_already_exists_exception' } },
+    });
+    expect(isIndexNotFoundError(exists)).toBe(false);
   });
 });
 
