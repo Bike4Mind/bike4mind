@@ -6,7 +6,7 @@ import {
   IUserDocument,
   Permission,
 } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
+import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';
@@ -37,7 +37,10 @@ export const addFiles = async (
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
-  if (files.length !== fileIds.length) throw new Error('Some files are not accessible');
+  // BadRequestError, not a bare Error: an id the caller cannot reach is a client mistake, and a
+  // bare Error is a 500 that pages LiveOps. Reachable now that the repository skips uncastable
+  // ids instead of throwing a CastError the handler turned into a 404.
+  if (files.length !== fileIds.length) throw new BadRequestError('Some files are not accessible');
 
   project.fileIds = uniq([...project.fileIds, ...fileIds]);
   project.updatedAt = new Date();

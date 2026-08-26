@@ -114,7 +114,8 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   // Check if user has permission to update all requested files
   if (fabFiles.length !== ids.length) {
-    throw new Error('Some files are not accessible or you do not have permission to edit them');
+    // BadRequestError, not a bare Error - see projectService/addFiles.
+    throw new BadRequestError('Some files are not accessible or you do not have permission to edit them');
   }
 
   const actor = { userId, isAdmin: !!user.isAdmin };

@@ -5,7 +5,7 @@ import {
   IProjectRepository,
   IUserRepository,
 } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
+import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const removeProjectFilesSchema = z.object({
@@ -40,7 +40,8 @@ export const removeFiles = async (
 
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
-  if (files.length !== fileIds.length) throw new Error('Some files are not accessible');
+  // BadRequestError, not a bare Error - see addFiles.
+  if (files.length !== fileIds.length) throw new BadRequestError('Some files are not accessible');
 
   if (project.userId !== userId && files.some(f => f.userId !== userId)) {
     throw new Error('You are not authorized to remove files from this project');

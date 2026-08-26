@@ -1,5 +1,5 @@
 import { IProjectRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
+import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const removeProjectSessionsSchema = z.object({
@@ -32,7 +32,8 @@ export const removeSessions = async (
   if (!project) throw new Error('Project not found');
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
-  if (sessions.length !== sessionIds.length) throw new Error('Some sessions are not accessible');
+  // BadRequestError, not a bare Error - see addFiles.
+  if (sessions.length !== sessionIds.length) throw new BadRequestError('Some sessions are not accessible');
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
     throw new Error('You are not authorized to remove sessions from this project');
   }
