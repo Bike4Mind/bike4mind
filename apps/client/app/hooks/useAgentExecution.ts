@@ -20,16 +20,17 @@
  * first events. Subscriptions live at the WebsocketProvider scope now.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { router } from '@client/app/router';
 import { AGENT_TRACE_ROUTE, buildAgentTraceSearch } from '@client/app/utils/agentTraceLink';
 import type { IMessageDataToClient } from '@bike4mind/common';
 import {
   useAgentExecutionStore,
   findChildAnyDepth,
+  isActiveStatus,
   AGENT_EXECUTION_STATUSES,
   type AgentExecutionStatus,
   type ChildExecution,
@@ -179,8 +180,49 @@ function notifyBackgroundCompletion(agentName: string, finalAnswer?: string, onV
 }
 
 export function useAgentExecutionSubscriptions(): void {
-  const { subscribeToAction } = useWebsocket();
+  const { subscribeToAction, readyState } = useWebsocket();
+  const { reconnect } = useAgentExecutionDispatch();
   const queryClient = useQueryClient();
+
+  // Re-ask the server for the state of every run this tab still believes is live,
+  // each time the socket comes up.
+  //
+  // Server->client progress is fire-and-forget: `createWsSender` in the agent
+  // executor posts to the connection id captured when the run started and only
+  // logs a failed post. A socket that dies mid-run - a suspended tab, a laptop
+  // lid, a network switch - therefore misses EVERY later frame, `completed`
+  // among them, and nothing corrects the UI afterwards: the run sits at "In
+  // Progress", counting up, while the server finished it minutes ago. Seen on
+  // production: a run that completed in ~2 minutes was still spinning 81
+  // minutes later, its 127 pushes all logged as failed sends.
+  //
+  // The repair path already existed on both ends (`reconnect` -> the server's
+  // `handleReconnect` -> `reconnect_result`) and simply had no caller. This is
+  // that caller. Cheap by construction: it fires only on a socket transition
+  // and only when the store holds an active run, so an idle tab sends nothing.
+  //
+  // Each request carries its executionId, which is what keeps a sweep over
+  // several runs from mis-pairing: the responses come from independent handler
+  // invocations whose latency scales with each run's child count, so they
+  // routinely arrive out of order (see `consumePendingReconnect`).
+  //
+  // The dispatcher is read through a ref and the effect is keyed on `readyState`
+  // alone: the dispatcher's identity is memoised over `sendJsonMessage`, which
+  // churns whenever the access token refreshes, and holding it in the deps would
+  // re-send the whole sweep each time it did. Same guard, same reason, as the
+  // mount-time caller in `ActiveAgentExecutions`.
+  const reconnectRef = useRef(reconnect);
+  useEffect(() => {
+    reconnectRef.current = reconnect;
+  }, [reconnect]);
+  useEffect(() => {
+    if (readyState !== ReadyState.OPEN) return;
+    const { executions } = useAgentExecutionStore.getState();
+    for (const [executionId, execution] of Object.entries(executions)) {
+      if (!isActiveStatus(execution.status)) continue;
+      reconnectRef.current(execution.sessionId, executionId);
+    }
+  }, [readyState]);
 
   // Navigate via the `router` singleton, NOT useNavigate(): this hook's host
   // (AgentExecutionSubscriber) mounts in providers.tsx, OUTSIDE the
@@ -373,7 +415,7 @@ export function useAgentExecutionSubscriptions(): void {
         // Always drain the pending sessionId, even on a `found: false` response;
         // otherwise the queue would carry a stale entry and pair it with the
         // next reconnect, mis-attributing the execution to the wrong session.
-        const sessionId = store().consumePendingReconnect();
+        const sessionId = store().consumePendingReconnect(msg.executionId);
         if (!msg.found || !msg.executionId || !msg.status) return;
         const executionId = msg.executionId;
 
@@ -688,7 +730,7 @@ export function useAgentExecutionDispatch() {
         // when sessionId is absent (callers reconnecting by executionId
         // already know their target).
         if (sessionId) {
-          useAgentExecutionStore.getState().registerPendingReconnect(sessionId);
+          useAgentExecutionStore.getState().registerPendingReconnect(sessionId, executionId);
         }
         sendJsonMessage({
           action: 'agent_execute',

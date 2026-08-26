@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { BFL_SAFETY_TOLERANCE, IMAGE_SIZE_CONSTRAINTS, ImageModels, ModelName } from '@bike4mind/common';
 import { getThemeConfig } from '../../../utils/themes';
@@ -17,11 +17,12 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 // ---- Mock useLLM ----
 const mockSetLLM = vi.fn();
 let mockSize: string = '1024x1024';
+let mockImageModel: string = ImageModels.FLUX_PRO_1_1;
 
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: () => ({
     model: 'gpt-4o',
-    imageModel: ImageModels.FLUX_PRO_1_1,
+    imageModel: mockImageModel,
     imageEditModel: ImageModels.GPT_IMAGE_1_5,
     setLLM: mockSetLLM,
     size: mockSize,
@@ -177,5 +178,33 @@ describe('ImageGenerationModelSelectionModal — safety_tolerance hard cap', () 
     expect(BFL_SAFETY_TOLERANCE.MAX).toBe(2);
     // The pre-cap top-of-scale mark must be gone from the UI copy
     expect(queryByText('🌶️ Spicy')).toBeNull();
+  });
+});
+
+describe('ImageGenerationModelSelectionModal - settings the selected model ignores', () => {
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+  });
+
+  it('disables Seed for a Gemini image model, which never receives it', () => {
+    mockImageModel = ImageModels.GEMINI_3_PRO_IMAGE;
+
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(getByTestId('image-setting-seed-input').querySelector('input')).toBeDisabled();
+  });
+
+  it('leaves Seed editable for BFL, which honors it', () => {
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(getByTestId('image-setting-seed-input').querySelector('input')).not.toBeDisabled();
   });
 });

@@ -62,10 +62,24 @@ async function run(query: Record<string, unknown> = {}, user: TestUser = { id: U
   return res;
 }
 
-/** The `$match` filter from the first aggregate() call. */
+/**
+ * The leading `$match` of the rows+total aggregation. It now carries BOTH the authorization scope
+ * and the caller's narrowing, merged - see `mergedFilter` below for the two-clause form.
+ */
 function matchStage(): Record<string, unknown> {
   const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
   return (pipeline.find(s => '$match' in s) as { $match: Record<string, unknown> }).$match;
+}
+
+/** The `[scope, narrowing]` pair from the leading `$match`, for the merged case. */
+function mergedFilter(): Array<Record<string, unknown>> {
+  return matchStage().$and as Array<Record<string, unknown>>;
+}
+
+/** The $facet branches of the SECOND aggregate() call - the facet-counts pipeline. */
+function facetPipeline(): Record<string, Array<Record<string, unknown>>> {
+  const pipeline = aggregate.mock.calls[1][0] as Array<Record<string, unknown>>;
+  return (pipeline.find(s => '$facet' in s) as { $facet: Record<string, Array<Record<string, unknown>>> }).$facet;
 }
 
 /** The `rows` branch of the $facet stage - where sort/skip/limit/project now live. */
@@ -102,6 +116,10 @@ beforeEach(() => {
         { _id: 'passphrase', n: 2 },
       ],
       withComments: [{ n: 1 }],
+      byTag: [
+        { _id: 'ionq', n: 6 },
+        { _id: 'security', n: 3 },
+      ],
     },
   ]);
   buildListVisibilityFilter.mockReturnValue(VIS);
@@ -203,6 +221,7 @@ describe('GET /api/publish/artifacts — projection', () => {
         visibility: { public: 38 },
         gate: { none: 39, passphrase: 2 },
         comments: 1,
+        tag: { ionq: 6, security: 3 },
       },
     });
   });
@@ -265,37 +284,69 @@ describe('GET /api/publish/artifacts - paging', () => {
 
   it('counts the total behind the SAME narrowing as the page, not the whole scope', async () => {
     // A total computed over the unfiltered scope would tell the owner there are 41 results
-    // while showing them 3, and the pager would offer pages that render empty.
+    // while showing them 3, and the pager would offer pages that render empty. Both branches now
+    // inherit the narrowing from the leading $match, so neither carries one of its own.
     buildListQuery.mockReturnValue({ match: { visibility: 'private' }, sort: { publishedAt: -1 } });
     await run({ mine: 'true', visibility: 'private' });
 
+    expect(mergedFilter()[1]).toEqual({ visibility: 'private' });
     const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
     const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, Array<Record<string, unknown>>> })
       .$facet;
-    expect(facet.total[0]).toEqual({ $match: { visibility: 'private' } });
+    expect(facet.total).toEqual([{ $count: 'n' }]);
+    expect(facet.rows.some(st => '$match' in st)).toBe(false);
+  });
+
+  it('carries the narrowing in the LEADING $match, where an index can serve it', async () => {
+    // Mongo does not use indexes inside a $facet sub-pipeline, so the tag filter running in there
+    // could never touch the { ownerId, tags, deletedAt } index it was added for. $and rather than a
+    // spread, so a narrowing key can never clobber - and thereby widen - the authorization scope.
+    buildListQuery.mockReturnValue({ match: { tags: 'ionq' }, sort: { publishedAt: -1 } });
+    await run({ mine: 'true', tag: 'ionq' });
+
+    expect(mergedFilter()).toEqual([{ deletedAt: null, ownerId: USER }, { tags: 'ionq' }]);
+  });
+
+  it('passes the scope through unwrapped when the caller is not narrowing', async () => {
+    // No empty `$and: [scope, {}]` for the common case.
+    await run({ mine: 'true' });
+    expect(matchStage()).toEqual({ deletedAt: null, ownerId: USER });
   });
 
   it('computes facet counts WITHOUT the caller selection, so a chip keeps its count once clicked', async () => {
     buildListQuery.mockReturnValue({ match: { 'source.kind': 'reply' }, sort: { publishedAt: -1 } });
     await run({ mine: 'true', kind: 'reply', facets: 'true' });
 
-    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
-    const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, Array<Record<string, unknown>>> })
-      .$facet;
-    // byKind groups straight off the scope - no $match ahead of it.
-    expect(facet.byKind).toEqual([{ $group: { _id: '$source.kind', n: { $sum: 1 } } }]);
+    // A SECOND aggregation, over the scope alone - the property is now literal rather than a side
+    // effect of $facet isolating its branches from the pipeline ahead of them.
+    const scopeMatch = (aggregate.mock.calls[1][0] as Array<Record<string, unknown>>)[0];
+    expect(scopeMatch).toEqual({ $match: { deletedAt: null, ownerId: USER } });
+    expect(facetPipeline().byKind).toEqual([{ $group: { _id: '$source.kind', n: { $sum: 1 } } }]);
   });
 });
 
 describe('GET /api/publish/artifacts - cost', () => {
   it('skips the facet group-bys unless the caller asks for them', async () => {
     // They are group-bys over the caller's WHOLE scope. The profile screen's existence check
-    // (limit=1) has no use for them and should not pay for four of them.
+    // (limit=1) has no use for them and should not pay for five of them - and now they are their
+    // own aggregation, so not asking means not issuing it at all.
     await run({ mine: 'true' });
 
+    expect(aggregate).toHaveBeenCalledTimes(1);
     const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
     const facet = (pipeline.find(st => '$facet' in st) as { $facet: Record<string, unknown> }).$facet;
     expect(Object.keys(facet).sort()).toEqual(['rows', 'total']);
+  });
+
+  it('skips them for a listing that is not owner-scoped, whatever the caller asked for', async () => {
+    // Without a `mine` gate an admin gets five group-bys with no allowDiskUse over the entire
+    // collection, and the $unwind over tags[] on top. The only caller that wants them sends `mine`.
+    await run({ facets: 'true' });
+    expect(aggregate).toHaveBeenCalledTimes(1);
+
+    aggregate.mockClear();
+    await run({ mine: 'true', facets: 'true' });
+    expect(aggregate).toHaveBeenCalledTimes(2);
   });
 
   it('derives the $size over versions[] AFTER $limit when no sort needs it', async () => {

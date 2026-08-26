@@ -38,6 +38,10 @@ const ToolSchema: Schema = new Schema(
     toJSON: {
       virtuals: true,
     },
+    // BaseRepository.create returns toObject(), so callers need the id virtual here.
+    toObject: {
+      virtuals: true,
+    },
   }
 );
 

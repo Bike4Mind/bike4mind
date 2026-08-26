@@ -41,7 +41,7 @@ export class BFLBackend implements ICompletionBackend {
           1: { input: 400, output: 400 }, // $0.04 per image
         },
         description:
-          'FLUX Kontext Pro - Advanced image-to-image transformation with high-quality output and versatile editing capabilities.',
+          'FLUX Pro 1.1 - Professional quality image generation with strong prompt adherence and fast turnaround.',
         supportsSafetyTolerance: true,
         rank: 1,
       },
@@ -106,7 +106,7 @@ export class BFLBackend implements ICompletionBackend {
           1: { input: 350, output: 350 }, // $0.035 per transformation
         },
         description:
-          'FLUX Kontext Max - Premium image-to-image transformation with maximum quality and advanced editing capabilities.',
+          'FLUX Kontext Pro - Advanced image-to-image transformation with high-quality output and versatile editing capabilities.',
         supportsSafetyTolerance: true,
         rank: 4,
       },
@@ -121,8 +121,7 @@ export class BFLBackend implements ICompletionBackend {
         pricing: {
           1: { input: 450, output: 450 }, // $0.045 per transformation
         },
-        description:
-          'BlackForest Labs FLUX Kontext Max - Premium image-to-image transformation with maximum quality and capabilities',
+        description: 'FLUX Kontext Max - Premium image-to-image transformation with maximum quality and capabilities.',
         supportsSafetyTolerance: true,
         rank: 5,
       },

@@ -47,6 +47,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
     userId: 'u1',
     user: { id: 'u1', groups: [] } as never,
     sessionId: 's1',
+    questId: 'q1',
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     retrievalFilter: { excludeFilenameMarkers: ['MARK'], vectorizedOnly: true },
@@ -1457,6 +1458,10 @@ describe('search_knowledge_base access-event audit', () => {
         fileIds: ['f1'],
         surface: 'chat-kb-search',
         queryText: 'retired notes',
+        // #1867 turn linkage: the keyword arm has no similarity score, so `scores` is
+        // deliberately absent here (not asserted) - see the semantic-arm test below for that.
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });
@@ -1564,6 +1569,11 @@ describe('search_knowledge_base access-event audit', () => {
         chunkIds: ['c1'],
         fileIds: ['f1'],
         surface: 'chat-kb-search',
+        // #1867 similarity scores + turn linkage: semantic arm has a real per-chunk score
+        // (0.81 from the mocked result above), index-aligned with chunkIds.
+        scores: [0.81],
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });
@@ -2291,5 +2301,134 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const { context } = contextWithConfiguredDefault(99);
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
     });
+  });
+});
+
+/**
+ * Personal-corpus sessions search WITHOUT their lake arms. The load-bearing assertions are that the
+ * lake corpus walk does not run, AND that the caller's own library stays reachable - routing this
+ * through kbScope previously made the attached ids the sole authority, which suppressed the lakes
+ * and the rest of the owner's files together.
+ */
+describe('search_knowledge_base personal-corpus scoping', () => {
+  function makePersonalContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      suppressLakeArms: true,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'own1', fileName: 'work-notes.txt', tags: [], vectorized: true, mimeType: 'text/plain' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('searches with NO lake arms and never consults owner-wide lake access', async () => {
+    await run(makePersonalContext());
+
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+    // The unscoped semantic arm still runs: collectScopedFiles admits the caller's own and shared
+    // files via includeShared, so the corpus is real - it simply carries no lake tags.
+    expect(semanticDataLakeSearchMock).toHaveBeenCalled();
+    // `ownFilesOnly` is the half that makes the empty-tag case actually search rather than bail.
+    // Asserting only `dataLakeTags: []` left the wiring untested: deleting the flag at the call site
+    // passed the entire suite, so R3 could regress to its original broken state with CI green.
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      dataLakeTags: [],
+      ownFilesOnly: true,
+    });
+  });
+
+  it('does NOT restrict to the attached files - the rest of the owner library stays searchable', async () => {
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makePersonalContext();
+    await run(ctx);
+
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    const [, , filters, , , opts] = searchMock.mock.calls[0];
+    expect(filters.restrictToFileIds).toBeUndefined();
+    expect(opts.skipOwnership).not.toBe(true);
+    expect(opts.includeShared).toBe(true);
+    expect(opts.dataLakeTags).toEqual([]);
+  });
+
+  it('an agent kbScope still hard-restricts, independent of lake suppression', async () => {
+    await run(makePersonalContext({ kbScope: { fileIds: ['agent1'] } }));
+    expect(fileScopedSemanticSearchMock.mock.calls[0][0]).toMatchObject({ fileIds: ['agent1'] });
+  });
+});
+
+/**
+ * Session lake scoping. narrowLakeAccessToSession is NOT mocked here, so these exercise the real
+ * narrowing. Both arms are asserted: a keyword fallback that re-widened would undo the scope on
+ * exactly the turns semantic search found nothing.
+ */
+describe('search_knowledge_base narrows lake access to the session lake', () => {
+  const twoLakes = {
+    dataLakeTags: ['datalake:mine', 'datalake:other'],
+    dataLakeTagPrefixes: ['mine:', 'other:'],
+    scopedTagPrefixes: [],
+    lakes: [
+      { id: 'l1', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+      { id: 'l2', datalakeTag: 'datalake:other', fileTagPrefix: 'other:', source: 'registry' },
+    ],
+  };
+
+  function makeLakeContext(sessionRetrievalTags?: string[]): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      sessionRetrievalTags,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'd1', fileName: 'Doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+  }
+
+  it('the semantic arm searches only the session lake', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    await run(makeLakeContext(['datalake:mine']));
+
+    expect(semanticDataLakeSearchMock).toHaveBeenCalled();
+    const args = semanticDataLakeSearchMock.mock.calls[0][0];
+    expect(args.dataLakeTags).toEqual(['datalake:mine']);
+    expect(args.dataLakeTagPrefixes).toEqual(['mine:']);
+    expect(args.dataLakeTags).not.toContain('datalake:other');
+  });
+
+  it('the keyword fallback narrows identically, so it cannot re-widen', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeLakeContext(['datalake:mine']);
+    await run(ctx);
+
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    const opts = searchMock.mock.calls[0]?.[5];
+    expect(opts.dataLakeTags).toEqual(['datalake:mine']);
+    expect(opts.dataLakeTags).not.toContain('datalake:other');
+  });
+
+  it('an unscoped session keeps full access, so this cannot narrow an ordinary notebook', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    await run(makeLakeContext(undefined));
+
+    const args = semanticDataLakeSearchMock.mock.calls[0][0];
+    expect(args.dataLakeTags).toEqual(['datalake:mine', 'datalake:other']);
   });
 });

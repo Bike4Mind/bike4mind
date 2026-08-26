@@ -446,6 +446,7 @@ export type ChatCompletionContext = Pick<
   | 'logger'
   | 'entitlementKeys'
   | 'resolveEntitlementKeys'
+  | 'personalCorpusOnly'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -671,6 +672,17 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     _embeddingFactory: EmbeddingFactory,
     message: string
   ): Promise<IMessage[]> {
+    // A personal corpus suppresses this card. The two compose badly otherwise: personalCorpusOnly is
+    // only ever true when `retrievalTags` is empty (see resolvePersonalCorpusOnly), which is exactly
+    // the branch below that falls back to the FULL entitled set - so a notebook about its own uploads
+    // would get every entitled lake's beliefs injected, the always-on injection this change exists to
+    // stop, just through the other surface. Checked FIRST so a suppressed turn also skips the
+    // entitlement and prompt resolution below rather than doing that work and discarding it.
+    if (this.chatCompletion.personalCorpusOnly) {
+      this.logger.log('🧠 [lakeMemory] skipped (session corpus is personal files, not lake content)');
+      return [];
+    }
+
     const query = message?.trim();
     if (!query || !this.chatCompletion.recallLakeMemory) return [];
 
@@ -1806,6 +1818,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       return [];
     }
 
+    // Same rule as the per-turn skip above, at SESSION altitude: when everything attached to this
+    // notebook is a personal file rather than lake content, the question is about those documents
+    // and grounding against every reachable lake is what put an unrelated product's documents into
+    // a user's answer. See `personalCorpusOnly` for why it keys on lake membership and not on an
+    // empty `retrievalTags`. A lake session keeps grounding: its attachments ARE lake-tagged. The
+    // model can still call search_knowledge_base for the caller's OWN files. It cannot reach
+    // unowned lake content: the tools' lake arms are empty under suppression, and a direct
+    // retrieve_knowledge_content(file_id) for an unowned lake doc is denied too.
+    if (this.chatCompletion.personalCorpusOnly) {
+      this.logger.log('🔒 Forced retrieval: skipped (session corpus is personal files, not lake content)');
+      return [];
+    }
+
     const { db, user } = this.chatCompletion;
     // Fail closed on the projected reader rather than falling back to an unbounded per-file read:
     // a host missing it should ground nothing, not quietly reintroduce the corpus-sized load.
@@ -2026,10 +2051,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const sections: string[] = [];
       const sourceFileIds: string[] = [];
       const injectedChunkIds: string[] = [];
+      const injectedScores: number[] = [];
       // `scored` is already floor-filtered during the scan, so the walk only enforces the budget.
       for (const candidate of scored) {
         if (used >= forcedRetrievalCharBudget) break;
         injectedChunkIds.push(candidate.id);
+        injectedScores.push(candidate.score);
         const file = fileById.get(candidate.fabFileId);
         const remaining = forcedRetrievalCharBudget - used;
         // Defang BEFORE the budget slice, not after: the defang adds one space per line-initial
@@ -2212,8 +2239,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             resolvedLakeIds: forcedRetrievalLakeIds,
             fileIds: sourceFileIds,
             chunkIds: injectedChunkIds,
+            scores: injectedScores,
             surface: 'forced-retrieval',
             queryText: query,
+            questId: quest.id,
+            sessionId: quest.sessionId,
           },
           this.logger,
           this.chatCompletion.db.adminSettings

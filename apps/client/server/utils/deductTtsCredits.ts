@@ -4,8 +4,9 @@ import { usdToCredits } from '@bike4mind/utils';
 import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
 import { type ILogger } from '@bike4mind/observability';
 
-// Thrown by assertTtsCreditsAvailable when the caller can't pay. Callers map
-// this to a 402 - it's a billing state, not a bug. Metering is what stops an
+// Thrown by assertTtsCreditsAvailable when the caller can't pay. Callers map this
+// to a 422 tagged `insufficient_credits` - it's a billing state, not a bug, and
+// the classifier is what a caller matches on. Metering is what stops an
 // authenticated user from draining the operator's admin provider key for free.
 export class InsufficientTtsCreditsError extends Error {
   constructor(message: string) {

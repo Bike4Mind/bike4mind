@@ -31,7 +31,7 @@ export const BFLSafetyToleranceSchema = z
   .transform(value => Math.min(value, BFL_SAFETY_TOLERANCE.MAX));
 
 /**
- * List of image models supported by BlackForest Labs
+ * List of image models supported by Black Forest Labs
  */
 export const BFL_IMAGE_MODELS = [
   ImageModels.FLUX_PRO_1_1, // Current standard model

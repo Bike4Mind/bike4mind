@@ -10,11 +10,13 @@ import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from 
  * Query params (all optional):
  *   mine, sourceArtifactId  - scoping, as before
  *   q                       - substring match on title + description
- *   kind, visibility, gate, comments - facet filters
+ *   kind, visibility, gate, comments, tag - facet filters
  *   sort                    - newest (default) | oldest | views | versions | updated | title
- *   facets                  - 'true' to also compute the facet counts. OFF by default: they are
- *                             group-bys over the caller's whole scope, and the existence check the
- *                             profile screen makes (limit=1) has no use for them.
+ *   facets                  - 'true' to also compute the facet counts, in a second aggregation.
+ *                             OFF by default, and only honoured together with `mine`: they are
+ *                             group-bys with no allowDiskUse over the caller's whole scope, the
+ *                             existence check the profile screen makes (limit=1) has no use for
+ *                             them, and the only caller that wants them is owner-scoped anyway.
  *   limit, skip             - paging. `limit` defaults to LEGACY_LIMIT so callers written
  *                             before paging existed keep their previous behaviour.
  *
@@ -82,6 +84,7 @@ const handler = baseApi().get(async (req, res) => {
     visibility: typeof req.query.visibility === 'string' ? req.query.visibility : undefined,
     gate: typeof req.query.gate === 'string' ? req.query.gate : undefined,
     comments: typeof req.query.comments === 'string' ? req.query.comments : undefined,
+    tag: typeof req.query.tag === 'string' ? req.query.tag : undefined,
     sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
   };
   const { match, sort } = buildListQuery(params);
@@ -95,22 +98,30 @@ const handler = baseApi().get(async (req, res) => {
     titleSort: { $toLower: '$title' },
   };
 
+  // AUTHORIZATION clause and caller narrowing merged into ONE leading $match, so an index can
+  // serve the whole predicate. Mongo does not use indexes inside a $facet sub-pipeline, so with the
+  // narrowing applied in there the { ownerId, tags, deletedAt } index was unreachable for the very
+  // filter it was added for.
+  //
+  // $and rather than a spread: the two objects share no key today, but the collision a spread would
+  // one day hide is a narrowing clause clobbering the visibility filter - i.e. WIDENING the
+  // authorized set, which buildListQuery says must be impossible. $and makes that structural, and a
+  // top-level $and is flattened by the planner so index eligibility is unaffected.
+  const filter = Object.keys(match).length ? { $and: [scope, match] } : scope;
+
   // `versions` can grow unbounded, so compute its length server-side with $size and never
   // ship the array over the wire - the count drives the management tab's version chip and
   // single-version hint. $ifNull guards rows written before the field existed.
   //
-  // One aggregation, three answers: the page, the total behind it, and the facet counts.
-  // The counts are computed over `scope` WITHOUT the user's own facet selection applied, so
-  // a chip still shows its count after you click it instead of collapsing to itself.
+  // One aggregation, two answers: the page and the total behind it, both under the same narrowing.
   const [result] = await PublishedArtifact.aggregate([
-    { $match: scope },
+    { $match: filter },
     // Only when a sort orders by a derived field does it have to exist before $sort (which runs
     // ahead of $project - ordering by a projected-only field silently orders by nothing).
     ...(sortNeedsDerived ? [{ $addFields: derived }] : []),
     {
       $facet: {
         rows: [
-          { $match: match },
           { $sort: sort },
           { $skip: skip },
           { $limit: limit },
@@ -124,6 +135,7 @@ const handler = baseApi().get(async (req, res) => {
               slug: 1,
               title: 1,
               description: 1,
+              tags: 1,
               visibility: 1,
               commentPolicy: 1,
               // Needed by the share dialog to seed its "List in search engines" switch. Without
@@ -144,18 +156,41 @@ const handler = baseApi().get(async (req, res) => {
             },
           },
         ],
-        total: [{ $match: match }, { $count: 'n' }],
-        ...(wantFacets
-          ? {
+        total: [{ $count: 'n' }],
+      },
+    },
+  ]);
+
+  // Facet counts are their OWN aggregation over `scope` alone, deliberately without the caller's
+  // narrowing: a chip has to keep showing its count after you click it instead of collapsing to
+  // itself. Splitting them out is what lets the rows query above carry its filter in a leading
+  // $match; it also makes that property literal rather than a side effect of $facet's isolation.
+  //
+  // Owner-scoped listings only. Ungated, these are five group-bys with no allowDiskUse over
+  // everything an admin can see, and only the management tab (which always sends `mine`) uses them.
+  const [facetResult] =
+    wantFacets && mine
+      ? await PublishedArtifact.aggregate([
+          { $match: scope },
+          {
+            $facet: {
               byKind: [{ $group: { _id: '$source.kind', n: { $sum: 1 } } }],
               byVisibility: [{ $group: { _id: '$visibility', n: { $sum: 1 } } }],
               byGate: [{ $group: { _id: { $ifNull: ['$accessGate.kind', 'none'] }, n: { $sum: 1 } } }],
               withComments: [{ $match: { commentPolicy: { $in: ['open', 'restricted'] } } }, { $count: 'n' }],
-            }
-          : {}),
-      },
-    },
-  ]);
+              // Sorted by count then name so the row is stable between requests, and capped: a
+              // library can carry far more distinct tags than belong in a toolbar, and the full
+              // vocabulary is available from GET /api/publish/tags.
+              byTag: [
+                { $unwind: '$tags' },
+                { $group: { _id: '$tags', n: { $sum: 1 } } },
+                { $sort: { n: -1, _id: 1 } },
+                { $limit: 24 },
+              ],
+            },
+          },
+        ])
+      : [undefined];
 
   const buckets = (rows: Array<{ _id: unknown; n: number }> | undefined): Record<string, number> =>
     (rows ?? []).reduce<Record<string, number>>((acc, r) => {
@@ -169,10 +204,11 @@ const handler = baseApi().get(async (req, res) => {
     limit,
     skip,
     facets: {
-      kind: buckets(result?.byKind),
-      visibility: buckets(result?.byVisibility),
-      gate: buckets(result?.byGate),
-      comments: result?.withComments?.[0]?.n ?? 0,
+      kind: buckets(facetResult?.byKind),
+      visibility: buckets(facetResult?.byVisibility),
+      gate: buckets(facetResult?.byGate),
+      comments: facetResult?.withComments?.[0]?.n ?? 0,
+      tag: buckets(facetResult?.byTag),
     },
   });
 });

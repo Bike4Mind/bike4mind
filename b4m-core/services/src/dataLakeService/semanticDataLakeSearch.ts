@@ -206,6 +206,17 @@ export interface SemanticDataLakeSearchParams {
   apiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } | null | undefined;
   /** datalake:* meta-tags for the user's accessible lakes (caller-computed). */
   dataLakeTags: string[];
+  /**
+   * Rank the caller's OWN and shared files when no lake is in scope, instead of returning empty.
+   *
+   * The bail on an empty `dataLakeTags` is an optimization for a caller with no lake at all, for whom
+   * there is nothing worth embedding a query over. It is wrong for a caller whose lakes were
+   * suppressed DELIBERATELY (a session whose corpus is personal): `collectScopedFiles` passes
+   * `includeShared: true` alongside the lake args, so with them empty the corpus is still real - the
+   * caller's own and shared files - and bailing drops that session to metadata-only keyword search,
+   * losing content search over their own uploads. Off by default so the lake-less caller is unchanged.
+   */
+  ownFilesOnly?: boolean;
   /** OPEN static-registry content-tag prefixes (e.g. 'opti:') - ownership-bypass by design. */
   dataLakeTagPrefixes: string[];
   /** SCOPED dynamic-lake prefixes - matched only within owner/org access (caller-computed). */
@@ -948,12 +959,13 @@ export async function semanticDataLakeSearch(
     dataLakeTagPrefixes,
     scopedTagPrefixes = [],
     retrievalFilter = {},
+    ownFilesOnly = false,
     logger,
   } = params;
 
   const budgets = resolveBudgets(params.budgets);
 
-  if (!query.trim() || dataLakeTags.length === 0) return emptyResult(embeddingModel, budgets);
+  if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly)) return emptyResult(embeddingModel, budgets);
 
   // --- Scope the files (metadata only) within the accessible data lakes ---
   const scoped = await collectScopedFiles({

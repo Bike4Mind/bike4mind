@@ -17,7 +17,7 @@ Create stunning images and edit existing ones using AI-powered tools. Bike4Mind 
 
 1. Click the **model picker** in the chat input area
 2. Select **Image Models** from the dropdown filter
-3. Choose an image model (e.g., FLUX PRO, GPT-Image-1)
+3. Choose an image model (e.g., FLUX Pro 1.1, GPT-Image-1)
 4. Type a description of the image you want
 5. Press Enter to generate
 
@@ -37,9 +37,9 @@ Once the model generates your image, you can view, download, or edit the result.
 - **Quality options**: Standard or HD
 - **Sizes**: 1024x1024, 1024x1536, 1536x1024
 
-#### Flux (BlackForest Labs)
-- **FLUX PRO**: High-quality standard generation
-- **FLUX PRO Ultra**: Premium quality with custom aspect ratios
+#### Flux (Black Forest Labs)
+- **FLUX Pro 1.1**: Professional quality standard generation
+- **FLUX Pro Ultra**: Premium quality with custom aspect ratios
 - **FLUX Kontext**: Transform existing images based on prompts
 
 ### Generation Settings
@@ -141,7 +141,7 @@ Check your credit balance in Profile > Credit Analytics.
 
 - Make sure you have an image model selected (use the model picker and filter by Image Models)
 - Check you have sufficient credits
-- Verify you have API keys configured for the image provider (OpenAI or BlackForest Labs)
+- Verify you have API keys configured for the image provider (OpenAI or Black Forest Labs)
 - Try a simpler prompt first
 
 ### Poor Quality Results

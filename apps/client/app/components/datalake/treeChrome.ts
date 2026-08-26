@@ -4,17 +4,18 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { HUES } from './deckChrome';
 import type { Hue } from './deckChrome';
+import type { TreeSortMode } from './DataLakeTreeView';
 
 /**
- * Shared chrome for the Data Lake tree surfaces: the in-chat sidebar (DataLakeTree) and the
- * manager modal's navigation (DataLakeManagerPanel). Both must stay visually identical, so
- * the sizing constants, row styling, and tag-namespace display names live here.
+ * Shared chrome for the Data Lake tree surfaces: the in-chat sidebar (DataLakeChatTree) and
+ * the manager modal's navigation (DataLakeWizard/manager/ManagerNav). Both must stay visually
+ * identical, so the sizing constants, row styling, and tag-namespace display names live here.
  * Row/hover styling mirrors the main app sidenav (layouts/Notebook/Sidenav).
  */
 
-/** How the tree lists order their rows. Both surfaces hold this in state; declared here so a
- *  third mode is added in one place, alongside its icon. */
-export type TreeSortMode = 'count' | 'alpha';
+/** How the tree lists order their rows. Declared in DataLakeTreeView (which owns the sort
+ *  state); re-exported here so treeChrome's public surface stays intact for existing importers. */
+export type { TreeSortMode } from './DataLakeTreeView';
 
 /**
  * Sort toggle icon per ACTIVE mode: A-Z gets the alphabet glyph so the mode is readable from the

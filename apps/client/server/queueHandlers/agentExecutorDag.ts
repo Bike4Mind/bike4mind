@@ -49,6 +49,9 @@ export function makeDagDispatcher(args: {
     organizationId?: string;
     sessionId: string;
     questId: string;
+    /** The parent's real Quest id, inherited so a DAG child's lake-access audit rows join to the
+     *  turn. NOT `questId` above, which holds different things per dispatch lineage (#1867). */
+    linkedQuestId?: string;
     /** Pulled from the parent execution doc - used for audit lineage. */
     spawnedByExecutionId?: string;
     /**
@@ -86,6 +89,7 @@ export function makeDagDispatcher(args: {
         organizationId: nodeDefaults.organizationId,
         sessionId: nodeDefaults.sessionId,
         questId: nodeDefaults.questId,
+        linkedQuestId: nodeDefaults.linkedQuestId,
         model,
         query: node.description,
         status: 'pending' as AgentExecutionStatus,
