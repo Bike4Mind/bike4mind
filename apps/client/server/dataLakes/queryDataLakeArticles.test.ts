@@ -147,6 +147,18 @@ describe('queryDataLakeArticles deep-link (?id=) branch', () => {
     findById.mockReset();
   });
 
+  it('narrows a repeated ?id= to its first value instead of casting an array into findById (#2095)', async () => {
+    // /api/data-lakes/articles has no `[id]` route segment, so `?id=a&id=b` reaches here as an
+    // array. Passing that to findById produced a Mongoose CastError and a 500; `search` and `tags`
+    // on the same query were already narrowed, `id` was not.
+    findById.mockResolvedValue({ id: 'f1', tags: [{ name: 'datalake:opti-knowledge' }], moderationStatus: 'clean' });
+
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: ['f1', 'f2'] } as any);
+
+    expect(findById).toHaveBeenCalledWith('f1');
+    expect(result.total).toBe(1);
+  });
+
   it('grants via meta-tag and surfaces the grantor id for the caller to reuse in its own attribution', async () => {
     findById.mockResolvedValue({ id: 'f1', tags: [{ name: 'datalake:opti-knowledge' }], moderationStatus: 'clean' });
 

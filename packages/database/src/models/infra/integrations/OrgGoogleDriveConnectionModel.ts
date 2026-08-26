@@ -95,6 +95,10 @@ OrgGoogleDriveConnectionSchema.index({ targetDataLakeId: 1 }, { unique: true, na
 // Org lookups - NON-unique: an org may connect several folders/lakes.
 OrgGoogleDriveConnectionSchema.index({ organizationId: 1 }, { name: 'org_gdrive_conn_org_id' });
 
+// Credential-owner lookup (findByConnectedBy) - the profile-disconnect revoke needs every connection
+// whose credential belongs to the disconnecting user, across orgs, so this is deliberately unscoped.
+OrgGoogleDriveConnectionSchema.index({ connectedBy: 1 }, { name: 'org_gdrive_conn_connected_by' });
+
 // Scheduled re-sync poll scan (findDueForPoll): enabled + status equality, then lastPolledAt for both
 // the cutoff range and the oldest-first sort. Small collection today, but the sort is served from the
 // index rather than an in-memory sort as the fleet grows.
@@ -143,6 +147,16 @@ class OrgGoogleDriveConnectionRepository
     driveFolderId: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.findOne({ driveFolderId });
+  }
+
+  /**
+   * Every connection whose stored credential belongs to a given user (`connectedBy` is re-stamped
+   * with the credential in updateCredential, so it always names the credential's owner). Deliberately
+   * CROSS-ORG: the caller is the user's own profile-disconnect, which revokes their Google grant and
+   * so breaks these connections whichever org they belong to. Excludes credentials.
+   */
+  async findByConnectedBy(connectedBy: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
+    return this.find({ connectedBy });
   }
 
   /**

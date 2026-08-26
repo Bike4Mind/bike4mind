@@ -7,7 +7,7 @@ interface TreeRowLabelProps {
   label: string;
   /** Optional theme color token override (e.g. 'danger.500' for a failed file's row). */
   color?: string;
-  /** Joy Typography level override - e.g. the standalone page tree's file rows use the smaller
+  /** Joy Typography level override - e.g. the Viewer's file rows use the smaller
    *  `body-xs` to stay visually subordinate to their `body-sm` folder rows. Omit for the flat
    *  14px/400 the in-chat tree and the manager modal use. */
   level?: TypographyProps['level'];

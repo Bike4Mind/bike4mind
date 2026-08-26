@@ -34,8 +34,6 @@ const createInviteSchema = z.object({
   available: z.number().optional(),
 });
 
-type CreateInviteParameters = z.infer<typeof createInviteSchema>;
-
 interface CreateInviteAdapters {
   db: {
     // TODO: Use Invite model create type def
@@ -56,7 +54,9 @@ interface CreateInviteAdapters {
 
 export const createInvite = async (
   user: IUserDocument,
-  parameters: CreateInviteParameters,
+  // Accept the schema INPUT type: secureParameters re-parses and applies .prefault() internally,
+  // so the caller need not supply expiresAt (the output type would require it as Date).
+  parameters: z.input<typeof createInviteSchema>,
   { db }: CreateInviteAdapters
 ) => {
   const { id, type, available, recipients, ...rest } = secureParameters(parameters, createInviteSchema);

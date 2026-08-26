@@ -21,7 +21,7 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimUnarchiving'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -65,7 +65,23 @@ export const unarchiveDataLake = async (
     throw new BadRequestError(`Cannot restore a data lake in '${existing.status}' status`);
   }
 
-  await db.dataLakes.update({ id: dataLakeId, status: 'restoring' });
+  // Conditional on the statuses the guard above admitted, NOT a blind $set: the check ran against a
+  // document read moments ago, and deleteDataLake accepts 'archived' too, so a delete landing in
+  // that gap must make this LOSE rather than be overwritten. Overwriting it would carry the lake on
+  // to the terminal 'active' write below with every member already soft-deleted, and
+  // restoreDeletedDataLake refuses an 'active' lake - the files would have no route back.
+  // Mirrors claimRestoring on the delete axis.
+  const entered = await db.dataLakes.claimUnarchiving(dataLakeId);
+  if (!entered) {
+    // Re-read only on the rare loss path, so the refusal names the status that actually won rather
+    // than the stale one the guard saw.
+    const current = await db.dataLakes.findById(dataLakeId);
+    throw new BadRequestError(
+      current
+        ? `Cannot restore a data lake in '${current.status}' status`
+        : 'This data lake is no longer available to restore'
+    );
+  }
 
   const scope = lakeMembershipScope(existing);
   // undefined for a lake archived before `filesArchivedAt` existed, which keeps both the dedup

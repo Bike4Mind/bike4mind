@@ -938,6 +938,25 @@ describe('ChatCompletionProcess', () => {
         expect(completeOpts.omitIdentityReminder).toBe(true);
       });
 
+      // A session's first turn used to keep the in-flight quest in history, so the caller's message
+      // reached the model twice: once as history, once as the current user prompt. The pair
+      // discriminates on the mode alone - only raw asks history to exclude the current turn.
+      it('asks history to exclude the current turn under raw, but not for a default request', async () => {
+        mockTextModel();
+        const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await service.process({ body: base, logger: mockLogger });
+        expect(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)?.[2]).toEqual(
+          expect.objectContaining({ excludeCurrentPrompt: false })
+        );
+
+        mockTextModel();
+        await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
+        expect(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)?.[2]).toEqual(
+          expect.objectContaining({ excludeCurrentPrompt: true })
+        );
+      });
+
       // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
       // server-side tool-use preamble into the request (observed live: an Anthropic completion
       // with only auto-added tools knew the current date on a fresh raw session). The same

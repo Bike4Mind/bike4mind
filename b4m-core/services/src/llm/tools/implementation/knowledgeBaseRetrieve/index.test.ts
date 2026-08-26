@@ -58,6 +58,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
     userId: 'u1',
     user: { id: 'u1', groups: [] } as never,
     sessionId: 's1',
+    questId: 'q1',
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     retrievalFilter: { excludeFilenameMarkers: ['MARK'], vectorizedOnly: true },
@@ -1001,6 +1002,9 @@ describe('retrieve_knowledge_content access-event audit', () => {
         resolvedLakeIds: ['lake-x'],
         fileIds: [FILE_ID],
         surface: 'chat-kb-retrieve',
+        // #1867 turn linkage: no scores here - direct file_id lookup, not a ranked search.
+        questId: 'q1',
+        sessionId: 's1',
       })
     );
   });
@@ -1094,5 +1098,78 @@ describe('retrieve_knowledge_content access-event audit', () => {
 
     expect(out).toContain('Retrieved content from');
     expect(record).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Personal-corpus scoping reaches this tool too. It is AUTO-PAIRED with search_knowledge_base
+ * (addPairedTool in ChatCompletionProcess), so a session scoped to its own files offers this tool on
+ * every such turn - and while only search honoured the scope, this was a live path back to every
+ * lake the owner could reach.
+ */
+describe('retrieve_knowledge_content honours the personal-corpus scope', () => {
+  it("serves the caller's own file without consulting owner-wide lake access", async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, suppressLakeArms: true } as Partial<ToolContext>);
+
+    await runById(ctx);
+
+    // Suppression removes the LAKE arms only. It must not become an id allow-list: the caller's own
+    // documents stay retrievable, which is what routing this through kbScope used to break.
+    expect(ctx.db.fabfiles!.findById).toHaveBeenCalled();
+  });
+});
+
+describe('retrieve_knowledge_content narrows lake access to the session lake', () => {
+  /**
+   * The earlier versions of these two used makeContext's DEFAULT bare vi.fn() readers, so `files`
+   * stayed empty and dynamicAccess() - the code under test - was never invoked; one of them wrapped
+   * its only assertion in an always-false `if`. Both passed while asserting nothing. Setting up a
+   * real served file is what makes them exercise the path.
+   */
+  const twoLakes = {
+    dataLakeTags: ['datalake:mine', 'datalake:unrelated'],
+    dataLakeTagPrefixes: ['mine:', 'unrel:'],
+    scopedTagPrefixes: [],
+    lakes: [
+      { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+      {
+        id: 'l2',
+        name: 'Unrelated-Product-KB',
+        datalakeTag: 'datalake:unrelated',
+        fileTagPrefix: 'unrel:',
+        source: 'registry',
+      },
+    ],
+  };
+
+  it("serves the caller's own file without consulting owner-wide lake access", async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, suppressLakeArms: true } as never);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    const out = await runById(ctx);
+
+    // Suppression removes the LAKE arms only - the caller's own documents stay retrievable, which is
+    // what routing this through kbScope used to break.
+    expect(ctx.db.fabfiles!.findByIdAndUserId).toHaveBeenCalled();
+    expect(out).not.toContain('No document found');
+  });
+
+  it('attributes the audit against OWNER-WIDE lakes, not the narrowed set', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    const record = vi.fn();
+    const ctx = makeContext({ retrievalFilter: undefined, sessionRetrievalTags: ['datalake:mine'] } as never);
+    // The audit block is gated on this repository being present - without it the assertion below
+    // would pass vacuously by never entering the branch at all.
+    (ctx.db as Record<string, unknown>).lakeAccessEvents = { record };
+    // Owner-served (the fast path consults no lake state) and tagged to a lake OUTSIDE the session
+    // scope. Attributing against the narrowed set finds nothing and drops the row; attributing
+    // against owner-wide access records it. That difference is the finding.
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ tags: [{ name: 'datalake:unrelated' }] })
+    );
+
+    await runById(ctx);
+
+    expect(record).toHaveBeenCalled();
   });
 });

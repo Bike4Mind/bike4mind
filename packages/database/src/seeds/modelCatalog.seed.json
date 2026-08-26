@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-04T09:38:17.825Z",
-  "notice": "Fallback defaults last maintained on 2026-08-04. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-08-20T13:26:52.509Z",
+  "notice": "Fallback defaults last maintained on 2026-08-20. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -765,7 +765,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "BlackForest Labs FLUX Kontext Max - Premium image-to-image transformation with maximum quality and capabilities",
+        "description": "FLUX Kontext Max - Premium image-to-image transformation with maximum quality and capabilities.",
         "rank": 5
       }
     },
@@ -791,7 +791,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "FLUX Kontext Max - Premium image-to-image transformation with maximum quality and advanced editing capabilities.",
+        "description": "FLUX Kontext Pro - Advanced image-to-image transformation with high-quality output and versatile editing capabilities.",
         "rank": 4
       }
     },
@@ -872,7 +872,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "FLUX Kontext Pro - Advanced image-to-image transformation with high-quality output and versatile editing capabilities.",
+        "description": "FLUX Pro 1.1 - Professional quality image generation with strong prompt adherence and fast turnaround.",
         "rank": 1
       }
     },

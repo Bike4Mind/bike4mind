@@ -2,6 +2,7 @@ import {
   dataLakeRepository,
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
+  dataLakeProposalRepository,
   fabFileRepository,
   fabFileChunkRepository,
   memoryLedgerRepository,
@@ -47,6 +48,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        dataLakeProposals: dataLakeProposalRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,

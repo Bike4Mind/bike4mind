@@ -143,7 +143,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'it broke' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
     // The saved document and the analytics call must agree on the same resolved id -- the
     // authenticated user's real id, not the untrusted body value.
@@ -216,7 +216,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'org mismatch check' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved!.organization).toBe('Real Org');
   });
 
@@ -259,7 +259,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     // duplicate retry.
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'email outage should not mask this save' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
   });
 
@@ -299,7 +299,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'analytics write failure should not mask this save' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
 
     createSpy.mockRestore();

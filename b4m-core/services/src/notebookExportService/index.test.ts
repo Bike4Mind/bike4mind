@@ -77,6 +77,14 @@ async function exportOnce(over: AdapterOverrides = {}) {
   return JSON.parse(uploaded[0]);
 }
 
+/** Same run, but hands back the adapters so a test can assert on what was NOT logged. */
+async function exportOnceWithAdapters(over: AdapterOverrides = {}) {
+  const { adapters, uploaded } = makeAdapters(over);
+  await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+  expect(uploaded).toHaveLength(1);
+  return { payload: JSON.parse(uploaded[0]), adapters };
+}
+
 describe('notebook export', () => {
   it('emits promptMeta from the nested groups it is actually stored in', async () => {
     const payload = await exportOnce();
@@ -139,13 +147,88 @@ describe('notebook export', () => {
     expect(find.mock.calls.map(([, opts]) => opts?.skip)).toEqual([0, 100]);
   });
 
+  it('finds artifacts by their own id, not by _id', async () => {
+    // Artifact ids are not ObjectId-castable, so the real collection throws on an `_id` query.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      if (!query.id?.$in) {
+        throw new Error('CastError: Cast to ObjectId failed for value "artifact_1_probe" at path "_id"');
+      }
+      return query.id.$in.map(id => ({ id, title: 'My Chart', type: 'recharts' }));
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts.map((a: { id: string }) => a.id)).toEqual(['artifact-1']);
+  });
+
+  it('warns by id about an artifact it could not export, so the gap is not silent', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      artifactRepository: { find: vi.fn().mockResolvedValue([]) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(uploaded).toHaveLength(1);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Some artifacts were not exported',
+      expect.objectContaining({ notExported: ['artifact-1'] })
+    );
+  });
+
+  it('leaves a soft-deleted artifact out of the export, like every other artifact reader', async () => {
+    // What this pins is that the filter is SENT and that a matching row is excluded. It cannot
+    // establish MongoDB's own null-matches-missing behaviour, which is what makes the filter safe
+    // for the normal rows that have no `deletedAt` field at all - the repository here is a stub.
+    // That half rests on the schema: `deletedAt` has no default, so those rows omit the field, and
+    // an equality-to-null query matches missing-or-null.
+    const find = vi.fn(async (query: Record<string, unknown>) => {
+      // Mirrors the collection: a row whose deletedAt is set does not match `deletedAt: null`.
+      if (query.deletedAt !== null) {
+        return [{ id: 'artifact-1', title: 'Deleted Chart', type: 'recharts', deletedAt: new Date() }];
+      }
+      return [];
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts).toEqual([]);
+    expect(find).toHaveBeenCalledWith(expect.objectContaining({ deletedAt: null }));
+  });
+
+  it('leaves out an artifact the exporter cannot read, and scopes the query to them', async () => {
+    // `session.artifactIds` is client-supplied and written through unvalidated, so an id arriving
+    // at the export is not necessarily the caller's. The normal read path denies such a row; the
+    // export must not be the way around it. The stub answers only when the query carries the
+    // access clause, so this cannot pass by resolving everything.
+    const find = vi.fn().mockImplementation((query: Record<string, unknown>) => {
+      if (!query.$or) return [{ id: 'artifact-1', title: 'Someone Elses Artifact', type: 'react' }];
+      return [];
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts).toEqual([]);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: [
+          { userId: 'user-1' },
+          { 'permissions.canRead': 'user-1' },
+          { visibility: 'public' },
+          { 'permissions.isPublic': true },
+        ],
+      })
+    );
+  });
+
   it('names an artifact from its title, which is the field the entity actually has', async () => {
-    const payload = await exportOnce({
+    const { payload, adapters } = await exportOnceWithAdapters({
       artifactRepository: {
         find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts' }]),
       },
     });
 
     expect(payload.notebooks[0].artifacts[0].name).toBe('My Chart');
+    // An export where every id resolved must say nothing. Without this a spurious warn - the kind
+    // an off-by-one in the notExported predicate produces - would ship green.
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
   });
 });

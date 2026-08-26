@@ -95,6 +95,69 @@ describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileIds', () => {
   });
 });
 
+// The per-FILE pairing the removal path needs (#2087). The union above cannot express it: pairing
+// every file with every model in the batch issues one request per (file, model) cell, most of which
+// match nothing, and widens any single index failure to every file in the removal.
+describe('FabFileChunkRepository.embeddingModelsByFabFileIds', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('groups models under the file that actually used them', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f2', text: 'c', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.embeddingModelsByFabFileIds(['f1', 'f2']);
+
+    expect(byFile).toEqual({ f1: ['model-a'], f2: ['model-b'] });
+  });
+
+  it('dedupes within a file and keeps every model a re-embedded file spans', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'b', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f1', text: 'c', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.embeddingModelsByFabFileIds(['f1']);
+
+    expect(byFile.f1.sort()).toEqual(['model-a', 'model-b']);
+  });
+
+  it('omits a requested file with no model-bearing chunks, rather than mapping it to an empty list', async () => {
+    // The port iterates this map, so an omitted file is how a no-op removal request is dropped.
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'f2', text: 'not vectorized', tokenCount: 1 },
+    ]);
+
+    const byFile = await fabFileChunkRepository.embeddingModelsByFabFileIds(['f1', 'f2', 'never-seen']);
+
+    expect(byFile).toEqual({ f1: ['model-a'] });
+  });
+
+  it('excludes chunks outside the requested file ids', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'in-scope', text: 'a', tokenCount: 1, embeddingModel: 'model-a' },
+      { fabFileId: 'out-of-scope', text: 'b', tokenCount: 1, embeddingModel: 'model-b' },
+    ]);
+
+    const byFile = await fabFileChunkRepository.embeddingModelsByFabFileIds(['in-scope']);
+
+    expect(byFile).toEqual({ 'in-scope': ['model-a'] });
+  });
+
+  it('an empty id list returns nothing without querying', async () => {
+    await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' }]);
+
+    expect(await fabFileChunkRepository.embeddingModelsByFabFileIds([])).toEqual({});
+  });
+});
+
 /**
  * The keyset contract the streaming ranker depends on. Without a total order and an exact cursor,
  * paging a corpus can skip or repeat chunks and retrieval results stop being reproducible - which
