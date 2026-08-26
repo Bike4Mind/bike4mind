@@ -1061,7 +1061,11 @@ export class AnthropicBackend implements ICompletionBackend {
     const cacheStrategy = options.cacheStrategy;
     if (cacheStrategy?.enableCaching) {
       const adapter = getCachingAdapter(ModelBackend.Anthropic);
-      const cachedParams = adapter.applyCaching(apiParams as unknown as Record<string, unknown>, cacheStrategy);
+      const cachedParams = adapter.applyCaching(
+        apiParams as unknown as Record<string, unknown>,
+        cacheStrategy,
+        this.logger
+      );
       Object.assign(apiParams, cachedParams);
 
       this.logger.debug('[Anthropic] Applying cache control', {
