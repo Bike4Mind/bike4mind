@@ -329,7 +329,8 @@ export interface ILakeConfigChangeEventRepository extends Pick<
 > {
   record(input: RecordLakeConfigChangeInput): Promise<ILakeConfigChangeEventDocument>;
   /** Newest first, tie-broken on `_id`: a TOTAL order, so repeated calls agree and a `limit`
-   * window is reproducible. A history surface exists to say what happened in what sequence. */
+   * window is reproducible. Within a same-millisecond tie that order is stable but NOT
+   * chronological - the writers are separate processes - so it is not a true sequence. */
   listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeConfigChangeEventDocument[]>;
 }
 

@@ -294,7 +294,8 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       findSpy.mockRestore();
 
       // The tie is real - every event shares one createdAt - so the returned order is decided
-      // entirely by the tie-break, newest-inserted first.
+      // entirely by the tie-break. One process and a monotonic counter here, so that lands
+      // newest-inserted first; across processes it is stable but not chronological.
       const stored = await LakeConfigChangeEventModel.find({ dataLakeId: 'lake-1' }).lean();
       expect(new Set(stored.map(e => e.createdAt.getTime())).size).toBe(1);
       expect(events.map(e => String(e.id))).toEqual([...ids].reverse());

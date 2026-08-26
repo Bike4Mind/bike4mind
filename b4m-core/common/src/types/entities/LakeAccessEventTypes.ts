@@ -189,7 +189,8 @@ export interface ILakeAccessEventRepository extends Pick<
 > {
   record(input: RecordLakeAccessEventInput): Promise<ILakeAccessEventDocument>;
   /** Both readers return newest first, tie-broken on `_id`: a TOTAL order, so repeated calls
-   * agree and a `limit` window is reproducible. */
+   * agree and a `limit` window is reproducible. Within a same-millisecond tie that order is
+   * stable but NOT chronological - the writers are separate processes. */
   listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]>;
   listByPrincipal(
     principalKind: LakeAccessPrincipalKind,
