@@ -431,6 +431,21 @@ const RESET_CONCURRENCY = 10;
 // matched union, so this trades round trips against the server-side work one query does.
 const LAKE_COUNT_CHUNK = 25;
 
+/** Chunk aggregates in flight per lake-count leg. Same reasoning as RESET_CONCURRENCY: the pool
+ *  defaults to 2, so a handful in flight keeps it busy while the next query is planned, and the
+ *  cap stops one admin request monopolizing every connection - the two legs run concurrently with
+ *  each other, so an unbounded fan-out on either starves the other. */
+const LAKE_COUNT_CONCURRENCY = 4;
+
+/** Runs `task` over `items` with at most `limit` in flight, in order. */
+const mapBounded = async <T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> => {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    results.push(...(await Promise.all(items.slice(i, i + limit).map(task))));
+  }
+  return results;
+};
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -799,21 +814,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       ...baseMatch,
       tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`), ...NOT_META_TAG } } },
     });
-    const anyPrefixRegex = new RegExp(`^(${usablePrefixes.map(p => escapeRegex(p)).join('|')})`);
-
     // The per-prefix breakdown is chunked into `$facet` aggregates for the same reason as
     // countDataLakeFilesByMembership: `tagPrefixes` is one entry per lake the caller can see,
     // which on the admin tag-count path is every lake of every tenant. Branches stay independent
     // because a file carrying two lakes' prefixes must count once for EACH - the reason the
     // docblock above warns that `byPrefix` can outsum `total`.
+    //
+    // Both unions below are `$or` of the single-prefix filters, NEVER one `^(a|b|c)` alternation:
+    // a regex only yields index bounds when `^` is followed by literal characters, so an
+    // alternation drops `tags.name` entirely and scans every tag of every file in the install.
+    // `$or` lets the planner bound each arm and union the results.
     const byPrefix: Record<string, number> = {};
     const chunkCounts = async (start: number) => {
       const chunk = usablePrefixes.slice(start, start + LAKE_COUNT_CHUNK);
-      const chunkRegex = new RegExp(`^(${chunk.map(p => escapeRegex(p)).join('|')})`);
       // Synthetic branch keys: a facet field name may not contain a '.' or start with a '$',
       // and a prefix is a user-derived string. Mapped back positionally.
       const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
-        { $match: { ...baseMatch, tags: { $elemMatch: { name: { $regex: chunkRegex, ...NOT_META_TAG } } } } },
+        { $match: { $or: chunk.map(prefixMatch) } },
         {
           $facet: Object.fromEntries(
             chunk.map((prefix, j) => [`p${j}`, [{ $match: prefixMatch(prefix) }, { $count: 'n' }]])
@@ -831,11 +848,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       (_, i) => i * LAKE_COUNT_CHUNK
     );
     const [total] = await Promise.all([
-      this.fabFileModel.countDocuments({
-        ...baseMatch,
-        tags: { $elemMatch: { name: { $regex: anyPrefixRegex, ...NOT_META_TAG } } },
-      }),
-      ...chunkStarts.map(chunkCounts),
+      this.fabFileModel.countDocuments({ $or: usablePrefixes.map(prefixMatch) }),
+      mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, chunkCounts),
     ]);
 
     return { total, byPrefix };
@@ -1566,11 +1580,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * per-scope INDEPENDENT: a file that belongs to two lakes (co-owned meta-tags, or a colliding
    * prefix) counts once for each, exactly as the per-scope counts did. A `$group` on a single
    * matched lake would have undercounted it.
+   *
+   * Chunks run at LAKE_COUNT_CONCURRENCY, the same bound countDataLakeUniqueFilesByPrefix uses:
+   * these two legs are issued concurrently with each other, so neither may fan out freely.
    */
   async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
     if (scopes.length === 0) return {};
     const counts: Record<string, number> = {};
-    for (let i = 0; i < scopes.length; i += LAKE_COUNT_CHUNK) {
+    const chunkStarts = Array.from(
+      { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
+      (_, i) => i * LAKE_COUNT_CHUNK
+    );
+    await mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, async i => {
       const chunk = scopes.slice(i, i + LAKE_COUNT_CHUNK);
       const filters = chunk.map(scope => ({
         ...buildDataLakeMembershipFilter(scope),
@@ -1587,7 +1608,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunk.forEach((scope, j) => {
         counts[scope.datalakeTag] = row?.[`s${j}`]?.[0]?.n ?? 0;
       });
-    }
+    });
     return counts;
   }
 

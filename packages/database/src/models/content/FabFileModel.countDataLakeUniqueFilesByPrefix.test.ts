@@ -146,6 +146,33 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
     }
   });
 
+  it('keeps tags.name index bounds on the chunk union', async () => {
+    // A regex only yields index bounds when `^` is followed by literal characters, so a single
+    // `^(a|b|c)` alternation for the chunk union drops `tags.name` and scans every tag in the
+    // install. This pins the `$or`-of-arms shape that keeps the bounds.
+    await FabFile.collection.createIndex({ 'tags.name': 1 });
+    for (let i = 0; i < 25; i++) await makeFile({ tags: [`lake${i}:x`], fileName: `member-${i}` });
+    for (let i = 0; i < 300; i++) await makeFile({ tags: [`unrelated-${i}`], fileName: `other-${i}` });
+
+    const prefixes = Array.from({ length: 25 }, (_, i) => `lake${i}:`);
+    const pipelines: any[] = [];
+    const aggregate = vi.spyOn(FabFile, 'aggregate');
+    try {
+      await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, prefixes);
+      pipelines.push(...aggregate.mock.calls.map(c => c[0]));
+    } finally {
+      aggregate.mockRestore();
+    }
+
+    // Explain the union the implementation actually built, not a hand-rewritten copy of it.
+    const union = pipelines[0].find((stage: any) => stage.$match).$match;
+    const stats: any = await FabFile.collection.find(union).explain('executionStats');
+
+    // Only the 25 lake files should be touched, not the 300 unrelated ones. The alternation
+    // shape loses tags.name and examines all 325.
+    expect(stats.executionStats.totalDocsExamined).toBeLessThan(100);
+  }, 60000);
+
   it('keeps prefixes independent across a chunk boundary', async () => {
     // The multi-lake case above, but with the two lakes deliberately in different chunks: the
     // chunk union is per-chunk, so a file must still count under a prefix in each.
