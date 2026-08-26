@@ -833,6 +833,37 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  /**
+   * Advance a file's partial vectorize progress WITHOUT ever regressing it or reopening a
+   * settled file. A file's chunks fan out across several vectorize messages, each of which
+   * recomputes the whole-file rollup; a message that finishes late still holds the count it
+   * measured before its peers committed theirs. An unguarded write of that stale rollup lands
+   * after the last message stamped the terminal state and leaves the file below chunkCount with
+   * isVectorizing back on - which isMemberIndexingInFlight reads as forever-indexing, silently
+   * withholding a fully-vectorized file from every semantic read with no path back.
+   *
+   * Two conditions, both load-bearing: the count may only move up, and
+   * `chunkEmbeddingModelStampedAt` must still be unset. The stamp is the terminal marker because
+   * `vectorized: true` + `isVectorizing: false` is also the state chunking leaves behind at
+   * count 0 (see fabFileService/chunk.ts), and re-chunking clears the stamp for the next round.
+   *
+   * Returns true if this call advanced the file.
+   */
+  async advanceVectorizeProgress(fabFileId: string, vectorizedChunkCount: number): Promise<boolean> {
+    const result = await this.fabFileModel.findOneAndUpdate(
+      {
+        _id: fabFileId,
+        // Matches an unset stamp as well as an explicitly null one.
+        chunkEmbeddingModelStampedAt: null,
+        // $lte alone would exclude a file whose count has never been written.
+        $or: [{ vectorizedChunkCount: { $lte: vectorizedChunkCount } }, { vectorizedChunkCount: null }],
+      },
+      { $set: { vectorized: true, vectorizedChunkCount, isVectorizing: true } },
+      { new: false, session: this._txn ?? undefined }
+    );
+    return result !== null;
+  }
+
   async findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       userId,

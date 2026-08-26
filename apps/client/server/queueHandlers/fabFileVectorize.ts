@@ -277,6 +277,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // >= with chunkCount>0 guard so an under-counted chunk can't permanently block completion.
     const isFileVectorized = !!fabFile.chunkCount && vectorizedChunkCount >= fabFile.chunkCount;
+    let advanced = false;
 
     if (isFileVectorized) {
       // Stamp every chunk with its embeddingModel only once the WHOLE file is vectorized - a
@@ -292,15 +293,22 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         { vectorized: true, vectorizedChunkCount, isVectorizing: false }
       );
     } else {
-      await fabFileRepository.update({
-        id: fabFileId,
-        vectorized: true,
-        vectorizedChunkCount,
-        isVectorizing: true,
-      });
+      // Guarded, not a plain update: sibling messages for this same file each recompute the
+      // whole-file rollup, so one that finishes late holds a count measured before its peers
+      // committed. Writing that stale rollup over a file another message already stamped
+      // terminal would reopen isVectorizing below chunkCount, which reads as forever-indexing
+      // and withholds a fully-vectorized file from retrieval with no repair path.
+      advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount);
+      if (!advanced) {
+        logger.log(
+          `FabFile ${fabFileId} partial rollup ${vectorizedChunkCount} is stale or the file is already settled, skipping write`
+        );
+      }
     }
-    fabFile.vectorizedChunkCount = vectorizedChunkCount;
-    fabFile.isVectorizing = !isFileVectorized;
+    if (isFileVectorized || advanced) {
+      fabFile.vectorizedChunkCount = vectorizedChunkCount;
+      fabFile.isVectorizing = !isFileVectorized;
+    }
 
     if (isFileVectorized) {
       // Non-fatal: a throw here must never reach the outer catch. This file is ALREADY

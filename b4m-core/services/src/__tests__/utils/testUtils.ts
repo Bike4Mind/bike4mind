@@ -81,6 +81,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
+  advanceVectorizeProgress: vi.fn(),
   computeDataLakeStats: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),

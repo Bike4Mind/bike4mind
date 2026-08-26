@@ -671,6 +671,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
+  /**
+   * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
+   * stored count is not already higher and the file has not been stamped terminal, so a stale
+   * rollup can never regress a count or reopen `isVectorizing` on a settled file. Returns true
+   * if this call advanced the file.
+   */
+  advanceVectorizeProgress(fabFileId: string, vectorizedChunkCount: number): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
   // fileTagPrefix match on a file the lake's creator OWNS. See buildDataLakeMembershipFilter
