@@ -129,6 +129,24 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
     expect((raw!.quests as { subQuests: { status: string }[] }[])[0].subQuests[0].status).toBe('completed');
   });
 
+  it('refuses a bad review-gate status at the schema too - the only writer of that field', async () => {
+    const planId = await seedLegacyPlan();
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forcing past the compile-time type is the point
+      questMasterPlanRepository.updateReviewGate(planId, 'q1', 'sq1', 'not-a-review-status' as any)
+    ).rejects.toThrow(/not a valid enum value/);
+  });
+
+  it('still accepts a valid review-gate status', async () => {
+    const planId = await seedLegacyPlan();
+
+    const updated = await questMasterPlanRepository.updateReviewGate(planId, 'q1', 'sq1', 'approved', 'looks good');
+
+    expect(updated!.quests[0].subQuests[0].reviewStatus).toBe('approved');
+    expect(updated!.quests[0].subQuests[0].reviewNote).toBe('looks good');
+  });
+
   it('lets a legacy sub-quest be written back to a canonical status', async () => {
     const planId = await seedLegacyPlan();
 

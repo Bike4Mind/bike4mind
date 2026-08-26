@@ -1,3 +1,4 @@
+import type { ReviewGateStatus } from '@bike4mind/common';
 import type {
   AgentListResponse,
   CreateAgentRequest,
@@ -77,7 +78,7 @@ export interface ITavernService {
     planId: string,
     questId: string,
     subQuestId: string,
-    reviewStatus: 'pending' | 'approved' | 'rejected',
+    reviewStatus: ReviewGateStatus,
     reviewNote?: string
   ): Promise<QuestWorkflowResponse>;
 

@@ -1,3 +1,4 @@
+import type { ReviewGateStatus } from '@bike4mind/common';
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { ITavernService } from './ITavernService.js';
 import type {
@@ -104,7 +105,7 @@ export class TavernService implements ITavernService {
     planId: string,
     questId: string,
     subQuestId: string,
-    reviewStatus: 'pending' | 'approved' | 'rejected',
+    reviewStatus: ReviewGateStatus,
     reviewNote?: string
   ): Promise<QuestWorkflowResponse> {
     return this.apiClient.post<QuestWorkflowResponse>(

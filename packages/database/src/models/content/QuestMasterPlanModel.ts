@@ -7,6 +7,7 @@ import {
   QuestDecision,
   QuestHandoff,
   REVIEW_GATE_STATUS_VALUES,
+  ReviewGateStatus,
   SUBQUEST_STATUS_VALUES,
   SubQuestStatus,
 } from '@bike4mind/common';
@@ -732,7 +733,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     planId: string,
     questId: string,
     subQuestId: string,
-    reviewStatus: 'pending' | 'approved' | 'rejected',
+    reviewStatus: ReviewGateStatus,
     reviewNote?: string
   ): Promise<IQuestMasterPlanDocument | null> {
     const setFields: Record<string, unknown> = {
@@ -753,6 +754,9 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       {
         arrayFilters: [{ 'quest.id': questId }, { 'subQuest.id': subQuestId }],
         new: true,
+        // Same reason as the status writes above: without this the reviewStatus enum is dead on
+        // the update path, and this is the only writer of that field.
+        runValidators: true,
       }
     );
   }
