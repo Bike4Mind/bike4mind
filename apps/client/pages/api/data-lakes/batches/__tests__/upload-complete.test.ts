@@ -7,8 +7,6 @@ const h = vi.hoisted(() => ({
   setStatusIfActive: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
-  fabFindByIdAndUserId: vi.fn(),
-  fabUpdate: vi.fn(),
   fabSoftDeleteScoped: vi.fn(),
 }));
 
@@ -32,8 +30,6 @@ vi.mock('@bike4mind/database', () => ({
     setStatusIfActive: h.setStatusIfActive,
   },
   fabFileRepository: {
-    findByIdAndUserId: h.fabFindByIdAndUserId,
-    update: h.fabUpdate,
     softDeleteByIdsForUserBatch: h.fabSoftDeleteScoped,
   },
 }));
@@ -49,7 +45,8 @@ const makeRes = () => {
   const res = { json, status: vi.fn(() => ({ json })) } as never;
   return { res, json };
 };
-const req = (body: unknown) => ({ method: 'POST', user: { id: 'u1' }, body, logger: { error: vi.fn() } }) as never;
+const logger = { error: vi.fn(), warn: vi.fn() };
+const req = (body: unknown) => ({ method: 'POST', user: { id: 'u1' }, body, logger }) as never;
 /** A syntactically valid 24-char hex ObjectId - failedFileIds is shape-validated at the schema. */
 const FID_A = '0123456789abcdef01234567';
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
@@ -62,8 +59,6 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     h.update.mockResolvedValue(null);
     h.finalizeBatchIfComplete.mockResolvedValue(undefined);
     h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
-    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'f1', batchId: 'b1' });
-    h.fabUpdate.mockResolvedValue(null);
   });
 
   it('rejects when the batch belongs to another user, without writing anything', async () => {
@@ -147,15 +142,14 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a malformed file id with a 400 instead of 500ing before finalize (#2090)', async () => {
-    // Unvalidated, this reached findOne({_id: 'not-an-id'}) and threw a Mongoose CastError - a 500
-    // raised BEFORE the status flip and finalize below, leaving the batch non-terminal until the
-    // stuck reconciler fired.
+  it('rejects a malformed file id at the schema rather than in the cleanup read (#2090)', async () => {
+    // Unvalidated, this reached findOne({_id: 'not-an-id'}) and threw a Mongoose CastError, which
+    // errorHandler maps to a 404 logged at warn - so it never alerted, and it was raised BEFORE the
+    // status flip and finalize below, leaving the batch non-terminal until the stuck reconciler fired.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
     const { res } = makeRes();
-    // The parse throws; baseApi's error middleware renders it as a 400 in production. What matters
-    // here is that it throws BEFORE any of the work below, so the batch is left untouched rather
-    // than half-processed.
+    // The parse throws a ZodError, which errorHandler renders as a 422. What matters here is that a
+    // malformed id can no longer reach the database, so the failure is attributable to the caller.
     await expect(run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['not-an-object-id'] }, res)).rejects.toThrow();
 
     expect(h.fabSoftDeleteScoped).not.toHaveBeenCalled();
@@ -163,14 +157,36 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
   });
 
-  it('rejects an oversized failed-id list rather than letting it time the request out (#2090)', async () => {
-    // The 1 MB body cap admitted ~38k ids; the request timed out before finalize, same hang.
+  it('clamps an oversized failed-id list instead of rejecting it, so the batch still finalizes (#2090)', async () => {
+    // The cap must never cost the batch its terminal state: rejecting the request would discard the
+    // failedFiles tally that completion depends on, reproducing the very hang #2090 is about. The
+    // ids past the cap simply go uncleaned.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
-    const { res } = makeRes();
-    const tooMany = Array.from({ length: 2001 }, () => FID_A);
-    await expect(run({ batchId: 'b1', failedFiles: 1, failedFileIds: tooMany }, res)).rejects.toThrow();
+    const { res, json } = makeRes();
+    const tooMany = Array.from({ length: 10001 }, () => FID_A);
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: tooMany }, res);
 
-    expect(h.fabSoftDeleteScoped).not.toHaveBeenCalled();
-    expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+    expect(h.fabSoftDeleteScoped).toHaveBeenCalledWith(tooMany.slice(0, 10000), 'u1', 'b1');
+    // Truncation is silent to the client, so it has to be visible in the logs.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('10001'));
+    expect(h.incrementCounter).toHaveBeenCalledWith('b1', 'failedFiles', 1);
+    expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('accepts a large failedFileNames list, since a fully-failed presign reports names and no ids', async () => {
+    // dataLakeUploadPipeline pushes a name but no id when presign itself is refused, so an append of
+    // many files that is refused wholesale arrives here as names only. Bounding them would 422 that
+    // request and hang the batch, while buying nothing - they are one $set.
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 5000 });
+    const { res, json } = makeRes();
+    const names = Array.from({ length: 5000 }, (_, i) => `f${i}.txt`);
+    await run({ batchId: 'b1', failedFiles: 5000, failedFileNames: names }, res);
+
+    expect(h.update).toHaveBeenCalledWith({ id: 'b1', failedFileNames: names });
+    expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith({ success: true });
   });
 });

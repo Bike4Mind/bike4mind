@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { setupMongoTest } from '../__test__/utils';
 import { KnowledgeType } from '@bike4mind/common';
@@ -88,6 +88,13 @@ describe('FabFileRepository.softDeleteByIdsForUserBatch', () => {
   });
 
   it('short-circuits an empty list without a write', async () => {
+    // Asserting the 0 alone would not detect the guard's removal: `$in: []` matches nothing, so
+    // modifiedCount is 0 either way. The point of the guard is that no query is issued at all.
+    const updateMany = vi.spyOn(FabFile, 'updateMany');
+
     expect(await fabFileRepository.softDeleteByIdsForUserBatch([], userId, batchId)).toBe(0);
+    expect(updateMany).not.toHaveBeenCalled();
+
+    updateMany.mockRestore();
   });
 });

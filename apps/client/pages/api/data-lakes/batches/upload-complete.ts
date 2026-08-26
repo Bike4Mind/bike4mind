@@ -7,15 +7,17 @@ import { Request } from 'express';
 import { z } from 'zod';
 
 /**
- * Bounds the two client-supplied per-file arrays. Unbounded, the 1 MB body cap admitted roughly 38k
- * ids, and the cleanup below would then be a single request doing tens of thousands of round trips -
- * a Lambda timeout that leaves the batch non-terminal, because it fires BEFORE the status flip and
- * finalize at the bottom of this handler. Generous relative to any real batch's failure count.
+ * Caps the ids the cleanup below will scope into one $in. It is a clamp, never a rejection: an
+ * oversized list still describes a real batch that has to be tallied and finalized at the bottom of
+ * this handler, and refusing the request would leave that batch non-terminal - the exact hang this
+ * route exists to prevent. Generous, since the cleanup is now a single query whose cost barely moves
+ * with list length; the 1 MB body cap already bounds the array at roughly 38k.
  */
-const MAX_FAILED_FILE_ENTRIES = 2000;
+const MAX_FAILED_FILE_IDS = 10000;
 
 /** A 24-char hex Mongo ObjectId string. Unvalidated, one malformed id made the id-scoped read throw
- * a Mongoose CastError, surfacing as a 500 before the batch was ever finalized. */
+ * a Mongoose CastError, which errorHandler renders as a 404 - a batch left non-terminal, and logged
+ * at warn so it never alerted. */
 const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
 
 const UploadCompleteInput = z.object({
@@ -24,14 +26,15 @@ const UploadCompleteInput = z.object({
   // server pipeline emits no event for them - the client is the only source of truth
   // for this tally, and it must count toward completion or the batch hangs.
   failedFiles: z.number().int().nonnegative().optional(),
-  failedFileNames: z.array(z.string()).max(MAX_FAILED_FILE_ENTRIES).optional(),
+  // Deliberately unbounded: these are written by a single $set, so length costs nothing here,
+  // and the presign-failure path reports names with no ids at all - capping them would 422 a
+  // fully-failed append and hang the very batch this route terminalizes.
+  failedFileNames: z.array(z.string()).optional(),
   // FabFile ids the failed uploads left behind (created at presign, 0 chunks, no S3
   // object). Removed here so they don't inflate the lake's file count. Shape-validated so a
-  // malformed id is a 400 from this parse rather than a 500 from the cleanup read.
-  failedFileIds: z
-    .array(z.string().regex(OBJECT_ID_RE, 'failedFileIds must be 24-character hex ids'))
-    .max(MAX_FAILED_FILE_ENTRIES)
-    .optional(),
+  // malformed id is a 422 from this parse rather than a 404 from the cleanup read. Length is
+  // clamped in the handler rather than bounded here, so an oversized list still finalizes.
+  failedFileIds: z.array(z.string().regex(OBJECT_ID_RE, 'failedFileIds must be 24-character hex ids')).optional(),
 });
 
 /**
@@ -67,7 +70,16 @@ const handler = baseApi()
     // One scoped updateMany rather than two queries per id: the previous per-id loop ran before the
     // status flip and finalize below, so a long list timed the request out and left the batch hanging.
     if (failedFileIds?.length) {
-      await fabFileRepository.softDeleteByIdsForUserBatch(failedFileIds, userId, batchId);
+      const ids = failedFileIds.slice(0, MAX_FAILED_FILE_IDS);
+      if (ids.length < failedFileIds.length) {
+        // Clamped, not refused. The excess orphans stay behind and keep inflating the lake's file
+        // count until someone deletes them, but the batch still reaches a terminal state below,
+        // which is the worse of the two failures to leave in place.
+        req.logger.warn(
+          `upload-complete: batch ${batchId} reported ${failedFileIds.length} failed file ids, cleaning up the first ${ids.length}`
+        );
+      }
+      await fabFileRepository.softDeleteByIdsForUserBatch(ids, userId, batchId);
     }
 
     // failedFileNames is client-only (the pipeline never writes it), so a plain set
