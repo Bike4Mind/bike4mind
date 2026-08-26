@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { setupMongoTest } from '../__test__/utils';
@@ -32,10 +32,6 @@ describe('FabFileRepository.advanceVectorizeProgress', () => {
       isVectorizing: raw?.isVectorizing,
     };
   };
-
-  beforeEach(async () => {
-    await FabFile.deleteMany({});
-  });
 
   it('advances a file that is still partially vectorized', async () => {
     const file = await seed({ vectorized: true, vectorizedChunkCount: 0, isVectorizing: false });
@@ -90,6 +86,53 @@ describe('FabFileRepository.advanceVectorizeProgress', () => {
     });
 
     expect(await stateOf(file)).toEqual({ vectorized: true, vectorizedChunkCount: 10, isVectorizing: false });
+  });
+
+  it('advances a file whose count has never been written', async () => {
+    // Predates the field's default: $lte alone would never match, so the null arm carries it.
+    const file = await seed({ vectorized: false, isVectorizing: true });
+    await FabFile.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(file) },
+      { $unset: { vectorizedChunkCount: '' } }
+    );
+
+    expect(await fabFileRepository.advanceVectorizeProgress(file, 2)).toBe(true);
+    expect(await stateOf(file)).toEqual({ vectorized: true, vectorizedChunkCount: 2, isVectorizing: true });
+  });
+
+  it('carries the lake-health rollups through the same guarded write', async () => {
+    const file = await seed({ vectorized: true, vectorizedChunkCount: 0, isVectorizing: false });
+
+    expect(
+      await fabFileRepository.advanceVectorizeProgress(file, 4, { embeddedChunkCount: 3, embeddedCharCount: 120 })
+    ).toBe(true);
+    const raw = await FabFile.collection.findOne({ _id: new mongoose.Types.ObjectId(file) });
+    expect(raw?.embeddedChunkCount).toBe(3);
+    expect(raw?.embeddedCharCount).toBe(120);
+
+    // Rejected write: the rollups must not land either, or a stale pair outlives the count guard.
+    expect(
+      await fabFileRepository.advanceVectorizeProgress(file, 2, { embeddedChunkCount: 1, embeddedCharCount: 10 })
+    ).toBe(false);
+    const after = await FabFile.collection.findOne({ _id: new mongoose.Types.ObjectId(file) });
+    expect(after?.embeddedChunkCount).toBe(3);
+    expect(after?.embeddedCharCount).toBe(120);
+  });
+
+  it('still repairs a stamped file left short of its chunkCount by a stale terminal write', async () => {
+    // A round-1 message stamps terminal at 10 after a re-chunk already raised chunkCount to 20.
+    // Refusing every stamped file here would make that state unrepairable - the unguarded
+    // terminal write is not itself CAS'd, so a later message has to be able to move it on.
+    const file = await seed({
+      chunkCount: 20,
+      vectorized: true,
+      vectorizedChunkCount: 10,
+      isVectorizing: false,
+      chunkEmbeddingModelStampedAt: new Date(),
+    });
+
+    expect(await fabFileRepository.advanceVectorizeProgress(file, 20)).toBe(true);
+    expect(await stateOf(file)).toEqual({ vectorized: true, vectorizedChunkCount: 20, isVectorizing: true });
   });
 
   it('leaves a re-chunked file advanceable again once the stamp is cleared', async () => {

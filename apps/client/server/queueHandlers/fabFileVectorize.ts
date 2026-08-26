@@ -479,8 +479,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Guarded, not a plain update: sibling messages for this same file each recompute the
       // whole-file rollup, so one that finishes late holds a count measured before its peers
       // committed. Writing that stale rollup over a file another message already stamped
-      // terminal would reopen isVectorizing below chunkCount, which reads as forever-indexing
-      // and withholds a fully-vectorized file from retrieval with no repair path.
+      // terminal would drag the stored count back below chunkCount, which isMemberIndexingInFlight
+      // reads as forever-indexing and withholds a fully-vectorized file from retrieval.
       advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount, {
         embeddedChunkCount,
         embeddedCharCount,

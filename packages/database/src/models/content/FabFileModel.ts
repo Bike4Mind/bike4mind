@@ -1000,16 +1000,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * settled file. A file's chunks fan out across several vectorize messages, each of which
    * recomputes the whole-file rollup; a message that finishes late still holds the count it
    * measured before its peers committed theirs. An unguarded write of that stale rollup lands
-   * after the last message stamped the terminal state and leaves the file below chunkCount with
-   * isVectorizing back on - which isMemberIndexingInFlight reads as forever-indexing, silently
-   * withholding a fully-vectorized file from every semantic read with no path back.
+   * after the last message stamped the terminal state and leaves the stored count below
+   * chunkCount - which isMemberIndexingInFlight (lakeConvergence.ts) reads as forever-indexing,
+   * silently withholding a fully-vectorized file from every semantic read with no path back.
    *
-   * Two conditions, both load-bearing: the count may only move up, and
-   * `chunkEmbeddingModelStampedAt` must still be unset. The stamp is the terminal marker because
-   * `vectorized: true` + `isVectorizing: false` is also the state chunking leaves behind at
-   * count 0 (see fabFileService/chunk.ts), and re-chunking clears the stamp for the next round.
+   * Two conditions, both load-bearing. The count may only move up. And the file must not already
+   * be settled: either `chunkEmbeddingModelStampedAt` is still unset, or the stamp is there but
+   * the stored count is still short of `chunkCount` - a file only a stale terminal write could
+   * have left in, and one a later message must still be able to repair. The stamp (not
+   * `vectorized`/`isVectorizing`) is the terminal marker because `vectorized: true` +
+   * `isVectorizing: false` is also the state chunking leaves behind at count 0 (see
+   * fabFileService/chunk.ts), and re-chunking clears the stamp for the next round.
    *
    * The lake-health rollups move with the count, so they ride the same guarded write.
+   *
+   * Sets `vectorized: true` and `isVectorizing: true` unconditionally when it advances - this is
+   * the partial-progress path; the terminal state is stamped by stampChunkEmbeddingModel.
    *
    * Returns true if this call advanced the file.
    */
@@ -1021,13 +1027,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const result = await this.fabFileModel.findOneAndUpdate(
       {
         _id: fabFileId,
-        // Matches an unset stamp as well as an explicitly null one.
-        chunkEmbeddingModelStampedAt: null,
-        // $lte alone would exclude a file whose count has never been written.
-        $or: [{ vectorizedChunkCount: { $lte: vectorizedChunkCount } }, { vectorizedChunkCount: null }],
+        $and: [
+          {
+            $or: [
+              // Matches an unset stamp as well as an explicitly null one.
+              { chunkEmbeddingModelStampedAt: null },
+              // A stamped file still short of its own chunkCount is the wedge a stale terminal
+              // write leaves behind; refusing it here would make that state unrepairable.
+              { $expr: { $lt: ['$vectorizedChunkCount', '$chunkCount'] } },
+            ],
+          },
+          // $lte alone would exclude a file whose count has never been written.
+          { $or: [{ vectorizedChunkCount: { $lte: vectorizedChunkCount } }, { vectorizedChunkCount: null }] },
+        ],
       },
       { $set: { vectorized: true, vectorizedChunkCount, isVectorizing: true, ...rollup } },
-      { new: false, session: this._txn ?? undefined }
+      { new: false }
     );
     return result !== null;
   }
