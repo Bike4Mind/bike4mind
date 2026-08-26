@@ -350,4 +350,55 @@ describe('blogDraftTool forwards the turn abort signal to its own llm.complete',
     await run;
     expect(optionsOf()?.abortSignal).toBeUndefined();
   });
+
+  // Making the sub-call cancellable means this tool now sees AbortError for the first time, and
+  // the pre-existing catch logged everything at error level - so every Stop would read as a
+  // blog_draft fault in the logs.
+  it('does not log a user Stop as a fault, and still rethrows', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const abortError = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const context = {
+      userId: 'u1',
+      user: {},
+      logger,
+      db: {},
+      llm: {
+        complete: vi.fn(async () => {
+          throw abortError;
+        }),
+      },
+      model: 'test-model',
+      getAbortSignal: () => controller.signal,
+    } as unknown as ToolContext;
+
+    await expect(
+      blogDraftTool.implementation(context, undefined).toolFn({ sourceContent: 'x', outputFormat: 'blog' }, {} as never)
+    ).rejects.toBe(abortError);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalled();
+  });
+
+  it('still logs a genuine failure at error level', async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const context = {
+      userId: 'u1',
+      user: {},
+      logger,
+      db: {},
+      llm: {
+        complete: vi.fn(async () => {
+          throw new Error('provider exploded');
+        }),
+      },
+      model: 'test-model',
+      getAbortSignal: () => new AbortController().signal,
+    } as unknown as ToolContext;
+
+    await expect(
+      blogDraftTool.implementation(context, undefined).toolFn({ sourceContent: 'x', outputFormat: 'blog' }, {} as never)
+    ).rejects.toThrow(/provider exploded/);
+    expect(logger.error).toHaveBeenCalled();
+  });
 });
