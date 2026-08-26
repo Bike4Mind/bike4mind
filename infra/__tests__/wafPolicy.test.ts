@@ -266,11 +266,19 @@ describe('wafPolicy', () => {
     });
   });
 
-  // The scope-down of a rate limit, whether asserted directly or negated with NotStatement.
-  // any: WAF statements nest differently per type; this reaches the ByteMatch in either shape.
-  function rateLimitByteMatch(rule: WafRule): any {
-    const scopeDown = (rule.Statement as any).RateBasedStatement?.ScopeDownStatement;
-    return scopeDown?.ByteMatchStatement ?? scopeDown?.NotStatement?.Statement?.ByteMatchStatement;
+  // Every path match in a rate limit's scope-down, at any nesting depth. A limit may assert one
+  // prefix directly, or negate a whole set of them with NotStatement wrapping an OrStatement, so
+  // returning a list is what lets one assertion cover both shapes.
+  // any: WAF statements nest differently per type and the tree is not usefully typed here.
+  function rateLimitByteMatches(rule: WafRule): any[] {
+    const found: any[] = [];
+    const walk = (node: any): void => {
+      if (!node || typeof node !== 'object') return;
+      if (node.ByteMatchStatement) found.push(node.ByteMatchStatement);
+      Object.values(node).forEach(walk);
+    };
+    walk((rule.Statement as any).RateBasedStatement?.ScopeDownStatement);
+    return found;
   }
 
   /** Every rate-based rule in a stage that narrows itself with a scope-down. */
@@ -296,27 +304,29 @@ describe('wafPolicy', () => {
         expect(limits.length).toBeGreaterThan(0);
 
         for (const rule of limits) {
-          const byteMatch = rateLimitByteMatch(rule);
-          expect(byteMatch, `${rule.Name} scope-down must match on a path`).toBeDefined();
+          const matches = rateLimitByteMatches(rule);
+          expect(matches.length, `${rule.Name} scope-down must match on a path`).toBeGreaterThan(0);
 
-          const ordered = [...(byteMatch.TextTransformations ?? [])]
-            .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
-            .map((t: { Type: string }) => t.Type);
+          for (const byteMatch of matches) {
+            const ordered = [...(byteMatch.TextTransformations ?? [])]
+              .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
+              .map((t: { Type: string }) => t.Type);
 
-          expect(ordered, `${rule.Name} must decode, then normalize, then lowercase`).toEqual([
-            'URL_DECODE',
-            'NORMALIZE_PATH',
-            'LOWERCASE',
-          ]);
+            expect(ordered, `${rule.Name} must decode, then normalize, then lowercase`).toEqual([
+              'URL_DECODE',
+              'NORMALIZE_PATH',
+              'LOWERCASE',
+            ]);
+          }
         }
       });
 
       it(`anchors every ${stage} rate limit to a URI path prefix`, () => {
         for (const rule of scopedRateLimits(stage)) {
-          const byteMatch = rateLimitByteMatch(rule);
-
-          expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
-          expect(byteMatch.PositionalConstraint, `${rule.Name} must be prefix-anchored`).toBe('STARTS_WITH');
+          for (const byteMatch of rateLimitByteMatches(rule)) {
+            expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
+            expect(byteMatch.PositionalConstraint, `${rule.Name} must be prefix-anchored`).toBe('STARTS_WITH');
+          }
         }
       });
     }
@@ -360,8 +370,14 @@ describe('wafPolicy', () => {
       // Excludes only real assets. /_next/static/ is the sole prefix CloudFront routes to the
       // bucket, so /_next/data, /_next/image and any case variant stay function-backed and must
       // fall through to this ceiling rather than into the 50000 asset bucket.
-      expect(rateBased.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString).toBe(
-        '/_next/static/'
+      // Excludes every bucket-served prefix, each confirmed by probing staging for an AmazonS3
+      // server header. /_next/static/ alone was not enough: in the worst 5-minute window, 84% of
+      // what this rule counted was /icons/, /images/, /scripts/, /version.json and /app-config/,
+      // so the fall-through budget was being spent on cache-cheap files rather than on the
+      // function-backed paths this ceiling exists to bound.
+      const excluded = rateLimitByteMatches(fallback!).map(m => m.SearchString);
+      expect(excluded).toEqual(
+        expect.arrayContaining(['/_next/static/', '/icons/', '/images/', '/scripts/', '/app-config/'])
       );
       // Pinned, not bounded: this number is about to be retuned off a shadow reading, and a
       // greater-than assertion would pass a 10x loosening while failing a tightening.
