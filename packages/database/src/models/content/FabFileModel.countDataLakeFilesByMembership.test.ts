@@ -136,7 +136,10 @@ describe('FabFileRepository.countDataLakeFilesByMembership', () => {
     // tenant, and one count per lake is thousands of round trips through a pool of two. The
     // bound is what matters here, not the exact chunk size.
     const scopes = Array.from({ length: 60 }, (_, i) => scope(`lake-${i}`, `lake${i}:`));
+    // Two seeded lakes, deliberately in different chunks: a facet key built from the wrong
+    // index would still read chunk 0 correctly and silently zero every later chunk.
     await makeFile({ tags: ['datalake:lake-7'] });
+    await makeFile({ tags: ['datalake:lake-52'] });
 
     const countDocuments = vi.spyOn(FabFile, 'countDocuments');
     const aggregate = vi.spyOn(FabFile, 'aggregate');
@@ -147,6 +150,8 @@ describe('FabFileRepository.countDataLakeFilesByMembership', () => {
       expect(Object.keys(counts)).toHaveLength(60);
       expect(counts['datalake:lake-7']).toBe(1);
       expect(counts['datalake:lake-8']).toBe(0);
+      expect(counts['datalake:lake-52']).toBe(1);
+      expect(counts['datalake:lake-53']).toBe(0);
     } finally {
       countDocuments.mockRestore();
       aggregate.mockRestore();
