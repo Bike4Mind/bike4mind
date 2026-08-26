@@ -270,6 +270,20 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       expect(await repo.listByLake('lake-1', { limit: 2 })).toHaveLength(2);
     });
 
+    // createdAt alone is not a total order, and the paged reader treats the last row of a window as
+    // that window's boundary - so a tie straddling the page boundary must not be able to reshuffle.
+    it('orders same-millisecond events stably across repeated paged loads', async () => {
+      for (let i = 0; i < 5; i++) {
+        await repo.record(baseInput({ changes: [nameChange('old', `e${i}`)] }));
+      }
+
+      const page = async () => (await repo.listByLake('lake-1', { limit: 3 })).map(e => e.changes[0].after);
+      // Newest-first with an _id tie-break is reverse insertion order, ObjectIds being monotonic
+      // within a process.
+      expect(await page()).toEqual(['e4', 'e3', 'e2']);
+      expect(await page()).toEqual(['e4', 'e3', 'e2']);
+    });
+
     it('is empty for a lake with no recorded changes', async () => {
       expect(await repo.listByLake('never-touched')).toEqual([]);
     });

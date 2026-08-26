@@ -175,7 +175,11 @@ class LakeConfigChangeEventRepository
   }
 
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeConfigChangeEventDocument[]> {
-    const query = this.eventModel.find({ dataLakeId: lakeId }).sort({ createdAt: -1 });
+    // `_id` breaks createdAt ties: two events written in the same millisecond would otherwise come
+    // back in an arbitrary order, so a paged reader (assembleLakeConfigHistory) could report a
+    // different window boundary on each load of the same page. Free given the
+    // { dataLakeId: 1, createdAt: -1 } index, whose prefix this sort still matches.
+    const query = this.eventModel.find({ dataLakeId: lakeId }).sort({ createdAt: -1, _id: -1 });
     if (opts?.limit) query.limit(opts.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as ILakeConfigChangeEventDocument);

@@ -457,6 +457,20 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(limited.map(r => r.principalId)).toEqual(['newest', 'middle']);
     });
 
+    it('listByLake orders same-millisecond events stably across repeated paged loads', async () => {
+      // Same clock for every write, so `createdAt` alone leaves the order to Mongo - and the row a
+      // page of 3 cuts at its boundary would then differ between two loads of that same page.
+      for (let i = 0; i < 5; i++) {
+        await repo.record(baseInput({ resolvedLakeIds: ['lake-tie'], principalId: `p${i}` }));
+      }
+
+      const page = async () => (await repo.listByLake('lake-tie', { limit: 3 })).map(r => r.principalId);
+      // Newest-first with the _id tie-break is reverse insertion order, ObjectIds being monotonic
+      // within a process.
+      expect(await page()).toEqual(['p4', 'p3', 'p2']);
+      expect(await page()).toEqual(['p4', 'p3', 'p2']);
+    });
+
     it('two identical record() calls produce two rows - no dedupe, by design', async () => {
       await repo.record(baseInput({ principalId: 'dup-test' }));
       await repo.record(baseInput({ principalId: 'dup-test' }));
