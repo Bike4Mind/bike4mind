@@ -30,6 +30,21 @@ const MAX_ITERATIONS_OPTIONS = [
   { label: 'Infinite', value: null },
 ];
 
+/**
+ * 'Auto' (undefined) is first because it is the default and the right answer for almost
+ * everyone: the server then sizes the output ceiling per model, which is what keeps
+ * reasoning models from spending the whole budget on thinking and truncating the answer.
+ * The explicit values exist for deliberately capping a run.
+ */
+const MAX_TOKENS_OPTIONS = [
+  { label: 'Auto (sized for model)', value: undefined },
+  { label: '4096', value: 4096 },
+  { label: '8192', value: 8192 },
+  { label: '16384', value: 16384 },
+  { label: '32000', value: 32000 },
+  { label: '64000', value: 64000 },
+];
+
 const THEME_OPTIONS = [
   { label: 'dark', value: 'dark' },
   { label: 'light', value: 'light' },
@@ -91,16 +106,17 @@ function buildConfigItems(availableModels: ModelInfo[], pluginDescriptors: Plugi
     {
       key: 'maxTokens',
       label: 'Max Tokens',
-      type: 'number' as const,
-      min: 256,
-      max: 128000,
-      step: 256,
+      // A select rather than a stepper so 'Auto' is reachable at all: undefined is the
+      // default and the only value that lets the server size the ceiling for the model.
+      // A numeric stepper also could not represent it - decrementing from undefined is NaN.
+      type: 'select' as const,
+      options: MAX_TOKENS_OPTIONS,
       getValue: config => config.preferences.maxTokens,
       setValue: (config, value) => ({
         ...config,
         preferences: {
           ...config.preferences,
-          maxTokens: value as number,
+          maxTokens: value as number | undefined,
         },
       }),
     },

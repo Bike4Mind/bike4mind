@@ -137,7 +137,7 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
     h.deleteManyByFabFileId.mockResolvedValue(undefined);
     h.findAllWithKnowledgeId.mockResolvedValue([]);
     h.findByDatalakeTag.mockResolvedValue(LAKE);
-    h.computeDataLakeStats.mockResolvedValue({ fileCount: 3, totalSizeBytes: 300 });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 3, totalSizeBytes: 300, totalChunkedChars: 0 });
     h.setStats.mockResolvedValue(undefined);
   });
 
@@ -155,7 +155,7 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
       fileTagPrefix: LAKE.fileTagPrefix,
       creatorUserId: LAKE.createdByUserId,
     });
-    expect(h.setStats).toHaveBeenCalledWith(LAKE.id, { fileCount: 3, totalSizeBytes: 300 });
+    expect(h.setStats).toHaveBeenCalledWith(LAKE.id, { fileCount: 3, totalSizeBytes: 300, totalChunkedChars: 0 });
   });
 
   it('does not recompute when the outcome is unshared', async () => {

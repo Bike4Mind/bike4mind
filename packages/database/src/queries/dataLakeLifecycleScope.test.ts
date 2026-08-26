@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { matchesTagPrefixArm, prefixArmTagNames } from '@bike4mind/common';
-import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
+import { isDataLakeTagName, matchesTagPrefixArm, prefixArmTagNames } from '@bike4mind/common';
+import {
+  buildDataLakeMembershipFilter,
+  buildLacksContentPrefixTagFilter,
+  buildNoOtherLakeMetaTagFilter,
+} from './dataLakeLifecycleScope';
 
 const TAG = 'datalake:org1:acme-docs';
 
@@ -156,5 +160,56 @@ describe('buildDataLakeMembershipFilter', () => {
       expect(regex?.test('Acme:report')).toBe(false);
       expect(matchesTagPrefixArm(['Acme:report'], 'acme:')).toBe(false);
     });
+  });
+});
+
+describe('buildNoOtherLakeMetaTagFilter', () => {
+  it("excludes any element carrying a datalake: meta-tag other than this lake's own", () => {
+    const filter = buildNoOtherLakeMetaTagFilter(TAG);
+
+    const elemMatch = (filter.tags as { $not: { $elemMatch: Record<string, unknown> } }).$not.$elemMatch;
+    const { name } = elemMatch as { name: { $regex: RegExp; $ne: string } };
+    expect(name.$regex.source).toBe('^datalake:');
+    expect(name.$regex.flags).toContain('i');
+    expect(name.$ne).toBe(TAG);
+  });
+
+  it('folds case on the namespace test, matching isDataLakeTagName', () => {
+    const filter = buildNoOtherLakeMetaTagFilter(TAG);
+    const { $regex } = (filter.tags as { $not: { $elemMatch: { name: { $regex: RegExp } } } }).$not.$elemMatch.name;
+
+    expect($regex.test('DATALAKE:org1:sibling')).toBe(true);
+    expect(isDataLakeTagName('DATALAKE:org1:sibling')).toBe(true);
+    expect($regex.test('not-datalake:x')).toBe(false);
+    expect(isDataLakeTagName('not-datalake:x')).toBe(false);
+  });
+
+  it('is exact (case-sensitive) on the "other than mine" test, agreeing with the membership filter\'s own meta arm', () => {
+    const filter = buildNoOtherLakeMetaTagFilter(TAG);
+    const { $regex, $ne } = (filter.tags as { $not: { $elemMatch: { name: { $regex: RegExp; $ne: string } } } }).$not
+      .$elemMatch.name;
+
+    // A case-variant of this lake's OWN tag is treated as "another lake's" (excluded) - degenerate
+    // and deliberate, since buildDataLakeMembershipFilter's meta arm is exact too and no lake can
+    // hold a non-canonical meta-tag in the first place.
+    const variant = 'DataLake:Org1:Acme-Docs';
+    expect($regex.test(variant)).toBe(true);
+    expect(variant === $ne).toBe(false);
+  });
+
+  it('composes with the membership filter and the content-prefix filter without a tags-key collision', () => {
+    const membership = buildDataLakeMembershipFilter({ datalakeTag: TAG, fileTagPrefix: 'acme:', creatorUserId: 'c1' });
+    const exclusive = buildNoOtherLakeMetaTagFilter(TAG);
+    const withMembership = { ...membership, ...exclusive };
+    expect(withMembership).toHaveProperty('$or');
+    expect(withMembership).toHaveProperty('tags');
+
+    const contentPrefix = buildLacksContentPrefixTagFilter('acme:');
+    const withContentPrefix = { ...contentPrefix, ...exclusive };
+    // Both fragments own a top-level `tags` key; spreading them in this order means the exclusive
+    // filter (spread last) wins the key rather than silently combining, so a caller composing them
+    // must not rely on both surviving from a single spread - documented here so a future caller
+    // finds this test before rediscovering the collision the hard way.
+    expect(withContentPrefix.tags).toEqual(exclusive.tags);
   });
 });

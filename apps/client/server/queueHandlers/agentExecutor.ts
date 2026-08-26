@@ -29,6 +29,7 @@ import {
   fabFileChunkRepository,
   projectRepository,
   dataLakeRepository,
+  fallbackLakeSettingsRepository,
   mongoose,
   agentExecutionRepository,
   agentRepository,
@@ -38,7 +39,9 @@ import {
   skillRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   mcpServerRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
@@ -66,6 +69,7 @@ import {
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
+  resolveToolAvailability,
   ServerAgentStore,
   ServerSubagentOrchestrator,
   PARENT_DEADLINE_BUFFER_MS,
@@ -76,18 +80,26 @@ import {
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
-import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
+import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
-import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
+import {
+  buildDagResumeReport,
+  clampMaxIterationsForOverCapAggregationWake,
+  isDagAggregationWake,
+  makeDagDispatcher,
+  onDagNodeTerminal,
+} from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -95,7 +107,7 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
-import { applySessionToolPolicy, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -137,6 +149,7 @@ import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
@@ -286,7 +299,7 @@ const POLL_MAX_MS = 30_000;
  * has a bounded latency. Setting too low is wasteful (DB reads); too high
  * widens the window where an aborted child keeps running.
  */
-const SUBAGENT_ABORT_POLL_MS = 5_000;
+export const SUBAGENT_ABORT_POLL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // Subagent handoff helpers
@@ -583,6 +596,36 @@ async function loadMcpToolsForSession(
   return loadMcpToolsSafe(userId, logger);
 }
 
+/**
+ * Builds a `checkMemberCreditCap` hook that re-fetches the organization fresh on
+ * every call rather than closing over the snapshot fetched once at the top of the
+ * calling invocation - reusing that snapshot would make the hook unconditionally
+ * false wherever an identical entry-gate check already refused whenever it would
+ * have been true. What the fresh read actually buys differs by caller:
+ * - The top-level execution's own iteration loop deducts to the org wallet per
+ *   iteration (see `deductCreditsWithOrgSupport`), so here the re-fetch catches a
+ *   member who crosses the cap mid-invocation, before ever reaching a delegate/
+ *   coordinate call.
+ * - A dispatched subagent does NOT deduct its own iterations to the org wallet yet
+ *   (Phase 1 known gap - it only bumps its own audit counter via
+ *   `incrementCreditsUsed`), so here the re-fetch cannot see this subagent's own
+ *   spend; it only picks up billing from the parent or a concurrent execution for
+ *   the same member since the entry-gate snapshot.
+ * Extracted as a standalone function so this behavior is directly unit testable
+ * without spinning up either handler.
+ */
+export function buildInProcessCreditCapCheck(
+  organizations: Pick<typeof organizationRepository, 'findById'>,
+  organizationId: string | undefined,
+  userId: string
+): () => Promise<boolean> {
+  return async () => {
+    if (!organizationId) return false;
+    const freshOrg = await organizations.findById(organizationId);
+    return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, userId));
+  };
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -632,6 +675,14 @@ async function processExecution(
     // Phase 4a - accept `awaiting_dag_children -> running` so the continuation
     // Lambda woken by the last-child completion hook can resume the parent.
     const isDagResume = !isNewExecution && execution.status === 'awaiting_dag_children';
+    // Computed once and reused by both the credit-cap gate (skip) and the DAG
+    // resume-trigger below (fire) so the two can never disagree about whether
+    // this wake is aggregation-only.
+    const isAggregationOnlyWake = isDagAggregationWake({
+      isDagResume,
+      dagSpec: execution.dagSpec,
+      waitingOnDagChildren: execution.waitingOnDagChildren,
+    });
     const expectedStatuses = isNewExecution
       ? (['pending'] as const)
       : isSubagentResume
@@ -731,7 +782,20 @@ async function processExecution(
       getSettingsByNames,
     });
 
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Availability overlaps the models fetch rather than the key fetch above, so the key table can
+    // be handed over instead of re-read inside the resolver. Never rejects (see its doc comment).
+    // Fail-closed here (unlike the Tools picker UI's fail-open default): an agent run has nobody in
+    // the loop to add a missing key, so a tool this lookup couldn't confirm works should not reach
+    // the model. Resolved per-user because that is the identity the tools themselves use for their
+    // keys at call time (toolDeps.userId below).
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        execution.userId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
+      ),
+    ]);
     // Upgrade a deprecated/retired model id to its modern equivalent before lookup. getAvailableModels
     // filters retired ids out, so an agent/session still pinned to a sunset snapshot would otherwise
     // miss the lookup and throw instead of running on the mapped replacement.
@@ -752,6 +816,60 @@ async function processExecution(
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
+    }
+
+    // Org-billed per-member cap. An agent run has no single upfront estimate (it bills
+    // per-iteration at settlement), so this gates on "already at/over cap" with no charge
+    // to add. It sits below the resume branch and re-reads `organization` each invocation,
+    // so it re-runs on every continuation/subagent-resume/DAG-wake: a run that crosses the
+    // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
+    // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
+    //
+    // Exception: skip the gate for a genuine aggregation-only wake (`isAggregationOnlyWake`)
+    // so it doesn't strand already-paid-for child work. See `isDagAggregationWake` and
+    // `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts` for the full
+    // rationale and the bound on what this exception actually grants.
+    //
+    // Scope note: an `awaiting_subagent` resume splices in an already-billed child result the
+    // same way (see the `isSubagentResume` branch below) but is NOT exempted here - that wake
+    // continues with a full iteration budget rather than a single wrap-up step, so it is not a
+    // pure aggregation and the same one-iteration bound would not apply cleanly.
+    if (organization && !isAggregationOnlyWake && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
+        used: creditService.getMemberUsedCredits(organization, execution.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
+      });
+      await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+      return;
+    }
+
+    // Resolve the memory gates ONCE and persist them (#1525). The read path (first-iteration
+    // preamble) and the write path (completion event) used to resolve independently a whole run
+    // apart, so a mid-run flip of `EnableMementos` or the user's V2 opt-in made them disagree.
+    // Persisting one verdict lets continuation Lambdas and the stop-at-gate WS handler read it back;
+    // the downstream helpers route through `resolveExecutionMementoGates`, which short-circuits to it.
+    // Only new executions resolve; an explicit opt-out (`enableMementos === false`) resolves read-free
+    // in the resolver, so we skip the write for it. Runs below the credit/backend guards so a doomed
+    // execution never pays for it. The persist is best-effort: the in-memory stamp below already gives
+    // THIS Lambda read/write consistency, so a write blip must degrade memoization, not fail the run.
+    if (isNewExecution && execution.enableMementos !== false && !execution.resolvedMementoGates) {
+      const resolvedGates = await resolveExecutionMementoGates(
+        execution,
+        { db: { adminSettings: adminSettingsRepository } },
+        logger
+      );
+      try {
+        await agentExecutionRepository.persistResolvedMementoGates(executionId, resolvedGates);
+      } catch (err) {
+        logger.warn('[Mementos] Failed to persist resolved gates; continuing with the in-memory value', {
+          executionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      execution.resolvedMementoGates = resolvedGates;
     }
 
     // Resolve the top-level orchestration profile. Two paths:
@@ -823,9 +941,18 @@ async function processExecution(
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
+        toolsetIsExclusive: orchestrationProfile.toolsetIsExclusive ?? false,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
         isContinuation: !isNewExecution,
       });
+      // An exclusive toolset voids the payload's tool selection by design - but silently
+      // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
+      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+        logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
+          profileId: orchestrationProfile.id,
+          ignoredToolCount: startPayload.enabledTools.length,
+        });
+      }
     }
 
     // Build tools - per-request agent store (unified agent model).
@@ -907,6 +1034,10 @@ async function processExecution(
           organizationId: execution.organizationId,
           sessionId: execution.sessionId,
           questId: execution.questId,
+          // Inherited alongside `questId` so a child's own audit rows can join to the turn its
+          // parent belongs to. Distinct from `questId` above, which means different things per
+          // dispatch lineage and must never be read as a Quest id (#1867).
+          linkedQuestId: execution.linkedQuestId,
           query: info.task,
           model: info.model,
           approvedTools: [] as string[],
@@ -1142,6 +1273,8 @@ async function processExecution(
         organizationId: execution.organizationId,
         sessionId: execution.sessionId,
         questId: execution.questId,
+        // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
+        linkedQuestId: execution.linkedQuestId,
         spawnedByExecutionId: executionId,
       },
       logger,
@@ -1163,6 +1296,20 @@ async function processExecution(
       cacheWriteTokens: 0,
     };
 
+    // Whether this run may offer each delegation surface - decided from the profile's
+    // denials and the session contract, and consumed below at the dependency level.
+    const delegation = delegationOffer({
+      profileDeniedTools: orchestrationProfile?.deniedTools,
+      session,
+    });
+    if (!delegation.offerDelegate || !delegation.offerDag) {
+      logger.info('[Orchestration] Delegation surfaces withheld for this run', {
+        offerDelegate: delegation.offerDelegate,
+        offerDag: delegation.offerDag,
+        profileId: orchestrationProfile?.id,
+      });
+    }
+
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
@@ -1171,6 +1318,16 @@ async function processExecution(
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
@@ -1180,6 +1337,7 @@ async function processExecution(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls (add_entity / set_value / query). Without this
         // adapter they fall back to an in-memory id that fails the ObjectId
@@ -1190,6 +1348,9 @@ async function processExecution(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -1202,12 +1363,32 @@ async function processExecution(
         models,
       },
       apiKeyTable: apiKeyTable as ApiKeyTable,
-      agentStore,
+      // The delegation tools are injected as OBJECTS keyed on these two deps, never on
+      // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
+      // profile denies both to keep its loop single-agent - or a session whose
+      // disableUserIntegrations promises no delegation, is enforced HERE or nowhere.
+      // Observed before this gate: an optimizer run registered delegate_to_agent and
+      // coordinate_task against its own profile's deniedTools. The `agentStore` local
+      // stays intact above for exclusive-MCP resolution; only the injection key is
+      // withheld - the same shape the chat path uses (`agentStore: undefined` in
+      // ChatCompletionProcess) and `agentExecutor.latticeTools` uses for its pool.
+      agentStore: delegation.offerDelegate ? agentStore : undefined,
       getRemainingTimeMs: () => context.getRemainingTimeInMillis(),
       handoffSignal,
       dagHandoffSignal,
-      dagDispatcher,
+      dagDispatcher: delegation.offerDag ? dagDispatcher : undefined,
       getCurrentExecutionId: () => executionId,
+      // In-process delegate_to_agent/coordinate_task have no pre-flight reservation of
+      // their own (unlike ChatCompletionProcess), so without this a member who crosses
+      // the cap mid-invocation - after the entry gate above already passed for this
+      // wake - could still delegate a subagent's full iteration budget in-process for
+      // free. See `buildInProcessCreditCapCheck` for why this re-fetches rather than
+      // reusing the `organization` snapshot captured at the top of this invocation.
+      checkMemberCreditCap: buildInProcessCreditCapCheck(
+        organizationRepository,
+        execution.organizationId,
+        execution.userId
+      ),
     };
 
     // Accumulate filenames of images generated by tools during the run. Unlike the
@@ -1217,6 +1398,12 @@ async function processExecution(
     // We collect them here and write them onto the Quest in persistRunAsQuest so the inline
     // "image 1 of N" grid renders just like classic chat after the run completes.
     const generatedImages: string[] = [];
+
+    // Per-turn retrieval outcome, accumulated the same way generatedImages is above: the agent
+    // path has no live quest to accrete onto during the run, so tool calls' retrieval writes are
+    // merged here (same OR/worst-of policy as classic chat's applyQuestStatusChanges) and flushed
+    // through persistRunAsQuest once the run completes (#1867).
+    let retrievalSummary: RetrievalSummary | undefined;
 
     // UI side-effects a tool emitted (e.g. optimizer console populate). The chat path
     // collects these on quest.uiSideEffects via its onUiSideEffect callback; the agent
@@ -1233,6 +1420,9 @@ async function processExecution(
           for (const img of changes.images) {
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
+        }
+        if (changes?.promptMeta?.retrieval) {
+          retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
         if (status) {
           await sendWs('progress', { executionId, status });
@@ -1288,6 +1478,10 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
+      questId: resolveExecutionQuestId({
+        startPayloadQuestId: startPayload?.questId,
+        executionLinkedQuestId: execution.linkedQuestId,
+      }),
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -1340,7 +1534,12 @@ async function processExecution(
     // even when the parent run didn't enable it — and Lattice never leaks into the
     // parent's own toolbelt because this pool is kept out of `tools`. See
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
-    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+    const subagentLatticeTools = buildSubagentLatticeToolPool(
+      toolDeps,
+      toolCallbacks,
+      subagentToolConfig,
+      toolAvailability
+    );
 
     // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
     // the opti-loop guards survive a continuation Lambda -- a repeat decompose or a re-solve of a
@@ -1390,6 +1589,10 @@ async function processExecution(
       config: subagentToolConfig,
       mcpToolsByServer,
       agentOnlyMcpServers,
+      // Additive to, not a replacement for, the profile's allowedTools gating: that already narrowed
+      // `enabledTools` upstream (pickEffectiveEnabledTools -> resolvedToolNames), and this drops
+      // whatever survived that has no working key. A tool must be both allowed AND offerable.
+      toolAvailability,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -1552,9 +1755,14 @@ async function processExecution(
     // when the payload doesn't pin one - agentless dispatches (Agent-mode
     // toggle path) land on the profile's `defaultThoroughness` ceiling rather
     // than the legacy 25-iteration fallback.
-    const maxIterations = orchestrationProfile
+    let maxIterations = orchestrationProfile
       ? pickEffectiveMaxIterations(startPayload?.maxIterations, orchestrationProfile)
       : (startPayload?.maxIterations ?? 25);
+    // Preserved before the aggregation-wake clamp below can shrink `maxIterations` for
+    // this invocation - the truncation message must report the run's real configured
+    // ceiling, not the one-iteration grace grant, or the number and the "send a
+    // follow-up" advice are both wrong (a follow-up hits the same cap gate again).
+    const configuredMaxIterations = maxIterations;
 
     // Track cumulative usage for delta-based billing.
     // Token counts in iterationBilling are stored as per-iteration deltas, so
@@ -1735,11 +1943,18 @@ async function processExecution(
       }
     }
 
+    // Fallback reply if the grace iteration below (a capped-out member's one-iteration
+    // aggregation grant) hits its own ceiling without producing a final_answer step -
+    // `extractFinalAnswer` would then find nothing, silently dropping the very
+    // already-paid-for child work this PR exists to return. See its use at
+    // `displayAnswer` below.
+    let dagAggregationFallbackSummary: string | undefined;
+
     // Phase 4a - resume from `awaiting_dag_children`. The completion hook for
     // the last terminal DAG child enqueued this continuation; load all child
     // results, build the aggregated markdown via shared `buildPipelineResult`,
     // and surgically replace the `coordinate_task` placeholder observation.
-    if (isDagResume && execution.dagSpec && execution.waitingOnDagChildren) {
+    if (isAggregationOnlyWake && execution.dagSpec && execution.waitingOnDagChildren) {
       // NOTE (merge): combined with main's first-iteration CASL scope below -
       // these are independent additions in the same spot; both are kept.
       const children = await agentExecutionRepository.findDagChildrenLean(executionId);
@@ -1747,6 +1962,7 @@ async function processExecution(
         dagSpec: execution.dagSpec,
         children,
       });
+      dagAggregationFallbackSummary = summary;
       try {
         agent.replaceLastToolResultObservation(execution.waitingOnDagChildren.toolUseId, summary);
       } catch (err) {
@@ -1796,6 +2012,19 @@ async function processExecution(
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
+
+    // Captured once and reused below at `displayAnswer` - the truncation message needs to know
+    // whether a later `reachedMaxIterations` was caused by THIS clamp specifically (where a
+    // "send a follow-up" suggestion is a dead end) rather than the run's own real ceiling.
+    const isOverCapForAggregationClamp = Boolean(
+      organization && creditService.isMemberAtOrOverCap(organization, execution.userId)
+    );
+    maxIterations = clampMaxIterationsForOverCapAggregationWake({
+      isAggregationOnlyWake,
+      isOverCap: isOverCapForAggregationClamp,
+      maxIterations,
+      iterationIndex,
+    });
 
     // Confidence-gate plumbing. The agent calls this callback after
     // tool execution with the iteration's average tool-result confidence;
@@ -1860,7 +2089,8 @@ async function processExecution(
           logger,
           generatedImages,
           undefined,
-          allSideEffects
+          allSideEffects,
+          retrievalSummary
         );
         return;
       }
@@ -1916,14 +2146,11 @@ async function processExecution(
         logger,
         fabFileRepository
       );
-      // Memento retrieval parity with chat_completion. Append the
+      // Memento retrieval parity with chat_completion. Appends the
       // `[KNOWN FACTS ABOUT THE USER ...]` preamble to the same iteration-0 user
-      // message the file preamble lands in, so the agent reads both from a
-      // single materialized string that gets persisted into the checkpoint.
-      // Continuation Lambdas, gate-resumes, and DAG-resumes inherit it via
-      // the checkpoint replay - same handoff contract as the file preamble.
-      // The helper guards on `parentExecutionId` and the resolved `MementoGates`,
-      // matching `publishMementoCompletion` on the write side.
+      // message the file preamble lands in, so both survive into the checkpoint and
+      // inherit through continuation/gate/DAG resumes. Gates come from the resolver,
+      // which returns the verdict resolved once at execution start (#1525).
       if (firstIterationQuery !== undefined) {
         const { preamble: mementoPreamble, mementoIds } = await resolveAndBuildMementosPreamble(
           execution,
@@ -2271,8 +2498,19 @@ async function processExecution(
     // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
     // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
     // honest "partial, hit the limit" reply instead of a trailed-off thought. See #674.
+    // See `resolveDisplayAnswer` for the capped-out-member grace-iteration case this
+    // must also handle: `finalAnswer` can be undefined entirely, and falling back to
+    // `dagAggregationFallbackSummary` there is what keeps the aggregated child report
+    // from being silently dropped on exactly the path this PR exists to protect.
     const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
-    const displayAnswer = reachedMaxIterations ? buildTruncatedRunReply(maxIterations, finalAnswer) : finalAnswer;
+    const displayAnswer = resolveDisplayAnswer({
+      reachedMaxIterations,
+      ranAnyIteration: iterationResult !== undefined,
+      finalAnswer,
+      dagAggregationFallbackSummary,
+      configuredMaxIterations,
+      isOverCapGraceIteration: isAggregationOnlyWake && isOverCapForAggregationClamp,
+    });
 
     await agentExecutionRepository.markComplete(executionId, {
       answer: displayAnswer,
@@ -2333,15 +2571,13 @@ async function processExecution(
       logger,
       generatedImages,
       finalCheckpoint.finishReason,
-      allSideEffects
+      allSideEffects,
+      retrievalSummary
     );
 
-    // Memento parity with chat_completion. Resolve the same gates the read side
-    // resolves (one authority, `resolveExecutionMementoGates`) and hand them to the
-    // publisher; it fires only when a gate is live and skips subagent / DAG children
-    // via the `parentExecutionId`/`spawnedByExecutionId` guard inside the helper. Reads `execution` (loaded
-    // at the top of this function) so continuation Lambdas see the persisted tri-state
-    // flag the WS handler stamped at dispatch.
+    // Memento parity with chat_completion, write side. Gates come from the resolver's verdict
+    // resolved once at execution start (#1525), so this write agrees with the read-path preamble
+    // even across a mid-run flip. The publisher's own guards skip subagent/DAG children.
     await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
 
     logger.info('[Complete] Agent execution finished', {
@@ -2366,7 +2602,10 @@ async function processExecution(
       const userFacingMessage = toUserFacingFailureMessage(errorMessage);
       await sendWs('failed', { executionId, reason: 'error', message: userFacingMessage });
       // Persist the failed run in chat history so the user still sees their
-      // prompt after refresh, with the (sanitized) reason as the reply.
+      // prompt after refresh, with the (sanitized) reason as the reply. Pre-existing 3-arg call
+      // (matches origin/main): generatedImages/finishReason/allSideEffects/retrievalSummary are
+      // all omitted here already, not something this PR changed - a hard-error path deliberately
+      // does not claim partial content or partial retrieval signal alongside the failure.
       await persistRunAsQuest(executionId, `${userFacingMessage}.`, logger);
     } catch (cleanupErr) {
       logger.error('[Error] Failed to update execution status on error', {
@@ -2379,6 +2618,72 @@ async function processExecution(
 // ---------------------------------------------------------------------------
 // Dispatched subagent handler
 // ---------------------------------------------------------------------------
+
+/**
+ * Fires the DAG completion hook for a dispatched child on every terminal outcome
+ * (success, refusal, failure, or abort), guarded on `dagNodeId` (a no-op for a
+ * plain delegated subagent, which has no siblings to unblock). `onDagNodeTerminal`
+ * is the ONLY thing that unblocks siblings or wakes a DAG parent - every terminal
+ * exit in `processSubagentDispatch` that skips it can wedge the parent in
+ * `awaiting_dag_children` forever (`cleanupStaleActive` deliberately excludes that
+ * status, so there is no reaper), and the wake only needs the LAST sibling to reach
+ * a terminal state to take a hook-less exit, not every sibling. If the hook itself
+ * throws, mark the parent failed so the session unwedges instead of hanging.
+ *
+ * Deliberately NOT called from the `!claimed` CAS-loss exit: that means another
+ * Lambda already owns this child and will complete it (and fire this hook) through
+ * its own normal path. Firing here too would not double-unblock anything - the hook
+ * is idempotent - but it would report a false terminal status for a child that may
+ * still succeed: a CAS loss means someone else has it, not that it failed. `status`
+ * itself is not load-bearing for `onDagNodeTerminal` (it re-reads every sibling
+ * fresh from the DB), only for logging.
+ *
+ * Narrow gap this does NOT close: if `agentExecutionRepository.findById` throws or
+ * returns null, or `child.subagentConfig` is missing, the function throws before
+ * `dagNodeId`/`dagParentExecutionId` are ever assigned, so the outer catch's call to
+ * this helper no-ops (both hoisted vars stay `undefined`). Not cheaply fixable - the
+ * dispatch message carries `dagNodeId` but not `parentExecutionId`
+ * (`agentExecutorDag.ts` `DagNodeDispatchSchema`), and `onDagNodeTerminal` requires
+ * both. A genuinely rare window (the dispatcher always sets `subagentConfig`; this
+ * needs a `findById` read blip immediately after create).
+ */
+async function fireDagNodeTerminalOnRefusal(args: {
+  dagNodeId: string | undefined;
+  parentExecutionId: string | undefined;
+  childExecutionId: string;
+  connectionId: string;
+  logger: Logger;
+  sendWs: ReturnType<typeof createWsSender>;
+  status?: 'completed' | 'failed' | 'aborted';
+}): Promise<void> {
+  const { dagNodeId, parentExecutionId, childExecutionId, connectionId, logger, sendWs, status = 'failed' } = args;
+  if (!dagNodeId) return;
+  try {
+    await onDagNodeTerminal({
+      child: { id: childExecutionId, parentExecutionId, dagNodeId, status },
+      connectionId,
+      logger,
+    });
+  } catch (hookErr) {
+    const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
+    logger.error('[DAG] onDagNodeTerminal failed - marking parent failed', {
+      parentId: parentExecutionId,
+      childExecutionId,
+      error: msg,
+    });
+    if (parentExecutionId) {
+      await agentExecutionRepository
+        .markFailed(parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
+        .catch(markErr => {
+          logger.error('[DAG] markFailed on parent also failed', {
+            parentId: parentExecutionId,
+            error: markErr instanceof Error ? markErr.message : String(markErr),
+          });
+        });
+      await sendWs('failed', { executionId: parentExecutionId, reason: 'dag_hook_error' });
+    }
+  }
+}
 
 /**
  * Runs a subagent that was dispatched to its own Lambda (either via `background: true`
@@ -2421,6 +2726,10 @@ async function processSubagentDispatch(
 
   let parentId: string | undefined;
   let agentName: string | undefined;
+  // Hoisted so the outer catch (which has no access to `child`) can still fire the
+  // DAG completion hook on a fatal error - see `fireDagNodeTerminalOnRefusal`.
+  let dagNodeId: string | undefined;
+  let dagParentExecutionId: string | undefined;
 
   try {
     const child = await agentExecutionRepository.findById(childExecutionId);
@@ -2431,6 +2740,8 @@ async function processSubagentDispatch(
 
     parentId = child.parentExecutionId ?? child.spawnedByExecutionId ?? childExecutionId;
     agentName = child.subagentConfig.agentName;
+    dagNodeId = child.dagNodeId;
+    dagParentExecutionId = child.parentExecutionId;
 
     // Check abort flag before claiming.
     if (child.abortedAt) {
@@ -2442,10 +2753,23 @@ async function processSubagentDispatch(
         error: 'Subagent was aborted before start',
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: 'aborted',
+      });
       return;
     }
 
-    // Atomic CAS: only the first dispatched Lambda claims the child.
+    // Atomic CAS: only the first dispatched Lambda claims the child. Deliberately
+    // does NOT fire the DAG completion hook on a lost race: the winning Lambda owns
+    // this child and will complete it (success or failure) through its own normal
+    // path, firing the hook itself then. Firing it here too would report a false
+    // terminal status for a child that may still succeed.
     const claimed = await agentExecutionRepository.claimExecution(childExecutionId, ['pending'], 'running');
     if (!claimed) {
       logger.warn('[CAS] Another Lambda already claimed this subagent, exiting gracefully', {
@@ -2469,6 +2793,14 @@ async function processSubagentDispatch(
         error: 'unauthorized',
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
       return;
     }
     const organization = child.organizationId ? await organizationRepository.findById(child.organizationId) : null;
@@ -2488,6 +2820,46 @@ async function processSubagentDispatch(
         error: 'insufficient_credits',
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
+
+    // Org-billed per-member cap, mirroring the parent gate in processExecution. Every
+    // DAG node and every delegated subagent lands here as a fresh execution (never an
+    // aggregation-only wake, since only the top-level parent can be resumed from
+    // `awaiting_dag_children`), so this always applies - no exemption needed. Without
+    // it, a capped-out member could dispatch unlimited child work through the
+    // org-pool-only check above, which does not see the per-member limit at all.
+    if (organization && creditService.isMemberAtOrOverCap(organization, child.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start subagent', {
+        used: creditService.getMemberUsedCredits(organization, child.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(childExecutionId, {
+        message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
+      });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'insufficient_credits',
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
       return;
     }
 
@@ -2496,7 +2868,17 @@ async function processSubagentDispatch(
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       getSettingsByNames,
     });
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Resolved for the CHILD's user, the identity its tools use for their own keys at call time
+    // (toolDeps.userId below), and handed the key table above so it is not read twice. Fail-closed
+    // for the same reason as the parent path: nobody is in the loop to add a missing key mid-run.
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        child.userId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
+      ),
+    ]);
     const modelInfo = models.find((m: { id: string }) => m.id === child.model);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
@@ -2542,6 +2924,14 @@ async function processSubagentDispatch(
         error: `Unknown agent: ${agentName}`,
         isTimeout: false,
       });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
       return;
     }
 
@@ -2554,6 +2944,16 @@ async function processSubagentDispatch(
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
@@ -2562,6 +2962,7 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Required for the Lattice opt-in pool below to actually work: the
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls. Without this adapter they fall back to an in-memory
@@ -2572,6 +2973,9 @@ async function processSubagentDispatch(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
@@ -2585,9 +2989,20 @@ async function processSubagentDispatch(
       // Propagate delegation depth so the dispatched orchestrator's delegate_to_agent
       // tool starts at the right level and the depth cap fires correctly.
       depth,
+      // This dispatched subagent's own in-process delegation needs the same gate as the
+      // top-level path - a grandchild delegated in-process here is otherwise unchecked.
+      // See `buildInProcessCreditCapCheck` for why this re-fetches rather than reusing
+      // the `organization` snapshot captured above.
+      checkMemberCreditCap: buildInProcessCreditCapCheck(organizationRepository, child.organizationId, child.userId),
     };
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {
+        // KNOWN GAP (#1867): a dispatched subagent's retrieval calls are not accumulated here.
+        // Unlike images (addImagesByAgentExecutionId below), there is no equivalent
+        // mergeRetrievalByAgentExecutionId write path onto the parent's Quest, so a nested
+        // subagent that calls a knowledge tool leaves no retrieval record on the diagnosis
+        // panel for that turn. Tracked as a fast-follow rather than added here.
+        //
         // A subagent has no Quest of its own and runs in a separate Lambda from the parent,
         // so any images it generates would never reach the chat bubble. Write them onto the
         // PARENT's Quest so they render inline alongside the parent's images ($addToSet keeps
@@ -2610,6 +3025,11 @@ async function processSubagentDispatch(
       onToolStart: async () => {},
       onToolFinish: async () => {},
       sessionId: child.sessionId,
+      // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
+      // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
+      // a lake-access row - but wired now so the native-tool path anticipated below does not
+      // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
+      questId: child.linkedQuestId,
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: child.model,
@@ -2622,7 +3042,12 @@ async function processSubagentDispatch(
     // to). Built unconditionally and granted only when the agent's `allowedTools`
     // names `lattice_*`; mirrors the top-level path so Lattice availability is
     // identical whether a subagent runs in-process or in its own Lambda.
-    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+    const subagentLatticeTools = buildSubagentLatticeToolPool(
+      toolDeps,
+      toolCallbacks,
+      subagentToolConfig,
+      toolAvailability
+    );
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       config: subagentToolConfig,
@@ -2634,6 +3059,11 @@ async function processSubagentDispatch(
       // them. Marking them agent-only here would hide them and reproduce the
       // 0-tools bug.
       agentOnlyMcpServers: [],
+      // Wired for parity with the parent path, but inert as long as this call passes no
+      // `enabledTools`: buildSharedTools applies the offerable filter only to that list, so today
+      // this site materializes MCP tools plus delegate/coordinate and nothing key-gated. Kept so a
+      // future change that gives this path native tools cannot silently bypass the filter.
+      toolAvailability,
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 
@@ -2754,6 +3184,16 @@ async function processSubagentDispatch(
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
       availableModels: models,
+      // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
+      // orchestrator cannot test whether a grandchild's model is serviceable and
+      // falls back to pairing this child's backend with the grandchild's model id
+      // - the 404 that the pairing fix exists to prevent, one level down.
+      resolveBackend: (modelId: string) => {
+        const info = models.find((m: { id: string }) => m.id === modelId);
+        return info
+          ? getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo: info, logger, endUserId: child.userId })
+          : null;
+      },
       signal: abortController.signal,
       onProgress: async (status: string) => {
         await sendWs('progress', { executionId: parentId, status });
@@ -2815,6 +3255,18 @@ async function processSubagentDispatch(
             partialAnswer: result.finalAnswer,
           });
         }
+        // Terminal exit: this branch returns before the success-path and catch-path
+        // hook fires below, so fire it here - every terminal exit must reach
+        // `onDagNodeTerminal` or the parent wedges.
+        await fireDagNodeTerminalOnRefusal({
+          dagNodeId,
+          parentExecutionId: dagParentExecutionId,
+          childExecutionId,
+          connectionId,
+          logger,
+          sendWs,
+          status: userAborted ? 'aborted' : 'failed',
+        });
         return;
       }
 
@@ -2854,47 +3306,15 @@ async function processSubagentDispatch(
       // Phase 4a - if this child was a DAG node, fire the completion hook
       // so any newly-unblocked siblings get dispatched, or the parent gets
       // woken if the whole DAG is done.
-      //
-      // Recovery: if the hook itself throws (SQS error, mongo error during
-      // sibling scan) the parent would otherwise sit in `awaiting_dag_children`
-      // forever - `cleanupStaleActive` deliberately excludes that status.
-      // Catch here, mark the parent failed, and surface a WS event so the
-      // session unwedges instead of hanging.
-      if (child.dagNodeId) {
-        try {
-          await onDagNodeTerminal({
-            child: {
-              id: childExecutionId,
-              parentExecutionId: child.parentExecutionId,
-              dagNodeId: child.dagNodeId,
-              status: 'completed',
-            },
-            connectionId,
-            logger,
-          });
-        } catch (hookErr) {
-          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
-          logger.error('[DAG] onDagNodeTerminal failed — marking parent failed', {
-            parentId: child.parentExecutionId,
-            childExecutionId,
-            error: msg,
-          });
-          if (child.parentExecutionId) {
-            await agentExecutionRepository
-              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
-              .catch(markErr => {
-                logger.error('[DAG] markFailed on parent also failed', {
-                  parentId: child.parentExecutionId,
-                  error: markErr instanceof Error ? markErr.message : String(markErr),
-                });
-              });
-            await sendWs('failed', {
-              executionId: child.parentExecutionId,
-              reason: 'dag_hook_error',
-            });
-          }
-        }
-      }
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId: child.dagNodeId,
+        parentExecutionId: child.parentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: 'completed',
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
@@ -2942,45 +3362,15 @@ async function processSubagentDispatch(
       // Phase 4a - DAG node terminal even on failure/abort. Same hook fires;
       // it'll detect the failed dep and dispatch only nodes that don't
       // depend on this one (or none if everything cascades).
-      //
-      // Recovery: same gap as the success path - if the hook throws, the
-      // parent would otherwise sit in `awaiting_dag_children` indefinitely.
-      // Catch and mark the parent failed so the session unwedges.
-      if (child.dagNodeId) {
-        try {
-          await onDagNodeTerminal({
-            child: {
-              id: childExecutionId,
-              parentExecutionId: child.parentExecutionId,
-              dagNodeId: child.dagNodeId,
-              status: wasAborted ? 'aborted' : 'failed',
-            },
-            connectionId,
-            logger,
-          });
-        } catch (hookErr) {
-          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
-          logger.error('[DAG] onDagNodeTerminal failed — marking parent failed', {
-            parentId: child.parentExecutionId,
-            childExecutionId,
-            error: msg,
-          });
-          if (child.parentExecutionId) {
-            await agentExecutionRepository
-              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
-              .catch(markErr => {
-                logger.error('[DAG] markFailed on parent also failed', {
-                  parentId: child.parentExecutionId,
-                  error: markErr instanceof Error ? markErr.message : String(markErr),
-                });
-              });
-            await sendWs('failed', {
-              executionId: child.parentExecutionId,
-              reason: 'dag_hook_error',
-            });
-          }
-        }
-      }
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId: child.dagNodeId,
+        parentExecutionId: child.parentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: wasAborted ? 'aborted' : 'failed',
+      });
     } finally {
       clearInterval(abortPoller);
     }
@@ -3003,6 +3393,14 @@ async function processSubagentDispatch(
         agentName,
         error: 'Subagent dispatch failed',
         isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
       });
     } catch (cleanupErr) {
       logger.error('[SubagentDispatch] Cleanup also failed', {

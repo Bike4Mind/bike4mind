@@ -66,7 +66,7 @@ describe('dismissTaxonomySuggestion', () => {
 
     await expect(
       dismissTaxonomySuggestion({ userId: 'stranger', isAdmin: false }, 'b1', adapters as any)
-    ).rejects.toThrow(/creator/i);
+    ).rejects.toThrow(/do not have permission to dismiss/i);
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 

@@ -62,9 +62,12 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
     organization.currentCredits = rest.currentCredits;
   }
 
-  // Only admins can set per-member credit caps
+  // Only admins can set per-member credit caps. Coalesce a cleared cap to null, NOT undefined:
+  // the repo update is `updateOne({_id}, { $set: organization })` and BSON drops undefined, so
+  // `?? undefined` would leave the previous cap in place (a null PUT silently no-ops). null is
+  // persisted by $set and read as "no cap" by isMemberCreditCapExceeded.
   if (user.isAdmin && rest.maxCreditsPerMember !== undefined) {
-    organization.maxCreditsPerMember = rest.maxCreditsPerMember ?? undefined;
+    organization.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
   }
 
   await adapters.db.organizations.update(organization);

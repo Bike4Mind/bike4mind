@@ -17,15 +17,13 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
   const layout = useSessionLayout(s => s.layout);
 
   // Dismiss the panel down to the bottom-right "AI Chat" launcher (the minimized
-  // FloatingChatWindow pill) rather than opening the floating window. previousLayout is
-  // recorded so expanding and then closing the float window returns to this dock.
+  // FloatingChatWindow pill) rather than opening the floating window.
   const handleMinimize = useCallback(() => {
     setSessionLayout({
       layout: 'floatingChat',
       floatingChatMinimized: true,
-      previousLayout: layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined,
     });
-  }, [layout]);
+  }, []);
 
   return (
     <Box
@@ -44,7 +42,9 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          height: '48px',
+          // Matches the sidenav header and the /opti mission-deck header so the
+          // three top bars line up across the app chrome.
+          height: '56px',
           padding: '0 16px',
           backgroundColor: theme.palette.background.level1,
           borderBottom: '1px solid',

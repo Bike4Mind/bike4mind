@@ -72,7 +72,16 @@ type SessionRow = Pick<
 
 type KnowledgeRow = Pick<
   IFabFileDocument,
-  'id' | 'fileName' | 'fileSize' | 'mimeType' | 'createdAt' | 'updatedAt' | 'filePath' | 'moderationStatus' | 'fileUrl'
+  | 'id'
+  | 'fileName'
+  | 'fileSize'
+  | 'mimeType'
+  | 'type'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'filePath'
+  | 'moderationStatus'
+  | 'fileUrl'
 >;
 
 /** No `content`: the body lives in a separate collection, reached via contentId. */
@@ -150,7 +159,7 @@ export class NotebookExportService {
 
       // Process each session
       for (const session of sessions) {
-        const exportedNotebook = await this.exportSession(session, options);
+        const exportedNotebook = await this.exportSession(session, options, userId);
         exportData.notebooks.push(exportedNotebook);
 
         totalMessages += exportedNotebook.chatHistory.length;
@@ -219,14 +228,20 @@ export class NotebookExportService {
     return await this.adapters.sessionRepository.find(query);
   }
 
-  private async exportSession(session: SessionRow, options: NotebookExportOptions): Promise<ExportedNotebook> {
+  private async exportSession(
+    session: SessionRow,
+    options: NotebookExportOptions,
+    userId: string
+  ): Promise<ExportedNotebook> {
     // Export chat history
     const chatHistory = await this.exportChatHistory(session.id, options);
 
     // Export attachments based on options
     const knowledge = options.includeKnowledge ? await this.exportKnowledge(session.knowledgeIds || [], options) : [];
 
-    const artifacts = options.includeArtifacts ? await this.exportArtifacts(session.artifactIds || [], options) : [];
+    const artifacts = options.includeArtifacts
+      ? await this.exportArtifacts(session.artifactIds || [], options, userId)
+      : [];
 
     const tools = options.includeTools ? await this.exportTools(session.toolIds || [], options) : [];
 
@@ -324,6 +339,7 @@ export class NotebookExportService {
           name: file.fileName,
           mimeType: file.mimeType,
           size: file.fileSize,
+          type: file.type,
           uploadedAt: (file.createdAt ?? file.updatedAt ?? new Date()).toISOString(),
         };
 
@@ -361,12 +377,46 @@ export class NotebookExportService {
     );
   }
 
-  private async exportArtifacts(artifactIds: string[], options: NotebookExportOptions): Promise<ExportedArtifact[]> {
+  private async exportArtifacts(
+    artifactIds: string[],
+    options: NotebookExportOptions,
+    userId: string
+  ): Promise<ExportedArtifact[]> {
     if (artifactIds.length === 0) return [];
 
+    // Artifact ids are `artifact_<ts>_<rand>`, not ObjectIds, so an `_id` query throws a CastError.
+    // `deletedAt: null` matches every read helper on ArtifactRepository - it only started to
+    // matter once the query above began resolving rows at all.
+    //
+    // The `$or` is the same predicate `ArtifactRepository.findByUserWithAccess` expresses and
+    // `artifactService/get` enforces via `canUserAccessArtifact`. It is needed HERE because
+    // `getSessionsToExport` scopes SESSIONS by userId and the scoping stops there:
+    // `session.artifactIds` is a client-supplied `z.array(z.string())` that `updateSession` writes
+    // through unvalidated, so an id arriving here is not necessarily the caller's. Reachable only
+    // since this query started resolving rows - before that it threw and returned nothing.
+    //
+    // Two consequences that are visible rather than hidden, both deliberate: neither this clause
+    // nor `canUserAccessArtifact` honours `visibility: 'project' | 'organization'`, so an
+    // org-shared artifact drops out of an export - this makes export exactly as strict as
+    // `GET /artifacts/:id` and no stricter, which is the right default but is a change. And in a
+    // collaborative session an artifact owned by another participant now leaves the owner's
+    // export. Widen both together with the normal read path, never here alone.
     const artifacts = await this.adapters.artifactRepository.find({
-      _id: { $in: artifactIds },
+      id: { $in: artifactIds },
+      deletedAt: null,
+      $or: [{ userId }, { 'permissions.canRead': userId }, { visibility: 'public' }, { 'permissions.isPublic': true }],
     });
+
+    // Covers three causes, and deliberately does not distinguish them: an artifact the user has
+    // since deleted (routine - the session keeps referencing it), a row that is genuinely gone
+    // (rare), and one the exporter cannot read. None is exportable, and telling them apart would
+    // cost a second query to sharpen a log line nothing alarms on - and for the third it would
+    // also confirm the id exists to someone with no access to it. Named because a partial export
+    // must not read as a complete one; fires once per notebook.
+    const notExported = artifactIds.filter(id => !artifacts.some((a: ArtifactRow) => a.id === id));
+    if (notExported.length > 0) {
+      this.adapters.logger.warn('Some artifacts were not exported', { notExported });
+    }
 
     return artifacts.map((artifact: ArtifactRow) => ({
       id: artifact.id,
@@ -382,6 +432,9 @@ export class NotebookExportService {
   private async exportTools(toolIds: string[], options: NotebookExportOptions): Promise<ExportedTool[]> {
     if (toolIds.length === 0) return [];
 
+    // `_id` is correct here, unlike artifacts: tools and agents are ObjectId-keyed. Sessions
+    // imported before the id fix can still hold uuids that cast-throw - resilience tracked
+    // separately, not a reason to change the key.
     const tools = await this.adapters.toolRepository.find({
       _id: { $in: toolIds },
     });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { VIEWER_SANDBOX } from '@server/services/publish/viewerSecurity';
 
 const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
@@ -132,10 +133,10 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(data).toContain('src="https://pub1.usercontent.app.bike4mind.com/uc/u/scope123/my-slug"');
     expect(data).not.toContain('srcdoc=');
     expect(data).not.toContain('console.log(42)'); // author JS lives on the isolated origin
-    // Minimal sandbox: allow-scripts + allow-same-origin only (no forms/popups).
-    expect(data).toContain('sandbox="allow-scripts allow-same-origin"');
+    // The shared viewer sandbox plus allow-same-origin (safe here: it resolves to the
+    // isolated usercontent origin). Popups are how off-origin links open; forms stay out.
+    expect(data).toContain(`sandbox="${VIEWER_SANDBOX} allow-same-origin"`);
     expect(data).not.toContain('allow-forms');
-    expect(data).not.toContain('allow-popups');
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("frame-src 'self' https://pub1.usercontent.app.bike4mind.com"); // can embed it
     // Wrapper has no inline scripts / bundle libs in Approach B -> tightened script-src.
@@ -164,6 +165,24 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits -> must permit bundle inline JS
     expect(data).toContain("b4m:'hash'"); // srcdoc mode carries the wrapper hash bridge
     expect(data).toContain("b4m:'fragment'"); // and the srcdoc carries the fragment-nav helper
+  });
+
+  it('retargets an off-origin link to a new tab on the isolated origin', async () => {
+    // An in-frame off-origin link is refused by the wrapper's frame-src and replaces the
+    // artifact with the browser's "content is blocked" page; a popup is what the sandbox allows.
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(
+      Buffer.from('<html><body><a href="https://github.com/o/r/issues/1">issue</a></body></html>')
+    );
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('target="_blank"');
+    expect(data).toContain('rel="noopener"');
+    expect(data).not.toContain('noreferrer'); // outbound referral attribution is kept
   });
 
   it('isolated origin serves the bundle AS the page with inline JS + unsafe-inline CSP', async () => {
@@ -335,11 +354,11 @@ describe('GET /api/publish/serve - gated-bundle loader shell', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
     const data = res._getData() as string;
-    expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(data).toContain(`<iframe id="b4m-frame" sandbox="${VIEWER_SANDBOX}"`);
     expect(data).not.toContain('allow-same-origin');
-    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("fetch('/api/auth/refreshToken'");
     expect(data).toContain("'raw=1'");
-    // CSP permits the shell's inline bootstrap + the same-origin ?raw=1 fetch.
+    // CSP permits the shell's inline bootstrap + the same-origin refresh/?raw=1 fetches.
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'");
     expect(csp).toContain('connect-src https://app.bike4mind.com');
@@ -525,7 +544,7 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
 
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
-    expect(data).toContain('sandbox="allow-scripts"');
+    expect(data).toContain(`sandbox="${VIEWER_SANDBOX}"`);
     expect(data).toContain('src="/p/r/rhtml?a=0"');
     // The artifact's inner markup must NOT leak into the reply page as text.
     expect(data).not.toContain('<label>Bill</label>');
@@ -557,7 +576,7 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     expect(data).toContain('Bill');
     const csp = res.getHeader('Content-Security-Policy') as string;
     // Opaque origin even on direct nav; author inline JS allowed only inside the sandbox.
-    expect(csp).toContain('sandbox allow-scripts');
+    expect(csp).toContain(`sandbox ${VIEWER_SANDBOX}`);
     expect(csp).toContain("script-src 'unsafe-inline'");
     expect(csp).not.toContain("script-src 'none'");
   });
@@ -725,7 +744,7 @@ describe('GET /api/publish/serve - fabfile embedded HTML artifact (#722)', () =>
 
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
-    expect(data).toContain('sandbox="allow-scripts"');
+    expect(data).toContain(`sandbox="${VIEWER_SANDBOX}"`);
     expect(data).toContain('src="/p/f/fhtml?a=0"');
     // Non-artifact text stays literal in a <pre>: the markdown heading is NOT rendered to <h1>.
     expect(data).toContain('<pre class="b4m-pre">');
@@ -747,7 +766,7 @@ describe('GET /api/publish/serve - fabfile embedded HTML artifact (#722)', () =>
     expect(res.getHeader('Content-Type')).toContain('text/html');
     expect(res._getData() as string).toContain('window.fab=1');
     const csp = res.getHeader('Content-Security-Policy') as string;
-    expect(csp).toContain('sandbox allow-scripts');
+    expect(csp).toContain(`sandbox ${VIEWER_SANDBOX}`);
     expect(csp).not.toContain("script-src 'none'");
   });
 
@@ -893,7 +912,7 @@ describe('GET /api/publish/serve - reply/fabfile organization visibility', () =>
     const { res, promise } = run(['r', 'r-org']);
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(res._getData() as string).toContain(`<iframe id="b4m-frame" sandbox="${VIEWER_SANDBOX}"`);
   });
 
   it('serves an org fabfile to a same-org member (200)', async () => {
@@ -942,9 +961,9 @@ describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
-    expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(data).toContain(`<iframe id="b4m-frame" sandbox="${VIEWER_SANDBOX}"`);
     expect(data).not.toContain('allow-same-origin');
-    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("fetch('/api/auth/refreshToken'");
     expect(data).toContain("'raw=1'");
     // Shell must NOT leak the gated reply's content or title.
     expect(data).not.toContain('Secret org reply');
@@ -957,7 +976,7 @@ describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
     const { res, promise } = run(['f', 'f-gated']);
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(res._getData() as string).toContain(`<iframe id="b4m-frame" sandbox="${VIEWER_SANDBOX}"`);
   });
 
   it('does NOT return the shell for a gated reply ?raw=1 with no credential (stays 401, no loop)', async () => {
@@ -2067,7 +2086,7 @@ describe('GET /api/publish/serve - ?export= content export (issue #1142)', () =>
     expect(data).toContain('srcdoc=');
     expect(data).not.toContain('?a=0');
     // Same opaque-origin posture as the served page; the artifact's own JS travels with it.
-    expect(data).toContain('sandbox="allow-scripts"');
+    expect(data).toContain(`sandbox="${VIEWER_SANDBOX}"`);
     expect(data).toContain('window.ok=1');
   });
 

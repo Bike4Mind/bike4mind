@@ -177,6 +177,25 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+### Structured tool output (`toolPayloads`)
+
+The reply fields (`response`/`responses` synchronously, `reply`/`replies` when polling) carry the model's prose. A tool that produced machine-readable state - not just something to read - also reports it verbatim under **`toolPayloads`**, so a script can act on a turn without re-parsing English:
+
+```json
+{
+  "response": "Scheduled 3 jobs across 2 machines.",
+  "toolPayloads": [{ "type": "populateProblem", "payload": { "name": "shop", "jobs": [], "machines": [] } }]
+}
+```
+
+- Present on both read paths: the `wait: true` response above, and `GET /api/quests/{id}` when polling (which is also how you read an agent run's structured output).
+- Always an array, `[]` when the turn fired no such tool. No opt-in flag.
+- `type` tells you how to read `payload`; treat an unfamiliar `type` as "newer server than my client" and skip that entry.
+- Entries are in emission order, which matters for a multi-step turn.
+- Additive only - the prose reply is byte-for-byte what it was before, so nothing that reads `response` today needs to change.
+
+If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was *offered* to the model, which is not the same thing.
+
 ## Streaming completions API (`/api/ai/v1/completions`)
 
 `POST /api/chat` (above) is the high-level chat API. For a low-level streaming completion - one request in, a token-by-token Server-Sent Events (SSE) stream out - call `/api/ai/v1/completions`. This is the endpoint the CLI uses under the hood, and the one to target from a custom client or agent loop.
@@ -267,7 +286,7 @@ sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
 
 The first three rows are one sparse MoE model that handles chat, tools, artifacts, vision, and RAG on its own. The bottom two rows are small dense models: the 8 GB pair needs switching per task because a 2-4B model cannot finish an HTML artifact, and 4 GB is chat only. [Choosing a model](#choosing-a-model) has the full menu and the measured numbers behind these picks.
 
-**A GPU is optional at every row.** An NVIDIA card with >=4 GB VRAM roughly triples prompt-processing speed; with no GPU everything still runs on CPU, just slower. VRAM is not what gates the model choice here - the MoE experts live in system RAM, so a 26B model and a 2B model both need about 3 GB of VRAM.
+**A GPU is optional at every row.** With no GPU everything still runs on CPU, just slower. With one, the expert-offload override is what makes it count: on the reference box it is worth about +57% generation and cuts resident memory from 17 GB to 2.5 GB (see [MoE expert offload](#moe-expert-offload)). VRAM is not what gates the model choice here - the MoE experts live in system RAM, so a 26B model and a 2B model both need about 3 GB of VRAM.
 
 ### Enable it
 
@@ -298,27 +317,40 @@ That's it - open the model picker and select your model under **Local / Self-Hos
 
 ### Choosing a model
 
-The rows in [Start here](#start-here-check-your-ram) are the recommended pick per RAM tier; this is the full menu behind them. `VRAM` is what the model needs on the GPU with expert offload enabled; the experts sit in RAM, which is why the download is large and the VRAM figure is not. **Size the machine by the RAM column.** Throughput is indicative of an entry-level 4 GB discrete GPU with a modern laptop CPU, at Q4_K_M with one model loaded; faster hardware scales up. `prefill` is prompt processing - the wait before the first token on a tool or RAG turn.
+The rows in [Start here](#start-here-check-your-ram) are the recommended pick per RAM tier; this is the full menu behind them. `VRAM` is what the model needs on the GPU with expert offload enabled; the experts sit in RAM, which is why the download is large and the VRAM figure is not. **Size the machine by the RAM column.** Throughput is measured on the reference box for this document - a 6P+8E laptop CPU, 32 GB of DDR5, and a 4 GB laptop GPU - at Q4_K_M with one model loaded and warm; faster hardware scales up. `prefill` is prompt processing - the wait before the first token on a tool or RAG turn.
+
+Two things about the prefill column, because a single number for it is misleading. It rises with prompt length, so it is quoted here at the ~9K-token prompt an agent turn actually carries; see [Prefill and the prefix cache](#prefill-and-the-prefix-cache) for the curve. And it is bounded by the batch size Ollama pins on its llama.cpp runner, which is not adjustable through Ollama - the same section covers what that costs.
 
 | Model tag | Download | VRAM | RAM | gen | prefill | Notes |
 |-----------|---------:|-----:|----:|----:|--------:|-------|
 | **MoE - one model for everything** ||||||
-| `gpt-oss:20b` | ~14 GB | ~3.3 GB | ~16 GB | 15/s | 481/s | 21B total / 3.6B active |
-| `gemma4:26b-a4b-it-q4_K_M` | ~17 GB | ~3.4 GB | ~24 GB | 19/s | 295/s | 26B/4B; **default**; multimodal |
-| `qwen3.6:35b-a3b-q4_K_M` | ~24 GB | ~2.9 GB | ~32 GB | 22/s | 279/s | 35B/3B; strongest coder |
+| `gpt-oss:20b` | ~14 GB | ~3.3 GB | ~16 GB | - | - | 21B total / 3.6B active |
+| `gemma4:26b-a4b-it-q4_K_M` | ~17 GB | ~3.4 GB | ~24 GB | 22/s | 53/s | 26B/4B; **default**; multimodal |
+| `qwen3.6:35b-a3b-q4_K_M` | ~24 GB | ~2.9 GB | ~32 GB | 28/s | 39/s | 35B/3B; strongest coder |
 | **Small dense - needs a separate coder for artifacts** ||||||
 | `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | - | - | Tiny; multimodal |
-| `qwen3.5:2b-q4_K_M` | ~1.9 GB | ~3.0 GB | ~8 GB | 93/s | 3621/s | Fastest; general/vision/tools |
+| `qwen3.5:2b-q4_K_M` | ~1.9 GB | ~3.0 GB | ~8 GB | 85/s | 3240/s | Fastest; general/vision/tools |
 | `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | - | - | Spills to CPU under 6 GB VRAM |
 | `qwen2.5-coder:3b` | ~1.9 GB | ~3.1 GB | ~8 GB | 73/s | 2309/s | Coding-tuned; artifacts |
 
-Note the shape of those numbers: a 26B MoE generates at roughly a fifth the speed of a 2B dense model while fitting in the same VRAM. That trade is usually worth it, because the small dense models cannot finish an HTML artifact at all.
+The MoE rows and `qwen3.5:2b-q4_K_M` were re-measured on the reference box. `qwen2.5-coder:3b` carries an earlier figure. `gpt-oss:20b` is blank because it could not be re-measured, not because it is slow.
 
-`gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working single-purpose HTML artifacts (which the 2-4B dense models do not), answers multi-chunk knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
+Note the shape of those numbers: a 26B MoE generates at about a quarter the speed of a 2B dense model while fitting in the same VRAM. That trade is usually worth it, because the small dense models cannot finish an HTML artifact at all.
+
+Prefill also decides which MoE to pick, and it does not rank them the way generation does:
+
+| Prompt size | ~900 tok | ~3.5K tok | ~9K tok | gen |
+|-------------|---------:|----------:|--------:|----:|
+| `gemma4:26b-a4b` | 36/s | 44/s | 53/s | 22/s |
+| `qwen3.6:35b-a3b` | 30/s | 35/s | 39/s | 28/s |
+
+On a ~10K-token tool or RAG turn that is about 190s to first token for the 26B against 256s for the 35B. The 26B generates slower and still finishes the turn about a minute sooner, because prefill dominates a turn of that shape. Choosing a local model for tool or RAG work by generation speed alone can get you the slower one.
+
+`gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working single-purpose HTML artifacts (which the 2-4B dense models do not), answers knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
 
 Set one or more (space-separated) in `OLLAMA_PULL_MODELS`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull gpt-oss:20b`.
 
-> **Not every MoE model offloads.** `qwen3.5:27b` does not - llama.cpp does not match its expert tensors, so the loader attempts a ~15 GB VRAM allocation and fails outright. Verify any tag not listed above: pull it, send one request, and check `ollama ps` reports `100% GPU` with a `SIZE` of a few GB rather than the full model size.
+> **Not every MoE model offloads.** The override works by matching a model's expert tensors by name, and that match is not guaranteed. When it misses, llama.cpp tries to put the whole model on the GPU and fails outright on `cudaMalloc` rather than degrading. Verify any tag not listed above: pull it, send one request, and check `ollama ps` reports `100% GPU` with a `SIZE` of a few GB rather than the full model size.
 
 #### What to expect from a local model
 
@@ -330,11 +362,28 @@ They do iterate, but they need precise direction. Reporting a symptom ("the char
 
 `compose.ollama-moe.yaml` (added as an extra `-f`, see [Enable it](#enable-it)) sets `LLAMA_ARG_N_CPU_MOE`, which keeps the expert weights in system RAM and leaves only the attention layers and KV cache on the GPU. For a 26B MoE that is roughly 16 GB of experts in RAM against 1.6 GB of weights in VRAM - which is why every MoE row in the tables above needs about the same VRAM as a 2B dense model.
 
-Ollama will run these models without the override - it spills to CPU on its own - but slower, and the gap is much wider on prefill than on generation (roughly 2.5x). That difference shows up directly as dead time before the first token on an agent turn carrying tool schemas and retrieved RAG chunks.
+Ollama will run these models without the override - it spills to CPU on its own - but slower and far larger. Measured on the reference box with the same prompt and context:
+
+| | Placement | Resident | gen | prefill |
+|-|-----------|---------:|----:|--------:|
+| Override off | 0/31 layers on GPU, 96%/4% CPU/GPU | 17 GB | 14/s | 21-37/s |
+| Override on | 31/31 layers on GPU, 100% GPU | 2.5 GB | 22/s | 29-51/s |
+
+Generation is the clear win at +57%. The prefill ranges overlap, so treat prefill as unchanged rather than improved. The reason to keep the override on is the footprint: 17 GB resident against 2.5 GB is what decides whether the model fits on the box at all. Without it the model runs, it just runs as a CPU model with a GPU attached.
 
 The flag is inert for dense models, so it is safe to leave enabled for a mixed model set. Do not also pin `LLAMA_ARG_N_GPU_LAYERS`: that defeats llama.cpp's automatic layer placement and hard-OOMs any dense model too large for the card instead of letting it spill.
 
-**Context window.** Requests are sized from the model's own reported context length, capped by `OLLAMA_MAX_NUM_CTX` (default 32768). Budget this rather than maximising it - usable input is `OLLAMA_MAX_NUM_CTX - 8192 (reserved for the reply) - 1000 (safety buffer)`. A tool-enabled RAG turn spends roughly 2.2K tokens on the system prompt and 2.6K on tool schemas before any of your content, so 16384 leaves only about 2.4K for retrieved chunks and overflows; 32768 is the smallest value that comfortably fits tools plus RAG.
+#### Prefill and the prefix cache
+
+On an entry-level card with the experts in RAM, prompt processing is what you wait on, not token generation. A ~10K-token turn carrying tool schemas and retrieved chunks costs roughly three minutes before the first token on the default model. Two things follow.
+
+**Keep the prefix stable.** llama.cpp reuses a cached prefix when the next request begins with the same tokens, and on the reference box that is worth about 200x: 53/s cold against 10187/s on a repeated prefix for the 26B, 12793/s for the 35B. So keep the system prompt and the tool set identical between turns, in the same order, and let retrieved context land after the stable part rather than being spliced into it. Changing the tool list mid-conversation pays the full prefill again.
+
+**Batch size is fixed at Ollama's default.** Ollama writes `-b 512 -ub 512` on its llama.cpp runner command line, and llama.cpp lets command-line arguments win over environment variables, so `LLAMA_ARG_BATCH` and `LLAMA_ARG_UBATCH` have no effect here. That ceiling is real: measured against `llama-server` directly on the same model, raising `-ub` from 512 to 1024 gained 50-90% prefill for about 17% of generation speed. If prefill is your bottleneck and you are willing to run `llama-server` yourself, that is the lever, with three caveats. Ollama's model blobs do not load in upstream llama.cpp, so it means re-downloading the weights as a standard GGUF. The compute buffer scales with `-ub`, so on a 4 GB card `-ub 1024` only fits if you give back context or quantize the KV cache, and `-ub 2048` does not fit at all. And setting the expert-offload flag disables llama.cpp's own memory auto-fit, so every combination has to be found by hand.
+
+None of this changes the recommended setup. It is why the prefill figures here are what they are, and why the first turn in a session is the slow one.
+
+**Context window.** Requests are sized from the model's own reported context length, capped by `OLLAMA_MAX_NUM_CTX` (default 32768). The cap exists because KV cache is not free: a model advertising a 262K window would try to allocate far more memory than a typical box has, and nothing else clamps it. Budget this rather than maximising it - usable input is `OLLAMA_MAX_NUM_CTX - 8192 (reserved for the reply) - 1000 (safety buffer)`. A tool-enabled RAG turn spends roughly 2.2K tokens on the system prompt and 2.6K on tool schemas before any of your content, so 16384 leaves only about 2.4K for retrieved chunks and overflows; 32768 is the smallest value that comfortably fits tools plus RAG.
 
 | VRAM | Model class | Suggested | Usable input |
 |------|-------------|----------:|-------------:|
@@ -343,9 +392,7 @@ The flag is inert for dense models, so it is safe to leave enabled for a mixed m
 | 8 GB | MoE 20-35B | 65536 | ~56K |
 | 12 GB+ | MoE 20-35B | 131072 | ~122K |
 
-KV cache is what grows with this number, and MoE models are cheap here: at 32768 the default holds under 1 GB of KV. Do not assume KV scales linearly - `gemma4` uses sliding-window attention on most of its layers, so much of its cache is a fixed size. If you run out of VRAM, halve the KV cost with `OLLAMA_KV_CACHE_TYPE=q8_0` before lowering the context. Do not go below 8192: Ollama's own 4096 default is small enough to truncate the tool definitions out of a request and make a tool-capable model report it has no tools. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
-
-**Context window.** Requests are sized from the model's own reported context length, capped at 32768 tokens by `OLLAMA_MAX_NUM_CTX`. The cap exists because KV cache is not free - a model advertising a 262K window would try to allocate far more memory than a typical box has. Lower it if you are tight on VRAM/RAM (`OLLAMA_MAX_NUM_CTX=8192`), raise it if you have headroom and want longer conversations. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
+KV cache is what grows with this number, and MoE models are cheap here: at 32768 the default holds under 1 GB of KV. Do not assume KV scales linearly - `gemma4` uses sliding-window attention on most of its layers, so much of its cache is a fixed size. If you run out of VRAM, halve the KV cost with `OLLAMA_KV_CACHE_TYPE=q8_0` before lowering the context. Lower the cap if you are tight on VRAM/RAM (`OLLAMA_MAX_NUM_CTX=8192`), raise it if you have headroom and want longer conversations. Do not go below 8192: Ollama's own 4096 default is small enough to truncate the tool definitions out of a request and make a tool-capable model report it has no tools. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
 
 ### GPU acceleration (NVIDIA)
 
@@ -567,8 +614,8 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
-- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen3.5:0.8b` or `:2b-q4_K_M`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section). Running an MoE model without `-f compose.ollama-moe.yaml` also costs throughput, most of it on prompt processing.
-- **An MoE model fails to load with `cudaMalloc failed: out of memory`** - the expert offload did not apply to that architecture, so llama.cpp tried to put the whole model on the GPU. Confirm the override is in the `up` command, then check placement with `docker compose -f compose.selfhost.yaml exec ollama ollama ps`: a working offload reports `100% GPU` with a `SIZE` of a few GB, not the full model size. Some tags never offload (`qwen3.5:27b`); use one of the models listed in "Choosing a model".
+- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen3.5:0.8b` or `:2b-q4_K_M`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section). Running an MoE model without `-f compose.ollama-moe.yaml` also costs throughput - about a third of generation speed - and it keeps the whole model resident instead of a few GB.
+- **An MoE model fails to load with `cudaMalloc failed: out of memory`** - the expert offload did not apply to that architecture, so llama.cpp tried to put the whole model on the GPU. Confirm the override is in the `up` command, then check placement with `docker compose -f compose.selfhost.yaml exec ollama ollama ps`: a working offload reports `100% GPU` with a `SIZE` of a few GB, not the full model size. Not every tag offloads; use one of the models listed in "Choosing a model", or verify a new tag with the check above.
 - **A tool-enabled or RAG turn fails with "Your request is too large"** - `OLLAMA_MAX_NUM_CTX` is too low. The system prompt and tool schemas alone cost roughly 5K tokens, and usable input is the cap minus about 9K. Raise it to 32768 (see "Context window") and recreate the `app` and `chatcompletion` containers.
 - **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The puller triggers an SD.Next rescan once the download finishes, and the picker caches models for ~60s. If it still isn't listed, force a rescan from the host: `curl -X POST http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints`.
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
@@ -576,7 +623,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
 - **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
-- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
+- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it configured permanently, or restore the original key. Rotation is not automated, so dropping the previous key makes anything still encrypted under it unrecoverable.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
 - **Files chunk but never get vectors / vectorize fails with a `401`** - your `OPENAI_API_KEY` (or `VOYAGE_API_KEY`) is set to an invalid or placeholder value, so embedding is routed to that cloud provider and rejected. Set a real key, or clear it and configure a local Ollama embedder (see "Offline RAG") for the airgapped path. A dummy/placeholder value is ignored automatically; a present-but-invalid key now surfaces an actionable error on the file instead of a raw 401. If you previously picked a cloud embedder in **Settings -> AI**, switch it back to a local one after clearing the key.
@@ -739,7 +786,7 @@ It **does not**: enable Mongo authentication, change your MinIO credentials, con
 Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts (including publishing and sharing artifact bundles - uploads proxy through the app, so MinIO stays internal). It includes **realtime streaming**: the `ws` gateway + `subscriber-fanout` services stream chat replies token-by-token and push live document updates (notebooks, sync) without a page refresh - the same WebSocket experience as the hosted app, with no AWS API Gateway. It also includes **background enrichment and offline RAG**: the `worker` service runs the queue consumers and scheduler, so notebook auto-naming, summaries, tagging, memento creation, research tasks, and automatic file chunking + embedding all work (embeddings can run fully offline via a local Ollama embedder - see "Offline RAG"). Known gaps today:
 
 - **Image moderation on upload** - the hosted upload path runs AWS Rekognition; self-host skips it (no AWS), so uploaded images are not content-scanned.
-- **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary).
+- **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary). Overlay mount points are empty in this repo and `pnpm install` behaves accordingly; the mechanism is documented under [premium overlays and the tracked lockfile](./CONTRIBUTING.md#premium-overlays-and-the-tracked-lockfile).
 - **Python artifacts need internet** - the in-browser Python runtime (Pyodide) is fetched from a public CDN, so running a Python artifact needs internet unless you point `PYODIDE_BASE_URL` at a local mirror (see below).
 
 ### Python artifacts offline

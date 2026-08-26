@@ -15,7 +15,7 @@ The feedback control panel provides all filtering and action controls in a singl
 
 ### Search
 
-The search input filters feedback by matching against the **username** or **content** of feedback entries. Results update as you type.
+The search input filters feedback by matching against the **username** or **content** of feedback entries. Results update as you type. Report text older than 90 days is automatically deleted (see Data Retention below), so search will no longer match on the content of an expired report.
 
 ### Status Filters
 
@@ -50,7 +50,7 @@ Each feedback entry is displayed as a card row with the following columns:
 |--------|-------|-------------|
 | **Created At** | ~16% | Timestamp in `Mon DD, YYYY HH:MM AM/PM` format with relative time (e.g., "2 days ago"). Tags associated with the feedback are shown as green chips below the date. |
 | **Reporter** | ~21% | Organization name (bold), username, and email with tooltip showing the user ID |
-| **Feedback** | ~46% | The feedback content, displayed with preserved whitespace and word wrapping. Scrollable if content exceeds 80px height. |
+| **Feedback** | ~46% | The feedback content, displayed with preserved whitespace and word wrapping. Scrollable if content exceeds 80px height. A **Truncated** chip appears if the original submission was cut down to the length cap, and expired content (see Data Retention below) renders as `[content expired]`. |
 | **Actions** | ~17% | Status dropdown and delete button |
 
 ### Header Row
@@ -90,7 +90,7 @@ Exported columns:
 | ID | Feedback document ID |
 | Status | Current status (New, In Progress, Closed) |
 | Username | Submitting user's username |
-| Content | Full feedback text |
+| Content | Feedback text, or `[content expired]` once the report is past the 90-day retention window (see Data Retention below) |
 | Organization | User's organization |
 | UpdatedAt | Last update timestamp |
 
@@ -105,6 +105,10 @@ Pagination controls appear above the feedback list:
 | Items per page | 20 (fixed) |
 | Navigation | Previous / Next buttons with current page and total pages |
 | Total count | Displayed as "Total Feedback: N" reflecting the filtered count |
+
+## Data Retention
+
+Feedback text is **automatically deleted 90 days after submission**. The structured record (status, reporter, organization, tags, timestamps) is kept permanently; only the free-text content expires. Once a report's text has been deleted, the list and CSV export both show `[content expired]` in its place, and it will no longer match a content search.
 
 ## Best Practices
 

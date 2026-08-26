@@ -1,4 +1,10 @@
-import { IChatHistoryItemRepository, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IChatHistoryItemRepository,
+  IFabFileRepository,
+  ISessionRepository,
+  IUserRepository,
+  rebindPromptMetaSession,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
@@ -17,7 +23,7 @@ type ForkSessionAdapters = {
     fabFiles: IFabFileRepository;
     chatHistories: Pick<
       IChatHistoryItemRepository,
-      'findById' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
+      'findBySessionIdAndId' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
     >;
   };
 } & CreateSessionAdapters;
@@ -32,7 +38,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   const session = await db.sessions.findByIdAndUserId(sessionId, userId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await db.chatHistories.findById(messageId);
+  const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
 
   const newSession = await createSession(
@@ -44,6 +50,13 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       summary: session.summary,
       summaryAt: session.summaryAt,
       forkedSourceId: session.id,
+      // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
+      // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
+      // threaded to this path), which cannot see a teammate-authored organization-lake file. That
+      // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
+      // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
+      // takes createSession's "explicit wins" arm, so it costs no DB read.
+      retrievalTags: session.retrievalTags,
     },
     adapters
   );
@@ -54,10 +67,13 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
   );
 
   await Promise.all(
-    messagesToFork.map(async ({ id, ...messageData }) => {
+    messagesToFork.map(async ({ id, promptMeta, ...messageData }) => {
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,
+        // Not cosmetic: the store REQUIRES promptMeta.session.{id,userId} on create(), and quests
+        // carrying promptMeta with no session block exist on disk - see rebindPromptMetaSession.
+        promptMeta: rebindPromptMetaSession(promptMeta, { sessionId: newSession.id, userId }),
       });
     })
   );

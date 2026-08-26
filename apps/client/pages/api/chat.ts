@@ -1,12 +1,5 @@
 import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
-import {
-  BadRequestError,
-  getSettingsMap,
-  getSettingsValue,
-  normalizeId,
-  NotFoundError,
-  SQSService,
-} from '@bike4mind/utils';
+import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -17,26 +10,31 @@ import {
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
 import { adminSettingsRepository, User, Session } from '@bike4mind/database';
-import { B4MLLMTools, chatContract, filterKnownTools, type SimplifiedChatRequest } from '@bike4mind/common';
+import {
+  B4MLLMTools,
+  chatContract,
+  filterKnownTools,
+  toToolPayloads,
+  type SimplifiedChatRequest,
+} from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
+import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
 // Auth mode, required scopes, and request validation all come from chatContract
 // (the single source of truth also driving the OpenAPI spec). `req.validated` is
-// the parsed, typed body. The adapter binds validation to the method registration,
-// so this `.use()` runs ahead of it - a malformed body still counts against the limiter.
-const route = nextRouteForContract(chatContract).use(
+// the parsed, typed body. Rate limit is passed as an option so the adapter orders
+// it before validation (a malformed body still counts against the limiter).
+const handler = nextRouteForContract(chatContract, {
   // Per-user request rate limit, tunable per subscription tier. Keyed on userId
   // (IP-independent); admins/developers and the dev server bypass.
-  rateLimit({
+  rateLimit: rateLimit({
     limit: req => resolveUserRateLimitPerMin(req.user),
     windowMs: 60 * 1000,
-  })
-);
-
-const handler = route.post(async (req, res) => {
+  }),
+}).post(async (req, res) => {
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
 
@@ -76,13 +74,19 @@ const handler = route.post(async (req, res) => {
   // Pre-compute tool recommendations once (used by both transform and response metadata)
   const recommendations = simplifiedRequest.toolMode === 'smart' ? recommendTools(simplifiedRequest.message) : [];
 
-  // Transform to internal format, including user's organization for team-wide system prompts.
-  // req.user.organizationId arrives as a Mongo ObjectId (or a populated Organization doc); a
-  // downstream schema parses it as z.string(), so normalize to a hex string at the boundary.
+  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
+  // caller's home-org field. When the request names an organizationId we validate the caller
+  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
+  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
+  // is what lets an org member whose org pool is empty still spend their own credits.
+  const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
+  // Transform to internal format. The resolved organizationId (already a validated hex string,
+  // or undefined for personal) also scopes team-wide system prompts downstream.
   const internalRequest = transformToInternalFormat(
     { ...simplifiedRequest, model, sessionId },
     req.user.id,
-    normalizeId(req.user.organizationId),
+    organizationId,
     recommendations
   );
 
@@ -185,10 +189,17 @@ const handler = route.post(async (req, res) => {
       model: internalRequest.params.model,
       response: completedQuest.reply,
       responses: completedQuest.replies,
+      // Additive twin of `response`: the machine-readable state the turn's tools produced, which
+      // otherwise survives only on the quest (the model sees a terse displayMessage instead). The
+      // prose above is unchanged - a caller reads one, the other, or both.
+      toolPayloads: toToolPayloads(completedQuest.uiSideEffects),
       createdAt: completedQuest.createdAt,
       ...(simplifiedRequest.includePromptDetails && completedQuest.promptMeta?.context?.systemPromptDetails
         ? { promptDetails: completedQuest.promptMeta.context.systemPromptDetails }
         : {}),
+      // Read off the process instance, not the quest: the disclosed text is deliberately never
+      // persisted, so this response is the only place it exists.
+      ...(processService.systemPromptText && { promptText: processService.systemPromptText }),
       ...(toolMeta && { tools: toolMeta }),
       performance,
       tracking_info: {
@@ -294,6 +305,7 @@ function transformToInternalFormat(
     },
     enableArtifacts: false,
     ...(request.promptMode ? { promptMode: request.promptMode } : {}),
+    includeSystemPrompt: request.includeSystemPrompt,
     ...(isToolsEnabled
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.

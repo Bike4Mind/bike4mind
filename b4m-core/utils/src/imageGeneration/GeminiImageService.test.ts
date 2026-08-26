@@ -58,3 +58,38 @@ describe('GeminiImageService.generateImageViaContent', () => {
     ).rejects.toThrow(/Would you like me to generate an image/);
   });
 });
+
+describe('GeminiImageService.buildGenerationConfig (enhancePrompt/seed omission)', () => {
+  // Regression: Google's generateImages API rejects the mere PRESENCE of enhancePrompt/seed, not
+  // just an unsupported value - so this must never set either, for ANY caller/option shape. This
+  // is the single place that guarantee lives; callers are free to pass prompt_upsampling/seed
+  // through without special-casing them.
+  const buildConfig = (options: Record<string, unknown>) => {
+    const svc = makeService(vi.fn());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (svc as any).buildGenerationConfig(options);
+  };
+
+  it('omits enhancePrompt/seed even when prompt_upsampling/seed are explicitly set', () => {
+    const config = buildConfig({ prompt_upsampling: true, seed: 42 });
+    expect(config).not.toHaveProperty('enhancePrompt');
+    expect(config).not.toHaveProperty('seed');
+  });
+
+  it('omits enhancePrompt/seed when prompt_upsampling is explicitly false and seed is null', () => {
+    const config = buildConfig({ prompt_upsampling: false, seed: null });
+    expect(config).not.toHaveProperty('enhancePrompt');
+    expect(config).not.toHaveProperty('seed');
+  });
+
+  it('omits enhancePrompt/seed when neither is provided', () => {
+    const config = buildConfig({});
+    expect(config).not.toHaveProperty('enhancePrompt');
+    expect(config).not.toHaveProperty('seed');
+  });
+
+  it('still forwards output_format/aspect_ratio, which Gemini does accept', () => {
+    const config = buildConfig({ output_format: 'jpeg', aspect_ratio: '16:9' });
+    expect(config).toMatchObject({ outputMimeType: 'image/jpeg', aspectRatio: '16:9' });
+  });
+});

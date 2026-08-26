@@ -31,8 +31,10 @@ interface SessionScore {
 interface SemanticSearchResponse {
   sessionIds: string[];
   count: number;
-  scores: SessionScore[];
-  debug: {
+  // scores/debug are omitted on the API's zero-session early return (200), so both
+  // are optional - see pages/api/sessions/semantic-search.ts.
+  scores?: SessionScore[];
+  debug?: {
     query: string;
     correctedQuery?: string;
     queryExpansionTimeMs?: number;
@@ -69,31 +71,37 @@ export const useSemanticSearch = () => {
       setSemanticDebugInfo(null);
     },
     onSuccess: data => {
-      setSemanticResults(data.sessionIds);
+      setSemanticResults(data.sessionIds ?? []);
 
-      const debugInfo: SemanticSearchDebugInfo = {
-        query: data.debug.query,
-        correctedQuery: data.debug.correctedQuery,
-        queryExpansionTimeMs: data.debug.queryExpansionTimeMs,
-        minSimilarity: data.debug.minSimilarity,
-        hybridMode: data.debug.hybridMode,
-        keywords: data.debug.keywords,
-        keywordMatchCount: data.debug.keywordMatchCount,
-        messagesWithEmbedding: data.debug.messagesWithEmbedding,
-        messagesGenerated: data.debug.messagesGenerated,
-        reRankingUsed: data.debug.reRankingUsed,
-        reRankingTimeMs: data.debug.reRankingTimeMs,
-        candidatesReRanked: data.debug.candidatesReRanked,
-        candidatesFiltered: data.debug.candidatesFiltered,
-        scores: data.scores.map(score => ({
-          sessionId: score.sessionId,
-          sessionName: score.sessionName,
-          maxSimilarity: score.maxSimilarity,
-          matchingMessages: score.matchingMessages,
-          bestMatch: score.bestMatch,
-        })),
-      };
-      setSemanticDebugInfo(debugInfo);
+      // The zero-session early return is a 200 with no `debug`/`scores` block; treat that
+      // as a valid empty result rather than dereferencing it (the crash behind #1775).
+      if (data.debug) {
+        const debugInfo: SemanticSearchDebugInfo = {
+          query: data.debug.query,
+          correctedQuery: data.debug.correctedQuery,
+          queryExpansionTimeMs: data.debug.queryExpansionTimeMs,
+          minSimilarity: data.debug.minSimilarity,
+          hybridMode: data.debug.hybridMode,
+          keywords: data.debug.keywords,
+          keywordMatchCount: data.debug.keywordMatchCount,
+          messagesWithEmbedding: data.debug.messagesWithEmbedding,
+          messagesGenerated: data.debug.messagesGenerated,
+          reRankingUsed: data.debug.reRankingUsed,
+          reRankingTimeMs: data.debug.reRankingTimeMs,
+          candidatesReRanked: data.debug.candidatesReRanked,
+          candidatesFiltered: data.debug.candidatesFiltered,
+          scores: (data.scores ?? []).map(score => ({
+            sessionId: score.sessionId,
+            sessionName: score.sessionName,
+            maxSimilarity: score.maxSimilarity,
+            matchingMessages: score.matchingMessages,
+            bestMatch: score.bestMatch,
+          })),
+        };
+        setSemanticDebugInfo(debugInfo);
+      } else {
+        setSemanticDebugInfo(null);
+      }
       setIsSemanticSearching(false);
     },
     onError: error => {

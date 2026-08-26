@@ -16,7 +16,7 @@
  */
 import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
-import { parseInternalStaffDomains } from '@bike4mind/common';
+import { parseInternalStaffDomains, DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -303,16 +303,53 @@ export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new
 export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
 
 /**
+ * Entitlement key family for lake-scoped grants (`IDataLake.requiredEntitlement`,
+ * dataLakes epic #1658 lane D). A datalake entitlement is admin-authored per lake
+ * with an arbitrary slug - there is no fixed catalog of lakes to enumerate as a grant
+ * row here (and an open-core file must never name a customer's lake), so unlike every
+ * other key in this registry it can't be listed. Recognized as KNOWN by pattern
+ * instead: `datalake:<slug>`, slug matching the same rule as a lake slug
+ * (`CreateDataLakeRequestInput` in b4m-core/common/src/schemas/dataLake.ts). Deliberately
+ * NOT added to `KNOWN_ENTITLEMENT_KEYS` (that list is "products with a fixed identity";
+ * a lake slug is per-tenant data) - checked separately in `unknownEntitlementKeys`.
+ *
+ * Known gap: this only validates SHAPE, not that a lake with that slug exists - a
+ * well-formed but nonexistent/mistyped slug is accepted as "known" and would persist as a
+ * silent no-op grant (the same class of bug #324 fixed for the fixed catalog). Closing that
+ * needs a DB read against `DataLakeModel`, which belongs with the read-time grant resolution
+ * work (dataLakes epic #1658 lane C, #1673), not this pattern-registration step.
+ */
+const DATALAKE_ENTITLEMENT_PREFIX = 'datalake:';
+// The shape and max come from the same constants CreateDataLakeRequestInput validates against,
+// so this gate cannot drift from what a lake slug is allowed to be. A longer slug can't belong
+// to a real lake, so accepting it here would reopen the exact silent-no-op-grant risk
+// `unknownEntitlementKeys` exists to close. (The 2-char minimum is already implied by the regex
+// shape: first char + last char, with the middle `*` allowed to match zero characters.)
+
+/**
+ * Whether `key` is a `datalake:<slug>` entitlement. Normalizes internally (matches
+ * `isBypassExemptEntitlement` above) so a caller can't get a wrong answer by forgetting to
+ * normalize first.
+ */
+export function isDatalakeEntitlementKey(key: string): boolean {
+  const normalized = normalizeTag(key);
+  if (!normalized.startsWith(DATALAKE_ENTITLEMENT_PREFIX)) return false;
+  const slug = normalized.slice(DATALAKE_ENTITLEMENT_PREFIX.length);
+  return slug.length <= MAX_DATA_LAKE_SLUG_LENGTH && DATA_LAKE_SLUG_REGEX.test(slug);
+}
+
+/**
  * The entitlement keys in `keys` the registry does NOT recognize (normalized, de-duplicated).
- * Empty means every key is a known grantable product. Used to reject typo'd keys at admin
- * write boundaries before they persist as a silent no-op grant.
+ * Empty means every key is a known grantable product, or a `datalake:<slug>` grant (see
+ * `isDatalakeEntitlementKey`). Used to reject typo'd keys at admin write boundaries before
+ * they persist as a silent no-op grant.
  */
 export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
   const known = new Set(KNOWN_ENTITLEMENT_KEYS);
   const unknown = new Set<string>();
   for (const raw of keys) {
     const key = normalizeTag(raw);
-    if (key && !known.has(key)) unknown.add(key);
+    if (key && !known.has(key) && !isDatalakeEntitlementKey(key)) unknown.add(key);
   }
   return [...unknown];
 }

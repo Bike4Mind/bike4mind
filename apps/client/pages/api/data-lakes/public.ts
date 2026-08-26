@@ -1,9 +1,18 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  userRepository,
+  lakeAccessEventRepository,
+} from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 // Coerce + clamp the browse query. Strings arrive from the query string; empty search is
 // dropped so it isn't sent to the repo as a no-op regex. Paging bounds mirror the repo clamp.
@@ -22,10 +31,39 @@ const handler = baseApi()
     const { q, limit, offset } = BrowseQuery.parse(req.query);
 
     const result = await dataLakeService.browsePublicDataLakes(
-      { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+      await toAccessContext(req),
       { search: q, limit, offset },
-      { db: { dataLakes: dataLakeRepository, users: userRepository } }
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          users: userRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        },
+      }
     );
+
+    // Best-effort audit write - the browsed lakes themselves ARE the result, so no
+    // tag-attribution step is needed; every returned lake goes straight into resolvedLakeIds.
+    // Deliberately recorded as an access even though it is metadata (name/description), not
+    // content: this catalog listing reveals which lakes exist, and data-lake-public-browse is its
+    // own surface precisely so a discovery listing here never gets conflated with an actual
+    // content read on data-lake-articles/chat-kb-* when someone reads listByLake later. Skipped
+    // entirely on an empty page: zero lakes browsed is not a lake access. Awaited (never
+    // rethrows): a per-request serverless route must not race a post-response environment freeze.
+    if (result.data.length > 0) {
+      await dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+          organizationId: normalizeId(req.user.organizationId),
+          resolvedLakeIds: result.data.map(lake => lake.id),
+          surface: 'data-lake-public-browse',
+          ...(q ? { queryText: q } : {}),
+        },
+        req.logger,
+        adminSettingsRepository
+      );
+    }
 
     return res.json(result);
   });

@@ -1,6 +1,7 @@
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { IFileTag, IFileTagRepository, TagType } from '@bike4mind/common';
+import { extractStaticRegistryPrefixedTags } from '../dataLakeService/authorizeLakeWrite';
 import { isDataLakeTagName, normalizeTagName } from './tagName';
 
 const tagCreateSchema = z.object({
@@ -34,6 +35,13 @@ interface TagCreateAdapters {
  * tag. The auto-create paths deliberately still mint them (accepting an invite to a shared lake
  * file needs one), which is why the refusal lives here and not in the repository.
  *
+ * A STATIC REGISTRY lake's `fileTagPrefix` (e.g. `opti:`) is refused for a related but distinct
+ * reason: nothing here needs the document to be USABLE (unlike a datalake: tag, an ordinary
+ * content-prefix tag never has to exist as a document to matter to a file), so refusing its
+ * creation outright is pure hardening - it denies a non-admin an unlinked document sitting under a
+ * registry prefix, which tagService/update's rename gate must otherwise treat as carefully as a
+ * file's own content tags.
+ *
  * One race survives: the unique index has no collation, so two concurrent creates of `Foo` and
  * `foo` both pass the lookup and both land. listFileTags under-reports such a pair rather than
  * lying about it, and renaming one onto the other merges them. Closing it properly needs a collated
@@ -51,6 +59,10 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
 
   if (isDataLakeTagName(name)) {
     throw new BadRequestError('Tag Service - Create: a data lake membership tag cannot be created here');
+  }
+
+  if (extractStaticRegistryPrefixedTags([name]).length > 0) {
+    throw new BadRequestError("Tag Service - Create: a data lake's tag prefix cannot be created here");
   }
 
   const existing = await adapters.db.fileTags.findByFoldedNameAndUserId(name, userId);

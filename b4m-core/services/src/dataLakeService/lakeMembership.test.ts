@@ -45,7 +45,7 @@ describe('addFileToLake', () => {
     const adapters = makeAdapters();
 
     await expect(addFileToLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can add files/i
+      /do not have permission to add files/i
     );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -98,7 +98,7 @@ describe('removeFileFromLake', () => {
     const adapters = makeAdapters();
 
     await expect(removeFileFromLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can remove files/i
+      /do not have permission to remove files/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -129,6 +129,29 @@ describe('removeFileFromLake', () => {
     await expect(removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters)).rejects.toThrow(
       /not found in this data lake/i
     );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses the lake creator removing a prefix-only file merely shared with them (#1040)', async () => {
+    // Same code path as the admin test above - ownsFile never reads file.users/file.groups - but
+    // spelled out for #1040's literal scenario: the ACTOR here is the lake's own creator (passes
+    // canManageLake trivially), and the file's owner shared it with them read/write. A share is
+    // not ownership, so the outcome is identical to the admin case.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            users: [{ userId: 'owner', permissions: ['read', 'write'] }],
+            tags: [{ name: 'lk:invoices', strength: 1 }],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found in this data lake/i);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 

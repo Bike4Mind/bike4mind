@@ -1,11 +1,21 @@
 import { requireUser } from '@server/middlewares/requireUser';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 
+// Per-user cap (req.user is set here, so rateLimit keys by user id, not IP). No legitimate
+// flow calls identify anywhere near 60/min - it fires on cold load, tab refocus and WS
+// reconnect probes - so this only bites a client stuck re-hitting it, bounding the Mongo cost
+// of that spam. NOTE: this runs AFTER baseApi's auth, so it does NOT throttle a pure 401 loop
+// (an invalid token is rejected before the handler chain); that class of flood is bounded by
+// refreshToken's own per-IP rate limit and, when enabled, the edge WAF.
+const IDENTIFY_RATE_LIMIT = { limit: 60, windowMs: 60 * 1000 } as const;
+
 const handler = baseApi()
+  .use(rateLimit(IDENTIFY_RATE_LIMIT))
   .use(requireUser)
   .get(async (req, res) => {
     let accessToken: string | undefined = req.headers?.authorization?.split(' ')[1];

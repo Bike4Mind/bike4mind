@@ -36,7 +36,7 @@ import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
-import { resetRefreshPromise } from '@client/app/contexts/ApiContext';
+import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
@@ -106,7 +106,8 @@ const Register: React.FC = () => {
     control,
     formState: { errors, isValid },
   } = useForm<RegisterFormData>({
-    resolver: zodResolver(registerSchema),
+    // any: Zod v4 schema type is incompatible with @hookform/resolvers v5 Zod v3 overload signature
+    resolver: zodResolver(registerSchema as any),
     mode: 'onChange',
   });
 
@@ -248,7 +249,7 @@ const Register: React.FC = () => {
       } else {
         result = await verifyMFA.mutateAsync({ token });
       }
-      resetRefreshPromise();
+      resetRefreshCoordinator();
       // Drop the cached cold-load result: this browser just acquired a session, so the next
       // protected navigation must not reuse the "no session" answer from before login.
       resetSessionBootstrap();
@@ -354,7 +355,7 @@ const Register: React.FC = () => {
       const result = response as Record<string, unknown>;
       const accessToken = (result.accessToken as string) || '';
       const user = result.user ?? result; // OTCRegisterResponse has .user, OTCVerifyResponse spreads it
-      resetRefreshPromise();
+      resetRefreshCoordinator();
       // Drop the cached cold-load result: this browser just acquired a session, so the next
       // protected navigation must not reuse the "no session" answer from before login.
       resetSessionBootstrap();

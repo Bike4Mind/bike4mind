@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { Message } from '../storage';
 import type { AgentStep } from '@bike4mind/agents';
+import { DEGENERATE_FINISH_REASON } from '@bike4mind/common';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 import {
@@ -147,6 +148,18 @@ export const MessageItem = React.memo(function MessageItem({
           ) : (
             <MarkdownRenderer content={message.content} columns={terminalCols} />
           )}
+        </Box>
+      )}
+
+      {/* A reply cut off against the output ceiling used to be indistinguishable from a
+          finished one - the user just saw a sentence stop mid-word. */}
+      {!isUser && message.metadata?.earlyStopReason && (
+        <Box paddingLeft={2}>
+          <Text color="yellow">
+            {message.metadata.earlyStopReason === DEGENERATE_FINISH_REASON
+              ? '⚠ Response stopped early: it began repeating itself. Try rephrasing the request.'
+              : '⚠ Response was cut off at the output-token limit. Type "continue" to resume, or raise Max Tokens in /config.'}
+          </Text>
         </Box>
       )}
 
