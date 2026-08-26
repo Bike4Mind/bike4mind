@@ -34,6 +34,7 @@ export * from './constants/agentExecutionStatus';
 export * from './constants/chunking';
 export * from './constants/lakeHealth';
 export * from './constants/lakeConvergence';
+export * from './constants/convergenceProvenance';
 export * from './constants/lakeAccessAudit';
 export * from './constants/lakeConfigAudit';
 export * from './constants/forcedRetrieval';
