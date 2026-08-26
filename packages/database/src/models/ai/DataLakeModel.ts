@@ -923,6 +923,18 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return this.guardedActiveUpdate(batchId, { status });
   }
 
+  async updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    // Same guard as markTerminalIfActive/setStatusIfActive, but carrying the PUT route's whole field
+    // set: that route accepts any BatchStatus plus the client's failure tallies, so neither of the
+    // narrower methods fits, and a plain update there let a client (or a read-then-write race with
+    // the queue finalizer) write a settled batch back to a non-terminal status - resurrecting it into
+    // findActiveByUserId, where reconcileStuckBatches would later force-fail a batch that succeeded.
+    return this.guardedActiveUpdate(batchId, fields as Record<string, unknown>);
+  }
+
   async touchIfActive(batchId: string): Promise<void> {
     await this.guardedActiveUpdate(batchId, { updatedAt: new Date() });
   }
