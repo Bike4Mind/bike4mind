@@ -86,6 +86,9 @@ vi.mock('@bike4mind/services', async () => ({
     emptyEmbeddingMismatchReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
+    emptyRetrievalUnavailableReport: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
+    ).emptyRetrievalUnavailableReport,
     // Real implementations (pure, already unit-tested on their own) so this suite can assert on
     // the actual lakeAccessEventRepository.record call args rather than a reimplementation.
     attributeAccessedLakeIds: (
@@ -345,6 +348,11 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
         // The short-circuit must carry the SAME shape as the success path: the RLM loopback
         // forwards this JSON verbatim, so a missing `scan` would be an inconsistent contract.
         scan: expect.objectContaining({ truncated: false, files_matching: 0, chunks_scanned: 0 }),
+        // Same contract, and the field #2096 was missing here: the RLM prompt documents
+        // `retrieval_unavailable` as always present, so REPL code reading
+        // `retrieval_unavailable.indexing_files` TypeErrored for any caller with no lakes - the
+        // most likely state for a new user.
+        retrieval_unavailable: { indexing_files: 0, paused_files: 0, partial: false },
       })
     );
     // Without these the test still passes with the short-circuit deleted.

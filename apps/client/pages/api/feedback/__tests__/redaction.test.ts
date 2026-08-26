@@ -45,6 +45,11 @@ FeedbackModelMock.find = mockFind;
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: FeedbackModelMock,
+  FeedbackTextModel: {
+    create: vi.fn().mockResolvedValue({}),
+    deleteOne: vi.fn().mockResolvedValue({}),
+    find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+  },
   User: { findOne: vi.fn().mockReturnValue({ populate: vi.fn().mockResolvedValue(null) }) },
   adminSettingsRepository: {},
 }));

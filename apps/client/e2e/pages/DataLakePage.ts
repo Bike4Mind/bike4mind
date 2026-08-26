@@ -153,8 +153,16 @@ export class DataLakePage extends BasePage {
   async openChatSurface() {
     await this.page.goto('/new', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    await expect(this.modeToggle).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await this.modeToggle.click();
+    // Wait for whichever settles first: the pill to click, or the surface already open
+    // (DataLakeToggle renders null once mode is on, so an already-on chat never shows a pill).
+    // The .or() is what makes the isVisible() below safe - isVisible resolves against the
+    // CURRENT DOM and ignores its timeout, so on its own it would answer false on an unpainted
+    // shell and silently leave mode off, which the domcontentloaded navigation above makes
+    // likely rather than rare.
+    await expect(this.modeToggle.or(this.explorer).first()).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    if (await this.modeToggle.isVisible()) {
+      await this.modeToggle.click();
+    }
     await expect(this.explorer).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 

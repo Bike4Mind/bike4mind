@@ -437,6 +437,11 @@
         },
         {
           "level": 2,
+          "text": "Data Retention",
+          "anchor": "data-retention"
+        },
+        {
+          "level": 2,
           "text": "Best Practices",
           "anchor": "best-practices"
         },
@@ -10011,6 +10016,11 @@
               "level": 2,
               "text": "Pagination",
               "anchor": "pagination"
+            },
+            {
+              "level": 2,
+              "text": "Data Retention",
+              "anchor": "data-retention"
             },
             {
               "level": 2,

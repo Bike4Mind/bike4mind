@@ -32,6 +32,30 @@ describe('forkSession', () => {
     };
   };
 
+  /**
+   * A fork is a NEW session holding the source's lake files, so it must carry the source's scope.
+   * Re-deriving instead would run the OWNERSHIP arm alone (no resolveLakeAccess is threaded here),
+   * which cannot see a teammate-authored organization-lake file - deriving [], and an empty list is
+   * NOT a narrow scope: fabFileSearchQuery skips its tag clause, so the fork would silently ground
+   * on every lake the caller can reach. Asserts the PERSISTED payload, so it also pins that
+   * secureParameters keeps the field and that createSession's explicit-wins arm does not re-derive.
+   */
+  it('carries the source session retrievalTags onto the fork', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
+
   it('forks messages up to the fork point when the message belongs to the session', async () => {
     const { db, created } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });

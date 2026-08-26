@@ -357,6 +357,20 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   preferredSystemPromptId?: string;
   /**
+   * How many proposals are waiting for this caller to review (#1671). EDITOR-ONLY, same gate as the
+   * fields above: deciding what enters a lake is a management right, so a reader must not learn that
+   * a queue exists, let alone how deep it is.
+   *
+   * Carried on the LIST rather than fetched per lake because it is the feature's only discovery
+   * surface. Nothing else in the app says a human has work waiting - without this the queue is
+   * reachable only by opening a lake's settings and noticing a tab that exists solely when it is
+   * non-empty, which is not a signal anyone will find.
+   *
+   * Absent (never 0) when the caller cannot manage the lake or the projection was given no proposal
+   * repo, so "none waiting" and "not yours to see" stay distinguishable.
+   */
+  pendingProposalCount?: number;
+  /**
    * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
    * surfaced only when the caller can manage the lake, so the settings picker can seed its current
    * selection. Absent when the caller can't manage it OR the lake never set the field (readers get

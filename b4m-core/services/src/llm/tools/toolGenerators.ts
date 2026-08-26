@@ -38,6 +38,8 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    suppressLakeArms,
+    sessionRetrievalTags,
     questId,
   }: {
     db: ToolContext['db'];
@@ -45,6 +47,8 @@ export const generateTools = (
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+    suppressLakeArms?: ToolContext['suppressLakeArms'];
+    sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
     questId?: ToolContext['questId'];
   },
   storage: BaseStorage,
@@ -89,6 +93,8 @@ export const generateTools = (
     kbScope,
     inlinedAttachmentIds,
     fullyInlinedAttachmentIds,
+    suppressLakeArms,
+    sessionRetrievalTags,
     codeMinifier,
     availableModels,
     onToolLlmUsage,

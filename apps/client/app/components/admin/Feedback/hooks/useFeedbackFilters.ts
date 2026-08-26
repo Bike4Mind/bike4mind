@@ -38,7 +38,7 @@ export const useFeedbackFilters = (feedback: IExtendedFeedbackDocument[]): UseFe
             : true;
         const matchesSearchTerm = searchTerm
           ? feedbackItem.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            feedbackItem.content.toLowerCase().includes(searchTerm.toLowerCase())
+            (feedbackItem.content ?? '').toLowerCase().includes(searchTerm.toLowerCase())
           : true;
         return matchesStatus && matchesOrganization && matchesSearchTerm;
       })
