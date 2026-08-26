@@ -5,7 +5,8 @@ import {
   normalizeExclusionMarkers,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { getDynamicDataLakeAccess, type ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import type { ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
  * How many documents a library holds - the one knowledge-base question ranked passage retrieval
@@ -140,7 +141,9 @@ export const knowledgeBaseCountTool: ToolDefinition = {
           return `This agent's knowledge base contains ${describeCount(scoped)}.${REPORTING_NOTE}`;
         }
 
-        const { lakes } = await getDynamicDataLakeAccess(context);
+        // Narrowed to the session's lake: a session scoped to one lake must not enumerate, or name,
+        // every other lake its owner can reach.
+        const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
           // No curated library, but the caller's own and shared files are still what

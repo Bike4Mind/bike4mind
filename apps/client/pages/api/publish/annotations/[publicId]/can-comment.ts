@@ -7,8 +7,10 @@ import { checkVisibility, canAnnotate, toPublishUser, requestHasGateProof } from
 /**
  * GET /api/publish/annotations/[publicId]/can-comment - the PER-VIEWER comment
  * capability, split out of the list GET so that list can be CDN-cached while
- * this stays no-store. The widget fetches it once on load (and on tab-refocus),
- * not on every poll. Anonymous viewers get `false`.
+ * this stays no-store. The widget fetches it when the comment panel is OPENED
+ * (and on tab-refocus once capability is known), not on load and not on every
+ * poll - the composer is the only thing that needs it, so a reader who never
+ * opens the panel costs nothing here. Anonymous viewers get `false`.
  */
 
 interface ArtifactGateLean {

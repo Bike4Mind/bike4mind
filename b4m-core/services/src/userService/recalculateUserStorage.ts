@@ -27,8 +27,7 @@ export const recalculateUserStorage = async (
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError(`User ${userId} not found`);
 
-  const fabFiles = await db.fabFiles.findByUserId(userId);
-  const totalSize = fabFiles.reduce((sum, file) => sum + (file.fileSize || 0), 0);
+  const totalSize = await db.fabFiles.sumFileSizeByUserId(userId);
 
   user.currentStorageSize = totalSize;
   await db.users.update(user);

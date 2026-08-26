@@ -1,23 +1,28 @@
 import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
-import type { IDataLakeRepository } from '@bike4mind/common';
-import {
-  buildSlackAccessContext,
-  ingestSlackFilesIntoLake,
-  type SlackIngestActor,
-  type SlackLakeIngestDeps,
-  type SlackLakeIngestOutcome,
-} from './dataLakeFileIngest';
+import { STATIC_LAKE_IDS } from '@bike4mind/common';
+import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
+import { buildSlackAccessContext, type SlackIngestActor } from './dataLakeIngestAuthz';
+import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps, type SlackLakeIngestOutcome } from './dataLakeFileIngest';
+import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps, type SlackLinkIngestOutcome } from './dataLakeLinkIngest';
 
 /**
  * Deterministic handler for the Slack `@datalake` command.
  *
- * M1 landed the grammar behind the `EnableDataLakeSlackAdd` flag; M2 fills in the FILE ingest
- * (see `dataLakeFileIngest.ts`, which owns lake resolution and the write gate) and `list`. LINK
- * ingest is M3 - a bare URL is refused here rather than silently ignored.
+ * The grammar landed first, then the FILE ingest (see `dataLakeFileIngest.ts`, which owns lake
+ * resolution and the write gate) and `list`, then LINK ingest - a bare URL is refused here rather
+ * than silently ignored.
  *
- * The whole surface stays DORMANT: `runDataLakeSlackCommand` only reaches this once the admin
- * flag is on, and the flag stays off until M4.
+ * This surface is now LIVE BY DEFAULT. `EnableDataLakeSlackAdd` defaults on, so the effective gate
+ * is the parent `EnableDataLakes` - which still defaults OFF, so nothing reaches here on a deployment
+ * that has never enabled Data Lakes.
+ *
+ * Both flags are DEPLOYMENT-GLOBAL, not per-org: `adminSettingsRepository.getSettingsValue` is a
+ * `findOne({ settingName })` against a collection keyed on `settingName` alone, and this path never
+ * touches the scoped-override machinery in `@bike4mind/utils` settings. So the bound is "the whole
+ * deployment, once Data Lakes is on" - do NOT read it as a per-org opt-in. The child flag is the
+ * off switch and rollback lever for that deployment; see `runDataLakeSlackCommand` below, which
+ * enforces both.
  */
 
 /** DataLake repository surface the command needs (injected for testability). */
@@ -35,7 +40,7 @@ export interface HandleDataLakeCommandParams {
   files: SlackAttachment[];
   channel: string;
   messageTs: string;
-  deps: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
+  deps: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   /**
    * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
    * reply: with it off, `objectCreated.ts` never enqueues the chunk job, so promising the file
@@ -47,6 +52,7 @@ export interface HandleDataLakeCommandParams {
 const HELP_TEXT = [
   '*Data Lake commands*',
   '- `@datalake add to <lake>` with a file attached - add that file to a lake',
+  '- `@datalake add to <lake> <link>` - fetch a link and add it to a lake',
   '- `@datalake list` - list the lakes you can add to',
   '- `@datalake help` - show this help',
 ].join('\n');
@@ -71,22 +77,103 @@ export async function handleDataLakeCommand(params: HandleDataLakeCommandParams)
   }
 }
 
+/** The lake fields the `list` scoping rules and the rendered rows need. */
+type ListableLake = Pick<ManageableDataLakeConfig, 'id' | 'slug' | 'name' | 'organizationId' | 'canManage'>;
+
+/** The caller facts both scoping rules key off. */
+type ListScope = Pick<AccessContext, 'isAdmin' | 'organizationIds'>;
+
+/** An org-scoped lake's org id, with a blank string read as org-less (both forms are stored). */
+const lakeOrgId = (lake: ListableLake): string | undefined => lake.organizationId?.trim() || undefined;
+
 /**
- * The lakes the caller may ADD to - i.e. `canManage` (admin or creator), not merely readable.
- * Listing everything they can read would advertise lakes every add would then refuse.
+ * Whether the caller may WRITE to this lake. `canManage` arrives computed under the
+ * isAdmin-suppressed context (see `handleList`), so a platform admin's own manage rung is restored
+ * here - EXCEPT on a built-in registry lake, which is read-only for everyone including admins
+ * (`assertLakeWritable`; `listDataLakes` stamps every fallback `canManage: false` for that reason).
+ * Restoring it there would advertise a lake `add` always refuses.
+ */
+const isWritable = (lake: ListableLake, scope: ListScope): boolean =>
+  lake.canManage || (scope.isAdmin && !STATIC_LAKE_IDS.has(lake.id));
+
+/**
+ * Whether `@datalake add to <slug>` can RESOLVE this lake for this caller: an org-less lake, or one
+ * scoped to an org the caller belongs to. Mirrors `findBySlug`'s own-org-then-org-less lookup
+ * (packages/database/src/models/ai/DataLakeModel.ts) and must stay in sync with it - a row that
+ * fails there is a slug this reply promised and `add` then refuses as "No Data Lake found".
+ */
+const isSlugAddressable = (lake: ListableLake, scope: ListScope): boolean => {
+  const orgId = lakeOrgId(lake);
+  return !orgId || (scope.organizationIds ?? []).includes(orgId);
+};
+
+/**
+ * Of two lakes sharing a slug, the one `findBySlug` would resolve: an org-scoped lake beats an
+ * org-less one, and among org-scoped ones the lowest org id wins (the model sorts ascending).
+ */
+const preferredBySlug = (a: ListableLake, b: ListableLake): ListableLake => {
+  const aOrg = lakeOrgId(a);
+  const bOrg = lakeOrgId(b);
+  if (!aOrg) return bOrg ? b : a;
+  if (!bOrg) return a;
+  return bOrg < aOrg ? b : a;
+};
+
+/**
+ * One row per slug. A slug is unique per org, so a collision means two lakes the caller can reach
+ * under one name - keep the one `add` would resolve, or the reply names a lake the command does not
+ * target. Runs over every ADDRESSABLE lake, before the write gate, because `findBySlug` resolves by
+ * org priority without consulting write access (see the note in `handleList`).
+ */
+const dedupeBySlug = (lakes: ListableLake[]): ListableLake[] => {
+  const bySlug = new Map<string, ListableLake>();
+  for (const lake of lakes) {
+    const existing = bySlug.get(lake.slug);
+    bySlug.set(lake.slug, existing ? preferredBySlug(existing, lake) : lake);
+  }
+  return Array.from(bySlug.values());
+};
+
+/**
+ * The lakes the caller may ADD to (see `isWritable`), not merely read. Listing everything they can
+ * read would advertise lakes every add would then refuse.
+ *
+ * Two scoping rules, both needed, because `list` and `add` resolve lakes differently:
+ *
+ * 1. The row set is queried with the platform-admin bypass SUPPRESSED, so an admin's reply is built
+ *    from the same org/visibility arms as everyone else's. Left on, `findAccessible` short-circuits
+ *    to every draft/active lake on the platform - and unlike the web manager list, this reply is a
+ *    channel message, so that set lands somewhere shared, searchable and permanent.
+ * 2. Every surviving row must be addressable BY SLUG for this caller, because `add` resolves through
+ *    the org-scoped `findBySlug` while `findAccessible`'s public arm ignores the org constraint.
+ *
+ * The invariant is "listed implies addable", NOT the converse: a lake an admin could write to purely
+ * by platform-admin power, holding no ownership or org claim on it, stays out of the channel.
  */
 async function handleList(params: HandleDataLakeCommandParams): Promise<string> {
-  const ctx = await buildSlackAccessContext(params.actor, params.deps);
-  const lakes = await dataLakeService.listDataLakes(ctx, { db: { dataLakes: params.deps.dataLakes } });
-  const writable = lakes.filter(lake => lake.canManage);
+  // Entitlement keys are resolved even for an admin, unlike the write path: rule 1 evaluates them
+  // through the non-admin arms, so without the keys an entitlement-gated lake in the admin's OWN
+  // org would fail findAccessible's requirement constraint and vanish from a list `add` still takes.
+  const ctx = await buildSlackAccessContext(params.actor, params.deps, { resolveEntitlementsForAdmin: true });
+  const lakes = await dataLakeService.listDataLakes(
+    { ...ctx, isAdmin: false },
+    { db: { dataLakes: params.deps.dataLakes } }
+  );
+  // Order matters, and it mirrors `add`: resolve the slug's winning lake FIRST, then apply the write
+  // gate to that winner. `findBySlug` picks by org priority alone and never falls back when the lake
+  // it picked turns out to be unwritable, so gating before the dedupe would hide a higher-priority
+  // lake and print a slug `add` resolves elsewhere and refuses. `isWritable` also restores the
+  // manage LABEL that suppressing isAdmin silenced in canManageLake; it only ever removes rows.
+  const addressable = lakes.filter(lake => isSlugAddressable(lake, ctx));
+  const writable = dedupeBySlug(addressable).filter(lake => isWritable(lake, ctx));
 
   if (writable.length === 0) {
     return 'You cannot add to any data lakes yet. You can add to lakes you created, or ask an admin.';
   }
 
-  // Capped: for an ADMIN, findAccessible short-circuits to every draft/active lake on the
-  // platform, all canManage. Past Slack's 40k-character `text` limit chat.postMessage errors, the
-  // orchestrator catches it, and the admin gets "something went wrong" instead of any list at all.
+  // Capped: a caller in a large org can still have more manageable lakes than fit Slack's
+  // 40k-character `text` limit, and past it chat.postMessage errors, the orchestrator catches it,
+  // and they get "something went wrong" instead of any list at all.
   const shown = writable.slice(0, LIST_LIMIT);
   const rows = shown.map(lake => `- \`${lake.slug}\` - ${lake.name}`).join('\n');
   const more = writable.length > shown.length ? `\n- ...and ${writable.length - shown.length} more` : '';
@@ -101,35 +188,87 @@ async function handleAdd(
     return 'Please name a target lake, e.g. `@datalake add to <lake>` with a file attached.';
   }
 
-  // LINK ingest is M3. Refuse explicitly: accepting the command and silently ingesting nothing
-  // would read as success to the person who shared the URL.
-  if (params.files.length === 0 && parsed.link) {
-    return 'Adding a link is not supported yet. Attach the file to your message instead.';
+  // Attachments and a link are both ingested now (M3), so a message carrying both gets both done
+  // and both reported. This replaces M2's "Ignored the link" note, which existed only because LINK
+  // ingest did not exist yet - keeping it would now under-report what actually happened.
+  //
+  // NOTE, deliberate: on a mixed message each ingest runs its OWN authorize-first prologue, so the
+  // lake is resolved and gated twice. That duplication is the price of neither path owning the
+  // other's security gate - the whole reason `dataLakeIngestAuthz` exists - and it is bounded (one
+  // extra lake lookup, only when a single message carries both a file and a link). The user-visible
+  // half of the cost, a refusal printed twice, is handled where the replies are joined below.
+  //
+  // `ok` is carried alongside the text because only REFUSALS are de-duplicated - see the join.
+  const replies: Array<{ text: string; ok: boolean }> = [];
+
+  if (params.files.length > 0) {
+    const outcome = await ingestSlackFilesIntoLake(
+      {
+        actor: params.actor,
+        lakeSlug: parsed.lakeSlug,
+        files: params.files,
+        channel: params.channel,
+        messageTs: params.messageTs,
+      },
+      params.deps
+    );
+    replies.push({
+      text: formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }),
+      ok: outcome.ok,
+    });
   }
 
-  const outcome = await ingestSlackFilesIntoLake(
-    {
-      actor: params.actor,
-      lakeSlug: parsed.lakeSlug,
-      files: params.files,
-      channel: params.channel,
-      messageTs: params.messageTs,
-    },
-    params.deps
+  if (parsed.link) {
+    const outcome = await ingestSlackLinkIntoLake(
+      {
+        actor: params.actor,
+        lakeSlug: parsed.lakeSlug,
+        link: parsed.link,
+        channel: params.channel,
+        messageTs: params.messageTs,
+      },
+      params.deps
+    );
+    replies.push({ text: formatLinkOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }), ok: outcome.ok });
+  }
+
+  if (replies.length === 0) {
+    return 'Attach a file or include a link to add something to a data lake.';
+  }
+
+  // Both halves authorize independently (see the note on the paired calls above), so an actor who is
+  // refused gets the SAME refusal sentence from each - which reads as a stutter rather than as two
+  // half-outcomes. Collapse those, preserving order.
+  //
+  // REFUSALS ONLY, deliberately. Two successes could in principle format identically - same lake, and
+  // a file whose name happens to match the link's page title - and collapsing one of those would
+  // under-report a write that really happened. A duplicated refusal is cosmetic; a swallowed success
+  // is a lie about what is in the lake.
+  const seenRefusals = new Set<string>();
+  return replies
+    .filter(reply => {
+      if (reply.ok) return true;
+      if (seenRefusals.has(reply.text)) return false;
+      seenRefusals.add(reply.text);
+      return true;
+    })
+    .map(reply => reply.text)
+    .join('\n');
+}
+
+/**
+ * Reply for a link add. Deliberately routed through `formatIngestOutcome` on the success path
+ * rather than duplicating its wording: a link-sourced file goes through the same S3 ObjectCreated ->
+ * chunk -> vectorize pipeline, so the searchability caveat about `enableAutoChunk` applies to it
+ * identically and must not be allowed to drift between the two paths.
+ */
+export function formatLinkOutcome(outcome: SlackLinkIngestOutcome, opts: { autoChunkEnabled?: boolean } = {}): string {
+  if (!outcome.ok) return outcome.message;
+
+  return formatIngestOutcome(
+    { ok: true, lakeName: outcome.lakeName, added: [outcome.fileName], duplicates: [], rejected: [] },
+    opts
   );
-
-  const reply = formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled });
-
-  // A message carrying BOTH files and a link falls past the refusal above, so say what happened
-  // to the link too - ingesting the files and staying silent about the URL reads as if both
-  // were taken. Only on success: appending it to a refusal would tell someone denied by the write
-  // gate that their link was "ignored", implying the rest went through.
-  if (parsed.link && outcome.ok) {
-    // Warning sign escaped so this source file stays ASCII (same as formatIngestOutcome).
-    return `${reply}\n\u26a0\ufe0f Ignored the link - links are not supported yet. Attach it as a file instead.`;
-  }
-
-  return reply;
 }
 
 /**
@@ -190,15 +329,15 @@ export interface RunDataLakeSlackCommandDeps {
       key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
     ): Promise<boolean | undefined>;
   };
-  ingest: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
+  ingest: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   sendMessage: (args: { channel: string; text: string; threadTs?: string }) => Promise<unknown>;
   logger: { info: (message: string) => void; error: (message: string, meta?: unknown) => void };
 }
 
 /**
- * Orchestrate a `@datalake` Slack command: enforce the admin gates (silent no-op when off, keeping
- * the surface dormant), otherwise dispatch and reply in-thread. The caller intercepts this BEFORE
- * the LLM path and always acks Slack with 200.
+ * Orchestrate a `@datalake` Slack command: enforce the admin gates (silent no-op when either is
+ * off), otherwise dispatch and reply in-thread. The caller intercepts this BEFORE the LLM path and
+ * always acks Slack with 200.
  *
  * BOTH `EnableDataLakes` and `EnableDataLakeSlackAdd` must be on. The child flag declares
  * `dependsOn: 'EnableDataLakes'`, so the admin UI hides it while the parent is off - but that is a

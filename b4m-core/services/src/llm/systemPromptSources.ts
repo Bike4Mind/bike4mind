@@ -34,6 +34,7 @@ export type PromptSourceId =
   | 'sessionPrompt'
   | 'skills'
   | 'knowledgeRetrieval'
+  | 'lakeMemory'
   | 'contextSummary'
   | 'mementos'
   | 'project'
@@ -48,18 +49,22 @@ export type PromptSourceId =
  */
 export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'dateContext',
-  'extraContext',
   'artifactEmission',
   'helpCenter',
   'abstention',
   'viewRegistry',
   'toolPrompt',
   'agentDetection',
+  // Moved behind the admin/hardcoded block above: this is `origin: 'user'` content that
+  // varies per request, and in front of that block it split the deployment-wide shareable
+  // prefix (see SHAREABLE_PREFIX_SOURCES) down to dateContext alone.
+  'extraContext',
   'questMaster',
   'organizationPrompt',
   'sessionPrompt',
   'skills',
   'knowledgeRetrieval',
+  'lakeMemory',
   'contextSummary',
   'mementos',
   'project',
@@ -67,6 +72,15 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'urls',
   'attachedFiles',
 ];
+
+/**
+ * Sources billed on every normal turn, and therefore inventoried even when a gate excluded them:
+ * buildAlwaysOnFloorDetails emits a row for each regardless (wasIncluded false,
+ * exclusionReason 'disabled'), so anything else itemizing the stack has to do the same or the two
+ * lists cannot be joined. Their rows come from that helper rather than from toPromptDetails, which
+ * only sees sources that contributed a message.
+ */
+export const ALWAYS_ON_FLOOR_SOURCES: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
 
 export interface TaggedSystemMessage {
   source: PromptSourceId;
@@ -79,6 +93,20 @@ export type MessagesBySource = Partial<Record<PromptSourceId, IMessage[]>>;
 export function buildTaggedContextMessages(bySource: MessagesBySource): TaggedSystemMessage[] {
   return PROMPT_SOURCE_ORDER.flatMap(source => (bySource[source] ?? []).map(message => ({ source, message })));
 }
+
+/**
+ * Features whose getContextMessages() contract is to always return [] - the real work happens in
+ * onComplete (a post-turn side effect), so they have no PromptSourceId and never need one. Exempts
+ * them from the reconciliation guard in systemPromptSources.test.ts, which otherwise requires every
+ * content-producing feature to be a consumed PromptSourceId - the exact gap that let a computed
+ * feature's output (SkillsFeature, then lakeMemory) silently vanish before reaching the model.
+ */
+export const SIDE_EFFECT_ONLY_FEATURES: featureNames[] = [
+  'slack',
+  'summarizeNotebook',
+  'contextSummarization',
+  'autoNameSession',
+];
 
 /**
  * What an API caller is asking us to put in front of the model, beyond their own message.
@@ -103,8 +131,8 @@ const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'atta
 
 export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
   raw: CALLER_SUPPLIED_SOURCES,
-  grounded: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval'],
-  surface: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'organizationPrompt', 'sessionPrompt'],
+  grounded: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'lakeMemory'],
+  surface: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'lakeMemory', 'organizationPrompt', 'sessionPrompt'],
 };
 
 /**
@@ -147,6 +175,9 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   contextSummary: 22,
   mementos: 23,
   recentImages: 24,
+  // Lightest-weight grounding signal in this band (a hot-card summary, not forced retrieval
+  // itself), so it is first to go if the budget must drop something from the tier.
+  lakeMemory: 25,
 
   // Guidance we wrote. Each one degrades gracefully: the model still answers, with worse formatting,
   // weaker abstention, or no awareness of a product surface.
@@ -230,6 +261,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   sessionPrompt: { origin: 'session', name: 'session_prompt' },
   skills: { origin: 'session', name: 'skills' },
   knowledgeRetrieval: { origin: 'session', name: 'knowledge_retrieval' },
+  lakeMemory: { origin: 'session', name: 'lake_memory' },
   contextSummary: { origin: 'session', name: 'context_summary' },
   mementos: { origin: 'user', name: 'mementos' },
   project: { origin: 'project', name: 'project_context' },
@@ -237,6 +269,45 @@ export const PROMPT_SOURCE_METADATA: Record<
   urls: { origin: 'user', name: 'url_content' },
   attachedFiles: { origin: 'user', name: 'attached_files' },
 };
+
+/**
+ * The leading run of sources whose text is identical for every caller on this deployment -
+ * `origin` of `hardcoded` or `admin`. Anything `user`/`session`/`org`/`project` ends the run,
+ * because a prompt cache matches on a PREFIX: one per-caller block in front of shared content
+ * makes that content unshareable.
+ *
+ * Derived from PROMPT_SOURCE_ORDER rather than hand-listed, so reordering a source cannot
+ * silently widen or narrow the shared region. Note the run must be CONTIGUOUS from the start:
+ * `recentImages` is also `hardcoded`, but it sits behind per-user content and so is not part
+ * of any shareable prefix.
+ */
+export const SHAREABLE_PREFIX_SOURCES: PromptSourceId[] = (() => {
+  const shareable: PromptSourceId[] = [];
+  for (const source of PROMPT_SOURCE_ORDER) {
+    const origin = PROMPT_SOURCE_METADATA[source].origin;
+    if (origin !== 'hardcoded' && origin !== 'admin') break;
+    shareable.push(source);
+  }
+  return shareable;
+})();
+
+/**
+ * Mark the end of the shareable prefix as a cache breakpoint, so the deployment-wide block
+ * is cached (and read back) independently of the per-caller content behind it. Measured on
+ * Bedrock: without this, a caller whose tail differs re-writes the whole prefix (6510 written,
+ * 0 read); with it, the same caller reads the shared head and writes only its own tail.
+ *
+ * Mutates in place: `systemPromptPriorities` and the delivered-message set in
+ * ChatCompletionProcess are keyed by message REFERENCE, so replacing the object would
+ * silently detach both.
+ *
+ * No-op when nothing shareable survived the gates (e.g. a promptMode that strips the admin
+ * block), rather than marking an arbitrary message.
+ */
+export function markShareablePrefixBoundary(tagged: TaggedSystemMessage[]): void {
+  const lastShareable = tagged.filter(t => SHAREABLE_PREFIX_SOURCES.includes(t.source)).at(-1);
+  if (lastShareable) lastShareable.message.cache = true;
+}
 
 /** The canonical telemetry row shape; sourced from common so the two cannot drift. */
 export type SystemPromptDetail = z.infer<typeof SystemPromptDetailSchema>;

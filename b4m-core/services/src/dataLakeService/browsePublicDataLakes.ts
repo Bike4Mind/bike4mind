@@ -1,15 +1,14 @@
 import type {
   BrowsePublicDataLakesResult,
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   PublicDataLakeSummary,
 } from '@bike4mind/common';
+import { canManageLake, isEffectiveOwner, type LakeGrant, type ManageActor } from './manageRule';
 
-/** The browsing caller. Only identity is needed - the public catalog is the same for everyone. */
-interface BrowseActor {
-  userId: string;
-  isAdmin: boolean;
-}
+/** The browsing caller. Carries the org-admin set so the manage label honors the org-manageable rung. */
+type BrowseActor = ManageActor;
 
 interface BrowsePublicDataLakesOptions {
   search?: string;
@@ -29,6 +28,8 @@ interface BrowsePublicDataLakesAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findPublicLakes'>;
     users: { findByIds: (ids: string[]) => Promise<OwnerLookup> };
+    /** Optional: makes the isOwn/canManage labels honor curator + transferred-owner grants. */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
   };
 }
 
@@ -61,8 +62,25 @@ export const browsePublicDataLakes = async (
   const owners = ownerIds.length > 0 ? await db.users.findByIds(ownerIds) : [];
   const nameById = new Map(owners.map(u => [String(u.id), u.name || u.username || undefined]));
 
+  // Active grants for this page's lakes (one query) so the labels honor curator/transferred-owner
+  // grants; empty when no grant repo is wired (labels then use the org-admin rung + creator only).
+  const grantsByLake = new Map<string, LakeGrant[]>();
+  if (db.dataLakeAccessGrants && lakes.length > 0) {
+    const rows = await db.dataLakeAccessGrants.listActiveByLakes(
+      lakes.map(l => l.id),
+      { activeAsOf: new Date() }
+    );
+    for (const row of rows) {
+      const list = grantsByLake.get(row.dataLakeId) ?? [];
+      list.push({ principalType: row.principalType, principalId: row.principalId, role: row.role });
+      grantsByLake.set(row.dataLakeId, list);
+    }
+  }
+
   const data: PublicDataLakeSummary[] = lakes.map((lake: IDataLakeDocument) => {
-    const isOwn = lake.createdByUserId === actor.userId;
+    const grants = grantsByLake.get(lake.id);
+    // isEffectiveOwner, not canManageLake: isOwn has no admin/curator/org-admin bypass.
+    const isOwn = isEffectiveOwner(lake, actor, grants);
     return {
       id: lake.id,
       slug: lake.slug,
@@ -73,7 +91,7 @@ export const browsePublicDataLakes = async (
       fileCount: lake.fileCount ?? 0,
       totalSizeBytes: lake.totalSizeBytes ?? 0,
       isOwn,
-      canManage: actor.isAdmin || isOwn,
+      canManage: canManageLake(lake, actor, grants),
     };
   });
 

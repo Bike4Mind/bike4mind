@@ -35,6 +35,9 @@ vi.mock('@bike4mind/database', async () => {
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
 import { queryDataLakeArticles } from './index';
+import { fabFileRepository } from '@bike4mind/database';
+
+const findById = fabFileRepository.findById as ReturnType<typeof vi.fn>;
 
 // `STATIC_LAKE_IDS` decides which prefixes are the OPEN (ownership-bypassing) arm, so the fixture
 // uses a lake id that is NOT in the static registry - its prefix must land on the scoped arm.
@@ -86,6 +89,16 @@ describe('queryDataLakeArticles scope plumbing', () => {
     expect(callArgs().params.options).toEqual({ textSearch: true, excludeContent: true });
   });
 
+  // Express hands back string[] for a repeated ?search= - narrow to the first value rather than
+  // let an array reach fabFilesService.search's `search` field, which expects a plain string.
+  it('narrows a repeated ?search= (Express hands back an array) to its first value', async () => {
+    await queryDataLakeArticles(req, [DYNAMIC_LAKE], { search: ['handbook', 'other'] } as any);
+
+    const { params } = callArgs();
+    expect(params.search).toBe('handbook');
+    expect(params.options).toEqual({ textSearch: true, excludeContent: true });
+  });
+
   // A dynamic lake's fileTagPrefix is user-chosen and can collide across tenants, so it must reach
   // the scoped arm (ANDed with ownership) and never the open one (an un-ANDed bypass).
   it('routes a dynamic lake prefix to the scoped arm, leaving the open arm empty', async () => {
@@ -120,5 +133,64 @@ describe('queryDataLakeArticles scope plumbing', () => {
 
     expect(result).toEqual({ data: [], total: 0, hasMore: false });
     expect(h.search).not.toHaveBeenCalled();
+  });
+});
+
+// This is a real static-registry id (STATIC_LAKE_IDS), so its prefix is the OPEN arm - the
+// grantingLakes case a caller with no recoverable meta-tag still resolves precisely, not via a
+// full-scope fallback.
+const STATIC_LAKE = { id: 'opti-knowledge', datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:' } as any;
+
+describe('queryDataLakeArticles deep-link (?id=) branch', () => {
+  beforeEach(() => {
+    h.search.mockReset();
+    findById.mockReset();
+  });
+
+  it('narrows a repeated ?id= to its first value instead of casting an array into findById (#2095)', async () => {
+    // /api/data-lakes/articles has no `[id]` route segment, so `?id=a&id=b` reaches here as an
+    // array. Passing that to findById produced a Mongoose CastError and a 500; `search` and `tags`
+    // on the same query were already narrowed, `id` was not.
+    findById.mockResolvedValue({ id: 'f1', tags: [{ name: 'datalake:opti-knowledge' }], moderationStatus: 'clean' });
+
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: ['f1', 'f2'] } as any);
+
+    expect(findById).toHaveBeenCalledWith('f1');
+    expect(result.total).toBe(1);
+  });
+
+  it('grants via meta-tag and surfaces the grantor id for the caller to reuse in its own attribution', async () => {
+    findById.mockResolvedValue({ id: 'f1', tags: [{ name: 'datalake:opti-knowledge' }], moderationStatus: 'clean' });
+
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: 'f1' } as any);
+
+    expect(result.total).toBe(1);
+    expect(result.grantedLakeIds).toEqual(['opti-knowledge']);
+  });
+
+  it('grants via an open (static-registry) prefix with no recoverable meta-tag, naming the specific lake', async () => {
+    // Prefix match only, no exact meta-tag.
+    findById.mockResolvedValue({ id: 'f1', tags: [{ name: 'opti:policy' }], moderationStatus: 'clean' });
+
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: 'f1' } as any);
+
+    expect(result.total).toBe(1);
+    expect(result.grantedLakeIds).toEqual(['opti-knowledge']);
+  });
+
+  it('returns an empty page and no grant when the file carries neither a meta-tag nor an open prefix', async () => {
+    findById.mockResolvedValue({ id: 'f1', tags: [{ name: 'personal:draft' }], moderationStatus: 'clean' });
+
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: 'f1' } as any);
+
+    expect(result).toEqual({ data: [], total: 0, hasMore: false });
+  });
+
+  it('returns an empty page when the file does not exist', async () => {
+    findById.mockResolvedValue(null);
+
+    const result = await queryDataLakeArticles(req, [STATIC_LAKE], { id: 'f1' } as any);
+
+    expect(result).toEqual({ data: [], total: 0, hasMore: false });
   });
 });

@@ -1,5 +1,6 @@
 import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { lakeConfigAuditDb } from './lakeConfigAuditDb';
 
 /**
  * Rebuild the persisted stats of every lake named by a `datalake:` meta-tag in `tagNames` - for
@@ -29,20 +30,57 @@ import { dataLakeService } from '@bike4mind/services';
  */
 export const recomputeStatsForLakeTags = async (
   tagNames: readonly unknown[],
-  { logger }: { logger: { error: (msg: string, meta?: Record<string, unknown>) => void } }
-): Promise<void> => {
-  for (const metaTag of dataLakeService.extractDataLakeMetaTags(tagNames)) {
-    try {
-      const lake = await dataLakeRepository.findByDatalakeTag(metaTag);
-      // An orphaned meta-tag left behind by a deleted lake has no stats to rebuild.
-      if (!lake) continue;
-      // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
-      // membership scope from it, and a partial one silently counts the meta-tag arm alone.
-      await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
-      });
-    } catch (error) {
-      logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
-    }
+  {
+    logger,
+    actor,
+  }: {
+    /**
+     * `warn` as well as `error`, and both are forwarded into the adapters below: the audit write
+     * inside `recordLakeConfigChange` is best-effort and reports a failure through `warn`, so an
+     * unforwarded logger sends an audit going dark to `console.warn`, where log-based alerting
+     * cannot see it. Optional so the existing callers that supply only `error` still compile.
+     */
+    logger: {
+      error: (msg: string, meta?: Record<string, unknown>) => void;
+      warn?: (msg: string, ...args: unknown[]) => void;
+    };
+    /**
+     * The signed-in user, when the calling door has one. Optional because the doors differ: the
+     * file DELETE routes act for a request and pass it, while the upload path arrives from an S3
+     * event or storage webhook with no user at all. Omitted, a draft -> active flip records under
+     * a `system` principal, which is the honest answer rather than an invented one.
+     */
+    actor?: { userId: string; isAdmin: boolean };
   }
+): Promise<void> => {
+  // Concurrent, not sequential: the lakes are independent and share no state, so a bulk delete
+  // spanning N lakes would otherwise serialize into N round trips. Matches tagService/remove and
+  // tagService/update, which recompute their affected lakes the same way.
+  //
+  // The try/catch stays INSIDE the map, per lake, which is what keeps `Promise.all` safe here: every
+  // element resolves, so one unresolvable or unwritable lake still cannot reject the batch and skip
+  // the rest. That per-lake isolation is the contract in the docstring above, not an accident of the
+  // loop it replaces.
+  await Promise.all(
+    dataLakeService.extractDataLakeMetaTags(tagNames).map(async metaTag => {
+      try {
+        const lake = await dataLakeRepository.findByDatalakeTag(metaTag);
+        // An orphaned meta-tag left behind by a deleted lake has no stats to rebuild.
+        if (!lake) return;
+        // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
+        // membership scope from it, and a partial one silently counts the meta-tag arm alone.
+        // `actor` forwarded when the calling door had one, so a user-driven flip is attributed to
+        // the person rather than to `system`. The rung stays `system` regardless - see
+        // recomputeLakeStats: `activateIfDraft` performs no authorization check, so nothing
+        // authorized this write and naming a rung would be an invention.
+        await dataLakeService.recomputeLakeStats(
+          lake,
+          { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
+          actor ? { actor } : undefined
+        );
+      } catch (error) {
+        logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
+      }
+    })
+  );
 };

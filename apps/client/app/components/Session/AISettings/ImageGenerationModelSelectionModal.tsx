@@ -34,6 +34,7 @@ import {
   isGPTImageModel,
   isGPTImage2Model,
   isKontextModel as isKontextImageModel,
+  EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 
@@ -48,23 +49,11 @@ import {
 import MetadataChip from './MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
+import { ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
 }
-
-// Models that support image editing
-// FLUX-PRO-FILL now auto-generates masks server-side for chat-based editing.
-// All Gemini image models support editing, so derive that portion from
-// GEMINI_IMAGE_MODELS to keep this in sync as new Gemini models are added.
-const EDIT_SUPPORTED_MODELS = [
-  ImageModels.GPT_IMAGE_1,
-  ImageModels.GPT_IMAGE_1_5,
-  ImageModels.GPT_IMAGE_1_MINI,
-  ImageModels.GPT_IMAGE_2,
-  ImageModels.FLUX_PRO_FILL,
-  ...GEMINI_IMAGE_MODELS,
-];
 
 // Always defaults to GPT_IMAGE_2 for best chat-based editing experience (no mask required)
 const getDefaultEditModel = (generationModel: string): ModelName => {
@@ -346,7 +335,11 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'input' as const,
       value: _seed?.toString() ?? '',
       onChange: (value: number | undefined) => setLLM({ seed: typeof value === 'number' ? value : null }),
-      tooltip: 'Set a specific seed for reproducible images (leave empty for random)',
+      tooltip: withInertNote(
+        'Set a specific seed for reproducible images (leave empty for random)',
+        ignoresUpsamplingAndSeed(contextImageModel)
+      ),
+      disabled: ignoresUpsamplingAndSeed(contextImageModel),
       inputProps: {
         type: 'number',
         placeholder: 'Random',
@@ -400,7 +393,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     {
       label: 'Output Format',
       type: 'select' as const,
-      value: (_output_format ?? 'jpeg') as 'jpeg' | 'png',
+      value: (_output_format ?? 'png') as 'jpeg' | 'png',
       onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
       options: [
         { value: 'jpeg', label: 'JPEG' },
@@ -559,7 +552,15 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
               {imageSettings.map(setting => (
                 <Grid key={setting.label} xs={12} md={6}>
                   <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '20px' }}>
-                    <Typography level="body-sm">{setting.label}</Typography>
+                    {/* A row is only disabled when the selected model ignores it, and then the label
+                      carries the reason - the rest of this list has no tooltip surface. */}
+                    {(setting as { disabled?: boolean }).disabled ? (
+                      <Tooltip title={(setting as { tooltip?: string }).tooltip ?? ''}>
+                        <Typography level="body-sm">{setting.label}</Typography>
+                      </Tooltip>
+                    ) : (
+                      <Typography level="body-sm">{setting.label}</Typography>
+                    )}
                     <Box sx={{ minWidth: '120px' }}>
                       {setting.type === 'select' && (
                         <Select
@@ -583,6 +584,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                           variant="outlined"
                           color="primary"
                           value={(setting as any).value}
+                          disabled={(setting as { disabled?: boolean }).disabled}
                           {...(setting as any).inputProps}
                           onChange={(e: any) => {
                             const raw = e.target.value;
@@ -693,7 +695,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                   data-testid="edit-model-select"
                 >
-                  {EDIT_SUPPORTED_MODELS.map(modelId => {
+                  {EDIT_SUPPORTED_IMAGE_MODELS.map(modelId => {
                     const modelInfo = modelInfoRepo?.find(m => m.id === modelId);
                     const isMaskRequired = modelId === ImageModels.FLUX_PRO_FILL;
                     return (

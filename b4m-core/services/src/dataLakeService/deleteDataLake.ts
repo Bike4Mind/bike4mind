@@ -1,17 +1,30 @@
 import type {
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake, type ManageActor } from './manageRule';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
-interface DeleteDataLakeAdapters {
-  db: {
+interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find' | 'claimFilesDeletedAt'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
   };
@@ -27,7 +40,7 @@ interface DeleteDataLakeAdapters {
  * is a separate, explicit phase 2 (cleanupDeletedDataLake). Owner or admin only.
  */
 export const deleteDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   { db, retrievalIndex, logger }: DeleteDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
@@ -35,14 +48,28 @@ export const deleteDataLake = async (
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can delete this data lake');
+  // Loaded once and reused for the audit event's manage rung: the gate and the recorded rung must
+  // agree on one grant set, not two reads that could disagree.
+  const grants = await loadActiveLakeGrants(existing, { db });
+  if (!canManageLake(existing, actor, grants)) {
+    throw new BadRequestError('You do not have permission to delete this data lake');
   }
   // Only short-circuit on the terminal state. A lake stuck in transitional 'deleting'
   // from a crashed prior attempt must be able to re-run; the phase-1 side effects
   // (cancel batches, soft-delete files, best-effort index removal) are idempotent.
   if (existing.status === 'deleted') {
     return existing;
+  }
+
+  // 'purging' is refused rather than short-circuited, and refused rather than fallen through.
+  // Falling through would re-run phase 1 on a lake whose hard delete is already accepted, and its
+  // closing `status: 'deleted'` write would silently un-purge it - the sweep's guard would then
+  // throw and the consumer would swallow the purge (#1744). Returning the lake unchanged would
+  // avoid that but report SUCCESS for a soft-delete that did not happen, which the client renders
+  // as `Data lake deleted (recoverable)` over an irreversible purge. Same answer as archive, for
+  // the same reason: deleting a lake whose purge is accepted is a caller error, not a no-op.
+  if (existing.status === 'purging') {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be deleted');
   }
 
   // Quiesce in-flight batches before teardown.
@@ -81,9 +108,25 @@ export const deleteDataLake = async (
   // soft-deleted members too and stays stable across re-runs.
   await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
-  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted' });
+  // Terminal transition only - see the note on archiveDataLake's settle step.
+  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted', ...lakeConfigWriteStamp(actor) });
   if (!updated) {
     throw new NotFoundError('Data lake not found after delete');
   }
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'delete',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      changes: diffLakeConfig(existing, { ...existing, status: 'deleted' }),
+    },
+    { db, logger }
+  );
   return updated;
 };

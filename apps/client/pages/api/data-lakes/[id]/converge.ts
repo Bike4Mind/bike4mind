@@ -1,0 +1,255 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { rateLimit } from '@server/middlewares/rateLimit';
+import { isDevelopment } from '@server/utils/config';
+import { dataLakeService } from '@bike4mind/services';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  adminSettingsRepository,
+  scopedSettingsRepository,
+} from '@bike4mind/database';
+import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
+import { Request } from 'express';
+import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { sendToQueue } from '@server/utils/sqs';
+import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+
+/**
+ * GET  /api/data-lakes/:id/converge                     -> the plan (a preview; writes nothing)
+ * POST /api/data-lakes/:id/converge  { limit, confirm } -> executes one bounded wave
+ *
+ * Owner-triggered convergence toward the lake's declared chunk policy (#1681). The owner asks; the
+ * SYSTEM performs the repair, which is what keeps this out of the lake-scoped-write-grant problem
+ * (#1658) - no principal needs write on the lake for its contents to be repaired.
+ *
+ * Deliberately NOT continuous (epic decision 6). A cron sweeping every lake would mean unattended
+ * spend and unattended retrieval outage; whether continuous convergence is worth those is a v2
+ * decision, to be taken once health data shows how much drift actually occurs.
+ *
+ * Three refusals a caller must expect, all reported rather than silently applied:
+ *  - `refusal: 'policyInherited'` - the lake has no EXPLICIT chunk policy, so it is measured and
+ *    reported by health but never repaired (epic decision 5). Nothing is re-embedded until an owner
+ *    adopts a policy.
+ *  - `requiresConfirmation` - the run would rewrite more than the operator's share threshold. A mass
+ *    rewrite is the signature of a misconfigured policy, and every change inside it looks locally
+ *    reasonable; POST refuses until it is re-sent with `confirm: true`.
+ *  - `crossLakeConflicts` - members that also belong to a lake requiring a different chunk target.
+ *    Repairing them would oscillate between the two lakes, re-embedding and billing on every pass.
+ *
+ * Enqueues onto the SAME `fabFileChunkQueue` the rest of the chunk path uses - no new queue, DLQ or
+ * alarm, because this adds no new background process: v1 has no unattended executor at all. What it
+ * does add is provenance: every message is stamped `origin: 'convergence'` + `lakeId`, so the #1676
+ * kill switch can halt a wave already on the queue without touching customer uploads.
+ *
+ * Auth mirrors /rechunk (`assertLakeRebuildAccess`): this re-chunks files already in the lake,
+ * attaching nothing and mutating no lake document.
+ */
+
+const HOUR_MS = 60 * 60 * 1000;
+/**
+ * Runs per hour per caller. `MAX_CONVERGENCE_WAVE` bounds ONE request; nothing bounded the caller
+ * across requests, so a loop re-embedded a whole lake at once and defeated the reason the default
+ * wave is 25 (see DEFAULT_CONVERGENCE_WAVE). Re-POSTing does not double-charge the same file - a
+ * just-reset member has no chunks and no marker, so the plan drops it - but flipping
+ * `requiredPassageTokenTarget` and re-running re-embeds the corpus again, and the Settings field
+ * this PR adds makes that loop reachable from the UI. At the 200 hard cap this still allows a wave
+ * rate far above what the embedder's TPM will absorb; it is a brake on runaway spend, not a quota.
+ *
+ * NOT exempted for admins, unlike the taxonomy caps: this meters SPEND rather than gating an
+ * action, and the operator most able to loop the button is exactly the one it has to bound.
+ */
+const CONVERGENCE_HOURLY_CAP = 20;
+
+const convergenceRunRateLimit = rateLimit({
+  limit: () => (isDevelopment() ? Infinity : CONVERGENCE_HOURLY_CAP),
+  windowMs: HOUR_MS,
+  // Required: the raw pathname embeds the lake id, which would make the cap per-lake - and "loop
+  // over every lake I own" is precisely the amplification being bounded.
+  bucket: 'data-lakes/converge',
+});
+
+const ConvergeInput = z.object({
+  limit: z.number().int().positive().max(dataLakeService.MAX_CONVERGENCE_WAVE).optional(),
+  /**
+   * Acknowledges the bulk-change guard, and is consulted ONLY when the plan actually trips it - so
+   * an ordinary run never has to send it. The guard is an interlock against an unread plan, not an
+   * authorization step: a caller that hard-codes `true` has opted out of it, which is why the UI
+   * sends it only from a dialog that has rendered the share it is confirming.
+   */
+  confirm: z.boolean().optional(),
+});
+
+const gateDeps = { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } };
+
+const convergenceAdapters = async () => {
+  const embeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+  // Fail loudly rather than planning against a model the chunker will not use: the effective target
+  // comparison is model-dependent, so a wrong model here silently mis-classifies every member.
+  if (!embeddingModel || !isSupportedEmbeddingModel(embeddingModel)) {
+    throw new BadRequestError('Default embedding model not found');
+  }
+  return {
+    db: {
+      fabFiles: fabFileRepository,
+      dataLakes: dataLakeRepository,
+      adminSettings: adminSettingsRepository,
+      scopedSettings: scopedSettingsRepository,
+    },
+    embeddingModel,
+  };
+};
+
+const handler = baseApi()
+  .use(requireFeatureEnabled('EnableDataLakes'))
+  // POST only. The GET is a preview that writes nothing and enqueues nothing; capping it would
+  // throttle reading the plan, which is the thing an owner is supposed to do before running one.
+  .use((req, res, next) => (req.method === 'POST' ? convergenceRunRateLimit(req, res, next) : next()))
+  .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    const { id } = req.query;
+    const ctx = await toAccessContext(req);
+    // Read gate, not the rebuild gate: anyone who can read the lake may see what convergence WOULD
+    // do, exactly as they can already see its health. Executing it still requires manage.
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, gateDeps);
+
+    const { report } = await dataLakeService.planLakeConvergenceRun(lake, {
+      ...(await convergenceAdapters()),
+      logger: req.logger,
+    });
+    // Every READ-gated exit redacts, same rule and same reason as redactLakeForActor: this gate has
+    // a public arm that crosses orgs, while the conflicting lakes the report names are resolved by
+    // membership with no access filter at all. The disagreeing TARGET is what explains the refusal
+    // and is kept; the lake's id and name are not the reader's to see. The POST below is
+    // manage-gated and keeps them, because its caller is the one who can act on them.
+    return res.json(dataLakeService.redactCrossLakeIdentities(report));
+  })
+  .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    const { id } = req.query;
+    const { limit, confirm } = ConvergeInput.parse(req.body ?? {});
+    const ctx = await toAccessContext(req);
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+
+    const { report, wave } = await dataLakeService.planLakeConvergenceRun(
+      lake,
+      { ...(await convergenceAdapters()), logger: req.logger },
+      limit ?? dataLakeService.DEFAULT_CONVERGENCE_WAVE
+    );
+
+    if (report.refusal || (report.requiresConfirmation && !confirm)) {
+      // 200 with an explicit outcome, not a 4xx: the plan is the useful part of the answer and the
+      // client renders it either way. `enqueued: 0` is the load-bearing field.
+      return res.json({
+        ...report,
+        outcome: report.refusal ?? 'confirmationRequired',
+        detected: 0,
+        enqueued: 0,
+        stranded: 0,
+      });
+    }
+
+    let enqueued = 0;
+    /**
+     * Members whose state was RESET but whose chunk message never reached the queue. Distinct from
+     * `wave.length - enqueued`, which also counts members the reset deliberately skipped because a
+     * worker held them - those are untouched and healthy. These are not: their rollups are cleared
+     * and their old chunk rows orphaned, with nothing scheduled to rebuild them, so the caller has
+     * to be told rather than shown a zero-count success.
+     */
+    let stranded = 0;
+    if (wave.length > 0) {
+      // Kill switch BEFORE the reset, not only in the consumer (#1676). The consumer's check drops
+      // messages that are already on the queue - by which point `resetChunkStateByIds` has cleared
+      // `chunked`, zeroed the counts and nulled all four health rollups for the whole wave. A paused
+      // platform would therefore still strip N files out of health and convergence accounting (both
+      // filter chunkCount > 0) while their chunk rows survive, leaving retrieval and health
+      // disagreeing about the same lake with nothing enqueued to repair it.
+      if (
+        await isConvergenceHalted(
+          { origin: CONVERGENCE_ORIGIN, lakeId: lake.id },
+          {
+            adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
+            dataLakes: dataLakeRepository,
+          },
+          req.logger
+        )
+      ) {
+        req.logger?.log?.(
+          `[convergence] lake ${lake.id}: background lake work is paused; refused before touching ${wave.length} member(s)`
+        );
+        return res.json({ ...report, outcome: 'paused', detected: 0, enqueued: 0, stranded: 0 });
+      }
+
+      const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
+      if (!queueUrl) throw new Error('Chunk queue URL not found');
+
+      // Reset the wave, then enqueue exactly what the reset changed. The reset is preconditioned on
+      // isChunking:{$ne:true} (see resetChunkStateByIds), so a file a worker is mid-run on is skipped
+      // rather than having its lease released; `resetIds` is a subset of the wave. Mutual exclusion
+      // itself remains the chunk worker's compare-and-set. Same shape as /rechunk on purpose - the
+      // two doors must not drift on how a re-chunk is handed off.
+      const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
+      const resetIds = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
+      const results = await Promise.allSettled(
+        resetIds.map(fabFileId =>
+          sendToQueue(queueUrl, {
+            fabFileId,
+            userId: userById.get(fabFileId)!,
+            // The whole point: chunk at the LAKE's required target rather than letting the handler
+            // re-resolve the file owner's DefaultChunkSize, which is the value that produced the
+            // non-conformant chunks in the first place. Without this the re-chunk reproduces exactly
+            // what was there and the lake never converges. Sending it is safe only because the
+            // cross-lake check already refused every member another lake would disagree about.
+            chunkSize: report.policy.requiredTarget,
+            // Provenance for the #1676 kill switch: this is background lake work, haltable, and
+            // must never be confused with a real-time user upload.
+            origin: CONVERGENCE_ORIGIN,
+            lakeId: lake.id,
+          })
+        )
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      const skipped = userById.size - resetIds.length;
+      if (failed > 0 || skipped > 0) {
+        // A failed send is NOT self-healing here, unlike the same shape in /rechunk: the file is
+        // left matching the rescue sweep's filter (chunked:false, chunkCount:0, error:null), and
+        // that sweep enqueues WITHOUT a chunkSize - so it re-chunks at the owner's DefaultChunkSize,
+        // the value that produced the off-policy chunks this run exists to replace. The file comes
+        // back servable but still off-policy, and the next wave selects it again. Reported rather
+        // than papered over: `enqueued` below is the honest count and the client branches on it.
+        req.logger?.error?.(
+          `convergence: lake ${lake.id} - ${failed}/${resetIds.length} sends failed (those files were reset and ` +
+            'will be rescued at the OWNER default target, not this lake policy); ' +
+            `${skipped} file(s) skipped as already being chunked`
+        );
+      }
+      enqueued = resetIds.length - failed;
+      stranded = failed;
+    }
+
+    req.logger?.log?.(
+      `[convergence] lake ${lake.id}: enqueued ${enqueued}/${wave.length} member(s) at target ` +
+        `${report.policy.requiredTarget} (${report.convergeableCount} off-policy of ${report.membersConsidered} graded, ` +
+        `${report.crossLakeConflictCount} refused for cross-lake disagreement)`
+    );
+
+    // `noop` is its own outcome, not a zero-count `enqueued`: a lake whose entire remaining drift is
+    // cross-lake conflicted returns here on EVERY run, and reporting that as a successful enqueue
+    // would have the caller announce a repair that cannot happen and will not happen next time
+    // either. The client needs to say why instead.
+    return res.json({
+      ...report,
+      outcome: wave.length === 0 ? 'noop' : 'enqueued',
+      detected: wave.length,
+      enqueued,
+      stranded,
+    });
+  });
+
+export const config = { api: { externalResolver: true } };
+export default handler;

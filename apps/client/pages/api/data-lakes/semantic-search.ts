@@ -12,12 +12,12 @@ import {
   organizationRepository,
   usageEventRepository,
   userRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
-  ApiKeyType,
   getEmbeddingModelCost,
   ModelBackend,
   OpenAIEmbeddingModel,
@@ -31,10 +31,12 @@ import {
   getSettingsByNames,
   getSettingsMap,
   getSettingsValue,
+  normalizeId,
   type ITokenizer,
 } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
@@ -129,7 +131,28 @@ const toMismatchPayload = (report: dataLakeService.EmbeddingMismatchReport) => (
     },
   },
   unlabeled: { chunks: report.unlabeled.chunks, files: report.unlabeled.files },
+  // Files searched via an ALTERNATE model's own ANN index rather than excluded - see
+  // groupFilesByEmbeddingModel/alternateModelAnn.ts. Never implies partial_results on its own.
+  alternate_model_served: {
+    files: report.alternateModelServed.files,
+    models: report.alternateModelServed.models,
+  },
   query_embedding_failed: report.queryEmbeddingFailed,
+});
+
+/**
+ * Flatten the retrieval-unavailable report to the wire shape. Shared by BOTH exits for the same
+ * reason as `toScanPayload` and `toMismatchPayload`: the RLM tool forwards this JSON verbatim and its
+ * prompt documents the field as always present, so a path that omits it TypeErrors REPL code that
+ * reads `retrieval_unavailable.indexing_files`. Flat counts rather than the whole report - a caller
+ * needs to know how much is temporarily unsearchable, and the file names are already in `warning`.
+ */
+const toRetrievalUnavailablePayload = (report: dataLakeService.RetrievalUnavailableReport) => ({
+  indexing_files: report.indexing.count,
+  // Counted apart from `indexing_files` because waiting does not fix these - see the report type. A
+  // caller that adds them together would tell the user to retry and be wrong.
+  paused_files: report.paused.count,
+  partial: report.partial,
 });
 
 const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
@@ -141,12 +164,14 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   files_scanned: scan.filesScanned,
   chunks_scanned: scan.chunksScanned,
   chunks_skipped_dimension_mismatch: scan.chunksSkippedDimensionMismatch,
-  // Files served by Atlas $vectorSearch instead of the brute-force scan - additive to
-  // files_scanned, not a replacement (see SemanticSearchScanAccounting.annFilesQueried). Without
-  // these a caller computing coverage from files_scanned alone would undercount an ANN-served file
-  // as unsearched.
+  // Files served by ANN retrieval (Atlas $vectorSearch or self-host OpenSearch, across the
+  // primary model and every alternate model queried) instead of the brute-force scan - additive
+  // to files_scanned, not a replacement (see SemanticSearchScanAccounting.annFilesQueried).
+  // Without these a caller computing coverage from files_scanned alone would undercount an
+  // ANN-served file as unsearched.
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
+  ann_models_queried: scan.annModelsQueried,
   budgets: { max_files: scan.budgets.maxFiles, max_chunks: scan.budgets.maxChunks },
 });
 
@@ -232,9 +257,9 @@ const handler = baseApi()
       // The pre-flight needs a token count on the request path, where the old best-effort
       // recording could just skip one; a length estimate keeps a tokenizer failure from
       // turning a working search into a 500.
-      const countQueryTokens = async (): Promise<number> => {
+      const countQueryTokens = async (model: string = embedding_model): Promise<number> => {
         try {
-          return await getSharedTokenizer(req.logger).countTokens(query, embedding_model);
+          return await getSharedTokenizer(req.logger).countTokens(query, model);
         } catch (err) {
           req.logger?.warn('[semantic-search] query token count failed; estimating from query length', err);
           return Math.ceil(query.length / 4);
@@ -242,7 +267,7 @@ const handler = baseApi()
       };
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
@@ -261,6 +286,7 @@ const handler = baseApi()
           chunks_scored: 0,
           partial_results: false,
           embedding_mismatch: toMismatchPayload(dataLakeService.emptyEmbeddingMismatchReport()),
+          retrieval_unavailable: toRetrievalUnavailablePayload(dataLakeService.emptyRetrievalUnavailableReport()),
           scan: toScanPayload(dataLakeService.emptyScanAccounting(budgets)),
         });
       }
@@ -280,11 +306,19 @@ const handler = baseApi()
         (getSettingsValue('enforceCredits', billingSettings) ?? false);
 
       // Resolved once and reused by the settlement below, so the pre-flight and the charge
-      // can never disagree about which holder pays.
-      const billingUser = await userRepository.findById(req.user.id);
-      const billingOrg = billingUser?.organizationId
-        ? await organizationRepository.findById(billingUser.organizationId)
-        : null;
+      // can never disagree about which holder pays. Best-effort: a billing-store failure leaves
+      // both the check and the charge undone, which is the pre-existing behaviour - it must not
+      // turn a working search into a 500.
+      let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
+      let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
+      try {
+        billingUser = await userRepository.findById(req.user.id);
+        billingOrg = billingUser?.organizationId
+          ? await organizationRepository.findById(billingUser.organizationId)
+          : null;
+      } catch (billingErr) {
+        req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
+      }
 
       if (shouldBill && billingUser) {
         // Deterministic round-up, never the stochastic settlement rounding: eligibility must
@@ -312,48 +346,46 @@ const handler = baseApi()
         }
       }
 
-      // --- Get the embedding-provider API key (OpenAI or VoyageAI) for the requested model ---
-      // embedding_model may be a VoyageAI model, so resolve the key for the model's actual
-      // provider instead of assuming OpenAI - otherwise a configured VoyageAI key is never
-      // used and the search fails despite being set up correctly.
-      const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } };
+      // --- Get the embedding-provider API keys, for every provider we have one, not just the
+      // requested model's own provider ---
+      // The mixed-embeddingModel ANN cutover (semanticDataLakeSearch) can attempt an ALTERNATE
+      // model from a different provider than the primary (e.g. a lake re-embedded from ada-002 to
+      // voyage-3); a table scoped to only the primary model's provider means that alternate can
+      // never actually be reached here, regardless of readiness/cap. Mirrors the chat
+      // search_knowledge_base tool's resolveEmbeddingContext, which already resolves the full
+      // multi-provider table this way.
       const userIdForService = req.user?.id || 'system';
       const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
+      const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
+        userIdForService,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+        { logger: req.logger }
+      );
 
-      // Branch POSITIVELY on the provider. A catch-all `else` here assumed every provider it
-      // did not recognise needed an OpenAI or VoyageAI key, so Bedrock - which authenticates
-      // through the AWS credential chain and has no key to find - resolved a credential it
-      // never needed and 500'd on environments without one, after ingesting the corpus fine.
-      // A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats it
-      // as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
-      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {};
-      if (embeddingProvider === ModelBackend.Ollama) {
-        const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
-          userIdForService,
-          { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-          { logger: req.logger }
-        );
-        if (!effectiveKeys?.ollama) {
-          return res.status(500).json({
-            error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
-          });
-        }
-        embeddingApiKeyTable = { ollama: effectiveKeys.ollama };
-      } else if (embeddingProvider === ModelBackend.OpenAI || embeddingProvider === ModelBackend.VoyageAI) {
-        const embeddingKeyType = embeddingProvider === ModelBackend.VoyageAI ? ApiKeyType.voyageai : ApiKeyType.openai;
-        const embeddingApiKey = await apiKeyService.getEffectiveApiKey(
-          userIdForService,
-          { type: embeddingKeyType },
-          dbAdapters
-        );
-        if (!embeddingApiKey) {
-          return res.status(500).json({
-            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-          });
-        }
-        embeddingApiKeyTable =
-          embeddingProvider === ModelBackend.VoyageAI ? { voyageai: embeddingApiKey } : { openai: embeddingApiKey };
+      // Branch POSITIVELY on the PRIMARY model's own provider only - a hard 500 here is about the
+      // model the caller actually asked for, not about a downstream alternate model's coverage,
+      // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
+      // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
+      // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
+      if (embeddingProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
+        return res.status(500).json({
+          error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
+        });
+      } else if (embeddingProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
+        return res.status(500).json({
+          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+        });
+      } else if (embeddingProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
+        return res.status(500).json({
+          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+        });
       }
+
+      const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {
+        openai: effectiveKeys?.openai,
+        voyageai: effectiveKeys?.voyageai,
+        ollama: effectiveKeys?.ollama,
+      };
 
       if (isAborted()) return res.end();
 
@@ -383,41 +415,99 @@ const handler = baseApi()
         }
       );
 
-      // Record the query-embedding spend (the embed ran inside the search above).
-      // Best-effort: never let a recording failure fail the search response.
+      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
+      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
+      // the lake arms), so a hit with no recoverable tag may be the caller's own private file -
+      // this must NOT fall back to the full scope, and is skipped entirely when nothing returned
+      // is actually attributable to a lake (not merely when nothing was returned at all).
+      // Awaited (never rethrows - see recordLakeAccessEvent's doc comment): a per-request
+      // serverless route must not race a post-response freeze of the execution environment.
+      // Recorded here, right as the search results come back - NOT after the later isAborted()
+      // check - because the read already happened at this point regardless of whether the client
+      // is still there for the response.
+      const resolvedLakeIds = dataLakeService.attributeAccessedLakeIds(
+        search.results.map(r => r.fileTags),
+        lakes,
+        { allowFullScopeFallback: false }
+      );
+      if (resolvedLakeIds.length > 0) {
+        await dataLakeService.recordLakeAccessEvent(
+          lakeAccessEventRepository,
+          {
+            ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+            organizationId: normalizeId(req.user.organizationId),
+            resolvedLakeIds,
+            chunkIds: search.results.map(r => r.chunkId),
+            scores: search.results.map(r => r.score),
+            fileIds: [...new Set(search.results.map(r => r.fileId))],
+            surface: 'data-lake-semantic-search',
+            queryText: query,
+          },
+          req.logger,
+          adminSettingsRepository
+        );
+      }
+
+      // Record the query-embedding spend for the primary model plus every alternate model the
+      // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
+      // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
+      // are the same documents the credit pre-flight above read, so the check and the charge can
+      // never disagree about which holder pays, and every recording runs concurrently.
+      // Best-effort as a whole: a recording failure must never fail the search response, and one
+      // model's recording failure must never skip another's.
       try {
         if (billingUser) {
-          await recordOperationalUsage(
-            {
-              requestId: req.user.id,
-              user: billingUser,
-              organization: billingOrg,
-              feature: 'embedding',
-              provider: embeddingProvider,
-              model: embedding_model,
-              inputTokens: queryTokens,
-              costUsd: getEmbeddingModelCost(embedding_model, queryTokens),
-              source: 'api',
-            },
-            {
-              db: {
-                usageEvents: usageEventRepository,
-                adminSettings: adminSettingsRepository,
-                creditTransactions: creditTransactionRepository,
-                users: userRepository,
-                organizations: organizationRepository,
-              },
-              logger: req.logger,
+          const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
+            try {
+              const tokens = model === embedding_model ? queryTokens : await countQueryTokens(model);
+              await recordOperationalUsage(
+                {
+                  requestId: req.user.id,
+                  user: billingUser,
+                  organization: billingOrg,
+                  feature: 'embedding',
+                  provider,
+                  model,
+                  inputTokens: tokens,
+                  costUsd: getEmbeddingModelCost(model, tokens),
+                  source: 'api',
+                },
+                {
+                  db: {
+                    usageEvents: usageEventRepository,
+                    adminSettings: adminSettingsRepository,
+                    creditTransactions: creditTransactionRepository,
+                    users: userRepository,
+                    organizations: organizationRepository,
+                  },
+                  logger: req.logger,
+                }
+              );
+            } catch (recordErr) {
+              req.logger?.warn(`[semantic-search] failed to record embedding usage for ${model}`, recordErr);
             }
-          );
+          };
+
+          await Promise.all([
+            recordEmbeddingUsage(embedding_model, embeddingProvider),
+            // Defensive: the planner (alternateModelAnn.ts) already only ever selects a
+            // registry-known model, so this filter should never actually drop anything. Mirrors
+            // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.
+            ...search.alternateModelsEmbedded
+              .filter(isSupportedEmbeddingModel)
+              .map(altModel => recordEmbeddingUsage(altModel, getProviderFromModel(altModel))),
+          ]);
         }
       } catch (recordErr) {
-        req.logger?.warn('[semantic-search] failed to record embedding usage', recordErr);
+        req.logger?.warn('[semantic-search] embedding usage recording failed', recordErr);
       }
 
       if (isAborted()) return res.end();
 
-      const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+      // One seam for every reason a search returned less than the whole corpus (embedding-space
+      // mismatch, and content withheld because it is mid-(re)index), so a third reason added later
+      // reaches this response without another edit here.
+      const warning = dataLakeService.describeSearchLimitations(search);
 
       return res.json({
         results: search.results.map(r => ({
@@ -433,10 +523,13 @@ const handler = baseApi()
         embedding_model: search.embeddingModel,
         latency_ms: Date.now() - t0,
         chunks_scored: search.chunksScored,
-        // The single flag a caller branches on to know the answer is incomplete for EMBEDDING
-        // reasons; scan.truncated is the separate "did we reach everything" signal.
-        partial_results: search.embeddingMismatch.partial,
+        // The single flag a caller branches on to know the answer is incomplete because content was
+        // WITHHELD - either because it could not be compared (embedding space) or because it could
+        // not be served (mid-re-index, #1681). scan.truncated is the separate "did we reach
+        // everything" signal.
+        partial_results: dataLakeService.isPartialSearch(search),
         embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
+        retrieval_unavailable: toRetrievalUnavailablePayload(search.retrievalUnavailable),
         // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
         // healthy search instead of present-and-undefined.
         ...(warning ? { warning } : {}),

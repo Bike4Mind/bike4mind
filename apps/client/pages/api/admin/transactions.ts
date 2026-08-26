@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { creditTransactionRepository } from '@bike4mind/database';
 import {
+  ApiKeyScope,
   CreditHolderType,
   COMPLETION_SOURCES,
   CREDIT_ADD_TRANSACTION_TYPES,
@@ -52,8 +53,16 @@ const QuerySchema = z.object({
  *
  * Access: platform admins (cross-org) plus the org's own owner/manager, via
  * verifyOrgAccess - which pins non-admins to their org and 404s the rest.
+ *
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+ * before req.user is set, so a key issued for a narrow integration can't read an
+ * org's ledger just because its owner is an admin. JWT/browser callers (admin or
+ * org owner/manager) skip that check and still go through verifyOrgAccess below.
+ * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
+ * rejected server-side), so this closes the API-key path entirely for a
+ * non-admin org owner/manager - only a JWT/browser session still works for them.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user) {
     throw new ForbiddenError('Authentication required');
   }

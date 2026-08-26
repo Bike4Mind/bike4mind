@@ -27,6 +27,7 @@ import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapsh
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
+import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
@@ -334,8 +335,12 @@ async function handleStart(
   if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
     lastSweptAtByUser.set(userId, now);
-    if (swept > 0) {
-      logger.info('[Start] Swept stale active executions before count', { userId, swept });
+    if (swept.length > 0) {
+      logger.info('[Start] Swept stale active executions before count', { userId, swept: swept.length });
+      // These executions are now `aborted`, which is terminal - the hourly
+      // abandoned-sweep can never see them again, so this is the only chance to
+      // settle the bubbles they leave behind.
+      await settleStrandedQuests(swept, logger, '[Start]');
     }
   }
 
@@ -426,9 +431,10 @@ async function handleStart(
   //
   // Best-effort: a Quest write failure must not block dispatch - the user
   // already saw their prompt in the optimistic bubble, and the AgentExecution
-  // doc carries the query for the completion handler. Failures log and fall
-  // back to the legacy `cmd.questId` (sessionId-as-questId) for the Lambda
-  // payload, matching pre-fix behavior.
+  // doc carries the query for the completion handler. On failure the Lambda
+  // payload simply OMITS `questId` (see the explicit refusal to fall back to
+  // `cmd.questId` at the invoke below - that value is the sessionId and would
+  // mis-key the client's optimistic swap).
   let persistedQuestId: string | undefined;
   try {
     const quest = await Quest.create({
@@ -445,7 +451,19 @@ async function handleStart(
       agentExecutionId: executionId,
       routingSource: cmd.routingSource,
     });
-    persistedQuestId = quest.id;
+    const linkedQuestId = quest.id;
+    persistedQuestId = linkedQuestId;
+    // Persisted on the execution doc (not just forwarded in the start payload below) so a
+    // resumed/checkpointed Lambda invocation still has the real Quest id available for
+    // lake-access audit rows - the start payload only carries it on the first invocation. Never
+    // read `execution.questId` for this purpose; that field holds the sessionId (see its own doc
+    // comment). Best-effort, same as the Quest write above.
+    await agentExecutionRepository.persistLinkedQuestId(executionId, linkedQuestId).catch(err =>
+      logger.warn('[Start] Failed to persist linkedQuestId on AgentExecution', {
+        executionId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
   } catch (err) {
     logger.warn('[Start] Failed to persist user prompt Quest — bubble will not survive a mid-run reload', {
       executionId,

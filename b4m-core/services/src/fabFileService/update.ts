@@ -1,9 +1,12 @@
 import { Logger } from '@bike4mind/observability';
 import {
   FAB_FILE_CONTENT_REWRITE_PATCH,
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
   isImageServeable,
@@ -12,6 +15,7 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
 import { z } from 'zod';
 
@@ -41,13 +45,19 @@ const EXPIRE_IN_SECONDS = 3600;
 
 type UpdateFabFileParameters = z.infer<typeof updateFabFileSchema>;
 
-interface UpdateFabFileAdapters {
-  db: {
+interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+    // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
+    // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
+    // same reason it is there: a door that could omit it would silently skip the contract.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -107,9 +117,8 @@ export const updateFabFile = async (
     Object.assign(fabFile, FAB_FILE_CONTENT_REWRITE_PATCH);
   }
 
-  // A tag replacement can join or leave a data lake, which is more than an array write: leaving
-  // has to clear the lake's prefixed content tags as well, and both directions have to leave the
-  // lake's stats correct. Resolved (and gated) BEFORE the write below, applied after it.
+  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
+  // why. Resolved (and gated) BEFORE the write below, applied after it.
   const lakeTags =
     params.tags === undefined
       ? undefined
@@ -118,7 +127,14 @@ export const updateFabFile = async (
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
-          { db, logger, fileOwnerUserId: fabFile.userId }
+          {
+            db,
+            logger,
+            fileOwnerUserId: fabFile.userId,
+            // Already in hand, so the admission contract grades this file on the target its chunks
+            // WERE built with instead of re-fetching it or predicting from policy.
+            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+          }
         );
 
   const updatedFabFile: Partial<IFabFileDocument> = {
@@ -143,15 +159,11 @@ export const updateFabFile = async (
 
   await db.fabFiles.update(updatedFabFile);
 
-  // Membership writes land on the persisted array, so they cannot be clobbered by the write
-  // above.
+  // A whole-array write can never leave a lake (see reconcileLakeTags), so tagsToPersist - already
+  // assigned into updatedFabFile above - is always the true final array; commit() only needs to
+  // recompute stats for any new join.
   if (lakeTags) {
     await lakeTags.commit();
-    // Leaving a lake also clears its prefixed content tags, so the array assembled above is no
-    // longer what is stored. Report what a subsequent GET would: a caller trusting a response
-    // that still lists tags this call just removed draws the wrong conclusion.
-    const persisted = await db.fabFiles.findById(id);
-    if (persisted) updatedFabFile.tags = persisted.tags;
   }
 
   return updatedFabFile;

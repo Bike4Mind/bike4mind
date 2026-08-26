@@ -1,9 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
+import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 // A single guarded status write, no AI/OpenAI spend involved (unlike apply/reanalyze) - a
 // generous hourly cap is enough to bound abuse, no shared daily-cap machinery needed.
@@ -18,11 +19,14 @@ const handler = baseApi()
   .post(async (req: Request, res) => {
     const { batchId } = req.query as { batchId: string };
 
-    const result = await dataLakeService.dismissTaxonomySuggestion(
-      { userId: req.user.id, isAdmin: req.user.isAdmin },
-      batchId,
-      { db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository } }
-    );
+    const ctx = await toAccessContext(req);
+    const result = await dataLakeService.dismissTaxonomySuggestion(ctx, batchId, {
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        batches: dataLakeBatchRepository,
+      },
+    });
 
     return res.json(result);
   });

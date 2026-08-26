@@ -1786,7 +1786,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                 },
                               }}
                             />
-                            <Typography level="body-sm" sx={{ color: 'primary.700' }}>
+                            <Typography
+                              level="body-sm"
+                              sx={{ color: 'primary.700' }}
+                              data-testid="generating-artifact-indicator"
+                            >
                               Generating artifact...
                             </Typography>
                           </Box>
