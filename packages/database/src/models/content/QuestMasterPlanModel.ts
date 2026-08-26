@@ -265,6 +265,13 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       {
         arrayFilters: [{ 'quest.id': mainQuestId }, { 'subQuest.id': subQuestId }],
         new: true,
+        // Mongoose resolves the positional paths above to `quests.N.subQuests.M.status` and runs
+        // the schema enum against them. Without this the enum on that path is dead on every
+        // update (it only fires on create), which is how a retired status vocabulary could
+        // persist and then be read back unvalidated by every consumer. Update validators only
+        // check the paths actually present in the update, so this cannot fail on unrelated
+        // fields of the stored document.
+        runValidators: true,
       }
     );
 
@@ -584,6 +591,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
         {
           arrayFilters: [{ 'quest.id': questId }, { 'subQuest.id': subQuestId }],
           new: true,
+          runValidators: true,
         }
       );
 
@@ -598,6 +606,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     const result = await this.questMasterPlanModel.findOneAndUpdate(query, updateOp, {
       arrayFilters: [{ 'quest.id': questId }, { 'subQuest.id': subQuestId }],
       new: true,
+      runValidators: true,
     });
 
     if (!result) {

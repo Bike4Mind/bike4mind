@@ -60,6 +60,54 @@ export const QUEST_COMPLEXITY_VALUES = ['Easy', 'Medium', 'Hard'] as const;
 export type QuestComplexity = (typeof QUEST_COMPLEXITY_VALUES)[number];
 
 /**
+ * Retired vocabularies, and what each token meant, so a document written before the vocabulary
+ * was unified can be interpreted in ONE place instead of every reader re-guessing.
+ *
+ * Only tokens with a documented provenance are listed. `pending` and `in-progress` were the V2
+ * questmaster artifact zod schema's statuses (`pending` was its initial state); `blocked` came
+ * from the deleted V1 artifact repository interface; the lowercase complexities were that same
+ * V2 schema's ratings. Speculative aliases are deliberately absent: a status reader in the UI
+ * has long branched on `done`/`started`/`failed`/`error` too, but those appear in no schema,
+ * type, or writer at any commit, so treating them as real history would be inventing it.
+ *
+ * `blocked -> not_started` is the one judgment call rather than a rename: the canonical
+ * vocabulary has no blocked state, and unblocked-and-not-yet-begun is the closest true meaning.
+ */
+export const LEGACY_SUBQUEST_STATUS_ALIASES: Readonly<Record<string, SubQuestStatus>> = {
+  'in-progress': 'in_progress',
+  pending: 'not_started',
+  blocked: 'not_started',
+};
+
+export const LEGACY_QUEST_COMPLEXITY_ALIASES: Readonly<Record<string, QuestComplexity>> = {
+  low: 'Easy',
+  medium: 'Medium',
+  high: 'Hard',
+};
+
+/**
+ * Resolve a persisted sub-quest status to the canonical vocabulary.
+ *
+ * Returns `null` for a token that is neither canonical nor a known retired alias. That is
+ * deliberate and load-bearing: collapsing an unrecognized value into `not_started` would make an
+ * unreadable row indistinguishable from a genuinely-unstarted one, and would let a migration
+ * silently rewrite data whose meaning nobody actually knows. Callers must decide - the migration
+ * skips and logs.
+ */
+export const normalizeSubQuestStatus = (value: unknown): SubQuestStatus | null => {
+  if (typeof value !== 'string') return null;
+  if ((SUBQUEST_STATUS_VALUES as readonly string[]).includes(value)) return value as SubQuestStatus;
+  return LEGACY_SUBQUEST_STATUS_ALIASES[value] ?? null;
+};
+
+/** Complexity counterpart of normalizeSubQuestStatus, with the same null-on-unknown contract. */
+export const normalizeQuestComplexity = (value: unknown): QuestComplexity | null => {
+  if (typeof value !== 'string') return null;
+  if ((QUEST_COMPLEXITY_VALUES as readonly string[]).includes(value)) return value as QuestComplexity;
+  return LEGACY_QUEST_COMPLEXITY_ALIASES[value] ?? null;
+};
+
+/**
  * A blocker preventing progress on the quest plan
  */
 export type QuestBlocker = {
