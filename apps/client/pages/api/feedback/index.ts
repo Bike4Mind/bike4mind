@@ -260,7 +260,9 @@ const handler = baseApi()
         feedbackId: newFeedback.id,
         delivery,
       });
-      return res.status(201).json({ ...newFeedback.toJSON(), delivery });
+      // Same body shape as the success path below - content/contentTruncated live on the
+      // FeedbackText sibling, so they have to be echoed explicitly on this early return too.
+      return res.status(201).json({ ...newFeedback.toJSON(), content: truncatedContent, contentTruncated, delivery });
     }
 
     // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email

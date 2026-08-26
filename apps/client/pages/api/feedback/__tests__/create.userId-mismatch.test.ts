@@ -7,7 +7,14 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, User, UserActivityCounter, Organization, CounterLog } from '@bike4mind/database';
+import {
+  FeedbackModel,
+  FeedbackTextModel,
+  User,
+  UserActivityCounter,
+  Organization,
+  CounterLog,
+} from '@bike4mind/database';
 import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
 import { getSettingsMap } from '@bike4mind/utils';
@@ -340,8 +347,10 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     expect(res._getStatusCode()).toBe(201);
 
-    const saved = await FeedbackModel.findOne({ content: 'settings outage should not mask this save' });
+    const saved = await FeedbackModel.findOne({ userId: realUser.id });
     expect(saved).not.toBeNull();
+    // The free text lives on the TTL'd sibling, so a durable submission means both rows landed.
+    expect(await FeedbackTextModel.findById(saved!.id)).not.toBeNull();
 
     // The analytics write does not depend on settings, so a settings outage must not cost us the
     // event: the early return that answers 201 has to happen after logEvent, not before it.
@@ -353,7 +362,11 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
 
     // Neither channel's configuration is knowable without settings, so both must report a failure
     // the alarm can see rather than the silent 'disabled' an empty settings fallback would give.
-    const { delivery } = JSON.parse(res._getData());
+    const body = JSON.parse(res._getData());
+    // This early return has to echo the same body shape as the success path, content included.
+    expect(body.content).toBe('settings outage should not mask this save');
+    expect(body.contentTruncated).toBe(false);
+    const { delivery } = body;
     expect(delivery).toEqual({
       delivered: false,
       channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'failed', reason: 'error' } },
