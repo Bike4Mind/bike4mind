@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   Box,
   Button,
@@ -15,6 +16,7 @@ import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CloseIcon from '@mui/icons-material/Close';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
@@ -69,12 +71,23 @@ interface DataLakeChatTreeProps {
   onCreateLake?: () => void;
   /** Header close (X) button - turns Data Lake mode off for this chat. */
   onClose?: () => void;
+  /** Rendered between the header bar and the search toolbar: the lake picker and, once a lake
+   *  is scoped, its actions strip (see DataLakeLakePicker / SelectedLakeHeader). */
+  subHeader?: ReactNode;
+  /** Replaces the plain "No categories" line when the host knows why the tree is empty. */
+  emptySlot?: ReactNode;
+  /**
+   * Resting hint above the footer buttons advertising drag-to-ingest. The drop overlay only
+   * appears once a drag is already underway, so without this the ingest capability is invisible
+   * at rest - the one thing the retired page's header row carried that has no other home.
+   */
+  dropHint?: string;
 }
 
 /**
  * Chat-embedded Data Lake tree: a rounded sidenav-style card with its own header (title + info +
- * close) and footer (Manage / Create), used as the left rail beside a chat in Data Lake mode.
- * The standalone /data-lakes page uses the brand-agnostic DataLakeTree instead (no header/footer).
+ * close), sub-header (lake picker + scoped-lake actions) and footer (Manage / Create), used as the
+ * left rail beside a chat in Data Lake mode. The only Data Lake browse surface there is (#1943).
  */
 export default function DataLakeChatTree({
   tree,
@@ -93,11 +106,14 @@ export default function DataLakeChatTree({
   onManage,
   onCreateLake,
   onClose,
+  subHeader,
+  emptySlot,
+  dropHint,
 }: DataLakeChatTreeProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
 
-  const header = (
+  const headerBar = (
     <Box
       className="datalake-tree-header"
       sx={{
@@ -159,19 +175,50 @@ export default function DataLakeChatTree({
     </Box>
   );
 
-  const footer = (onManage || onCreateLake) && (
-    // Sticky bottom bar: manage / create lakes. Pinned below the scrollable list by being
-    // TreeView's footer slot, outside the scroll pane.
+  const header = (
+    <>
+      {headerBar}
+      {subHeader}
+    </>
+  );
+
+  const footer = (onManage || onCreateLake || dropHint) && (
+    // Sticky bottom bar: drop hint, then manage / create lakes. Pinned below the scrollable list
+    // by being TreeView's footer slot, outside the scroll pane.
     <Box
       className="datalake-tree-footer"
       sx={{
         display: 'flex',
+        flexWrap: 'wrap',
         gap: '8px',
         p: '12px',
         borderTop: '1px solid',
         borderColor: isDark ? gray[800] : gray[200],
       }}
     >
+      {dropHint && (
+        <Box
+          data-testid="datalake-drop-hint"
+          sx={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 0.5,
+            px: 1,
+            py: 0.25,
+            borderRadius: 'sm',
+            border: '1px dashed',
+            borderColor: isDark ? gray[800] : gray[200],
+            color: 'text.tertiary',
+          }}
+        >
+          <CloudUploadIcon sx={{ fontSize: 15 }} />
+          <Typography level="body-xs" sx={{ color: 'inherit', whiteSpace: 'nowrap' }}>
+            {dropHint}
+          </Typography>
+        </Box>
+      )}
       {onManage && (
         <Button
           variant="outlined"
@@ -365,7 +412,7 @@ export default function DataLakeChatTree({
 
   return (
     // The chrome's file rows wire their own onClick straight to onViewFile, so TreeView's
-    // per-row callback is unused here (it exists for the page tree) and gets a no-op.
+    // per-row callback is unused here (the manager nav and Viewer use it) and gets a no-op.
     <DataLakeTreeView
       tree={tree}
       articles={articles}
@@ -379,6 +426,7 @@ export default function DataLakeChatTree({
       chrome={chrome}
       header={header}
       footer={footer}
+      emptySlot={emptySlot}
     />
   );
 }

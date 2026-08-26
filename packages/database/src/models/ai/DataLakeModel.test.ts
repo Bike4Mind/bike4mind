@@ -1431,6 +1431,39 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
   });
 
+  it('claimUnarchiving enters restoring from archived', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-claim', status: 'archived' }));
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+  });
+
+  it('claimUnarchiving loses to a delete that got there first (#2086)', async () => {
+    // The race the claim exists for: deleteDataLake also accepts 'archived', so it can settle
+    // 'deleted' between unarchiveDataLake's status read and this write. Losing here is what stops
+    // the unarchive carrying on to settle 'active' over a lake whose members are already
+    // soft-deleted - a state restoreDeletedDataLake refuses, leaving the files unreachable.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-loses', status: 'archived' }));
+    await dataLakeRepository.update({ id: created.id, status: 'deleted' });
+
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleted');
+  });
+
+  it('claimUnarchiving is re-entrant from restoring, so a crashed attempt can retry', async () => {
+    // matchedCount, not modifiedCount, for the same reason as claimRestoring: the second call
+    // changes nothing and must still be allowed, matching the guard in unarchiveDataLake which
+    // admits 'restoring' for exactly this retry.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-reentrant', status: 'archived' }));
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+  });
+
+  it('claimUnarchiving refuses an active lake, so it cannot resurrect a settled transition', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-active', status: 'active' }));
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('active');
+  });
+
   it('releases purging -> deleted so a refused sweep leaves a visible, retryable lake', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release', status: 'deleted' }));
     await dataLakeRepository.claimPurging(created.id);

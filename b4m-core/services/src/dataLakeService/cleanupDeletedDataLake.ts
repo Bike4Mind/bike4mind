@@ -1,5 +1,6 @@
 import type {
   IDataLakeAccessGrantRepository,
+  IDataLakeProposalRepository,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
@@ -17,6 +18,11 @@ interface CleanupDeletedDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'removeAllForLake'>;
+    /**
+     * Optional: the acquisition queue (#1671). Absent -> no sweep, so a host that never wired the
+     * queue is unaffected. Its rows are lake-scoped and unreviewable once the lake is gone.
+     */
+    dataLakeProposals?: Pick<IDataLakeProposalRepository, 'deleteForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds' | 'findById' | 'pullTagsByFabFileId'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
@@ -136,6 +142,11 @@ export const cleanupDeletedDataLake = async (
   // are gone, so a DLQ retry is safe. Runs before the lake record delete for the same
   // recoverable-on-failure ordering as the rest of the sweep.
   await db.dataLakeAccessGrants.removeAllForLake(dataLakeId);
+
+  // 4c. Cascade-drop the lake's acquisition proposals for the same reason: a proposal outliving its
+  // lake is unreviewable by anyone, and its tombstones guard a source identity that no longer has a
+  // destination. Idempotent, so a DLQ retry is safe.
+  await db.dataLakeProposals?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

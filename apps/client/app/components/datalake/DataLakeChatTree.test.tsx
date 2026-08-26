@@ -112,3 +112,65 @@ describe('DataLakeChatTree file-row actions', () => {
     expect(onViewFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
   });
 });
+
+describe('DataLakeChatTree chrome slots (#1943)', () => {
+  it('gives Create the primary treatment and Manage the secondary one', () => {
+    renderTree({ onManage: vi.fn(), onCreateLake: vi.fn() });
+
+    // Joy's variant/color modifier classes are a stable public API (unlike its emotion
+    // hashes), so they are the only way to assert visual hierarchy without a snapshot.
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    expect(createBtn.className).toMatch(/MuiButton-variantSolid/);
+    expect(createBtn.className).toMatch(/MuiButton-colorPrimary/);
+
+    const manageBtn = screen.getByTestId('datalake-manage-btn');
+    expect(manageBtn.className).toMatch(/MuiButton-variantOutlined/);
+    expect(manageBtn.className).toMatch(/MuiButton-colorNeutral/);
+  });
+
+  it('wires each footer button to its own handler', () => {
+    const onManage = vi.fn();
+    const onCreateLake = vi.fn();
+    renderTree({ onManage, onCreateLake });
+
+    fireEvent.click(screen.getByTestId('datalake-create-btn'));
+    expect(onCreateLake).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('datalake-manage-btn'));
+    expect(onManage).toHaveBeenCalledTimes(1);
+  });
+
+  it('advertises drag-to-ingest at rest, which the drop overlay alone cannot do', () => {
+    renderTree({ dropHint: 'Drag files here to add' });
+    expect(screen.getByTestId('datalake-drop-hint')).toHaveTextContent(/drag files here to add/i);
+  });
+
+  it('renders the sub-header between the title bar and the search toolbar', () => {
+    renderTree({ subHeader: <div data-testid="sub-header" /> });
+
+    const subHeader = screen.getByTestId('sub-header');
+    const search = screen.getByTestId('datalake-search');
+    expect(subHeader.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('prefers the host empty slot over the bare "No categories" line', () => {
+    // Root breadcrumb + empty tree: the node list is empty and nothing is being searched.
+    renderTree({ breadcrumb: [], articles: [], emptySlot: <div data-testid="host-empty" /> });
+
+    expect(screen.getByTestId('host-empty')).toBeInTheDocument();
+    expect(screen.queryByText('No categories')).not.toBeInTheDocument();
+  });
+
+  it('keeps "No matches" over the empty slot while searching - that is a fact about the query', () => {
+    renderTree({ breadcrumb: [], articles: [], emptySlot: <div data-testid="host-empty" /> });
+
+    // The testid sits on Joy's Input root; the value setter lives on the inner <input>.
+    fireEvent.change(screen.getByTestId('datalake-search').querySelector('input')!, {
+      target: { value: 'zzz' },
+    });
+
+    expect(screen.getByText('No matches')).toBeInTheDocument();
+    expect(screen.queryByTestId('host-empty')).not.toBeInTheDocument();
+  });
+});

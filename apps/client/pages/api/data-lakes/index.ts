@@ -4,6 +4,7 @@ import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  dataLakeProposalRepository,
   userRepository,
   adminSettingsRepository,
   fallbackLakeSettingsRepository,
@@ -34,6 +35,10 @@ const handler = baseApi()
       // preferredSystemPromptId, systemPrompt). Only ever consulted on the admin
       // (listAllDataLakes) branch below.
       fallbackLakeSettings: fallbackLakeSettingsRepository,
+      // Proposal repo: puts a pending-review count on each lake the caller can manage (#1671). This is
+      // the queue's only discovery surface - without it a reviewer has to open a lake's settings to
+      // learn whether anything is waiting, which nobody does unprompted.
+      dataLakeProposals: dataLakeProposalRepository,
     };
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
     const dataLakes = ctx.isAdmin

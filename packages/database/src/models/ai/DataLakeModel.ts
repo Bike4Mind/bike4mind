@@ -541,6 +541,21 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
+  async claimUnarchiving(id: string): Promise<boolean> {
+    // The archive-axis twin of claimRestoring. What the filter EXCLUDES is the point: deleteDataLake
+    // also accepts 'archived', so a delete accepted between unarchiveDataLake's status read and this
+    // write must win. Losing here yields the same refusal the caller's guard would have given, where
+    // a plain $set would instead leave the lake 'active' with every member soft-deleted and
+    // restoreDeletedDataLake refusing it - unreachable files with no route back.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['archived', 'restoring'] } },
+      { $set: { status: 'restoring' } }
+    );
+    // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
+    // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
+    return res.matchedCount === 1;
+  }
+
   async releasePurgingToDeleted(id: string): Promise<boolean> {
     // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
     // 'purging' may be released, so this can never resurrect one another transition has moved on.

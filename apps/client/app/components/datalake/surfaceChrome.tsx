@@ -1,15 +1,15 @@
 /**
- * surfaceChrome - brand-agnostic visual primitives for the standalone Data Lake
- * surface (tree, article, explorer header).
+ * surfaceChrome - brand-agnostic visual primitives (hues, animations, the stat ticker).
  *
  * Nothing here may carry product flavor: hues are named after colors rather than
- * concepts and every string is caller-supplied. Branded surfaces layer their own
- * look on top by overriding the `theme` half of the surface tokens - see
- * `DataLakeSurfaceProvider` in `surfaceTokens.tsx`.
+ * concepts and every string is caller-supplied.
  *
  * `deckChrome.tsx` re-exports these primitives under its historical names so the
  * premium deck surfaces keep their import paths - it imports from here rather than
- * duplicating, so the palette and animations cannot drift between the two.
+ * duplicating, so the palette and animations cannot drift between the two. Those
+ * surfaces are now the only consumers: the Data Lake surface that these were written
+ * for lost its themed chrome when the standalone page was retired (#1943), keeping only
+ * `inkFor` for the tree's per-branch ink.
  */
 
 import { Box, Typography } from '@mui/joy';

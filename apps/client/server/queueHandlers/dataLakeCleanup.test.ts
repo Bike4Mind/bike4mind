@@ -16,6 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
+  dataLakeProposalRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -34,14 +35,20 @@ const payload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } }
 describe('dataLakeCleanup consumer', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('parses the message and runs the cleanup service with the four repos + logger', async () => {
+  it('parses the message and runs the cleanup service with the lake repos + logger', async () => {
     h.cleanup.mockResolvedValue(undefined);
     await dispatch(makeEvent(payload), {} as never, logger);
     expect(h.cleanup).toHaveBeenCalledWith(
       { userId: 'u1', isAdmin: false },
       'lake1',
       expect.objectContaining({
-        db: expect.objectContaining({ dataLakes: expect.anything(), fabFileChunks: expect.anything() }),
+        db: expect.objectContaining({
+          dataLakes: expect.anything(),
+          fabFileChunks: expect.anything(),
+          // The acquisition queue is swept alongside the grants (#1671) - a proposal outliving its
+          // lake is unreviewable, so an unwired repo here would leave orphans behind every purge.
+          dataLakeProposals: expect.anything(),
+        }),
         logger,
       })
     );
