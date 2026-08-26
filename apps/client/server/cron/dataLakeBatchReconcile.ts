@@ -26,7 +26,12 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS } from '@server/worker/chunkScan';
+import {
+  buildFabFileChunkScanFilter,
+  buildStrandedVectorizeScanFilter,
+  CHUNK_SCAN_MIN_AGE_MS,
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
+} from '@server/worker/chunkScan';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 
@@ -48,6 +53,28 @@ async function rescueUnchunkedFiles(): Promise<number> {
 
   const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
   const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
+    .select('_id userId')
+    .limit(CHUNK_RESCUE_MAX_PER_RUN)
+    .lean();
+
+  for (const file of candidates) {
+    await sendToQueue(Resource.fabFileChunkQueue.url, {
+      fabFileId: String(file._id),
+      userId: file.userId,
+    });
+  }
+  return candidates.length;
+}
+
+/**
+ * Hosted counterpart of the same second pass in the self-host worker's fabFileChunkScan: files
+ * whose chunks were committed but whose vectorize hand-off failed. Re-enqueueing a chunk message
+ * resumes only the fan-out (see buildStrandedVectorizeScanFilter and fabFileChunk.ts) - it never
+ * re-chunks. Not gated on enableAutoChunk: these files were already chunked.
+ */
+async function rescueStrandedVectorizeFiles(): Promise<number> {
+  const cutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff))
     .select('_id userId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
@@ -102,6 +129,10 @@ export async function handler() {
     logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
     return 0;
   });
+  const rescuedVectorizeFiles = await rescueStrandedVectorizeFiles().catch(err => {
+    logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue sweep failed: ${err}`);
+    return 0;
+  });
 
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
   await recordReconcileRun().catch(() => {});
@@ -112,6 +143,7 @@ export async function handler() {
     taxonomyCandidates: stuckTaxonomy.length,
     taxonomyForced: forcedTaxonomy.length,
     rescuedChunkFiles,
+    rescuedVectorizeFiles,
   });
   return {
     statusCode: 200,
@@ -121,6 +153,7 @@ export async function handler() {
       taxonomyCandidates: stuckTaxonomy.length,
       taxonomyForced: forcedTaxonomy.length,
       rescuedChunkFiles,
+      rescuedVectorizeFiles,
     }),
   };
 }

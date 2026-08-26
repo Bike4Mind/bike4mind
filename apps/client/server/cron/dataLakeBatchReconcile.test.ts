@@ -47,6 +47,8 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 vi.mock('@server/worker/chunkScan', () => ({
   buildFabFileChunkScanFilter: (cutoff: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } }),
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
+  buildStrandedVectorizeScanFilter: (cutoff: Date) => ({ vectorizeEnqueueFailedAt: { $lt: cutoff } }),
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS: 15 * 60_000,
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
@@ -109,6 +111,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       taxonomyCandidates: 0,
       taxonomyForced: 0,
       rescuedChunkFiles: 0,
+      rescuedVectorizeFiles: 0,
     });
   });
 
@@ -123,6 +126,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       taxonomyCandidates: 0,
       taxonomyForced: 0,
       rescuedChunkFiles: 0,
+      rescuedVectorizeFiles: 0,
     });
   });
 
@@ -152,23 +156,28 @@ describe('dataLakeBatchReconcile cron handler', () => {
   });
 
   describe('un-chunked rescue sweep (#1420)', () => {
+    // Both rescue sweeps read FabFile.find; route the mock by which filter it was handed.
+    const findResult = (docs: unknown[]) => ({ select: () => ({ limit: () => ({ lean: async () => docs }) }) });
+    const routeFind = (unchunked: unknown[], stranded: unknown[]) =>
+      h.fabFileFind.mockImplementation((filter: Record<string, unknown>) =>
+        findResult('vectorizeEnqueueFailedAt' in filter ? stranded : unchunked)
+      );
+
     beforeEach(() => {
       h.findStuck.mockResolvedValue([]);
       h.reconcile.mockResolvedValue([]);
+      routeFind([], []);
     });
 
     it('re-enqueues complete-but-never-chunked files when auto-chunk is enabled', async () => {
       h.getSettingsValue.mockResolvedValue(true);
-      h.fabFileFind.mockReturnValue({
-        select: () => ({
-          limit: () => ({
-            lean: async () => [
-              { _id: 'ff1', userId: 'u1' },
-              { _id: 'ff2', userId: 'u2' },
-            ],
-          }),
-        }),
-      });
+      routeFind(
+        [
+          { _id: 'ff1', userId: 'u1' },
+          { _id: 'ff2', userId: 'u2' },
+        ],
+        []
+      );
 
       const res = await handler();
 
@@ -178,10 +187,10 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
 
-    it('does nothing when auto-chunk is disabled', async () => {
+    it('sweeps no un-chunked files when auto-chunk is disabled', async () => {
       h.getSettingsValue.mockResolvedValue(false);
       await handler();
-      expect(h.fabFileFind).not.toHaveBeenCalled();
+      expect(h.fabFileFind).not.toHaveBeenCalledWith(expect.objectContaining({ chunkCount: 0 }));
       expect(h.sendToQueue).not.toHaveBeenCalled();
     });
 
@@ -196,6 +205,19 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.recordRun).toHaveBeenCalledTimes(1);
       expect(res.statusCode).toBe(200);
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(0);
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(0);
+    });
+
+    it('re-enqueues files whose vectorize hand-off was stranded, regardless of auto-chunk', async () => {
+      // Those files are already chunked, so the auto-chunk setting has no bearing on finishing
+      // the hand-off - and no other sweep can see them (this one selects on the failure stamp).
+      h.getSettingsValue.mockResolvedValue(false);
+      routeFind([], [{ _id: 'ff9', userId: 'u9' }]);
+
+      const res = await handler();
+
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff9', userId: 'u9' });
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(1);
     });
   });
 });

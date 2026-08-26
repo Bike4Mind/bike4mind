@@ -14,7 +14,13 @@ import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDi
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import {
+  buildFabFileChunkScanFilter,
+  buildStrandedVectorizeScanFilter,
+  CHUNK_SCAN_BATCH,
+  CHUNK_SCAN_MIN_AGE_MS,
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
+} from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -132,22 +138,40 @@ async function main() {
   // notification is missed, sweep un-chunked files and enqueue them. The selection filter
   // (buildFabFileChunkScanFilter) skips uploads that never completed so the scan can't churn.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
+    if (await adminSettingsRepository.getSettingsValue('enableAutoChunk')) {
+      const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
+      const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
+        .select('_id userId')
+        .limit(CHUNK_SCAN_BATCH)
+        .lean();
 
-    const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
-    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
+      for (const file of candidates) {
+        await sendToQueue(Resource.fabFileChunkQueue.url, {
+          fabFileId: String(file._id),
+          userId: file.userId,
+        });
+      }
+      if (candidates.length > 0) {
+        bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
+      }
+    }
+
+    // Second pass, same queue: files whose chunks landed but whose vectorize hand-off failed.
+    // Ungated and separately capped - see buildStrandedVectorizeScanFilter.
+    const strandedCutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+    const stranded = await FabFile.find(buildStrandedVectorizeScanFilter(strandedCutoff))
       .select('_id userId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
-    for (const file of candidates) {
+    for (const file of stranded) {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: file.userId,
       });
     }
-    if (candidates.length > 0) {
-      bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
+    if (stranded.length > 0) {
+      bootLogger.info(`[fabFileChunkScan] re-enqueued ${stranded.length} file(s) with a stranded vectorize hand-off`);
     }
   });
 

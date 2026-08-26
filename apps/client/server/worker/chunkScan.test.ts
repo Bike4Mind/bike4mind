@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
+import {
+  buildFabFileChunkScanFilter,
+  buildStrandedVectorizeScanFilter,
+  NO_EXTRACTABLE_TEXT_NOTE_PREFIX,
+} from './chunkScan';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
@@ -9,7 +13,13 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
     if (cond && typeof cond === 'object' && '$ne' in cond) return value !== (cond as { $ne: unknown }).$ne;
-    if (cond && typeof cond === 'object' && '$lt' in cond) return (value as Date) < (cond as { $lt: Date }).$lt;
+    if (cond && typeof cond === 'object' && '$lt' in cond) {
+      // Mirror Mongo: null/missing sorts below a Date, so a $lt WOULD match it without a $type
+      // guard alongside it.
+      if ('$type' in cond && (cond as { $type: string }).$type === 'date' && !(value instanceof Date)) return false;
+      if (!('$type' in cond) && !(value instanceof Date)) return true;
+      return (value as Date) < (cond as { $lt: Date }).$lt;
+    }
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
     if (cond && typeof cond === 'object' && '$not' in cond)
       return !matches({ [key]: value }, { [key]: (cond as { $not: unknown }).$not });
@@ -112,5 +122,59 @@ describe('buildFabFileChunkScanFilter', () => {
     const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
     expect(matches({ ...base, mimeType: 'text/markdown' }, filter)).toBe(true);
     expect(matches({ ...base, mimeType: 'application/pdf' }, filter)).toBe(true);
+  });
+});
+
+describe('buildStrandedVectorizeScanFilter', () => {
+  // The state this rescues: chunks committed, `chunked: true`, zero vectors and a failed
+  // vectorize hand-off. buildFabFileChunkScanFilter cannot see it (it requires chunkCount: 0).
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const stale = new Date('2025-12-31T00:00:00Z');
+  const fresh = new Date('2026-01-01T00:00:01Z');
+  const filter = buildStrandedVectorizeScanFilter(cutoff);
+
+  it('selects a chunked file whose vectorize enqueue failed past the grace period', () => {
+    const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(true);
+  });
+
+  it('skips a file with no stamp - the ordinary case, so the sweep costs nothing', () => {
+    const doc = { chunked: true, chunkCount: 12, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file whose stamp is the schema default null (BSON null sorts below a Date)', () => {
+    const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: null, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a stamp inside the grace period, so it cannot race the handler own SQS retries', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: fresh, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file that is actively chunking', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: true, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a deleted file', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: new Date() };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('is disjoint from the un-chunked sweep: a stranded file matches only this filter', () => {
+    const doc = {
+      status: 'complete',
+      chunked: true,
+      chunkCount: 12,
+      vectorizeEnqueueFailedAt: stale,
+      isChunking: false,
+      createdAt: stale,
+      deletedAt: null,
+      mimeType: 'application/pdf',
+    };
+    expect(matches(doc, buildFabFileChunkScanFilter(cutoff))).toBe(false);
+    expect(matches(doc, filter)).toBe(true);
   });
 });

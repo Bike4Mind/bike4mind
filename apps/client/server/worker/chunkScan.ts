@@ -55,3 +55,31 @@ export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
   notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
   error: { $in: [null, ''] },
 });
+
+/** Grace period before the stranded-vectorize sweep touches a file, so it cannot race the chunk
+ * handler's own SQS retries of the same failed enqueue. */
+export const VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS = 15 * 60_000;
+
+/**
+ * Mongo filter selecting files whose chunks were committed but whose vectorize fan-out failed -
+ * fabFileChunk.ts stamps `vectorizeEnqueueFailedAt` when its enqueue throws.
+ *
+ * These files are invisible to buildFabFileChunkScanFilter above: that one requires
+ * chunkCount: 0, and these files HAVE chunks. Without this sweep the state is terminal by
+ * construction - the chunk handler's idempotency guard skips a redelivery and no other filter
+ * selects it - leaving a file with chunks, no vectors and nothing looking at it.
+ *
+ * Rescue is a chunk-queue re-enqueue, like the un-chunked sweep, and is non-destructive: the
+ * chunk handler refuses to re-chunk an already-chunked file and only re-sends the fan-out for
+ * chunks that still lack a vector, clearing the stamp when it succeeds. Deliberately NOT gated on
+ * enableAutoChunk (unlike the un-chunked sweep): that setting governs whether new uploads get
+ * chunked, and this only finishes handing off work that was already chunked.
+ */
+export const buildStrandedVectorizeScanFilter = (cutoff: Date) => ({
+  // $type is load-bearing, not decoration: the field defaults to null, and BSON type ordering puts
+  // null BELOW a Date, so a bare `$lt: cutoff` would select every never-failed file in the
+  // collection. It also matches the partial index's own predicate (FabFileModel.ts).
+  vectorizeEnqueueFailedAt: { $type: 'date', $lt: cutoff },
+  isChunking: { $ne: true },
+  deletedAt: null,
+});

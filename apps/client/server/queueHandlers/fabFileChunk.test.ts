@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+  findVectorlessChunkIds: vi.fn(async () => [] as string[]),
+  sendToQueue: vi.fn(async () => undefined),
   selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
 
@@ -34,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
   },
-  fabFileChunkRepository: {},
+  fabFileChunkRepository: { findVectorlessChunkIds: h.findVectorlessChunkIds },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
@@ -47,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { chunkFabfile: h.chunkFabfile } }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
@@ -309,5 +311,141 @@ describe('fabFileChunk handler - self-host OpenSearch searchIndex adapter', () =
       expect.anything(),
       expect.objectContaining({ searchIndex: undefined })
     );
+  });
+});
+
+describe('fabFileChunk handler - a failed vectorize enqueue must not strand the file', () => {
+  // The chunk rows and `chunked: true` are already committed when the fan-out runs, so a bare
+  // rejection there used to leave a file with chunks, zero vectors and no error: the idempotency
+  // guard skipped every redelivery and the un-chunked rescue sweep could not select it
+  // (chunkCount: 0). The failure must be recorded AND the hand-off must stay retryable.
+  const ENQUEUE_ERR = 'SQS throttled';
+  const chunks = Array.from({ length: 3 }, (_, i) => ({ id: `c${i}` }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.chunkFabfile.mockResolvedValue(chunks);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ chunkedFiles: 1, failedFiles: 0, totalFiles: 1 });
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.incrementCounters.mockResolvedValue({ failedFiles: 1, processingFailedFiles: 1, totalFiles: 3 });
+    h.isBatchComplete.mockReturnValue(false);
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.findVectorlessChunkIds.mockResolvedValue([]);
+    h.sendToQueue.mockResolvedValue(undefined);
+  });
+
+  it('stamps the file, records the failure and rethrows when the fan-out fails', async () => {
+    h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
+    // The stamp is what makes the state findable at all (buildStrandedVectorizeScanFilter).
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $set: { vectorizeEnqueueFailedAt: expect.any(Date) } }
+    );
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining(ENQUEUE_ERR));
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+  });
+
+  it('leaves file and batch state untouched on a non-final attempt, but still stamps it', async () => {
+    h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $set: { vectorizeEnqueueFailedAt: expect.any(Date) } }
+    );
+  });
+
+  it('resumes the fan-out for un-vectorized chunks on redelivery, without re-chunking', async () => {
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      batchId: 'batch-1',
+      chunked: true,
+      chunkCount: 3,
+      embeddingModel: 'text-embedding-3-small',
+      vectorizeEnqueueFailedAt: new Date(),
+    });
+    h.findVectorlessChunkIds.mockResolvedValue(['c0', 'c1', 'c2']);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.sendToQueue).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        fabFileId: 'ff1',
+        chunkIds: ['c0', 'c1', 'c2'],
+        embeddingModel: 'text-embedding-3-small',
+      })
+    );
+    // Recovered: the stamp is dropped so the rescue sweep stops selecting the file.
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $unset: { vectorizeEnqueueFailedAt: 1 } });
+  });
+
+  it('re-sends only the chunks that still lack a vector', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, chunkCount: 3 });
+    h.findVectorlessChunkIds.mockResolvedValue(['c2']);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ chunkIds: ['c2'] }));
+  });
+
+  it('clears the error it wrote itself when the resume succeeds', async () => {
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      chunked: true,
+      error: 'Could not hand off for vector indexing: SQS throttled',
+    });
+    h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $unset: { vectorizeEnqueueFailedAt: 1 }, $set: { error: null } }
+    );
+  });
+
+  it('never clears an error it does not own (a real chunking failure survives the resume)', async () => {
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      chunked: true,
+      error: 'Invalid PDF structure',
+      vectorizeEnqueueFailedAt: new Date(),
+    });
+    h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $unset: { vectorizeEnqueueFailedAt: 1 } });
+  });
+
+  it('sends nothing for an already fully vectorized file, and skips the marker write', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, chunkCount: 3 });
+    h.findVectorlessChunkIds.mockResolvedValue([]);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('a failed resume re-stamps and rethrows, so the file stays rescuable', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true });
+    h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+    h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $set: { vectorizeEnqueueFailedAt: expect.any(Date) } }
+    );
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining(ENQUEUE_ERR));
+  });
+
+  it('batches the fan-out at 50 chunk ids per message', async () => {
+    h.chunkFabfile.mockResolvedValue(Array.from({ length: 120 }, (_, i) => ({ id: `c${i}` })));
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    const sizes = h.sendToQueue.mock.calls.map(([, msg]) => (msg as { chunkIds: string[] }).chunkIds.length);
+    expect(sizes).toEqual([50, 50, 20]);
   });
 });
