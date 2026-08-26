@@ -369,21 +369,51 @@ describe('wafPolicy', () => {
       expect(rateBased.Limit).toBeGreaterThan(apiLimit);
     });
 
-    // Nothing else pins this. #1893's parity guard deep-equals Statement only, so flipping a
-    // production limit to Count is invisible to every other test in this file. When these do go
-    // to Count for a first week of measurement, this assertion is what makes coming back to
-    // Block something the build demands rather than something someone remembers.
-    it('enforces, rather than counts, every production rate limit', () => {
+    // Production's rate limits are in Count for one measurement week, deliberately, and this
+    // assertion is the thing that makes going back to Block a build requirement rather than
+    // something someone remembers. Nothing else in the file would notice: #1893's parity guard
+    // deep-equals Statement and never the rule object.
+    //
+    // What has to be true before each rule flips back to Block:
+    //   api-rate-limit         a week of CountedRequests on production traffic, not staging's,
+    //                          since the January 0.7% was measured on the old blanket shape
+    //   default-rate-limit     5000 has no measurement under it anywhere yet
+    //   image-rate-limit       1000 likewise, and it is the one expensive non-API path
+    //   ai-route, register     both shadows have read zero on staging for weeks, so a Count week
+    //                          is the first real signal either has produced
+    //   static-asset           a DoS backstop, so the reading matters least of the six
+    //
+    // Flip the rule and this assertion together, per rule, as each reading justifies it.
+    // emergency-ip-block and the managed rule groups are untouched and stay enforcing.
+    it('counts, rather than blocks, every production rate limit during the measurement week', () => {
       const rules: WafRule[] = JSON.parse(
         buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
       );
 
-      // any: see above
+      // any: RateBasedStatement shape is deeply nested and varies by statement type
       const limits = rules.filter(r => (r.Statement as any).RateBasedStatement);
       expect(limits.length).toBeGreaterThan(0);
 
       for (const rule of limits) {
-        expect(rule.Action, `${rule.Name} must Block, not Count`).toEqual({ Block: {} });
+        expect(rule.Action, `${rule.Name} is in Count for the measurement week`).toEqual({ Count: {} });
+      }
+    });
+
+    // The break-glass control and the managed rule groups are not part of the measurement week.
+    // If Count ever spreads to these, production has no enforcing rule left at all.
+    it('keeps the emergency IP block enforcing throughout', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const emergency = rules.find(r => r.Name === 'emergency-ip-block');
+      expect(emergency).toBeDefined();
+      expect(emergency!.Action).toEqual({ Block: {} });
+
+      for (const rule of rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement)) {
+        expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
+          None: {},
+        });
       }
     });
   });
