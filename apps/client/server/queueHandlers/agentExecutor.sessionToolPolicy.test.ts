@@ -243,9 +243,10 @@ describe('delegationOffer -- profile and session denials reach the dependency ga
   });
 
   it('honors a session-level disabledTools entry', () => {
-    expect(
-      delegationOffer({ profileDeniedTools: [], session: { disabledTools: ['delegate_to_agent'] } })
-    ).toEqual({ offerDelegate: false, offerDag: true });
+    expect(delegationOffer({ profileDeniedTools: [], session: { disabledTools: ['delegate_to_agent'] } })).toEqual({
+      offerDelegate: false,
+      offerDag: true,
+    });
   });
 
   it('a denial of unrelated tools withholds nothing', () => {

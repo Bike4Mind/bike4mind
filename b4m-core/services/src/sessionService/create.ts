@@ -12,7 +12,9 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import { z } from 'zod';
+import type { Logger } from '@bike4mind/observability';
 import { projectService } from '..';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
@@ -60,6 +62,10 @@ export interface CreateSessionAdapters {
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
   };
+  /** Optional so existing callers compile; without it a failed lake-tag derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
 }
 
 export const createSession = async (
@@ -76,6 +82,13 @@ export const createSession = async (
     ...rest
   } = secureParameters(parameters, createSessionParametersSchema);
 
+  // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
+  // tags is authoritative, so derivation runs only for a file-seeded session that named neither.
+  const retrievalTags =
+    rest.retrievalTags?.length || knowledgeIds.length === 0
+      ? rest.retrievalTags
+      : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -87,6 +100,8 @@ export const createSession = async (
 
     ...rest,
 
+    // After ...rest so the derived value wins over the (absent) request value it stands in for.
+    ...(retrievalTags?.length ? { retrievalTags } : {}),
     userId: user.id,
     knowledgeIds,
     artifactIds,

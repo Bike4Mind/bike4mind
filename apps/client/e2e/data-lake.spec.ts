@@ -87,9 +87,7 @@ test.describe('Data Lake - feature gate', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // List panel & management UI
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - management panel', () => {
+test.describe('Data Lake - management panel', () => {
   test('opens the manager and lists a seeded lake with its tag-prefix chip', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E List ${RUN}`,
@@ -114,10 +112,7 @@ test.describe.skip('Data Lake - management panel', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Create wizard (drive the steps we can without a live S3/vectorize upload)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite the entry point
-// (openManagerFromHome) against the in-chat Data Lake header toggle + manager modal.
-// Skipped to keep CI green; the assertions below already match the three-step wizard.
-test.describe.skip('Data Lake - create wizard', () => {
+test.describe('Data Lake - create wizard', () => {
   test('step gating: Next needs both files and a valid name, then advances', async ({ dataLakePage }) => {
     await dataLakePage.openManagerFromHome();
     await dataLakePage.startCreate();
@@ -164,9 +159,7 @@ test.describe.skip('Data Lake - create wizard', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Append mode
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - append mode', () => {
+test.describe('Data Lake - append mode', () => {
   test('add-files wizard opens titled for the target lake', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Append ${RUN}`,
@@ -185,9 +178,7 @@ test.describe.skip('Data Lake - append mode', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle (archive → deleted → purge) through the UI
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - lifecycle', () => {
+test.describe('Data Lake - lifecycle', () => {
   test('archive moves the lake to the Archived section', async ({ request, dataLakePage }) => {
     test.setTimeout(2 * TIMEOUTS.TEST);
     const lake = await seedLake(request, ownerToken(), {
@@ -233,9 +224,7 @@ test.describe.skip('Data Lake - lifecycle', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings modal (rename + gate can't-clear rule)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - settings', () => {
+test.describe('Data Lake - settings', () => {
   test('rename a lake via the settings modal', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Rename ${RUN}`,
@@ -293,9 +282,7 @@ test.describe.skip('Data Lake - settings', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Viewer
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - viewer', () => {
+test.describe('Data Lake - viewer', () => {
   test('opens the viewer with a filterable tree', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Viewer ${RUN}`,
@@ -390,10 +377,7 @@ test.describe('Data Lake - sharing & permissions', () => {
 // (Upload "complete" fires when the S3 puts finish — it does NOT wait for
 // vectorization — so this is fast with a small file. Taxonomy runs a real AI call.)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite the entry point
-// (openManagerFromHome) against the in-chat Data Lake header toggle + manager modal.
-// Skipped to keep CI green; the assertions below already match the three-step wizard.
-test.describe.skip('Data Lake - create wizard (full upload)', () => {
+test.describe('Data Lake - create wizard (full upload)', () => {
   test('creates a lake end-to-end: source -> config -> upload complete', async ({ request, dataLakePage }) => {
     test.setTimeout(3 * TIMEOUTS.TEST);
     const name = `E2E Create Full ${RUN}`;
@@ -475,9 +459,7 @@ test.describe.skip('Data Lake - create wizard (full upload)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Group D — Taxonomy tag editing
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - taxonomy', () => {
+test.describe('Data Lake - taxonomy', () => {
   test('deleting a suggested tag removes it from the list', async ({ dataLakePage }) => {
     test.setTimeout(3 * TIMEOUTS.TEST);
 
@@ -498,9 +480,7 @@ test.describe.skip('Data Lake - taxonomy', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Group G — Append: full upload into an existing lake
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - append (full upload)', () => {
+test.describe('Data Lake - append (full upload)', () => {
   test('uploads a file into an existing lake (no taxonomy step)', async ({ request, dataLakePage }) => {
     test.setTimeout(2 * TIMEOUTS.TEST);
     const lake = await seedLake(request, ownerToken(), {
@@ -519,26 +499,30 @@ test.describe.skip('Data Lake - append (full upload)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Group J — Viewer / explorer article (seeded via API to avoid the upload pipeline)
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO(datalake-in-chat): /data-lakes route retired; rewrite these against the in-chat
-// Data Lake header toggle once the Phase 3 surface settles. Skipped to keep CI green.
-test.describe.skip('Data Lake - explorer article', () => {
-  test('"Ask about" an article prefills chat and navigates to a new session', async ({
+test.describe('Data Lake - explorer article', () => {
+  // The page's inline reader and its "Ask about this article" hand-off went away with the page
+  // (#1943): in chat mode the chat is already beside the tree, so the article opens in the
+  // KnowledgeViewer and the hand-off is the row's Attach-to-chat action. What must NOT break is
+  // the shared link itself, which now redirects into a Data-Lake-mode chat.
+  test('a shared /data-lakes?article= link lands in the in-chat surface with the file open', async ({
     request,
     dataLakePage,
     page,
   }) => {
     const lake = await seedLake(request, ownerToken(), {
-      name: `E2E AskAbout ${RUN}`,
-      fileTagPrefix: `e2eask${RUN}:`,
+      name: `E2E DeepLink ${RUN}`,
+      fileTagPrefix: `e2edeep${RUN}:`,
     });
     const fileId = await apiSeedLakeArticle(request, ownerToken(), lake, {
-      fileName: `ask-about-${RUN}.txt`,
+      fileName: `deep-link-${RUN}.txt`,
       content: 'Sinigang is a sour Filipino soup made with tamarind, pork, and vegetables.',
     });
 
     await dataLakePage.gotoArticle(fileId);
-    await dataLakePage.askAboutBtn.click();
+
+    // Redirected off the retired path into a chat, with Data Lake mode already on.
     await expect(page).toHaveURL(/\/new/, { timeout: TIMEOUTS.NAVIGATION });
+    await expect(page.getByText(`deep-link-${RUN}`).first()).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 
   test('the sort toggle flips sort state', async ({ request, dataLakePage }) => {

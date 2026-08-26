@@ -446,9 +446,20 @@ jobs:
     # drag the test-shard fan-out onto the larger, pricier runner.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
-    timeout-minutes: 20
+    # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
+    # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
+    # into - the job was cancelled during cleanup AFTER every test had passed, so a green
+    # suite reported red on a coin flip decided by runner speed (#2015). 30 buys headroom over
+    # that drift; SHARD_SOFT_BUDGET_SECONDS below is what actually watches for it.
+    timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # Soft budget: the shard's former hard cap. Crossing it now annotates the run instead of
+      # killing it, so the next slow creep surfaces as a warning on a passing build rather than
+      # as someone's PR failing for no reason - which was the only signal this had that the
+      # client shard had gone from 15 minutes to 20.
+      SHARD_SOFT_BUDGET_SECONDS: '1200'
 
     strategy:
       fail-fast: false
@@ -568,6 +579,12 @@ jobs:
           pnpm --filter @bike4mind/database exec node -e
           "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
+      # Paired with "Report shard duration" at the end of this job. Set before the test steps
+      # rather than derived from the job's own start so the number is test runtime, not
+      # test runtime plus install and core-build restore.
+      - name: Mark shard start
+        run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
+
       # `matrix.shard.script` is unset on every shard but client-integration, and an
       # unset matrix value is the empty string here, so `||` falls back to the unit
       # `test` script.
@@ -606,6 +623,25 @@ jobs:
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+
+      # Reports, never fails. Before this, the only signal that a shard's runtime had crept was
+      # a PR going red for no reason once the creep crossed `timeout-minutes` (#2015) - by which
+      # point the information arrives as a broken build rather than as a trend. A duration on
+      # every run, plus a warning annotation once a shard passes its soft budget, makes the
+      # slide visible while the build is still green.
+      #
+      # `always()` so a FAILING shard still reports: a shard that failed because it was slow is
+      # the exact run where the number is worth having. Guarded on SHARD_START_SECONDS being set
+      # so an early failure (before the mark step) reports nothing instead of nonsense.
+      - name: Report shard duration
+        if: always() && env.SHARD_START_SECONDS != ''
+        run: |
+          elapsed=$(( $(date +%s) - SHARD_START_SECONDS ))
+          summary=$(printf '%s: %dm%02ds' '${{ matrix.shard.name }}' "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
+          echo "- Run Tests (${summary})" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt "$SHARD_SOFT_BUDGET_SECONDS" ]; then
+            echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
+          fi
 
   # Aggregate gate for the sharded test matrix. Branch protection requires a
   # status check literally named "Run Tests"; the matrix above reports per-shard

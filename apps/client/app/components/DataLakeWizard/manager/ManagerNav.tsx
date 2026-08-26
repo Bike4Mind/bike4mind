@@ -482,6 +482,28 @@ export default function ManagerNav({
                                   </IconButton>
                                 </Tooltip>
                               )}
+                              {/* The acquisition queue's only discovery surface (#1671). Server sends it
+                                  ONLY for lakes this caller can manage, and omits it at zero - so the
+                                  row is unchanged for everyone with nothing to review, and a reviewer
+                                  never has to open a lake to find out whether work is waiting. */}
+                              {!!lake.pendingProposalCount && (
+                                <Tooltip
+                                  title={`${lake.pendingProposalCount} ${
+                                    lake.pendingProposalCount === 1 ? 'source is' : 'sources are'
+                                  } waiting for your review`}
+                                  size="sm"
+                                >
+                                  <Chip
+                                    size="sm"
+                                    variant="soft"
+                                    color="primary"
+                                    sx={COUNT_CHIP_SX}
+                                    data-testid={`datalake-manager-pending-proposals-${lake.id}`}
+                                  >
+                                    {`${lake.pendingProposalCount} to review`}
+                                  </Chip>
+                                </Tooltip>
+                              )}
                               {typeof count === 'number' && (
                                 <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
                                   {count}

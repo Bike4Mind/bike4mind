@@ -92,7 +92,9 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 }
 
 export interface DataLakeArticlesQuery {
-  id?: string;
+  // `string[]` for the same reason as `tags`/`search` below: /api/data-lakes/articles has no `[id]`
+  // route segment, so `id` comes purely from the query string and is repeatable.
+  id?: string | string[];
   tags?: string | string[];
   search?: string | string[];
   page?: string;
@@ -147,8 +149,12 @@ export async function queryDataLakeArticles(
   // lakes safely - membership IS the meta-tag) OR a static-registry (open) prefix.
   // A dynamic lake's user-controlled prefix is deliberately NOT a grant here - that
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
-  if (query.id) {
-    const file = await fabFileRepository.findById(query.id);
+  // Narrowed like `search`/`tags` below: an array reaching findById casts to a Mongoose CastError
+  // and 500s the deep-link read. /api/data-lakes/articles has no `[id]` route segment, so nothing
+  // else overwrites this with a single value.
+  const articleId = firstQueryValue(query.id);
+  if (articleId) {
+    const file = await fabFileRepository.findById(articleId);
     const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
     if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };

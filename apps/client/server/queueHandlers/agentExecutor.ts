@@ -41,6 +41,7 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   mcpServerRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
@@ -1317,6 +1318,16 @@ async function processExecution(
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
@@ -1339,6 +1350,7 @@ async function processExecution(
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -2932,6 +2944,16 @@ async function processSubagentDispatch(
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),
+      // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
+      // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
+      sessionRetrievalTags: session.retrievalTags,
+      // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
+      // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
+      // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
+      // this surface performs - so there is nothing here to forward. Giving a delegated agent the same
+      // suppression means running that predicate on this surface, which is real work rather than a
+      // passthrough. Until then an agent delegated from a personal-corpus session searches the
+      // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
@@ -2953,6 +2975,7 @@ async function processSubagentDispatch(
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

@@ -16,14 +16,18 @@ import {
 } from '@bike4mind/database';
 import { z } from 'zod';
 
-// Used only for type inference via z.infer<typeof ...>
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const CreateInviteRequestSchema = z.object({
-  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
+// z.enum(Permission) produces Permission[] so the service type is satisfied.
+const createInviteBodySchema = z.object({
+  permissions: z.array(z.enum(Permission)),
   recipients: z.string().array().optional(),
   description: z.string().optional(),
-  expiresAt: z.date().optional(),
-  available: z.number().prefault(1).optional(),
+  // null is the client's "no expiry" (hooks/data/invites.ts DataInput) -- map to undefined so
+  // the service's 100-year prefault applies. z.coerce.date(null) would silently produce epoch.
+  expiresAt: z.preprocess(
+    v => (v === null ? undefined : v),
+    z.coerce.date().min(new Date(), 'expiresAt must be in the future').optional()
+  ),
+  available: z.number().optional(),
 });
 
 const handler = baseApi()
@@ -39,16 +43,18 @@ const handler = baseApi()
     return res.json(result);
   })
   .post(
-    asyncHandler<{}, unknown, z.infer<typeof CreateInviteRequestSchema>>(async (req, res) => {
+    asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       const { id } = req.query as { id: string };
       if (!id || typeof id !== 'string') {
         return res.status(400).json({ message: 'Invalid project ID' });
       }
 
+      const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          { id, type: InviteType.Project, ...(req.body as any) },
+          // id and type come last so path params are always authoritative over any body field.
+          { ...restBody, ...(expiresAt !== undefined && { expiresAt }), id, type: InviteType.Project },
           {
             db: {
               invites: inviteRepository,
@@ -84,7 +90,7 @@ const handler = baseApi()
                   projectId: id,
                   projectName: project.name,
                   memberId: recipientId,
-                  memberRole: (req.body.permissions || []).join(','),
+                  memberRole: (restBody.permissions || []).join(','),
                 },
               },
               { ability: req.ability }

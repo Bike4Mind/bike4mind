@@ -84,6 +84,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
+  findByServerTextHashesInDataLake: vi.fn(),
+  isLiveDataLakeMember: vi.fn(),
   findByDriveFileIdsInDataLake: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),

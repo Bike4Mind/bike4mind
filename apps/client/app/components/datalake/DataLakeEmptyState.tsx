@@ -18,6 +18,10 @@ interface DataLakeEmptyStateProps {
  * Centred empty state shared by the Data Lake surfaces (the manager's right pane, the Discover
  * catalog) so they cannot drift apart. The tinted icon badge is the same one the advanced-search
  * drawer uses.
+ *
+ * For PANES. `children` lands inside a Typography, so this cannot host an action button, and the
+ * badge + title-lg cost more vertical room than a narrow rail has - the in-chat tree's own state
+ * is DataLakeTreeEmptyState for both reasons.
  */
 export default function DataLakeEmptyState({
   icon,

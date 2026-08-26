@@ -126,6 +126,21 @@ const toMismatchPayload = (report: dataLakeService.EmbeddingMismatchReport) => (
   query_embedding_failed: report.queryEmbeddingFailed,
 });
 
+/**
+ * Flatten the retrieval-unavailable report to the wire shape. Shared by BOTH exits for the same
+ * reason as `toScanPayload` and `toMismatchPayload`: the RLM tool forwards this JSON verbatim and its
+ * prompt documents the field as always present, so a path that omits it TypeErrors REPL code that
+ * reads `retrieval_unavailable.indexing_files`. Flat counts rather than the whole report - a caller
+ * needs to know how much is temporarily unsearchable, and the file names are already in `warning`.
+ */
+const toRetrievalUnavailablePayload = (report: dataLakeService.RetrievalUnavailableReport) => ({
+  indexing_files: report.indexing.count,
+  // Counted apart from `indexing_files` because waiting does not fix these - see the report type. A
+  // caller that adds them together would tell the user to retry and be wrong.
+  paused_files: report.paused.count,
+  partial: report.partial,
+});
+
 const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   truncated: scan.truncated,
   file_budget_hit: scan.fileBudgetHit,
@@ -245,6 +260,7 @@ const handler = baseApi()
           chunks_scored: 0,
           partial_results: false,
           embedding_mismatch: toMismatchPayload(dataLakeService.emptyEmbeddingMismatchReport()),
+          retrieval_unavailable: toRetrievalUnavailablePayload(dataLakeService.emptyRetrievalUnavailableReport()),
           scan: toScanPayload(dataLakeService.emptyScanAccounting(budgets)),
         });
       }
@@ -436,15 +452,7 @@ const handler = baseApi()
         // everything" signal.
         partial_results: dataLakeService.isPartialSearch(search),
         embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
-        // Flat counts rather than the whole report: a caller needs to know how much is temporarily
-        // unsearchable, and the file names are already in `warning`.
-        retrieval_unavailable: {
-          indexing_files: search.retrievalUnavailable.indexing.count,
-          // Counted apart from `indexing_files` because waiting does not fix these - see the report
-          // type. A caller that adds them together would tell the user to retry and be wrong.
-          paused_files: search.retrievalUnavailable.paused.count,
-          partial: search.retrievalUnavailable.partial,
-        },
+        retrieval_unavailable: toRetrievalUnavailablePayload(search.retrievalUnavailable),
         // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
         // healthy search instead of present-and-undefined.
         ...(warning ? { warning } : {}),

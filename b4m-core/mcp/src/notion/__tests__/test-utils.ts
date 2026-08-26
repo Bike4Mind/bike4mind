@@ -21,10 +21,11 @@ export interface McpToolResponse {
 export type McpToolHandler = (params: Record<string, unknown>) => Promise<McpToolResponse>;
 
 /**
- * Registered tool entry with handler
+ * Registered tool entry with handler and optional description
  */
 export interface RegisteredTool {
   handler: McpToolHandler;
+  description?: string;
 }
 
 /**
@@ -39,7 +40,9 @@ export function createMockServer(): {
   const server = {
     tool: vi.fn((name: string, ...args: unknown[]) => {
       const handler = args[args.length - 1] as McpToolHandler;
-      registeredTools.set(name, { handler });
+      // server.tool(name, description, schema, handler) or server.tool(name, schema, handler)
+      const description = typeof args[0] === 'string' ? args[0] : undefined;
+      registeredTools.set(name, { handler, description });
     }),
   } as unknown as McpServer;
 

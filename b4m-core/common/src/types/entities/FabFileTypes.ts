@@ -34,6 +34,8 @@ export enum FabFileSourceType {
   SALESFORCE = 'salesforce',
   GOOGLE_DRIVE = 'google_drive',
   SLACK = 'slack',
+  /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
+  PROPOSAL_APPROVAL = 'proposal_approval',
 }
 
 // Data Lake metadata interface
@@ -435,6 +437,13 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
    */
   distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * The same fact as above, but resolved PER FILE: `{ [fabFileId]: models }`, omitting any file with
+   * no model-bearing chunks. A per-model retrieval index needs the pairing, not the union - pairing
+   * every file with every model seen across the batch issues one request per (file, model) cell, so
+   * a two-model lake doubles its removal traffic and most of it matches nothing.
+   */
+  embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -891,6 +900,29 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * admitting a prefix match here would risk the wrong file for no gain.
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Files in a lake whose SERVER-VERIFIED extracted-text hash matches (META-TAG ONLY, mirroring
+   * findByContentHashesInDataLake). The acquisition queue's "the lake already holds this text"
+   * check (#1671): `serverTextHash` is stamped by the admission contract for every door, where
+   * `contentHash` is written by only the two presigned-URL uploads and never verified. Files that
+   * have not chunked yet carry no hash and so cannot match - a miss here means "not known to be
+   * present", never "known absent".
+   */
+  findByServerTextHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Whether ONE named file is still a member of a lake: same META-TAG scope as
+   * findByServerTextHashesInDataLake, not deleted and not archived - but NOT filtered on `status`,
+   * unlike every hash-keyed sibling. The acquisition queue asks this about the file a prior approval
+   * admitted (#1671), where a stored `approved` status alone would keep answering "the lake already
+   * holds this" long after ordinary file management removed the file, leaving the source permanently
+   * unproposable with no human ever seeing it again.
+   *
+   * The `status` divergence is deliberate: the caller already knows a human approved THIS file, so a
+   * file still mid-ingest ('pending', before the S3 ObjectCreated handler completes it) is held, not
+   * absent. Excluding it would re-open the source for the whole approval->ingest window and let a
+   * reviewer be handed a second card for content already on its way in.
+   */
+  isLiveDataLakeMember(fabFileId: string, datalakeTag: string): Promise<boolean>;
   /**
    * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
    * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:

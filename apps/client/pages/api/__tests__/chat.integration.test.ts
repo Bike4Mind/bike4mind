@@ -607,6 +607,43 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     );
   });
 
+  describe('toolPayloads (structured tool output for programmatic callers)', () => {
+    const PROBLEM = { name: 'shop', jobs: [], machines: [] };
+    // Models what ToolBuilder does for real: it pushes onto the in-memory quest while
+    // process() runs, and the route reads that same object back.
+    const processEmitting = (effects: unknown[]) =>
+      mockProcess.mockImplementation(
+        async ({ prefetchedQuest }: { prefetchedQuest: { uiSideEffects?: unknown[] } }) => {
+          prefetchedQuest.uiSideEffects = effects;
+        }
+      );
+
+    it('returns the structured payload ALONGSIDE the unchanged prose reply', async () => {
+      processEmitting([{ type: 'populateProblem', payload: PROBLEM }]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const bodyOut = res._getJSONData();
+      expect(bodyOut.response).toBe('hi');
+      expect(bodyOut.responses).toEqual(['hi']);
+      expect(bodyOut.toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+
+    it('returns an empty array when the turn fired no structured tool', async () => {
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getJSONData().toolPayloads).toEqual([]);
+    });
+
+    it('needs no opt-in flag, unlike promptDetails/promptText', async () => {
+      processEmitting([{ type: 'populateProblem', payload: PROBLEM }]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getJSONData()).not.toHaveProperty('promptDetails');
+      expect(res._getJSONData().toolPayloads).toHaveLength(1);
+    });
+  });
+
   it('accepts promptMode: raw at the HTTP boundary', async () => {
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'raw' } });
     await handler(req, res);
