@@ -390,7 +390,7 @@ describe('AnthropicCachingAdapter', () => {
     });
 
     it('logs the skipped breakpoints, with a census of where the markers sit', () => {
-      const logger = { warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const logger = { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() };
       adapter.applyCaching(
         {
           tools: [{ name: 'a' }],
@@ -419,7 +419,7 @@ describe('AnthropicCachingAdapter', () => {
      * to it, and must say so loudly - a bare ValidationException gave no way to find the source.
      */
     it('reports an error, and adds nothing, when the request is already over the cap on arrival', () => {
-      const logger = { warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const logger = { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() };
       const marker = { type: 'ephemeral' };
       const result = adapter.applyCaching(
         {

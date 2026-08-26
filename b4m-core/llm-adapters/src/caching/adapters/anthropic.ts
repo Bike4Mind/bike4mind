@@ -151,12 +151,20 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     //    so the next occurrence is diagnosable rather than a bare ValidationException. This is
     //    the case the original incident hit and could not be accounted for from code reading, so
     //    it is logged loudly rather than assumed impossible.
-    // Always report the census, not only on the exceptional paths. The incident this cap was
-    // written for could not be explained from code reading - the known sources sum to four, not
-    // five - and a request is only diagnosable while it is still in hand. At debug level this is
-    // the record that identifies the unaccounted-for marker the first time it recurs.
+    // Report the census, not only the exceptional paths. The incident this cap was written for
+    // could not be explained from code reading - the known sources sum to four, not five - and a
+    // request is only diagnosable while it is still in hand.
+    //
+    // Level is deliberate: deployed stages do not emit `debug` at all, so a debug-only census
+    // would be invisible in exactly the environments that reproduce this. A request sitting at
+    // the ceiling is the interesting one, so that logs at `info`; quieter requests stay at
+    // `debug` rather than adding a line to every LLM call in the platform.
     const census = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-    if (logger) logger.debug('[PromptCache] cache_control census', census);
+    const nearCap = outbound.total >= MAX_CACHE_CONTROL_BLOCKS;
+    if (logger) {
+      if (nearCap) logger.info('[PromptCache] cache_control census at the ceiling', census);
+      else logger.debug('[PromptCache] cache_control census', census);
+    }
 
     if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
       const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); the provider will reject it`;
