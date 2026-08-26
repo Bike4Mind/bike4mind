@@ -5,6 +5,9 @@ type FabFileDoc = { _id: string; fileName: string; userId: string };
 const mockFind = vi.fn();
 const mockResetChunkState = vi.fn();
 const mockSend = vi.fn();
+const mockLakeFindById = vi.fn();
+const mockResolveScopedSetting = vi.fn();
+const mockGetSettingsValue = vi.fn();
 
 // requeueStragglers's own imports, stubbed to the minimum needed to import the module without
 // running any real DB/AWS logic - see the entrypoint guard in ingest-pdf-datalake.ts, which is
@@ -12,12 +15,12 @@ const mockSend = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   buildDataLakeMembershipFilter: () => ({}),
   connectDB: vi.fn(),
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args) },
   // Declared even though no test reaches the ingest path yet: the source imports it, and Vitest
   // throws on ACCESS of an undeclared export - so omitting it is a trap for whoever extends this
   // file to cover that path, not a saving.
   scopedSettingsRepository: {},
-  dataLakeRepository: {},
+  dataLakeRepository: { findById: (...args: unknown[]) => mockLakeFindById(...args) },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {
     resetChunkStateByIds: (...args: unknown[]) => mockResetChunkState(...args),
@@ -31,16 +34,29 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {},
   fabFilesService: {},
+  scopedSettingsService: {
+    resolveScopedSetting: (...args: unknown[]) => mockResolveScopedSetting(...args),
+    scopeForLake: (lake: { id?: string }) => ({ lakeId: lake.id }),
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(),
   getSettingsValue: vi.fn(),
 }));
-vi.mock('@bike4mind/common', () => ({
-  CONVERGENCE_ORIGIN: 'convergence',
-  DATA_LAKES: [],
-  KnowledgeType: { FILE: 'file' },
-}));
+// The provenance vocabulary and the halt rule are pulled REAL, not stubbed: a literal
+// `CONVERGENCE_ORIGIN` here would make the origin assertions below compare the mock to itself, so a
+// retuned constant would leave production sending a value `isConvergenceHalted` no longer matches
+// while this suite - the only one covering this producer - stayed green.
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
+    shouldHaltConvergence: actual.shouldHaltConvergence,
+    isConvergencePausedNote: actual.isConvergencePausedNote,
+    DATA_LAKES: [],
+    KnowledgeType: { FILE: 'file' },
+  };
+});
 vi.mock('sst', () => ({
   Resource: { fabFileChunkQueue: { url: 'https://sqs.test/fabFileChunkQueue' }, MONGODB_URI: { value: '' }, App: {} },
 }));
@@ -53,6 +69,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   }),
 }));
 
+import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
 import { requeueStragglers, type Options } from './ingest-pdf-datalake';
 import type { LakeTarget } from './ingestPlan';
 
@@ -87,6 +104,10 @@ beforeEach(() => {
   // Default: every selected file resets cleanly, so the canonical method hands back what it was given.
   mockResetChunkState.mockImplementation((ids: string[]) => Promise.resolve(ids));
   mockSend.mockResolvedValue({});
+  // Default: the kill switch is OFF at every rung, so the pre-check waves the run through.
+  mockLakeFindById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'u1' });
+  mockResolveScopedSetting.mockResolvedValue({ value: false, source: 'platform' });
+  mockGetSettingsValue.mockResolvedValue(false);
 });
 
 describe('requeueStragglers', () => {
@@ -117,7 +138,7 @@ describe('requeueStragglers', () => {
     await requeueStragglers(lake, baseOpts);
 
     const body = JSON.parse(mockSend.mock.calls[0][0].input.MessageBody);
-    expect(body).toEqual({ fabFileId: 'f1', userId: 'u1', origin: 'convergence', lakeId: 'lake-1' });
+    expect(body).toEqual({ fabFileId: 'f1', userId: 'u1', origin: CONVERGENCE_ORIGIN, lakeId: 'lake-1' });
   });
 
   // A static lake has no document to hang a Lake-scope override on; the platform switch still
@@ -128,7 +149,7 @@ describe('requeueStragglers', () => {
     await requeueStragglers({ ...lake, id: undefined }, baseOpts);
 
     const body = JSON.parse(mockSend.mock.calls[0][0].input.MessageBody);
-    expect(body).toEqual({ fabFileId: 'f1', userId: 'u1', origin: 'convergence' });
+    expect(body).toEqual({ fabFileId: 'f1', userId: 'u1', origin: CONVERGENCE_ORIGIN });
   });
 
   it('skips the enqueue for a file re-claimed between selection and the reset write', async () => {
@@ -162,8 +183,8 @@ describe('requeueStragglers', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
     const bodies = mockSend.mock.calls.map(([cmd]) => JSON.parse(cmd.input.MessageBody));
     expect(bodies).toEqual([
-      { fabFileId: 'f1', userId: 'u1', origin: 'convergence', lakeId: 'lake-1' },
-      { fabFileId: 'f2', userId: 'u2', origin: 'convergence', lakeId: 'lake-1' },
+      { fabFileId: 'f1', userId: 'u1', origin: CONVERGENCE_ORIGIN, lakeId: 'lake-1' },
+      { fabFileId: 'f2', userId: 'u2', origin: CONVERGENCE_ORIGIN, lakeId: 'lake-1' },
     ]);
   });
 
@@ -174,6 +195,62 @@ describe('requeueStragglers', () => {
 
     expect(mockResetChunkState).not.toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  // The consumer's halt arrives too late to be the only guard: by then the reset has already cleared
+  // the health rollups and the worker has stamped the paused note, which turns an invisible straggler
+  // into a `withheld` one and makes every search on the lake report partial results. Refusing up
+  // front is what keeps a paused lake byte-identical.
+  describe('the PauseLakeConvergence pre-check', () => {
+    it('refuses without reading, resetting or sending when the Lake-scope switch is ON', async () => {
+      mockResolveScopedSetting.mockResolvedValue({ value: true, source: 'lake' });
+
+      expect(await requeueStragglers(lake, baseOpts)).toBe(1);
+
+      expect(mockFind).not.toHaveBeenCalled();
+      expect(mockResetChunkState).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    // A static lake has no document to hang a Lake-scope override on, so the platform switch is the
+    // only rung - and it must still be honoured.
+    it('refuses on the platform switch for a lake with no document', async () => {
+      mockGetSettingsValue.mockResolvedValue(true);
+
+      expect(await requeueStragglers({ ...lake, id: undefined }, baseOpts)).toBe(1);
+
+      expect(mockResolveScopedSetting).not.toHaveBeenCalled();
+      expect(mockResetChunkState).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('refuses a dry run too, so --execute is not the thing being gated', async () => {
+      mockResolveScopedSetting.mockResolvedValue({ value: true, source: 'platform' });
+
+      expect(await requeueStragglers(lake, { ...baseOpts, execute: false })).toBe(1);
+
+      expect(mockFind).not.toHaveBeenCalled();
+    });
+
+    // Fail-soft, matching resolvePauseFlag's own contract: a settings outage must not strand a repair
+    // an operator is standing in front of.
+    it('proceeds when the pause read throws', async () => {
+      mockResolveScopedSetting.mockRejectedValue(new Error('settings unavailable'));
+      mockFind.mockReturnValue(findReturning([{ _id: 'f1', fileName: 'a.pdf', userId: 'u1' }]));
+
+      expect(await requeueStragglers(lake, baseOpts)).toBe(0);
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('proceeds when the switch is OFF', async () => {
+      mockFind.mockReturnValue(findReturning([{ _id: 'f1', fileName: 'a.pdf', userId: 'u1' }]));
+
+      expect(await requeueStragglers(lake, baseOpts)).toBe(0);
+
+      expect(mockResetChunkState).toHaveBeenCalledWith(['f1']);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('no stragglers found performs zero writes and zero sends', async () => {

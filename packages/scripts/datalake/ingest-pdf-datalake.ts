@@ -22,8 +22,9 @@
  *   --requeue-stragglers   re-enqueue complete-but-unchunked files (lost S3 events)
  *
  * --requeue-stragglers enqueues its work as background convergence work, so it is subject to the
- * `PauseLakeConvergence` kill switch: with that setting ON (platform or Lake scope) the files are
- * reset and marked paused by the chunk worker instead of re-chunked. Clear the switch first.
+ * `PauseLakeConvergence` kill switch: with that setting ON (platform or Lake scope) the run refuses
+ * before it touches anything, and the messages it does send are stamped haltable in case the switch
+ * is flipped on behind it. Clear the switch first.
  *
  * Usage (needs DB + AWS resources, provided by `sst shell`):
  *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/ingest-pdf-datalake.ts \
@@ -60,9 +61,15 @@ import {
   Organization,
   User,
 } from '@bike4mind/database';
-import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { CONVERGENCE_ORIGIN, DATA_LAKES, KnowledgeType } from '@bike4mind/common';
+import {
+  CONVERGENCE_ORIGIN,
+  DATA_LAKES,
+  KnowledgeType,
+  isConvergencePausedNote,
+  shouldHaltConvergence,
+} from '@bike4mind/common';
 import {
   filterPdfCandidates,
   planUploads,
@@ -202,24 +209,75 @@ async function statusReport(lake: LakeTarget): Promise<number> {
     console.log(`  STALE PENDING (lost S3 event): ${stalePendingCount} - re-run the ingest command to repair`);
   }
 
-  const stragglers = await FabFile.find(stragglerFilter(lake), 'fileName error')
+  // `notes` is projected so a file the chunk worker parked with CONVERGENCE_PAUSED_CHUNK_NOTE reads
+  // as paused rather than as an ordinary straggler - it still matches stragglerFilter (no `error`,
+  // still 0 chunks), so without the label an operator sees an unchanged list and no reason why.
+  const stragglers = await FabFile.find(stragglerFilter(lake), 'fileName error notes')
     .sort({ createdAt: 1 })
     .limit(20)
     .lean();
   const stragglerCount = await FabFile.countDocuments(stragglerFilter(lake));
   if (stragglerCount > 0) {
     console.log(`  STRAGGLERS (complete >2min ago, 0 chunks): ${stragglerCount}`);
-    for (const s of stragglers) console.log(`    - ${s.fileName} (${s._id})${s.error ? ` [failed: ${s.error}]` : ''}`);
+    for (const s of stragglers) {
+      const label = s.error
+        ? ` [failed: ${s.error}]`
+        : isConvergencePausedNote(s.notes)
+          ? ' [paused by the convergence kill switch]'
+          : '';
+      console.log(`    - ${s.fileName} (${s._id})${label}`);
+    }
     if (stragglerCount > stragglers.length) console.log(`    ... and ${stragglerCount - stragglers.length} more`);
     console.log('  Re-enqueue the non-failed ones with --requeue-stragglers --execute');
-    console.log('    (halted while the PauseLakeConvergence setting is ON - clear it first)');
+    console.log('    (refused while the PauseLakeConvergence setting is ON - clear it first)');
   } else {
     console.log('  stragglers:       none');
   }
   return 0;
 }
 
+/**
+ * The effective `PauseLakeConvergence` flag for this lake: the platform switch folded with any
+ * Lake-scope override (narrower rung wins). Mirrors `resolvePauseFlag` in
+ * apps/client/server/queueHandlers/convergenceKillSwitch.ts and MUST stay in sync with it - the
+ * enforcement path itself lives under apps/client, which packages/scripts cannot import, so only the
+ * settings read is duplicated: the halt DECISION stays shared (`shouldHaltConvergence`) and the
+ * setting key is checked against common's registry by the `SettingKey` type. Fails soft to "not
+ * paused" for the same reason the handler's read does: a settings outage must not strand a repair.
+ */
+async function isLakeConvergencePaused(lake: LakeTarget): Promise<boolean> {
+  try {
+    const lakeDoc = lake.id ? await dataLakeRepository.findById(lake.id) : null;
+    if (lakeDoc) {
+      const { value } = await scopedSettingsService.resolveScopedSetting(
+        'PauseLakeConvergence',
+        scopedSettingsService.scopeForLake(lakeDoc),
+        { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository }
+      );
+      return value === true;
+    }
+    return (await adminSettingsRepository.getSettingsValue('PauseLakeConvergence')) === true;
+  } catch (err) {
+    console.warn('PauseLakeConvergence read failed; treating as not paused:', err);
+    return false;
+  }
+}
+
 export async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
+  // Refuse BEFORE touching anything, the same argument as the pre-check in
+  // pages/api/data-lakes/[id]/converge.ts: the consumer's halt only fires once the message is off the
+  // queue, by which point resetChunkStateByIds has cleared the counts and all four health rollups and
+  // the chunk worker has stamped CONVERGENCE_PAUSED_CHUNK_NOTE. That flips a straggler from silently
+  // invisible to `withheld`, so every search on the lake reports partial results naming files that
+  // had no passages to contribute - and with the switch still on, nothing is scheduled to clear it.
+  if (shouldHaltConvergence(CONVERGENCE_ORIGIN, await isLakeConvergencePaused(lake))) {
+    console.log(
+      `Refusing to re-enqueue: background lake work is paused for "${lake.slug}" ` +
+        '(PauseLakeConvergence is ON at the platform or Lake scope). Clear the switch first.'
+    );
+    return 1;
+  }
+
   // Exclude files the pipeline already marked failed (markFailedIfNotAlready sets `error`):
   // SQS retried them 3x before DLQ, so blind re-enqueueing only churns slots. `$in` also
   // matches a missing field. Failed files stay visible in --status for manual triage.
@@ -261,10 +319,10 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
           userId: String(f.userId),
           // Stamps this wave as background convergence work so the kill switch can halt it
           // (fabFileChunk.ts's isConvergenceHalted). An unstamped message defaults to `user` and is
-          // never haltable, which silently exempted this bulk path from a set switch. The halt is
-          // enforced at the CONSUMER: with the switch ON these files are marked paused rather than
-          // re-chunked. `lakeId` only when the lake has one (static lakes have no doc), so a
-          // Lake-scope pause override applies where it can.
+          // never haltable, which silently exempted this bulk path from a set switch. The pre-check
+          // above is what keeps a paused lake untouched; this stamp is the backstop for a switch
+          // flipped ON while the wave is still on the queue. `lakeId` only when the lake has one
+          // (static lakes have no doc), so a Lake-scope pause override applies where it can.
           origin: CONVERGENCE_ORIGIN,
           ...(lake.id ? { lakeId: lake.id } : {}),
         }),
