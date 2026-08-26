@@ -37,7 +37,9 @@ describe('Artifact isPublic virtual', () => {
     const doc = await Artifact.findOne({ id: 'artifact_1_no_permissions' });
 
     expect(() => doc!.toJSON()).not.toThrow();
-    expect((doc!.toJSON() as { isPublic?: boolean }).isPublic).toBeFalsy();
+    // Explicitly `false`, not undefined: undefined JSON-serializes as a MISSING key, so a consumer
+    // doing `artifact.isPublic === false` would get a different answer than before the guard.
+    expect((doc!.toJSON() as { isPublic?: boolean }).isPublic).toBe(false);
   });
 
   it('still reports a public artifact as public', async () => {

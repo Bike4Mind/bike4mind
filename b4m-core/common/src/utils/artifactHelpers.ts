@@ -8,7 +8,10 @@ export function isArtifact(obj: unknown): obj is BaseArtifact {
 }
 
 export function isPublicArtifact(artifact: BaseArtifact): boolean {
-  return artifact.visibility === 'public' || artifact.permissions.isPublic;
+  // `permissions` has no schema default, so a stored artifact can lack it entirely. These run on
+  // the ACCESS-CHECK path, so an unguarded dereference throws where the answer should be "no".
+  // Must stay in sync with the isPublic virtual in packages/database ArtifactModel.
+  return artifact.visibility === 'public' || artifact.permissions?.isPublic === true;
 }
 
 export function isDraftArtifact(artifact: BaseArtifact): boolean {
@@ -36,19 +39,19 @@ export function calculateContentSize(content: string): number {
 export function canUserReadArtifact(artifact: BaseArtifact, userId: string): boolean {
   if (isPublicArtifact(artifact)) return true;
   if (artifact.userId === userId) return true;
-  if (artifact.permissions.canRead.includes(userId)) return true;
+  if (artifact.permissions?.canRead?.includes(userId)) return true;
   return false;
 }
 
 export function canUserWriteArtifact(artifact: BaseArtifact, userId: string): boolean {
   if (artifact.userId === userId) return true;
-  if (artifact.permissions.canWrite.includes(userId)) return true;
+  if (artifact.permissions?.canWrite?.includes(userId)) return true;
   return false;
 }
 
 export function canUserDeleteArtifact(artifact: BaseArtifact, userId: string): boolean {
   if (artifact.userId === userId) return true;
-  if (artifact.permissions.canDelete.includes(userId)) return true;
+  if (artifact.permissions?.canDelete?.includes(userId)) return true;
   return false;
 }
 
