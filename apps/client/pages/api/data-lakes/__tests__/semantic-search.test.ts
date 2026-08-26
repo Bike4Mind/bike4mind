@@ -14,6 +14,7 @@ const {
   mockGetSettingsMap,
   mockRecordOperationalUsage,
   mockRecordLakeAccessEvent,
+  mockCountTokens,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -27,6 +28,7 @@ const {
   mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
   mockRecordOperationalUsage: vi.fn(),
   mockRecordLakeAccessEvent: vi.fn().mockResolvedValue(undefined),
+  mockCountTokens: vi.fn(async () => 3),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -51,7 +53,7 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   getProviderFromModel: mockGetProviderFromModel,
 }));
 vi.mock('@bike4mind/utils', () => ({
-  createTokenizer: () => ({ countTokens: vi.fn(async () => 3) }),
+  createTokenizer: () => ({ countTokens: mockCountTokens }),
   getSettingsByNames: vi.fn(),
   getSettingsMap: mockGetSettingsMap,
   // Real lookup semantics over whatever map getSettingsMap returned - the billing gate is a
@@ -127,9 +129,12 @@ vi.mock('@bike4mind/services', async () => ({
     }),
   },
   recordOperationalUsage: mockRecordOperationalUsage,
+  // Real per-member cap predicate - it is the shared billing decision under test, so a
+  // reimplementation here would prove nothing.
+  creditService: await import('../../../../../../b4m-core/services/src/creditService/memberCreditCap'),
 }));
 
-import { BedrockEmbeddingModel, getQuestErrorCode, ModelBackend } from '@bike4mind/common';
+import { BedrockEmbeddingModel, getQuestErrorCode, ModelBackend, OllamaEmbeddingModel } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
@@ -920,7 +925,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
-    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsMap.mockResolvedValue(BILLING_ON);
@@ -1007,5 +1012,41 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
 
     expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
     expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse a zero-cost embedder to a caller with no credits', async () => {
+    // Ollama models are priced at exactly 0, so they settle 0 credits; gating on
+    // usdToCredits' 1-credit floor would refuse a search that costs the operator nothing.
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    await handler(makeReq({ query: 'onboarding', embedding_model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refuse a zero-cost embedder to a member already at their cap', async () => {
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({
+      id: 'org1',
+      currentCredits: 0,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'u1', usedCredits: 500 }],
+    });
+
+    await handler(makeReq({ query: 'onboarding', embedding_model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('searches on the length estimate when the tokenizer fails, rather than 500ing', async () => {
+    mockCountTokens.mockRejectedValueOnce(new Error('tiktoken encoder unavailable'));
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
   });
 });

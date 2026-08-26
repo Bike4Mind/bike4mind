@@ -14,7 +14,7 @@ import {
   userRepository,
   lakeAccessEventRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
@@ -320,20 +320,24 @@ const handler = baseApi()
         req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
       }
 
-      if (shouldBill && billingUser) {
+      // Gate on the USD cost, not on usdToCredits' 1-credit floor: a zero-cost embedder
+      // (Ollama runs on the operator's own hardware) and any model missing from the price
+      // table both settle 0 credits, so there is nothing to be eligible for - flooring first
+      // would turn a free search into a 422. See the pricing-table contract in
+      // b4m-core/common/src/schemas/embedding.ts.
+      const embeddingCostUsd = getEmbeddingModelCost(embedding_model, queryTokens);
+
+      if (shouldBill && billingUser && embeddingCostUsd > 0) {
         // Deterministic round-up, never the stochastic settlement rounding: eligibility must
         // not turn on a coin flip.
-        const requiredCredits = usdToCredits(getEmbeddingModelCost(embedding_model, queryTokens));
+        const requiredCredits = usdToCredits(embeddingCostUsd);
 
         // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
         // rejected even when the org pool is flush.
-        if (billingOrg?.maxCreditsPerMember != null) {
-          const usedCredits = billingOrg.userDetails?.find(member => member.id === req.user.id)?.usedCredits ?? 0;
-          if (usedCredits + requiredCredits > billingOrg.maxCreditsPerMember) {
-            throw insufficientCreditsError(
-              'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
-            );
-          }
+        if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, req.user.id, requiredCredits)) {
+          throw insufficientCreditsError(
+            'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
+          );
         }
 
         const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
