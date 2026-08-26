@@ -179,15 +179,24 @@ async function main() {
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
+    // Per-send catch so one throttled or unroutable send costs only itself: this is the last pass of
+    // a scheduled task, so an escaping rejection would abandon every candidate behind it AND fail the
+    // whole tick. Logged count is what was actually sent.
+    let strandedSent = 0;
     for (const file of stranded) {
-      await sendToQueue(Resource.fabFileChunkQueue.url, {
-        fabFileId: String(file._id),
-        userId: String(file.userId),
-        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
-      });
+      try {
+        await sendToQueue(Resource.fabFileChunkQueue.url, {
+          fabFileId: String(file._id),
+          userId: String(file.userId),
+          ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
+        });
+        strandedSent += 1;
+      } catch (err) {
+        bootLogger.error(`[fabFileChunkScan] stranded-vectorize re-enqueue failed for ${file._id}: ${err}`);
+      }
     }
-    if (stranded.length > 0) {
-      bootLogger.info(`[fabFileChunkScan] re-enqueued ${stranded.length} file(s) with a stranded vectorize hand-off`);
+    if (strandedSent > 0) {
+      bootLogger.info(`[fabFileChunkScan] re-enqueued ${strandedSent} file(s) with a stranded vectorize hand-off`);
     }
   });
 

@@ -146,10 +146,17 @@ export const VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS = 15 * 60_000;
  * chunked, and this only finishes handing off work that was already chunked.
  */
 export const buildStrandedVectorizeScanFilter = (cutoff: Date) => ({
-  // $type is load-bearing, not decoration: the field defaults to null, and BSON type ordering puts
-  // null BELOW a Date, so a bare `$lt: cutoff` would select every never-failed file in the
-  // collection. It also matches the partial index's own predicate (FabFileModel.ts).
+  // $type is load-bearing, not decoration, but not for narrowing: `$lt` is type-bracketed, so a bare
+  // `$lt: cutoff` already excludes the null default and a missing field. $type is here because it
+  // matches the partial index's own predicate (FabFileModel.ts) and is therefore what lets the
+  // planner use that index - drop it and this sweep becomes a full scan of the largest collection in
+  // the system. The IXSCAN assertion in fabFileVectorizeStranded.test.ts is what holds that.
   vectorizeEnqueueFailedAt: { $type: 'date', $lt: cutoff },
+  // Redundant against the marker in practice, but it makes this sweep's domain disjoint from
+  // buildFabFileChunkScanFilter's (which requires chunkCount: 0) by construction rather than by
+  // whichever writer happens to have cleared the marker: an un-chunked file is the other sweep's
+  // business whatever stamps it carries.
+  chunked: true,
   isChunking: { $ne: true },
   deletedAt: null,
 });

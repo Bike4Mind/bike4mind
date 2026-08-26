@@ -286,6 +286,31 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(1);
     });
 
+    it('a failed send costs only itself: the candidates behind it still go out', async () => {
+      // A recovery sweep runs precisely when the queue is under the stress that makes a transient
+      // send failure likely, so a rejection escaping the loop would abandon every file behind it and
+      // report zero. The reported count is what was SENT, so a partial tick is visible in the log.
+      h.getSettingsValue.mockResolvedValue(false);
+      routeFind(
+        [],
+        [
+          { _id: 'ff1', userId: 'u1' },
+          { _id: 'ff2', userId: 'u2' },
+          { _id: 'ff3', userId: 'u3' },
+        ]
+      );
+      h.sendToQueue.mockRejectedValueOnce(new Error('throttled'));
+
+      const res = await handler();
+
+      expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+      expect(h.sendToQueue).toHaveBeenLastCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff3',
+        userId: 'u3',
+      });
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(2);
+    });
+
     it('tags a stranded lake file as convergence work so the kill switch can halt it', async () => {
       h.getSettingsValue.mockResolvedValue(false);
       routeFind([], [{ _id: 'ff9', userId: 'u9', batchId: 'batch-9' }]);

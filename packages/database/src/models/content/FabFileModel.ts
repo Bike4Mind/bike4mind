@@ -1535,6 +1535,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 vectorizedChunkCount: 0,
                 notes: '',
                 error: null,
+                // Same rule as `error` above, for the marker the stranded-vectorize sweep selects
+                // on (buildStrandedVectorizeScanFilter). A file that stranded and is now being
+                // re-chunked has no chunks left for that sweep to rescue, and the only other place
+                // the marker is cleared is the resume path - which is reachable only for an
+                // already-chunked file. Leaving it set would have the sweep re-enqueue this file on
+                // every pass until it finishes chunking again, duplicating the wave's own send and
+                // spending a CHUNK_RESCUE_MAX_PER_RUN slot each time.
+                vectorizeEnqueueFailedAt: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today

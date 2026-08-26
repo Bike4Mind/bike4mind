@@ -216,6 +216,18 @@ async function clearStrandedMarkers(fabFileId: string, ownsError: boolean, logge
  *
  * The chunks were sized against the model they were chunked under, so that model (not the current
  * default, which may have changed since) is what their embeddings must be generated with.
+ *
+ * Deliberately NOT gated on `wasStranded`: any redelivery for an already-chunked file resumes, not
+ * only one carrying a marker. That is a chosen trade-off, not an accident of where `wasStranded` is
+ * read. Gating would be cheaper - an ordinary at-least-once duplicate arriving while the first
+ * fan-out is still in flight re-embeds the chunks that have not landed a vector yet, and the
+ * vectorize handler's idempotency guard is file-level, so a PARTIALLY vectorized file does not
+ * short-circuit it: that is metered spend, not just wasted work. It loses to the other side. Both
+ * marker writes are best-effort (see recordVectorizeEnqueueFailure and clearStrandedMarkers), so a
+ * file whose stamp AND error write both failed carries no marker at all, is invisible to the rescue
+ * sweep, and an ungated resume is the only thing that still recovers it - which is exactly the
+ * permanently-unreachable state this whole path exists to eliminate. Bounded duplicate spend on a
+ * healthy file is the cheaper failure.
  */
 async function resumeVectorizeEnqueue(
   event: SQSEvent,

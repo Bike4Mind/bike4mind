@@ -94,14 +94,25 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
+  // Per-send catch, not a bare sequential loop: one throttled or unroutable send must cost only
+  // itself, not abandon every candidate behind it (the same lesson driveLakeResyncPoll learned). A
+  // recovery sweep is the worst place for that, since it runs precisely when the queue is under the
+  // stress that makes a transient send failure likely. Returns the SENT count so a partially-failing
+  // tick is distinguishable from a clean one in the log.
+  let sent = 0;
   for (const file of candidates) {
-    await sendToQueue(Resource.fabFileChunkQueue.url, {
-      fabFileId: String(file._id),
-      userId: String(file.userId),
-      ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
-    });
+    try {
+      await sendToQueue(Resource.fabFileChunkQueue.url, {
+        fabFileId: String(file._id),
+        userId: String(file.userId),
+        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
+      });
+      sent += 1;
+    } catch (err) {
+      logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue send failed for ${file._id}: ${err}`);
+    }
   }
-  return candidates.length;
+  return sent;
 }
 
 /**

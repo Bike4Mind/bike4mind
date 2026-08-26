@@ -23,11 +23,12 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
       return value !== ne;
     }
     if (cond && typeof cond === 'object' && '$lt' in cond) {
-      // Mirror Mongo: null/missing sorts below a Date, so a $lt WOULD match it without a $type
-      // guard alongside it.
-      if ('$type' in cond && (cond as { $type: string }).$type === 'date' && !(value instanceof Date)) return false;
-      if (!('$type' in cond) && !(value instanceof Date)) return true;
-      return (value as Date) < (cond as { $lt: Date }).$lt;
+      // Mirror Mongo's type bracketing: `$lt` against a Date matches Dates only, so a null or
+      // missing field is out of range with or without a `$type` guard. (BSON type ordering governs
+      // sorting, not comparison-operator matching - which is why the chunkClaimedAt:null backfill
+      // arm in buildFabFileChunkScanFilter has to be spelled out separately.)
+      if (!(value instanceof Date)) return false;
+      return value < (cond as { $lt: Date }).$lt;
     }
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
     if (cond && typeof cond === 'object' && '$not' in cond)
@@ -212,7 +213,7 @@ describe('buildStrandedVectorizeScanFilter', () => {
     expect(matches(doc, filter)).toBe(false);
   });
 
-  it('skips a file whose stamp is the schema default null (BSON null sorts below a Date)', () => {
+  it('skips a file whose stamp is the schema default null ($lt is type-bracketed)', () => {
     const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: null, isChunking: false, deletedAt: null };
     expect(matches(doc, filter)).toBe(false);
   });
@@ -229,6 +230,14 @@ describe('buildStrandedVectorizeScanFilter', () => {
 
   it('skips a deleted file', () => {
     const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: new Date() };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file that was re-chunked, whose reset cleared chunked and the stamp with it', () => {
+    // resetChunkStateByIds clears vectorizeEnqueueFailedAt, so this shape should not occur - the
+    // `chunked: true` clause is what makes the two sweeps' domains disjoint by construction rather
+    // than by whichever writer cleared the marker. An un-chunked file is the other sweep's business.
+    const doc = { chunked: false, chunkCount: 0, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: null };
     expect(matches(doc, filter)).toBe(false);
   });
 
