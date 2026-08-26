@@ -3,6 +3,7 @@ import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { ApiKeyScope, redactPromptMetaForViewer } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
+import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import type { Request } from 'express';
 
 // Reading a quest is the documented poll step after POST /api/chat, so an AI
@@ -32,7 +33,7 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
-  const userHasAccess = session.userId === userId || session.users?.some(userShare => userShare.userId === userId);
+  const userHasAccess = isSessionOwnedByUser(session, userId);
 
   if (!userHasAccess) {
     throw new NotFoundError('Quest not found');

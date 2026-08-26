@@ -1,8 +1,26 @@
 import { IFeedbackDocument, FeedbackStatus } from '@bike4mind/common';
 
-// Extended feedback document with MongoDB _id field
+// Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
+// hydrateFeedbackText join - true when content was submitted but has since aged out under the
+// 90-day TTL, distinct from a report that never had content at all (both render `content` as
+// undefined, so the UI needs this flag to tell them apart). `contentTruncated` is true when the
+// original submission was cut at FEEDBACK_CONTENT_MAX_CHARS - without surfacing it, a truncated
+// report reads back identically to a short one.
 export interface IExtendedFeedbackDocument extends IFeedbackDocument {
   _id: string;
+  contentExpired?: boolean;
+  contentTruncated?: boolean;
+}
+
+/** Renders the same expired/never-had-content distinction everywhere a feedback item's content
+ * is displayed - `fallback` covers the "never had content" case, since callers want different
+ * copy for it (a blank CSV cell vs. a "No content" toast). */
+export function getFeedbackDisplayContent(
+  feedbackItem: Pick<IExtendedFeedbackDocument, 'content' | 'contentExpired'> | undefined,
+  fallback: string
+): string {
+  if (!feedbackItem) return fallback;
+  return feedbackItem.content ?? (feedbackItem.contentExpired ? '[content expired]' : fallback);
 }
 
 export interface FeedbackFilters {
