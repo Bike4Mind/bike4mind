@@ -394,6 +394,13 @@ export class NotebookExportService {
     // `session.artifactIds` is a client-supplied `z.array(z.string())` that `updateSession` writes
     // through unvalidated, so an id arriving here is not necessarily the caller's. Reachable only
     // since this query started resolving rows - before that it threw and returned nothing.
+    //
+    // Two consequences that are visible rather than hidden, both deliberate: neither this clause
+    // nor `canUserAccessArtifact` honours `visibility: 'project' | 'organization'`, so an
+    // org-shared artifact drops out of an export - this makes export exactly as strict as
+    // `GET /artifacts/:id` and no stricter, which is the right default but is a change. And in a
+    // collaborative session an artifact owned by another participant now leaves the owner's
+    // export. Widen both together with the normal read path, never here alone.
     const artifacts = await this.adapters.artifactRepository.find({
       id: { $in: artifactIds },
       deletedAt: null,
