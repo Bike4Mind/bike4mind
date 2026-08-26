@@ -5,6 +5,7 @@ import { CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mi
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
 type Doc = Record<string, unknown>;
+const MODELLED_OPERATORS = new Set(['$ne', '$lt', '$not', '$in', '$nin']);
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
     if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
@@ -25,7 +26,11 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
         // legacy row. Other `$ne` values (e.g. `isChunking: {$ne: true}`) do match a missing field.
         checks.push(ne === null ? value !== null && value !== undefined : value !== ne);
       }
-      if ('$lt' in ops) checks.push((value as Date) < (ops.$lt as Date));
+      // Type-bracketed, like Mongo: a comparison only ever matches a value of the SAME BSON type, so
+      // a missing field or a wrong-typed one never matches `$lt: <Date>`. Written as a JS `<` it
+      // would coerce instead, agreeing with Mongo by luck on the fixtures here and diverging on any
+      // fixture that ever carries a non-Date.
+      if ('$lt' in ops) checks.push(value instanceof Date && ops.$lt instanceof Date && value < ops.$lt);
       if ('$not' in ops) checks.push(!matches({ [key]: value }, { [key]: ops.$not }));
       // Mongo $in with null also matches a missing field.
       if ('$in' in ops)
@@ -37,6 +42,14 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
         checks.push(
           !(ops.$nin as unknown[]).some(v => (v === null ? value === null || value === undefined : value === v))
         );
+      // Loud on drift. An operator this model does not implement used to fall through to the
+      // `value === cond` below, which is false for any object - so a filter that grew a new operator
+      // would keep every `toBe(false)` assertion passing while asserting nothing, and the
+      // `toBe(true)` ones would fail somewhere unrelated. Throwing names the gap instead.
+      const unmodelled = Object.keys(ops).filter(k => k.startsWith('$') && !MODELLED_OPERATORS.has(k));
+      if (unmodelled.length > 0) {
+        throw new Error(`chunkScan.test matches(): unmodelled Mongo operator(s) ${unmodelled.join(', ')} on '${key}'`);
+      }
       if (checks.length > 0) return checks.every(Boolean);
     }
     return value === cond;
@@ -264,8 +277,11 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
   it('RESCUES an isChunking:true claim with no timestamp - the backfill for files stuck before chunkClaimedAt existed', () => {
     // Every code path that sets isChunking:true now stamps chunkClaimedAt in the same write, so a
     // null/missing stamp on an in-flight file can only be a pre-migration straggler - which would
-    // otherwise stay claimed and unrescuable forever. The sweep re-claims it via a CAS before
-    // enqueue, so a still-running (not crashed) file isn't double-processed.
+    // otherwise stay claimed and unrescuable forever. Note what protects a straggler that is in fact
+    // still running: NOT a producer-side claim - the sweep does not re-claim before enqueue, it sends
+    // exactly what this filter selected. The mutual exclusion is the chunk worker's own
+    // compare-and-set (fabFileChunk.ts), which the duplicate delivery loses, returning without
+    // re-chunking.
     expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
     expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
   });

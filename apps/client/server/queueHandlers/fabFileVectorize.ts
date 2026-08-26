@@ -67,7 +67,10 @@ const VectorizePayload = z.object({
  * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed;
  * this note makes the abandoned set enumerable (query the prefix) and signals a reprocess is needed.
  * `POST /api/files/reprocess` clears it as part of its `notes` reset. Distinct from
- * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which excludes a file from the chunk-rescue sweep; this does not.
+ * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which is terminal and excludes a file from the chunk-rescue sweep
+ * unconditionally: this marker excludes it only while the kill switch is ON (#2120). That
+ * conditionality is what makes the sweep the marker's automatic exit once the switch goes off, rather
+ * than a permanent exclusion - see buildFabFileChunkScanFilter.
  */
 // Re-exported, not defined here: the lake-health evaluator in b4m-core reads this marker to tell a
 // permanently-stalled file from one still indexing, and b4m-core cannot import from apps/client.
