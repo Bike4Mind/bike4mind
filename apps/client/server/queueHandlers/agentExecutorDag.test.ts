@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { IDagSpec, AgentExecutionStatus } from '@bike4mind/database';
 
 vi.mock('sst', () => ({
@@ -505,5 +507,29 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
   it('passes an explicit opt-in through unchanged', async () => {
     await createNodeWith(true);
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: true }));
+  });
+});
+
+/**
+ * Static-analysis guard on the PRODUCER hops, not the dispatcher.
+ *
+ * The cases above lock what `makeDagDispatcher` does with the `enableArtifacts` it is handed. What
+ * hands it over lives in `processExecution`, which has no test harness (same situation as
+ * `agentExecutor.resolveQuestId.test.ts`, and the same string-parsing answer): delete the key from
+ * the `nodeDefaults` literal, or the `inheritedArtifactFields` spread from the subagent `create`
+ * payload, and every unit test in this directory stays green while a caller's opt-out silently stops
+ * crossing the dispatch boundary - the PR's headline design claim.
+ */
+describe('artifact opt-out producer hops in agentExecutor', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('stamps the caller intent onto the DAG nodeDefaults', () => {
+    const call = source.match(/makeDagDispatcher\(\{[\s\S]*?\n {4}\}\);/);
+    expect(call, 'makeDagDispatcher call site not found in agentExecutor.ts').not.toBeNull();
+    expect(call![0]).toContain('enableArtifacts: callerEnableArtifacts');
+  });
+
+  it('spreads the inherited fields into the subagent create payload', () => {
+    expect(source).toContain('...inheritedArtifactFields(callerEnableArtifacts)');
   });
 });

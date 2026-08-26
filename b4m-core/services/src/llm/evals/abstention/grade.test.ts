@@ -70,6 +70,16 @@ describe('detectCoverageClaims', () => {
     expect(detectCoverageClaims('I was not able to consult the library, so there are no records I can cite.')).toEqual([
       'couldNotConsult',
     ]);
+    // Contractions: `(?:could|can)` eats `can`, so `can't` needs its own branch. Both apostrophes,
+    // since a model emits either - and both directions of the miss are live (see the two cases below).
+    for (const reply of [
+      "I can't access the curated library for this.",
+      'I can\u2019t consult the curated library.',
+      "I couldn't access the curated library for this.",
+      'I couldn\u2019t access the curated library.',
+    ]) {
+      expect(detectCoverageClaims(reply), reply).toContain('couldNotConsult');
+    }
   });
 });
 
@@ -85,6 +95,16 @@ describe('gradeMustNotMentionCoverage', () => {
     expect(result.passed).toBe(false);
     expect(result.reason).toContain('couldNotConsult');
   });
+
+  it('fails the same apology when the model contracts', () => {
+    // The false PASS the contraction gap produced: the exact failure this eval was built to catch,
+    // scoring clean whenever the model writes `can't` instead of `could not`.
+    const result = gradeMustNotMentionCoverage(
+      "You're welcome! Note that I can't access the curated library for this."
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain('couldNotConsult');
+  });
 });
 
 describe('gradeMustHedge', () => {
@@ -93,6 +113,8 @@ describe('gradeMustHedge', () => {
       true
     );
     expect(gradeMustHedge('Rotate passwords every 90 days.', 'unavailable').passed).toBe(false);
+    // The false FAIL the same gap produced, on the finding the README calls the one that matters most.
+    expect(gradeMustHedge("I can't consult the curated library for this question.", 'unavailable').passed).toBe(true);
   });
 
   it('fails an unavailable turn that reports the outage as absent coverage', () => {

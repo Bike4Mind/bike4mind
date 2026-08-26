@@ -54,7 +54,14 @@ async function complete(config: AbstentionEvalConfig, evalCase: AbstentionCase):
     throw new Error(`${config.model}: ${response.status} ${await response.text()}`);
   }
   const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-  return body.choices?.[0]?.message?.content ?? '';
+  const content = body.choices?.[0]?.message?.content;
+  // Not `?? ''`: an empty reply makes every `mustNotMentionCoverage` case pass vacuously, so a 200
+  // whose text lives somewhere else (a `tool_calls` reply, a reasoning model) would report most of
+  // the suite clean having measured nothing.
+  if (typeof content !== 'string' || content.length === 0) {
+    throw new Error(`${config.model}: response carried no message content: ${JSON.stringify(body).slice(0, 400)}`);
+  }
+  return content;
 }
 
 function grade(evalCase: AbstentionCase, reply: string): GradeResult {

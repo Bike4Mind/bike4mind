@@ -15,8 +15,8 @@ export type CoverageClaim = 'notCovered' | 'searchedNothingFound' | 'couldNotCon
  * material. Unambiguous: a claim about the corpus whatever else the sentence says.
  */
 const CORPUS_ABSENCE: RegExp[] = [
-  /\b(?:does|do|did)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:seem\s+to\s+)?(?:cover|contain|include|mention|address)\b/i,
-  /\b(?:is|are)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:covered|documented|in\s+the\s+(?:library|knowledge\s*base))\b/i,
+  /\b(?:does|do|did)(?:n[o'\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:seem\s+to\s+)?(?:cover|contain|include|mention|address)\b/i,
+  /\b(?:is|are)(?:n[o'\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:covered|documented|in\s+the\s+(?:library|knowledge\s*base))\b/i,
 ];
 
 /**
@@ -48,7 +48,9 @@ const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {
   ],
   // "the library could not be consulted / is unavailable" - the honest `unavailable` wording.
   couldNotConsult: [
-    /\b(?:could|can)(?:n[o']t|\s+n[o']t|\s+not)\s+(?:be\s+)?(?:consult|search|access|reach|read)(?:ed)?\b/i,
+    // The bare-apostrophe branch is `can't` only: `(?:could|can)` consumes `can`, leaving `'t`, which
+    // no `n...t` branch can match. Both apostrophes, because a model emits either.
+    /\b(?:could|can)(?:n[o'\u2019]t|['\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:be\s+)?(?:consult|search|access|reach|read)(?:ed)?\b/i,
     /\b(?:library|knowledge\s*base|documents?)\b[^.!?]{0,40}\b(?:unavailable|inaccessible)\b/i,
     /\b(?:unable|not\s+able)\s+to\s+(?:consult|search|access|reach)\b/i,
   ],

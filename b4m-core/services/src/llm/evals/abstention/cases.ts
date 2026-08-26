@@ -114,7 +114,7 @@ export const ABSTENTION_CASES: AbstentionCase[] = [
     message: 'What does our security policy say about password rotation?',
     expectation: {
       kind: 'mustHedge',
-      why: 'The whole accessible library was searched. Only here is a flat "not covered" honest - and the answer must still not invent the policy.',
+      why: 'The whole accessible library was searched. Only here is a flat "not covered" honest.',
     },
   },
 ];

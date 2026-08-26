@@ -773,6 +773,13 @@ async function processExecution(
       });
     }
 
+    // One precedence rule for the caller's artifact intent across every consumer in this function:
+    // start payload first, persisted doc second, the same order `resolveAgentArtifactGate` reads
+    // them in below. Both channels are written from the same command object in `agentExecute`, so
+    // they cannot disagree today - hoisted so they still cannot if that doc write ever becomes
+    // optimistic.
+    const callerEnableArtifacts = startPayload?.enableArtifacts ?? execution.enableArtifacts;
+
     // Get API keys and LLM backend
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(execution.userId, {
       db: {
@@ -1083,7 +1090,7 @@ async function processExecution(
           //
           // `enableArtifacts` is the deliberate exception - see `inheritedArtifactFields` for why an
           // opt-OUT has to cross the dispatch boundary when a grant does not.
-          ...inheritedArtifactFields(execution.enableArtifacts),
+          ...inheritedArtifactFields(callerEnableArtifacts),
         };
 
         // Three execution modes mapped to schema state:
@@ -1280,7 +1287,7 @@ async function processExecution(
         // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
         linkedQuestId: execution.linkedQuestId,
         spawnedByExecutionId: executionId,
-        enableArtifacts: execution.enableArtifacts,
+        enableArtifacts: callerEnableArtifacts,
       },
       logger,
     });
