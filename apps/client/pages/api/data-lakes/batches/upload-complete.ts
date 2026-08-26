@@ -15,9 +15,16 @@ import { z } from 'zod';
  */
 const MAX_FAILED_FILE_IDS = 10000;
 
-/** A 24-char hex Mongo ObjectId string. Unvalidated, one malformed id made the id-scoped read throw
- * a Mongoose CastError, which errorHandler renders as a 404 - a batch left non-terminal, and logged
- * at warn so it never alerted. */
+/**
+ * A 24-char hex Mongo ObjectId string. Unvalidated, one malformed id made the id-scoped read throw a
+ * Mongoose CastError, which errorHandler renders as a 404 - logged at warn, so it never alerted.
+ *
+ * Applied as a FILTER in the handler, not as a schema refinement. Rejecting is the same failure
+ * class as the length cap: a ZodError from the parse on the first line skips the cleanup, the tally,
+ * the status flip and finalize, so one bad id hangs a batch the client never hears about. Filtering
+ * keeps the reason the shape check exists - no unvalidated string reaches the query - without
+ * spending terminality to get it.
+ */
 const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
 
 const UploadCompleteInput = z.object({
@@ -31,10 +38,11 @@ const UploadCompleteInput = z.object({
   // fully-failed append and hang the very batch this route terminalizes.
   failedFileNames: z.array(z.string()).optional(),
   // FabFile ids the failed uploads left behind (created at presign, 0 chunks, no S3
-  // object). Removed here so they don't inflate the lake's file count. Shape-validated so a
-  // malformed id is a 422 from this parse rather than a 404 from the cleanup read. Length is
-  // clamped in the handler rather than bounded here, so an oversized list still finalizes.
-  failedFileIds: z.array(z.string().regex(OBJECT_ID_RE, 'failedFileIds must be 24-character hex ids')).optional(),
+  // object). Removed here so they don't inflate the lake's file count. Deliberately unconstrained
+  // here: both the shape check and the length bound are applied in the handler as a filter and a
+  // clamp, so a malformed or oversized list still tallies and finalizes instead of 422ing the batch
+  // into a three-hour hang. See OBJECT_ID_RE and MAX_FAILED_FILE_IDS.
+  failedFileIds: z.array(z.string()).optional(),
 });
 
 /**
@@ -70,16 +78,35 @@ const handler = baseApi()
     // One scoped updateMany rather than two queries per id: the previous per-id loop ran before the
     // status flip and finalize below, so a long list timed the request out and left the batch hanging.
     if (failedFileIds?.length) {
-      const ids = failedFileIds.slice(0, MAX_FAILED_FILE_IDS);
-      if (ids.length < failedFileIds.length) {
+      // Filtered, then clamped - both degrade the request rather than refusing it, for the same
+      // reason: everything below this point is what terminalizes the batch.
+      const wellFormed = failedFileIds.filter(id => OBJECT_ID_RE.test(id));
+      if (wellFormed.length < failedFileIds.length) {
+        req.logger.warn(
+          `upload-complete: batch ${batchId} sent ${failedFileIds.length - wellFormed.length} malformed file id(s), skipping them`
+        );
+      }
+      const ids = wellFormed.slice(0, MAX_FAILED_FILE_IDS);
+      if (ids.length < wellFormed.length) {
         // Clamped, not refused. The excess orphans stay behind and keep inflating the lake's file
         // count until someone deletes them, but the batch still reaches a terminal state below,
         // which is the worse of the two failures to leave in place.
         req.logger.warn(
-          `upload-complete: batch ${batchId} reported ${failedFileIds.length} failed file ids, cleaning up the first ${ids.length}`
+          `upload-complete: batch ${batchId} reported ${wellFormed.length} failed file ids, cleaning up the first ${ids.length}`
         );
       }
-      await fabFileRepository.softDeleteByIdsForUserBatch(ids, userId, batchId);
+      if (ids.length) {
+        // The count matters because moving the ownership guard into the query filter also made a
+        // refusal SILENT: an id belonging to another user or another batch is simply not matched,
+        // with no application-code branch left to notice. Reporting the shortfall turns a stale or
+        // cross-scope client from invisible into greppable.
+        const modified = await fabFileRepository.softDeleteByIdsForUserBatch(ids, userId, batchId);
+        if (modified < ids.length) {
+          req.logger.warn(
+            `upload-complete: batch ${batchId} reported ${ids.length} failed file ids, ${modified} were in scope`
+          );
+        }
+      }
     }
 
     // failedFileNames is client-only (the pipeline never writes it), so a plain set

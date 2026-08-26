@@ -59,6 +59,9 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     h.update.mockResolvedValue(null);
     h.finalizeBatchIfComplete.mockResolvedValue(undefined);
     h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
+    // Default: every id sent was in scope, so the shortfall warning stays quiet unless a test
+    // deliberately makes the delete match fewer rows than it was given.
+    h.fabSoftDeleteScoped.mockImplementation(async (ids: string[]) => ids.length);
   });
 
   it('rejects when the batch belongs to another user, without writing anything', async () => {
@@ -142,19 +145,50 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a malformed file id at the schema rather than in the cleanup read (#2090)', async () => {
+  it('filters a malformed file id instead of rejecting the request (#2090)', async () => {
     // Unvalidated, this reached findOne({_id: 'not-an-id'}) and threw a Mongoose CastError, which
-    // errorHandler maps to a 404 logged at warn - so it never alerted, and it was raised BEFORE the
-    // status flip and finalize below, leaving the batch non-terminal until the stuck reconciler fired.
+    // errorHandler maps to a 404 logged at warn - so it never alerted. Rejecting it at the schema
+    // fixed the CastError but kept the hang: a ZodError from the parse skips the tally, the status
+    // flip and finalize just the same. Filtering keeps the malformed id away from the query AND
+    // lets the batch terminalize, which is the only outcome that satisfies both halves.
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
+    const { res, json } = makeRes();
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: [FID_A, 'not-an-object-id'] }, res);
+
+    // The good id is still cleaned up; the malformed one never reaches the database.
+    expect(h.fabSoftDeleteScoped).toHaveBeenCalledWith([FID_A], 'u1', 'b1');
+    // Dropped silently to the client, so it has to be attributable in the logs.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('malformed'));
+    // And the batch still reaches a terminal state, which is the whole point.
+    expect(h.incrementCounter).toHaveBeenCalledWith('b1', 'failedFiles', 1);
+    expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('skips the cleanup query entirely when every id is malformed', async () => {
+    // The filter can empty the list, and an empty $in would be a pointless round trip - but the
+    // tally and finalize must still run, since the client is reporting real failures.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
     const { res } = makeRes();
-    // The parse throws a ZodError, which errorHandler renders as a 422. What matters here is that a
-    // malformed id can no longer reach the database, so the failure is attributable to the caller.
-    await expect(run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['not-an-object-id'] }, res)).rejects.toThrow();
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['nope', 'also-nope'] }, res);
 
     expect(h.fabSoftDeleteScoped).not.toHaveBeenCalled();
-    expect(h.setStatusIfActive).not.toHaveBeenCalled();
-    expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+    expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports how many ids the scoped delete actually matched, so a cross-scope client is greppable', async () => {
+    // Moving the ownership guard into the query filter made a refusal silent: an id from another
+    // user or another batch is simply unmatched, with no application-code branch left to see it.
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
+    h.fabSoftDeleteScoped.mockResolvedValue(1); // two sent, one in scope
+    const { res } = makeRes();
+    const OTHER = 'ffffffffffffffffffffffff';
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: [FID_A, OTHER] }, res);
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('1 were in scope'));
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
   });
 
   it('clamps an oversized failed-id list instead of rejecting it, so the batch still finalizes (#2090)', async () => {
