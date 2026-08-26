@@ -456,6 +456,81 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
 // systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
 // creator or an admin may read the wording. The list endpoint is where the editor UI gets the
 // value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
+describe('listDataLakes - pending proposal count is the queue discovery surface', () => {
+  const counts = (byLake: Record<string, number>) => ({
+    countPendingByLakes: vi.fn(async () => byLake),
+  });
+
+  it('carries the count for a lake the caller manages', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: counts({ mine: 4 }),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBe(4);
+  });
+
+  // Deciding what enters a lake is a management right, so a reader must not learn a queue exists -
+  // let alone how deep it is. Same gate as systemPrompt.
+  it('withholds the count from a caller who can only read the lake', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakeProposals: counts({ theirs: 9 }),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
+    expect(result.find(l => l.id === 'theirs')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // Absent rather than 0 so the client can treat presence as "there is work here", and so a row with
+  // nothing waiting renders exactly as it did before this field existed.
+  it('omits the field entirely when nothing is pending', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: counts({}),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')).not.toHaveProperty('pendingProposalCount');
+  });
+
+  it('is optional - a caller that wires no proposal repo pays for no read', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // The count is a discovery hint; the list is the page. A failing count read must never take the
+  // lake list down with it.
+  it('still returns the list when the count read throws', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: {
+        countPendingByLakes: vi.fn(async () => {
+          throw new Error('aggregate unavailable');
+        }),
+      },
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+});
+
 describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () => {
   const withPrompt = (overrides: Partial<IDataLakeDocument>) =>
     lake({ systemPrompt: 'Always cite the source file.', ...overrides });
