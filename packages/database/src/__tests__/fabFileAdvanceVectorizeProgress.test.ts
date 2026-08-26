@@ -131,8 +131,11 @@ describe('FabFileRepository.advanceVectorizeProgress', () => {
       chunkEmbeddingModelStampedAt: new Date(),
     });
 
+    // The repair lands the count exactly on chunkCount, so the derived flag must settle the file
+    // rather than leave it flagged as vectorizing - which this same guard would then refuse to
+    // advance again, and the UI reprocess controls refuse to reset.
     expect(await fabFileRepository.advanceVectorizeProgress(file, 20)).toBe(true);
-    expect(await stateOf(file)).toEqual({ vectorized: true, vectorizedChunkCount: 20, isVectorizing: true });
+    expect(await stateOf(file)).toEqual({ vectorized: true, vectorizedChunkCount: 20, isVectorizing: false });
   });
 
   it('leaves a re-chunked file advanceable again once the stamp is cleared', async () => {

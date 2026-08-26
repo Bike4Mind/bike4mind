@@ -460,7 +460,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // >= with chunkCount>0 guard so an under-counted chunk can't permanently block completion.
     const isFileVectorized = !!fabFile.chunkCount && vectorizedChunkCount >= fabFile.chunkCount;
-    let advanced = false;
 
     if (isFileVectorized) {
       // Stamp every chunk with its embeddingModel only once the WHOLE file is vectorized - a
@@ -481,7 +480,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // committed. Writing that stale rollup over a file another message already stamped
       // terminal would drag the stored count back below chunkCount, which isMemberIndexingInFlight
       // reads as forever-indexing and withholds a fully-vectorized file from retrieval.
-      advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount, {
+      const advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount, {
         embeddedChunkCount,
         embeddedCharCount,
       });
@@ -490,12 +489,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           `FabFile ${fabFileId} partial rollup ${vectorizedChunkCount} is stale or the file is already settled, skipping write`
         );
       }
-    }
-    if (isFileVectorized || advanced) {
-      fabFile.vectorizedChunkCount = vectorizedChunkCount;
-      fabFile.embeddedChunkCount = embeddedChunkCount;
-      fabFile.embeddedCharCount = embeddedCharCount;
-      fabFile.isVectorizing = !isFileVectorized;
     }
 
     if (isFileVectorized) {

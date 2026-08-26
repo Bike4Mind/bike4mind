@@ -1014,8 +1014,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    *
    * The lake-health rollups move with the count, so they ride the same guarded write.
    *
-   * Sets `vectorized: true` and `isVectorizing: true` unconditionally when it advances - this is
-   * the partial-progress path; the terminal state is stamped by stampChunkEmbeddingModel.
+   * Sets `vectorized: true` when it advances, and derives `isVectorizing` from whether the new
+   * count is still short of `chunkCount`; the terminal state itself is stamped by
+   * stampChunkEmbeddingModel.
    *
    * Returns true if this call advanced the file.
    */
@@ -1041,7 +1042,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           { $or: [{ vectorizedChunkCount: { $lte: vectorizedChunkCount } }, { vectorizedChunkCount: null }] },
         ],
       },
-      { $set: { vectorized: true, vectorizedChunkCount, isVectorizing: true, ...rollup } },
+      [
+        {
+          $set: {
+            vectorized: true,
+            vectorizedChunkCount,
+            // Derived, not a literal true: a repair landing the count exactly on chunkCount would
+            // otherwise leave a settled file flagged as vectorizing, which the guard above then
+            // refuses to advance again and the UI reprocess controls refuse to reset.
+            isVectorizing: { $lt: [vectorizedChunkCount, { $ifNull: ['$chunkCount', 0] }] },
+            ...rollup,
+          },
+        },
+      ],
       { new: false }
     );
     return result !== null;
