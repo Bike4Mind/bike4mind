@@ -21,6 +21,10 @@
  *   --status               read-only pipeline progress report for the lake
  *   --requeue-stragglers   re-enqueue complete-but-unchunked files (lost S3 events)
  *
+ * --requeue-stragglers enqueues its work as background convergence work, so it is subject to the
+ * `PauseLakeConvergence` kill switch: with that setting ON (platform or Lake scope) the files are
+ * reset and marked paused by the chunk worker instead of re-chunked. Clear the switch first.
+ *
  * Usage (needs DB + AWS resources, provided by `sst shell`):
  *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/ingest-pdf-datalake.ts \
  *     --dir /path/to/pdfs --slug <lake-slug> --userId <ownerId>
@@ -58,7 +62,7 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { DATA_LAKES, KnowledgeType } from '@bike4mind/common';
+import { CONVERGENCE_ORIGIN, DATA_LAKES, KnowledgeType } from '@bike4mind/common';
 import {
   filterPdfCandidates,
   planUploads,
@@ -208,6 +212,7 @@ async function statusReport(lake: LakeTarget): Promise<number> {
     for (const s of stragglers) console.log(`    - ${s.fileName} (${s._id})${s.error ? ` [failed: ${s.error}]` : ''}`);
     if (stragglerCount > stragglers.length) console.log(`    ... and ${stragglerCount - stragglers.length} more`);
     console.log('  Re-enqueue the non-failed ones with --requeue-stragglers --execute');
+    console.log('    (halted while the PauseLakeConvergence setting is ON - clear it first)');
   } else {
     console.log('  stragglers:       none');
   }
@@ -233,44 +238,36 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
 
   const queueUrl = Resource.fabFileChunkQueue.url;
   const sqs = new SQSClient({});
+  // Delegate to THE reset shape (fabFileRepository.resetChunkStateByIds) instead of keeping a
+  // second copy here. The copy had drifted off the canonical write by omitting
+  // `chunkRebuildRequestedAt` - the marker that makes the gap between the reset and the queue send
+  // readable, so a run that dies in it does not leave a chunkless, error-less file that lake
+  // health, convergence and the retrieval withhold all read as intact (see `isChunkRebuildPending`
+  // in b4m-core/common/src/constants/chunking.ts). It keeps the guarantees the copy existed for:
+  // its per-document write is preconditioned on `isChunking: {$ne: true}`, it never touches
+  // `chunkClaimedAt`, and it returns only the ids it actually changed, so the enqueue below cannot
+  // overstate the work. Clearing `notes` stays part of that shape, which is what clears the
+  // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
+  // straggler silently no-op at the worker.
+  const resetIds = new Set(await fabFileRepository.resetChunkStateByIds(files.map(f => String(f._id))));
   let enqueued = 0;
   for (const f of files) {
-    // Reset processing flags EXCEPT the worker-owned claim fields (#1802 follow-up):
-    // isChunking/chunkClaimedAt are deliberately excluded here - the chunk worker's own
-    // compare-and-set (fabFileChunk.ts) is the single point of mutual exclusion for those, and an
-    // unconditional write to them here could clear a claim out from under a worker that is still
-    // genuinely running (a stale-looking claim on self-host, which has no handler timeout, may
-    // still be live). Everything else below is this script's own reprocess mechanism (parity with
-    // POST /api/files/reprocess) and must stay - `notes` in particular is what clears the
-    // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
-    // straggler silently no-op at the worker.
-    //
-    // Precondition mirrors resetChunkStateByIds's per-document mechanism (FabFileModel.ts):
-    // selection (above) and this write are separated by up to requeueLimit round-trips in a
-    // serial loop, so a file can genuinely still be claimed by the time its turn comes. Without
-    // the isChunking:{$ne:true} guard, the reset would still land on that live worker for every
-    // field it touches - including re-admitting a just-failed file to the pool via error:null,
-    // the one field here that's genuinely new versus the pre-#1802-follow-up reset. Skipping the
-    // enqueue when the write doesn't match (rather than sending it unconditionally) keeps the
-    // reported count from overstating the work, same as resetChunkStateByIds's own contract.
-    const result = await FabFile.updateOne(
-      { _id: f._id, isChunking: { $ne: true } },
-      {
-        $set: {
-          chunked: false,
-          chunkCount: 0,
-          vectorized: false,
-          vectorizedChunkCount: 0,
-          notes: '',
-          error: null,
-        },
-      }
-    );
-    if (result.matchedCount === 0) continue;
+    if (!resetIds.has(String(f._id))) continue;
     await sqs.send(
       new SendMessageCommand({
         QueueUrl: queueUrl,
-        MessageBody: JSON.stringify({ fabFileId: String(f._id), userId: String(f.userId) }),
+        MessageBody: JSON.stringify({
+          fabFileId: String(f._id),
+          userId: String(f.userId),
+          // Stamps this wave as background convergence work so the kill switch can halt it
+          // (fabFileChunk.ts's isConvergenceHalted). An unstamped message defaults to `user` and is
+          // never haltable, which silently exempted this bulk path from a set switch. The halt is
+          // enforced at the CONSUMER: with the switch ON these files are marked paused rather than
+          // re-chunked. `lakeId` only when the lake has one (static lakes have no doc), so a
+          // Lake-scope pause override applies where it can.
+          origin: CONVERGENCE_ORIGIN,
+          ...(lake.id ? { lakeId: lake.id } : {}),
+        }),
       })
     );
     enqueued++;
