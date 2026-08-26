@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, fabFileRepository } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -115,6 +115,48 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
     const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['datalake:']);
 
     expect(result).toEqual({ total: 0, byPrefix: { 'datalake:': 0 } });
+  });
+
+  it('issues a bounded number of database operations for a large lake set', async () => {
+    // The fan-out this batching exists to remove: `tagPrefixes` is one entry per lake the caller
+    // can see, and on the admin tag-count path that is every lake of every tenant - one count per
+    // prefix is thousands of round trips through a pool of two.
+    const prefixes = Array.from({ length: 60 }, (_, i) => `lake${i}:`);
+    // Two seeded lakes in different chunks: a facet key built from the wrong index would still
+    // read chunk 0 correctly and silently zero every later chunk.
+    await makeFile({ tags: ['lake7:alpha'], fileName: 'first-chunk' });
+    await makeFile({ tags: ['lake52:beta'], fileName: 'third-chunk' });
+
+    const countDocuments = vi.spyOn(FabFile, 'countDocuments');
+    const aggregate = vi.spyOn(FabFile, 'aggregate');
+    try {
+      const { total, byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, prefixes);
+
+      // One count for `total` plus ceil(60/25) chunk aggregates.
+      expect(countDocuments.mock.calls.length + aggregate.mock.calls.length).toBeLessThanOrEqual(5);
+      expect(total).toBe(2);
+      expect(Object.keys(byPrefix)).toHaveLength(60);
+      expect(byPrefix['lake7:']).toBe(1);
+      expect(byPrefix['lake8:']).toBe(0);
+      expect(byPrefix['lake52:']).toBe(1);
+      expect(byPrefix['lake53:']).toBe(0);
+    } finally {
+      countDocuments.mockRestore();
+      aggregate.mockRestore();
+    }
+  });
+
+  it('keeps prefixes independent across a chunk boundary', async () => {
+    // The multi-lake case above, but with the two lakes deliberately in different chunks: the
+    // chunk union is per-chunk, so a file must still count under a prefix in each.
+    const prefixes = Array.from({ length: 30 }, (_, i) => `lake${i}:`);
+    await makeFile({ tags: ['lake1:x', 'lake26:y'], fileName: 'spans-chunks' });
+
+    const { total, byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, prefixes);
+
+    expect(total).toBe(1);
+    expect(byPrefix['lake1:']).toBe(1);
+    expect(byPrefix['lake26:']).toBe(1);
   });
 
   it('counts a padded prefix under its trimmed key', async () => {
