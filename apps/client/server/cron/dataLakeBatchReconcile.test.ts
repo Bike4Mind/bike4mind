@@ -12,6 +12,10 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   fabFileFind: vi.fn(),
   sendToQueue: vi.fn(),
+  // Hoisted rather than left inside the observability mock's closure: an SST cron's return value is
+  // discarded by EventBridge, so this log line is the only actionable output the rescue sweep's
+  // per-file catch produces. Unexposed, deleting that logger.error call is undetectable.
+  loggerError: vi.fn(),
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
@@ -43,7 +47,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/observability', () => {
-  const mockLogger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+  const mockLogger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: h.loggerError, log: vi.fn() };
   mockLogger.withMetadata = vi.fn(() => mockLogger);
   return {
     Logger: vi.fn(function () {
@@ -83,8 +87,11 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.findStuckTaxonomy.mockResolvedValue([]);
     h.reconcileTaxonomy.mockResolvedValue([]);
     h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
-    // Rescue sweep defaults: auto-chunk off, no candidates.
+    // Rescue sweep defaults: auto-chunk off, no candidates, sends succeed. The send stub is reset
+    // explicitly because clearAllMocks() clears calls but NOT implementations - without this a test
+    // that makes sendToQueue reject leaks that into every test after it in file order.
     h.getSettingsValue.mockResolvedValue(false);
+    h.sendToQueue.mockResolvedValue(undefined);
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
@@ -262,24 +269,35 @@ describe('dataLakeBatchReconcile cron handler', () => {
               { _id: 'ff1', userId: 'u1' },
               { _id: 'ff2', userId: 'u2' },
               { _id: 'ff3', userId: 'u3' },
+              { _id: 'ff4', userId: 'u4' },
             ],
           }),
         }),
       });
-      // The MIDDLE one fails, so the assertion below distinguishes "kept going" from "stopped early".
+      // TWO fail, and neither is first or last: the middle placement distinguishes "kept going" from
+      // "stopped early", and the second failure is what forces `failed` to accumulate - a counter
+      // pinned to 1 would satisfy a single-failure fixture.
       h.sendToQueue.mockImplementation(async (_url: unknown, msg: { fabFileId: string }) => {
-        if (msg.fabFileId === 'ff2') throw new Error('SQS throttled');
+        if (msg.fabFileId === 'ff2' || msg.fabFileId === 'ff3') throw new Error('SQS throttled');
       });
 
       const res = await handler();
 
-      // All three attempted - the one behind the failure is not abandoned.
-      expect(h.sendToQueue).toHaveBeenCalledTimes(3);
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff3', userId: 'u3' });
-      // And the counts are honest: two really were rescued, one really was not.
+      // All four attempted - the ones behind a failure are not abandoned.
+      expect(h.sendToQueue).toHaveBeenCalledTimes(4);
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff4', userId: 'u4' });
+      // And the counts are honest: two really were rescued, two really were not.
       const body = JSON.parse(res.body);
       expect(body.rescuedChunkFiles).toBe(2);
-      expect(body.rescueFailures).toBe(1);
+      expect(body.rescueFailures).toBe(2);
+      // Each failure names its file. The cron's return value goes nowhere (EventBridge discards it),
+      // so without this line an operator has no way to tell WHICH files were not enqueued.
+      for (const fabFileId of ['ff2', 'ff3']) {
+        expect(h.loggerError).toHaveBeenCalledWith(
+          expect.stringContaining('failed to enqueue'),
+          expect.objectContaining({ fabFileId, error: 'SQS throttled' })
+        );
+      }
     });
 
     it('does not let a rescue failure take down the batch reconciliation around it', async () => {
@@ -316,7 +334,12 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       expect(h.recordRun).toHaveBeenCalledTimes(1);
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).rescuedChunkFiles).toBe(0);
+      // BOTH counts, not just the rescued one: the outer catch has to return a whole
+      // {enqueued, failed}, and a fallback that omits `failed` reports nothing at all here -
+      // JSON.stringify drops the undefined key, so the field silently vanishes from the body.
+      const body = JSON.parse(res.body);
+      expect(body.rescuedChunkFiles).toBe(0);
+      expect(body.rescueFailures).toBe(0);
     });
   });
 });
