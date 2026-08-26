@@ -49,7 +49,9 @@ interface BrowsePublicDataLakesAdapters {
 /**
  * The discover/browse catalog of public data lakes. Returns one page of the public lakes this
  * caller can reach (the repo enforces public + active + the same gate and grant arms
- * `findAccessible` applies, so discover and access never disagree) enriched with the preview
+ * `findAccessible` applies, so discover and the list/read gate never disagree; retrieval via
+ * `findActiveByUserTagsAndEntitlements` has no grant arm yet - see the interlock in
+ * `resolveLakeReadAccess.ts`) enriched with the preview
  * metadata the catalog renders: owner display name, file count, total size, plus per-caller
  * `isOwn`/`canManage` so the UI can gate management affordances. This is a read-only discovery
  * surface - it grants nothing; access is already ambient once a lake is public (a public

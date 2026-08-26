@@ -167,8 +167,9 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     expect(browseOpts().search).toBe('');
   });
 
-  // The catalog is per-caller: a gated public lake is discoverable by the users who hold its
-  // gate, which only works if the route hands the service the caller's resolved tags/keys.
+  // `toAccessContext` is mocked, so this seam pins wiring only (resolution itself is owned by
+  // toAccessContext.test.ts): the route must hand the service the caller's resolved context,
+  // which is what makes the catalog per-caller.
   it('passes the resolved access context through as the browse actor', async () => {
     const req = makeReq({}, { id: 'u1' });
     await route(req, makeRes());

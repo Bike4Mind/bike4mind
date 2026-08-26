@@ -424,11 +424,14 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
       baseLake({ slug: 'beta', name: 'Beta Lake', description: 'about widgets', isPublic: true })
     );
     // Excluded: private (not public).
-    await dataLakeRepository.create(baseLake({ slug: 'private-lake', createdByUserId: 'alice' }));
+    const privateLake = await dataLakeRepository.create(baseLake({ slug: 'private-lake', createdByUserId: 'alice' }));
     // Excluded for a caller lacking the gate; admitted for one who holds it (see below).
     await dataLakeRepository.create(baseLake({ slug: 'gated', isPublic: true, requiredUserTag: 'Opti' }));
     // Excluded: public but archived (browse is active-only).
-    await dataLakeRepository.create(baseLake({ slug: 'archived-pub', isPublic: true, status: 'archived' }));
+    const archivedPub = await dataLakeRepository.create(
+      baseLake({ slug: 'archived-pub', isPublic: true, status: 'archived' })
+    );
+    return { privateLake, archivedPub };
   };
 
   it('returns only active, public lakes whose gate the caller passes', async () => {
@@ -509,7 +512,7 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
   });
 
   it('surfaces a public lake the caller holds an explicit grant on, gate or no gate', async () => {
-    await seedMixed();
+    const { privateLake, archivedPub } = await seedMixed();
     const gated = (await dataLakeRepository.findPublicLakes(viewer({ isAdmin: true }))).lakes.find(
       l => l.slug === 'gated'
     )!;
@@ -518,9 +521,11 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     expect(withGrant.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
     expect(withGrant.total).toBe(3);
 
-    // A grant on some other lake widens nothing.
+    // The grant arm is nested inside the reach $or, so it can widen the gate but never the
+    // public/active restriction: granting a real private lake and a real archived one must
+    // still leave the catalog untouched.
     const unrelated = await dataLakeRepository.findPublicLakes(viewer(), {
-      grantedLakeIds: ['deadbeefdeadbeefdeadbeef'],
+      grantedLakeIds: [privateLake.id, archivedPub.id, 'deadbeefdeadbeefdeadbeef'],
     });
     expect(unrelated.lakes.map(l => l.slug)).toEqual(['alpha', 'beta']);
   });
