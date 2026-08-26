@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ModelBackend } from '@bike4mind/common';
 import { AnthropicCachingAdapter } from './anthropic';
 import { getCachingAdapter, NoOpCachingAdapter } from './index';
@@ -269,10 +269,13 @@ describe('AnthropicCachingAdapter', () => {
       cacheConversationHistory: true,
     } as const;
 
-    /** Every cache_control marker on an outgoing request, wherever it may sit. */
+    /**
+     * Every cache_control marker on an outgoing request, wherever it may sit. Counts the VALUE,
+     * matching what the provider counts - an explicit `cache_control: undefined` is not a marker.
+     */
     const countMarkers = (params: Record<string, unknown>): number => {
       const marked = (block: unknown) =>
-        !!block && typeof block === 'object' && 'cache_control' in (block as Record<string, unknown>);
+        !!block && typeof block === 'object' && !!(block as Record<string, unknown>).cache_control;
       let count = 0;
       if (Array.isArray(params.tools)) count += params.tools.filter(marked).length;
       if (Array.isArray(params.system)) count += params.system.filter(marked).length;
@@ -384,6 +387,85 @@ describe('AnthropicCachingAdapter', () => {
       );
 
       expect(countMarkers(result)).toBeLessThanOrEqual(4);
+    });
+
+    it('logs the skipped breakpoints, with a census of where the markers sit', () => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      adapter.applyCaching(
+        {
+          tools: [{ name: 'a' }],
+          system: [
+            { type: 'text', text: 'a', cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: 'b', cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: 'tail' },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        allBreakpoints,
+        logger as unknown as Parameters<typeof adapter.applyCaching>[2]
+      );
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.error).not.toHaveBeenCalled();
+      const [message, detail] = logger.warn.mock.calls[0];
+      expect(message).toContain('budget exhausted');
+      expect((detail as { dropped: string[] }).dropped).toEqual(['history']);
+      expect((detail as { outbound: { total: number } }).outbound.total).toBe(4);
+    });
+
+    /**
+     * The case the original incident hit: the request arrives already over the ceiling, so there
+     * is nothing to subtract and the provider will reject it regardless. The adapter must not add
+     * to it, and must say so loudly - a bare ValidationException gave no way to find the source.
+     */
+    it('reports an error, and adds nothing, when the request is already over the cap on arrival', () => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const marker = { type: 'ephemeral' };
+      const result = adapter.applyCaching(
+        {
+          tools: [{ name: 'a', cache_control: marker }],
+          system: [
+            { type: 'text', text: '1', cache_control: marker },
+            { type: 'text', text: '2', cache_control: marker },
+            { type: 'text', text: '3', cache_control: marker },
+            { type: 'text', text: '4', cache_control: marker },
+            { type: 'text', text: 'tail' },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        allBreakpoints,
+        logger as unknown as Parameters<typeof adapter.applyCaching>[2]
+      );
+
+      // Five arrived; the adapter adds none of its three.
+      expect(countMarkers(result)).toBe(5);
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      const [message, detail] = logger.error.mock.calls[0];
+      expect(message).toContain('exceeds');
+      const census = detail as { inbound: { system: number; tools: number }; outbound: { total: number } };
+      expect(census.inbound.system).toBe(4);
+      expect(census.inbound.tools).toBe(1);
+      expect(census.outbound.total).toBe(5);
+    });
+
+    it('does not count a block whose cache_control is explicitly undefined', () => {
+      const result = adapter.applyCaching(
+        {
+          system: [
+            { type: 'text', text: 'a', cache_control: undefined },
+            { type: 'text', text: 'b', cache_control: undefined },
+            { type: 'text', text: 'c', cache_control: undefined },
+            { type: 'text', text: 'd', cache_control: undefined },
+            { type: 'text', text: 'tail' },
+          ],
+          tools: [{ name: 'a' }],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        allBreakpoints
+      );
+
+      // None of those undefined keys is a real marker, so the full budget was still available.
+      expect(countMarkers(result)).toBe(3);
     });
 
     it('leaves an over-budget request untouched rather than adding a fifth marker', () => {

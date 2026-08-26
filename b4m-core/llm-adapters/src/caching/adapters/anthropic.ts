@@ -10,30 +10,41 @@ import type { Logger } from '@bike4mind/observability';
  */
 const MAX_CACHE_CONTROL_BLOCKS = 4;
 
-/** Does this block already carry a marker? Re-marking one costs no budget. */
+/**
+ * Does this block already carry a marker? Re-marking one costs no budget.
+ *
+ * Tests the VALUE, not just key presence: a block carrying an explicit
+ * `cache_control: undefined` is not a marker as far as the provider is concerned, and counting
+ * it would spend budget on nothing and drop a breakpoint we could have kept.
+ */
 function hasMarker(block: unknown): boolean {
-  return !!block && typeof block === 'object' && 'cache_control' in (block as Record<string, unknown>);
+  return !!block && typeof block === 'object' && !!(block as Record<string, unknown>).cache_control;
+}
+
+/** Where the markers on a request sit. Kept per-location so an over-budget request is diagnosable. */
+interface MarkerCensus {
+  tools: number;
+  system: number;
+  messages: number;
+  total: number;
 }
 
 /**
  * Markers already on the request. Callers upstream attach their own before this runs -
- * `bedrockBackend/anthropic.ts` marks every system block flagged `cache: true` to declare a
- * mid-stack breakpoint - so this adapter's budget is whatever they left, not the full four.
+ * `bedrockBackend/anthropic.ts` marks each system block flagged `cache: true` (the mid-stack
+ * shareable-prefix breakpoint) - so this adapter's budget is whatever they left, not the full four.
  */
-function countMarkers(params: Record<string, unknown>): number {
-  let count = 0;
-  const tools = params.tools;
-  if (Array.isArray(tools)) count += tools.filter(hasMarker).length;
-  const system = params.system;
-  if (Array.isArray(system)) count += system.filter(hasMarker).length;
-  const messages = params.messages;
-  if (Array.isArray(messages)) {
-    for (const message of messages) {
+function censusMarkers(params: Record<string, unknown>): MarkerCensus {
+  const tools = Array.isArray(params.tools) ? params.tools.filter(hasMarker).length : 0;
+  const system = Array.isArray(params.system) ? params.system.filter(hasMarker).length : 0;
+  let messages = 0;
+  if (Array.isArray(params.messages)) {
+    for (const message of params.messages) {
       const content = (message as Record<string, unknown> | null)?.content;
-      if (Array.isArray(content)) count += content.filter(hasMarker).length;
+      if (Array.isArray(content)) messages += content.filter(hasMarker).length;
     }
   }
-  return count;
+  return { tools, system, messages, total: tools + system + messages };
 }
 
 /**
@@ -52,7 +63,8 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     // descending durability below, so when the budget runs out the LEAST valuable one is the
     // one dropped: the history anchor moves every turn and yields the shortest-lived prefix,
     // while the system prefix and the tool schemas are stable across a whole conversation.
-    let budget = MAX_CACHE_CONTROL_BLOCKS - countMarkers(modifiedParams);
+    const inbound = censusMarkers(modifiedParams);
+    let budget = MAX_CACHE_CONTROL_BLOCKS - inbound.total;
     const dropped: string[] = [];
 
     /** Claim one marker slot, or record the miss. Re-marking a marked block is free. */
@@ -126,13 +138,29 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
       }
     }
 
-    if (dropped.length > 0) {
-      // Not fatal - the request still goes out, just with fewer breakpoints than asked for.
-      // Logged because a silently degraded cache strategy is otherwise invisible: the only
-      // symptom is a lower hit rate.
+    const outbound = censusMarkers(modifiedParams);
+
+    // Two distinct situations, and the difference matters:
+    //
+    // 1. Budget exhausted (dropped.length > 0) - this adapter deliberately skipped a breakpoint
+    //    to stay legal. Not fatal; the request goes out with a weaker cache strategy, whose only
+    //    other symptom would be a lower hit rate.
+    // 2. Already over the cap on arrival (outbound.total > MAX) - upstream alone exceeded the
+    //    ceiling, so there is nothing this adapter can subtract and the provider WILL reject the
+    //    request. That is a defect in whoever attached them, and the census names where they sit
+    //    so the next occurrence is diagnosable rather than a bare ValidationException. This is
+    //    the case the original incident hit and could not be accounted for from code reading, so
+    //    it is logged loudly rather than assumed impossible.
+    if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
+      const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); the provider will reject it`;
+      const detail = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
+      if (logger) logger.error(message, detail);
+      else console.error(message, JSON.stringify(detail));
+    } else if (dropped.length > 0) {
       const message = `[PromptCache] cache_control budget exhausted (limit ${MAX_CACHE_CONTROL_BLOCKS}); skipped breakpoints: ${dropped.join(', ')}`;
-      if (logger) logger.warn(message, { dropped, limit: MAX_CACHE_CONTROL_BLOCKS });
-      else console.warn(message);
+      const detail = { dropped, inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
+      if (logger) logger.warn(message, detail);
+      else console.warn(message, JSON.stringify(detail));
     }
 
     return modifiedParams;
