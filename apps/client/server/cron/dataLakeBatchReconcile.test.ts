@@ -131,6 +131,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       taxonomyCandidates: 0,
       taxonomyForced: 0,
       rescuedChunkFiles: 0,
+      rescueFailures: 0,
     });
   });
 
@@ -145,6 +146,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       taxonomyCandidates: 0,
       taxonomyForced: 0,
       rescuedChunkFiles: 0,
+      rescueFailures: 0,
     });
   });
 
@@ -245,6 +247,56 @@ describe('dataLakeBatchReconcile cron handler', () => {
         userId: 'u1',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
+    });
+
+    it('finishes the sweep when one enqueue fails, and reports the partial result (#2117)', async () => {
+      // The sweep is the safety net for files the chunk pipeline lost, so it matters most under the
+      // cluster/queue stress that makes a transient send failure likely. It used to reject out of the
+      // loop on the first failure: every candidate behind it was abandoned, and because the caller
+      // turns a throw into 0 it also reported a sweep that HAD rescued files as having rescued none.
+      h.getSettingsValue.mockResolvedValue(true);
+      h.fabFileFind.mockReturnValue({
+        select: () => ({
+          limit: () => ({
+            lean: async () => [
+              { _id: 'ff1', userId: 'u1' },
+              { _id: 'ff2', userId: 'u2' },
+              { _id: 'ff3', userId: 'u3' },
+            ],
+          }),
+        }),
+      });
+      // The MIDDLE one fails, so the assertion below distinguishes "kept going" from "stopped early".
+      h.sendToQueue.mockImplementation(async (_url: unknown, msg: { fabFileId: string }) => {
+        if (msg.fabFileId === 'ff2') throw new Error('SQS throttled');
+      });
+
+      const res = await handler();
+
+      // All three attempted - the one behind the failure is not abandoned.
+      expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff3', userId: 'u3' });
+      // And the counts are honest: two really were rescued, one really was not.
+      const body = JSON.parse(res.body);
+      expect(body.rescuedChunkFiles).toBe(2);
+      expect(body.rescueFailures).toBe(1);
+    });
+
+    it('does not let a rescue failure take down the batch reconciliation around it', async () => {
+      // The isolation the caller's catch already provided must survive the per-item catch: the
+      // stuck-batch sweep above it still reports, and the handler still returns 200.
+      h.getSettingsValue.mockResolvedValue(true);
+      h.fabFileFind.mockReturnValue({
+        select: () => ({ limit: () => ({ lean: async () => [{ _id: 'ff1', userId: 'u1' }] }) }),
+      });
+      h.sendToQueue.mockRejectedValue(new Error('queue unreachable'));
+
+      const res = await handler();
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.rescuedChunkFiles).toBe(0);
+      expect(body.rescueFailures).toBe(1);
     });
 
     it('does nothing when auto-chunk is disabled', async () => {
