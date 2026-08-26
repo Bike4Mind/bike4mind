@@ -8,6 +8,7 @@ import {
   QuestHandoff,
   REVIEW_GATE_STATUS_VALUES,
   SUBQUEST_STATUS_VALUES,
+  SubQuestStatus,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -487,21 +488,12 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return result;
   }
 
-  // Valid status values for runtime validation
-  private static readonly VALID_SUBQUEST_STATUSES = [
-    'not_started',
-    'in_progress',
-    'completed',
-    'skipped',
-    'deleted',
-  ] as const;
-
   async updateQuestProgress(
     planId: string,
     questId: string,
     subQuestId: string,
     updates: {
-      status?: 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted';
+      status?: SubQuestStatus;
       timeSpent?: number;
       chatMessageId?: string;
       startedAt?: number;
@@ -511,8 +503,9 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       autoResumeIfPaused?: boolean;
     }
   ): Promise<IQuestMasterPlanDocument | null> {
-    // Runtime validation for updates
-    if (updates.status && !QuestMasterPlanRepository.VALID_SUBQUEST_STATUSES.includes(updates.status)) {
+    // Runtime validation: callers include API routes and CLI tools, so an
+    // unvetted status can still reach here past the compile-time type.
+    if (updates.status && !SUBQUEST_STATUS_VALUES.includes(updates.status)) {
       throw new Error(`Invalid status: ${updates.status}`);
     }
 

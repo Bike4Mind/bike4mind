@@ -14,7 +14,7 @@ import {
   BorderStyle,
   AlignmentType,
 } from 'docx';
-import { DocxColors, DocxFontSizes, DocxSpacing, DocxBorderSizes, type SubQuestStatusType } from './docxStyles';
+import { DocxColors, DocxFontSizes, DocxSpacing, DocxBorderSizes } from './docxStyles';
 
 const STATUS_ICONS: Record<SubQuestStatus, string> = {
   completed: ' ✓',
@@ -353,18 +353,16 @@ export async function questPlanToExcel(plan: IQuestMasterPlanDocument, filename:
  * Get background color for status-based cell shading.
  */
 function getStatusCellShading(status: SubQuestStatus): { fill: string } {
-  const fill =
-    status in DocxColors.statusBackground
-      ? DocxColors.statusBackground[status as SubQuestStatusType]
-      : DocxColors.statusBackground.not_started;
-  return { fill };
+  // The `??` arms here and below are unreachable per the type but not at runtime:
+  // a legacy plan on disk can carry a status predating the mongoose enum.
+  return { fill: DocxColors.statusBackground[status] ?? DocxColors.statusBackground.not_started };
 }
 
 /**
  * Get text color for status-based text styling.
  */
 function getStatusTextColor(status: SubQuestStatus): string {
-  return status in DocxColors.status ? DocxColors.status[status as SubQuestStatusType] : DocxColors.status.not_started;
+  return DocxColors.status[status] ?? DocxColors.status.not_started;
 }
 
 export async function questPlanToDocx(plan: IQuestMasterPlanDocument, filename: string): Promise<void> {

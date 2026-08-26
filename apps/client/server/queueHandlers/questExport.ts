@@ -7,7 +7,7 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels, isImageServeable } from '@bike4mind/common';
+import { ChatModels, isImageServeable, type SubQuestStatus } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
@@ -129,22 +129,22 @@ function slugify(text: string): string {
 }
 
 /**
- * Returns the appropriate status icon for a subquest status.
- * ✓ = completed, 🔄 = in_progress, ⏳ = not_started, ⏭ = skipped
+ * Kept exhaustive over SubQuestStatus so a new status fails the build here rather
+ * than silently exporting without an icon. Must stay in sync with the client-side
+ * docx export's STATUS_ICONS (apps/client/app/utils/questExport.ts).
  */
-function getStatusIcon(status: string): string {
-  switch (status) {
-    case 'completed':
-      return ' ✓';
-    case 'in_progress':
-      return ' 🔄';
-    case 'not_started':
-      return ' ⏳';
-    case 'skipped':
-      return ' ⏭';
-    default:
-      return '';
-  }
+const STATUS_ICONS: Record<SubQuestStatus, string> = {
+  completed: ' ✓',
+  in_progress: ' 🔄',
+  not_started: ' ⏳',
+  skipped: ' ⏭',
+  deleted: ' ❌',
+};
+
+function getStatusIcon(status: SubQuestStatus): string {
+  // The `??` is unreachable per the type: a legacy plan on disk can still carry
+  // a status predating the mongoose enum.
+  return STATUS_ICONS[status] ?? '';
 }
 
 /**

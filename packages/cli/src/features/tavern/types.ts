@@ -4,6 +4,9 @@
  * These map to the REST API shapes in apps/client/pages/api/tavern/*.
  */
 import { z } from 'zod';
+// The sub-quest vocabularies are owned by @bike4mind/common - the CLI mirrors
+// the server shapes, so it must not redeclare them.
+import { REVIEW_GATE_STATUS_VALUES, SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
 
 // Re-export the WS event type from common
 export type { ITavernHeartbeatLogAction } from '@bike4mind/common';
@@ -268,12 +271,12 @@ export type TriggerHeartbeatResponse = z.infer<typeof TriggerHeartbeatResponseSc
 export const SubQuestSchema = z.object({
   id: z.string(),
   title: z.string(),
-  status: z.enum(['not_started', 'in_progress', 'completed', 'skipped', 'deleted']),
+  status: z.enum(SUBQUEST_STATUS_VALUES),
   questId: z.string().optional(),
   startedAt: z.number().optional(),
   evidence: z.string().optional(),
   reviewGate: z.boolean().optional(),
-  reviewStatus: z.enum(['pending', 'approved', 'rejected']).optional(),
+  reviewStatus: z.enum(REVIEW_GATE_STATUS_VALUES).optional(),
   reviewNote: z.string().optional(),
 });
 export type SubQuest = z.infer<typeof SubQuestSchema>;
@@ -324,7 +327,7 @@ export const UpdateReviewGateRequestSchema = z.object({
   planId: z.string(),
   questId: z.string(),
   subQuestId: z.string(),
-  reviewStatus: z.enum(['pending', 'approved', 'rejected']),
+  reviewStatus: z.enum(REVIEW_GATE_STATUS_VALUES),
   reviewNote: z.string().optional(),
 });
 export type UpdateReviewGateRequest = z.infer<typeof UpdateReviewGateRequestSchema>;
@@ -334,7 +337,7 @@ export const UpdateSubQuestProgressRequestSchema = z.object({
   planId: z.string(),
   questId: z.string(),
   subQuestId: z.string(),
-  status: z.enum(['not_started', 'in_progress', 'completed', 'skipped', 'deleted']).optional(),
+  status: z.enum(SUBQUEST_STATUS_VALUES).optional(),
   evidence: z.string().optional(),
   timeSpent: z.number().optional(),
 });
