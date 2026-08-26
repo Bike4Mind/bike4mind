@@ -390,11 +390,25 @@ const AttachFileButton = ({
                     color={selected ? 'primary' : 'neutral'}
                     size="sm"
                   >
-                    {/* disableIcon + overlay turns the whole chip into the hit target
-                        instead of just the radio dot. */}
+                    {/* disableIcon drops the dot so the pill fill IS the selection cue; overlay
+                        makes the focus ring follow the pill instead of boxing the whole row. It is
+                        NOT what makes the row clickable - Radio renders its action slot
+                        unconditionally and absolutely positions it over its nearest positioned
+                        ancestor, so the label was always part of the hit target.
+
+                        variant/color are passed down deliberately: Radio reads RadioGroupContext
+                        and FormControlContext, never ChipContext, so without these it resolves its
+                        own default outlined/primary. Under disableIcon that repaints BOTH the label
+                        colour and the action's background, and the action sits at zIndex 1 over the
+                        chip - so an outlined Radio in a solid Chip paints primary.outlinedColor on
+                        primary.solidBg (1.08:1) and inverts to near-white on hover. Matching the
+                        Chip's own variant/color makes the action paint the token the chip already
+                        paints, which is a no-op at rest and a proper darken on hover. */}
                     <Radio
                       disableIcon
                       overlay
+                      variant={selected ? 'solid' : 'outlined'}
+                      color={selected ? 'primary' : 'neutral'}
                       value={mode}
                       label={ATTACH_SCOPE_COPY[mode].label}
                       data-testid={`attach-file-scope-${mode}-radio`}
