@@ -82,6 +82,7 @@ export * from './utils/sanitizeTelemetryError';
 export * from './utils/sessionRedaction';
 export * from './utils/promptMetaRedaction';
 export * from './utils/promptMetaSessionBinding';
+export * from './utils/toolPayloads';
 export * from './utils/triggerWord';
 export * from './utils/agentMentions';
 export * from './utils/agentPersona';

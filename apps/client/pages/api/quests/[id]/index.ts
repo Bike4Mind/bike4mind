@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { ApiKeyScope, redactPromptMetaForViewer } from '@bike4mind/common';
+import { ApiKeyScope, redactPromptMetaForViewer, toToolPayloads } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import type { Request } from 'express';
@@ -53,6 +53,13 @@ const handler = baseApi({
   const isOwner = session.userId === userId;
   const promptMeta = redactPromptMetaForViewer(quest.promptMeta, isOwner);
 
+  // Structured tool output for this turn. This is the poll step for BOTH the async chat path and
+  // an agent run persisted as a quest, so it is the one place a programmatic caller can read what
+  // a tool actually produced - `reply`/`replies` carry only the model's prose. Not viewer-redacted:
+  // these same payloads already reach every session participant's client (SessionMiddle dispatches
+  // them off loaded quests), so a share holder gains nothing new here.
+  const toolPayloads = toToolPayloads(quest.uiSideEffects);
+
   return res.json({
     id: quest.id,
     status: quest.status,
@@ -61,6 +68,7 @@ const handler = baseApi({
     replies: quest.replies,
     images,
     files,
+    toolPayloads,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
     promptMeta,
