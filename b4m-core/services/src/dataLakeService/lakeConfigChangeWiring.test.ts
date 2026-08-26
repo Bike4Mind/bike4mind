@@ -744,6 +744,37 @@ describe('removeFileFromDataLake - audit-loss logging on the stats recompute', (
     expect(error).toHaveBeenCalled();
   });
 
+  /**
+   * The actor is threaded, not dropped: `removeFileFromDataLake` already holds one for the
+   * membership write, so an `auto-activate` row it emits must name that person. The rung stays
+   * `system` - `activateIfDraft` authorizes nothing.
+   */
+  it('names the removing actor as the principal on the auto-activate row it emits', async () => {
+    const audit = auditSpy();
+    await removeFileFromDataLake(owner, 'lake1', 'f1', { db: removeDb(audit) });
+    expect(audit.only()).toMatchObject({
+      action: 'auto-activate',
+      principalKind: 'user',
+      principalId: 'owner',
+      manageRung: 'system',
+    });
+  });
+
+  it('carries an actor auditPrincipal through, so a key-driven removal names the KEY', async () => {
+    const audit = auditSpy();
+    await removeFileFromDataLake(
+      { ...owner, auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' } },
+      'lake1',
+      'f1',
+      { db: removeDb(audit) }
+    );
+    expect(audit.only()).toMatchObject({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: 'owner',
+    });
+  });
+
   it('still completes the removal when no logger is wired at all', async () => {
     // The adapter field is optional, so a caller that has not threaded one must not crash.
     const audit = auditSpy();
