@@ -3,7 +3,7 @@ import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import { rotateSession, type RotateSessionResult } from './rotateSession';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
 import { createMockAuthSessionRepository, createMockUserRepository } from '../__tests__/utils/testUtils';
-import { DEFAULT_REFRESH_TTL_MS } from './constants';
+import { ABSOLUTE_SESSION_MAX_MS, DEFAULT_REFRESH_TTL_MS, MAX_SESSION_RECOVERIES } from './constants';
 
 const SID = 'sid-1';
 const future = () => new Date(Date.now() + 60_000);
@@ -44,6 +44,68 @@ const refreshTokenOf = (result: RotateSessionResult): string => {
   return result.refreshToken;
 };
 const secretOf = (result: RotateSessionResult): string => parseRefreshToken(refreshTokenOf(result))!.secret;
+
+const setupStateful = (initialSecret: string) => {
+  const state = makeSession({ refreshTokenHash: hashRefreshSecret(initialSecret) }) as unknown as {
+    refreshTokenHash: string;
+    previousRefreshTokenHash: string | null;
+    graceExpiresAt: Date | null;
+    revokedAt: Date | null;
+    expiresAt: Date;
+    lastUsedAt: Date;
+    replayUses?: number;
+    recoveries?: number;
+  };
+  const authSessions = createMockAuthSessionRepository();
+  const users = createMockUserRepository();
+  users.findById.mockResolvedValue({ id: 'user-1', tokenVersion: 7 } as never);
+  // Snapshot on read, exactly like a real find: a concurrent writer must not mutate what an
+  // in-flight caller already read.
+  authSessions.findBySid.mockImplementation(async () => ({ ...state }) as never);
+  authSessions.rotateHash.mockImplementation(async (_sid, params) => {
+    // Mirrors AuthSessionModel.rotateHash: the expected hash is part of the FILTER.
+    if (state.revokedAt || state.expiresAt <= new Date()) return null;
+    if (state.refreshTokenHash !== params.expectedCurrentHash) return null; // lost the CAS
+    state.refreshTokenHash = params.nextHash;
+    state.previousRefreshTokenHash = params.expectedCurrentHash;
+    state.graceExpiresAt = params.replayExpiresAt;
+    state.lastUsedAt = new Date();
+    state.replayUses = 0; // a fresh generation gets a fresh allowance
+    state.recoveries = 0; // only a true rotation clears the recovery allowance
+    state.expiresAt = params.newExpiresAt;
+    return { ...state } as never;
+  });
+  authSessions.recoverRotateHash.mockImplementation(async (_sid, params) => {
+    // Mirrors AuthSessionModel.recoverRotateHash: previous-match, ELAPSED grace window and the
+    // recovery allowance are all part of the FILTER; the winner re-opens the window. Note it
+    // never writes expiresAt - recoveries do not slide - and never resets `recoveries`.
+    const now = new Date();
+    if (state.revokedAt || state.expiresAt <= now) return null;
+    if (state.previousRefreshTokenHash !== params.expectedPreviousHash) return null;
+    if (!state.graceExpiresAt || state.graceExpiresAt > now) return null;
+    if ((state.recoveries ?? 0) >= params.maxRecoveries) return null;
+    state.refreshTokenHash = params.nextHash;
+    state.graceExpiresAt = params.replayExpiresAt;
+    state.lastUsedAt = now;
+    state.replayUses = 0;
+    state.recoveries = (state.recoveries ?? 0) + 1;
+    return { ...state } as never;
+  });
+  authSessions.registerReplayUse.mockImplementation(async (_sid, maxUses) => {
+    // Mirrors AuthSessionModel.registerReplayUse: the cap is part of the FILTER.
+    if (state.revokedAt || state.expiresAt <= new Date()) return null;
+    if ((state.replayUses ?? 0) >= maxUses) return null;
+    state.replayUses = (state.replayUses ?? 0) + 1;
+    state.lastUsedAt = new Date();
+    return { ...state } as never;
+  });
+  authSessions.revokeBySid.mockImplementation(async () => {
+    state.revokedAt = new Date();
+    return { ...state } as never;
+  });
+  const signAccessToken = vi.fn().mockReturnValue('ACCESS');
+  return { state, authSessions, users, signAccessToken, db: { authSessions, users } };
+};
 
 describe('rotateSession', () => {
   it('rotates on a current-hash match and returns a fresh opaque token + access token', async () => {
@@ -213,12 +275,18 @@ describe('rotateSession', () => {
 
       expect(result.status).toBe('rotated');
       expect(secretOf(result)).not.toBe(held);
+      // No newExpiresAt: a superseded secret must never extend the session it is used against.
+      // The signature enforces this, and this pins it against a signature that later loosens.
       expect(authSessions.recoverRotateHash).toHaveBeenCalledWith(SID, {
         expectedPreviousHash: hashRefreshSecret(held),
         nextHash: expect.any(String),
         replayExpiresAt: expect.any(Date),
-        newExpiresAt: expect.any(Date),
+        maxRecoveries: expect.any(Number),
       });
+      expect(authSessions.recoverRotateHash).toHaveBeenCalledWith(
+        SID,
+        expect.not.objectContaining({ newExpiresAt: expect.anything() })
+      );
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
     });
 
@@ -269,7 +337,26 @@ describe('rotateSession', () => {
       expect(Math.abs(params.newExpiresAt!.getTime() - (Date.now() + DEFAULT_REFRESH_TTL_MS))).toBeLessThan(5000);
     });
 
-    it('never slides past createdAt + ABSOLUTE_SESSION_MAX_MS, and never shrinks the current expiry', async () => {
+    it('clamps the slide to createdAt + ABSOLUTE_SESSION_MAX_MS', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const secret = generateRefreshSecret();
+      // Day 70 of 90 with only 1d promised, so the CAP is the winning arm of the min() AND beats
+      // the monotone max(): the assertion below therefore pins the cap's magnitude, not just
+      // monotonicity. min(now+30d, createdAt+90d) = createdAt+90d = now+20d.
+      const createdAt = new Date(Date.now() - 70 * DAY);
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: hashRefreshSecret(secret),
+          createdAt,
+          expiresAt: new Date(Date.now() + 1 * DAY),
+        })
+      );
+      await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
+      const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt: Date };
+      expect(params.newExpiresAt.getTime()).toBe(createdAt.getTime() + ABSOLUTE_SESSION_MAX_MS);
+    });
+
+    it('never shrinks an expiry the row already promised (monotone)', async () => {
       const { authSessions, db, signAccessToken } = setup();
       const secret = generateRefreshSecret();
       const expiresAt = new Date(Date.now() + 10 * DAY);
@@ -281,9 +368,110 @@ describe('rotateSession', () => {
         })
       );
       await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
-      const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt?: Date };
+      const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt: Date };
       // min(now+30d, createdAt+90d) = ~now+1d, but the row already promised now+10d - keep it.
-      expect(params.newExpiresAt!.getTime()).toBe(expiresAt.getTime());
+      expect(params.newExpiresAt.getTime()).toBe(expiresAt.getTime());
+    });
+  });
+
+  describe('recovery allowance (a superseded secret is one shot, not a renewable credential)', () => {
+    /** Row state after a lost rotation response: `held` is pinned as previous, window elapsed. */
+    const orphaned = (heldHash: string, over: Record<string, unknown> = {}) =>
+      makeSession({
+        refreshTokenHash: 'orphaned-successor',
+        previousRefreshTokenHash: heldHash,
+        graceExpiresAt: past(),
+        ...over,
+      });
+
+    it('passes the allowance into the CAS so the database enforces it', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const held = generateRefreshSecret();
+      authSessions.findBySid.mockResolvedValue(orphaned(hashRefreshSecret(held)));
+
+      await rotateSession(buildRefreshToken(SID, held), { db, signAccessToken });
+
+      expect(authSessions.recoverRotateHash).toHaveBeenCalledWith(
+        SID,
+        expect.objectContaining({ maxRecoveries: MAX_SESSION_RECOVERIES })
+      );
+    });
+
+    it('degrades to 429 (never a revoke) once the allowance is spent, and records it', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      const held = generateRefreshSecret();
+      const heldHash = hashRefreshSecret(held);
+      // The CAS refuses because `recoveries` is at the cap; the re-read still shows the same
+      // pinned previous hash with an elapsed window.
+      authSessions.findBySid.mockResolvedValue(orphaned(heldHash, { recoveries: MAX_SESSION_RECOVERIES }));
+      authSessions.recoverRotateHash.mockResolvedValue(null);
+
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit })).rejects.toThrow(
+        TooManyRequestsError
+      );
+      // Revoking here would kill a healthy session AND stamp the theft event on a benign stall.
+      expect(authSessions.revokeBySid).not.toHaveBeenCalled();
+      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1' });
+      expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked' }));
+    });
+
+    it('still revokes when the previous hash has genuinely moved on', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const held = generateRefreshSecret();
+      authSessions.findBySid
+        .mockResolvedValueOnce(orphaned(hashRefreshSecret(held)))
+        // Re-read shows the chain advanced past the presented hash: two generations stale.
+        .mockResolvedValueOnce(makeSession({ refreshTokenHash: 'newer', previousRefreshTokenHash: 'newer-prev' }));
+      authSessions.recoverRotateHash.mockResolvedValue(null);
+
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken })).rejects.toThrow(
+        UnauthorizedError
+      );
+      expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+    });
+
+    it('stops a replay loop: the allowance survives recoveries and only a true rotation clears it', async () => {
+      const s1 = generateRefreshSecret();
+      const t = setupStateful(s1);
+      const lost = await rotateSession(buildRefreshToken(SID, s1), { db: t.db, signAccessToken: t.signAccessToken });
+      expect(lost.status).toBe('rotated');
+
+      // Replay the superseded secret once per lapsed window, as an attacker would. Each recovery
+      // hands back the new current token; keep the last one to prove the escape hatch below.
+      let currentToken = refreshTokenOf(lost);
+      for (let i = 0; i < MAX_SESSION_RECOVERIES; i++) {
+        t.state.graceExpiresAt = past();
+        const recovered = await rotateSession(buildRefreshToken(SID, s1), {
+          db: t.db,
+          signAccessToken: t.signAccessToken,
+        });
+        expect(recovered.status).toBe('rotated');
+        currentToken = refreshTokenOf(recovered);
+      }
+      t.state.graceExpiresAt = past();
+      await expect(
+        rotateSession(buildRefreshToken(SID, s1), { db: t.db, signAccessToken: t.signAccessToken })
+      ).rejects.toThrow(TooManyRequestsError);
+      expect(t.state.revokedAt).toBeNull();
+
+      // Escaping the cap requires the CURRENT secret - which is exactly what an attacker
+      // replaying a superseded secret does not have, and what moves `previous` off it.
+      const current = await rotateSession(currentToken, { db: t.db, signAccessToken: t.signAccessToken });
+      expect(current.status).toBe('rotated');
+      expect(t.state.recoveries).toBe(0);
+    });
+
+    it('does not slide the expiry on recovery, so a superseded secret cannot extend the session', async () => {
+      const s1 = generateRefreshSecret();
+      const t = setupStateful(s1);
+      await rotateSession(buildRefreshToken(SID, s1), { db: t.db, signAccessToken: t.signAccessToken });
+      const afterRotation = t.state.expiresAt.getTime();
+
+      t.state.graceExpiresAt = past();
+      await rotateSession(buildRefreshToken(SID, s1), { db: t.db, signAccessToken: t.signAccessToken });
+
+      expect(t.state.expiresAt.getTime()).toBe(afterRotation);
     });
   });
 
@@ -333,6 +521,44 @@ describe('rotateSession', () => {
       expect(audit).toHaveBeenCalledWith({ type: 'refresh_replay_capped', sid: SID, userId: 'user-1' });
     });
 
+    it('a REJECTING async audit hook never fails the refresh', async () => {
+      // An async adapter type-checks against `=> void | Promise<void>`; its rejection would escape
+      // a bare synchronous try/catch as an unhandled rejection in the auth path.
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn().mockRejectedValue(new Error('audit sink down'));
+      const held = generateRefreshSecret();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: 'orphaned',
+          previousRefreshTokenHash: hashRefreshSecret(held),
+          graceExpiresAt: past(),
+        })
+      );
+      const result = await rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit });
+      expect(result.status).toBe('rotated');
+    });
+
+    it('awaits the audit write on the paths that throw straight after emitting', async () => {
+      // revokeAsTheft throws on the next line; an un-awaited insert can be lost when the runtime
+      // freezes on response. Resolution order is the observable proxy for "it was awaited".
+      const { authSessions, db, signAccessToken } = setup();
+      const settled: string[] = [];
+      const audit = vi.fn().mockImplementation(async () => {
+        await Promise.resolve();
+        settled.push('audit');
+      });
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({ refreshTokenHash: 'cur', previousRefreshTokenHash: null })
+      );
+
+      await expect(
+        rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
+      ).rejects.toThrow(UnauthorizedError);
+      settled.push('threw');
+
+      expect(settled).toEqual(['audit', 'threw']);
+    });
+
     it('a throwing audit hook never fails the refresh', async () => {
       const { authSessions, db, signAccessToken } = setup();
       const audit = vi.fn(() => {
@@ -358,64 +584,6 @@ describe('rotateSession', () => {
    * hides the entire bug class this behaviour exists to prevent.
    */
   describe('concurrency (real CAS + one shared cookie jar)', () => {
-    const setupStateful = (initialSecret: string) => {
-      const state = makeSession({ refreshTokenHash: hashRefreshSecret(initialSecret) }) as unknown as {
-        refreshTokenHash: string;
-        previousRefreshTokenHash: string | null;
-        graceExpiresAt: Date | null;
-        revokedAt: Date | null;
-        expiresAt: Date;
-        lastUsedAt: Date;
-        replayUses?: number;
-      };
-      const authSessions = createMockAuthSessionRepository();
-      const users = createMockUserRepository();
-      users.findById.mockResolvedValue({ id: 'user-1', tokenVersion: 7 } as never);
-      // Snapshot on read, exactly like a real find: a concurrent writer must not mutate what an
-      // in-flight caller already read.
-      authSessions.findBySid.mockImplementation(async () => ({ ...state }) as never);
-      authSessions.rotateHash.mockImplementation(async (_sid, params) => {
-        // Mirrors AuthSessionModel.rotateHash: the expected hash is part of the FILTER.
-        if (state.revokedAt || state.expiresAt <= new Date()) return null;
-        if (state.refreshTokenHash !== params.expectedCurrentHash) return null; // lost the CAS
-        state.refreshTokenHash = params.nextHash;
-        state.previousRefreshTokenHash = params.expectedCurrentHash;
-        state.graceExpiresAt = params.replayExpiresAt;
-        state.lastUsedAt = new Date();
-        state.replayUses = 0; // a fresh generation gets a fresh allowance
-        if (params.newExpiresAt) state.expiresAt = params.newExpiresAt;
-        return { ...state } as never;
-      });
-      authSessions.recoverRotateHash.mockImplementation(async (_sid, params) => {
-        // Mirrors AuthSessionModel.recoverRotateHash: previous-match AND closed grace window are
-        // both part of the FILTER; the winner re-opens the window.
-        const now = new Date();
-        if (state.revokedAt || state.expiresAt <= now) return null;
-        if (state.previousRefreshTokenHash !== params.expectedPreviousHash) return null;
-        if (!state.graceExpiresAt || state.graceExpiresAt > now) return null;
-        state.refreshTokenHash = params.nextHash;
-        state.graceExpiresAt = params.replayExpiresAt;
-        state.lastUsedAt = now;
-        state.replayUses = 0;
-        if (params.newExpiresAt) state.expiresAt = params.newExpiresAt;
-        return { ...state } as never;
-      });
-      authSessions.registerReplayUse.mockImplementation(async (_sid, maxUses) => {
-        // Mirrors AuthSessionModel.registerReplayUse: the cap is part of the FILTER.
-        if (state.revokedAt || state.expiresAt <= new Date()) return null;
-        if ((state.replayUses ?? 0) >= maxUses) return null;
-        state.replayUses = (state.replayUses ?? 0) + 1;
-        state.lastUsedAt = new Date();
-        return { ...state } as never;
-      });
-      authSessions.revokeBySid.mockImplementation(async () => {
-        state.revokedAt = new Date();
-        return { ...state } as never;
-      });
-      const signAccessToken = vi.fn().mockReturnValue('ACCESS');
-      return { state, authSessions, users, signAccessToken, db: { authSessions, users } };
-    };
-
     /** Apply responses to the single cookie jar in the given landing order; last write wins. */
     const settleCookieJar = (initial: string, results: RotateSessionResult[]): string =>
       results.reduce((cookie, r) => (r.status === 'rotated' ? r.refreshToken : cookie), initial);

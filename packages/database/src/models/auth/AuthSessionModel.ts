@@ -21,6 +21,7 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
     previousRefreshTokenHash: { type: String, default: null },
     graceExpiresAt: { type: Date, default: null },
     replayUses: { type: Number, default: 0 },
+    recoveries: { type: Number, default: 0 },
     device: { type: AuthSessionDeviceSchema, default: undefined },
     createdVia: { type: String, required: true },
     impersonatedBy: { type: String, default: null },
@@ -66,7 +67,7 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
 
   async rotateHash(
     sid: string,
-    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt?: Date }
+    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt: Date }
   ): Promise<IAuthSessionDocument | null> {
     const now = new Date();
     // `refreshTokenHash` in the FILTER is the compare-and-swap: it makes this a conditional write
@@ -82,8 +83,12 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
           lastUsedAt: now,
           // A fresh generation gets a fresh allowance; see registerReplayUse.
           replayUses: 0,
+          // Possession of the CURRENT secret is what proves a live client, so this is the only
+          // write that clears the recovery allowance - see recoverRotateHash.
+          recoveries: 0,
           // Sliding session window, computed by the caller (it holds createdAt for the cap).
-          ...(params.newExpiresAt ? { expiresAt: params.newExpiresAt } : {}),
+          // Required here and absent from recoverRotateHash: only a true rotation earns a slide.
+          expiresAt: params.newExpiresAt,
         },
       },
       { new: true }
@@ -92,18 +97,28 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
 
   async recoverRotateHash(
     sid: string,
-    params: { expectedPreviousHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt?: Date }
+    params: { expectedPreviousHash: string; nextHash: string; replayExpiresAt: Date; maxRecoveries: number }
   ): Promise<IAuthSessionDocument | null> {
     const now = new Date();
-    // Recovery CAS (see IAuthSessionRepository doc): the grace window being CLOSED is part of the
-    // filter, so inside the window this never fires (coalesce handles that), and the winner
-    // re-opening graceExpiresAt is what makes a racing second recovery lose. previous stays
-    // pinned to the presented hash so siblings still holding it coalesce instead of forking.
+    // Recovery CAS (see IAuthSessionRepository doc): an ELAPSED grace window is part of the filter,
+    // so inside the window this never fires (coalesce handles that), and the winner re-opening
+    // graceExpiresAt is what makes a racing second recovery lose. previous stays pinned to the
+    // presented hash so siblings still holding it coalesce instead of forking - which is precisely
+    // why the allowance below has to exist.
+    //
+    // `$lte: <Date>` is type-bracketed, so it matches an elapsed window but NOT a null/missing one:
+    // a session that never rotated has no previous hash to recover from and is excluded by the
+    // hash clause anyway (the two fields are only ever written together).
+    //
+    // `$not: { $gte }` rather than `$lt` on the allowance, for the same deploy-safety reason as
+    // registerReplayUse: rows written before the field existed have it absent, and `$lt` silently
+    // skips missing fields.
     return AuthSessionModel.findOneAndUpdate(
       {
         sid,
         previousRefreshTokenHash: params.expectedPreviousHash,
         graceExpiresAt: { $lte: now },
+        recoveries: { $not: { $gte: params.maxRecoveries } },
         revokedAt: null,
         expiresAt: { $gt: now },
       },
@@ -113,8 +128,9 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
           graceExpiresAt: params.replayExpiresAt,
           lastUsedAt: now,
           replayUses: 0,
-          ...(params.newExpiresAt ? { expiresAt: params.newExpiresAt } : {}),
         },
+        // Never reset here: only rotateHash (possession of the current secret) clears this.
+        $inc: { recoveries: 1 },
       },
       { new: true }
     ).exec();

@@ -5,6 +5,7 @@ import {
   ABSOLUTE_SESSION_MAX_MS,
   DEFAULT_REFRESH_TTL_MS,
   MAX_REFRESH_REPLAY_USES,
+  MAX_SESSION_RECOVERIES,
   REFRESH_REPLAY_WINDOW_MS,
 } from './constants';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
@@ -14,7 +15,7 @@ import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefre
  * UserAuthAuditEvent names so the refresh endpoint can pass them straight to logAuthAudit.
  */
 export interface RotateSessionAuditEvent {
-  type: 'session_reuse_revoked' | 'session_recovered' | 'refresh_replay_capped';
+  type: 'session_reuse_revoked' | 'session_recovered' | 'refresh_replay_capped' | 'refresh_recovery_capped';
   sid: string;
   userId: string;
 }
@@ -33,9 +34,14 @@ export interface RotateSessionAdapters {
   /** How many replays of the superseded secret are served per generation; defaults to
    *  MAX_REFRESH_REPLAY_USES. */
   maxReplayUses?: number;
-  /** Involuntary-session-event sink (see RotateSessionAuditEvent). Fire-and-forget: it is never
-   *  awaited and a throw is swallowed, so it can never fail or slow the auth path. */
-  audit?: (event: RotateSessionAuditEvent) => void;
+  /** How many recoveries are served between true rotations; defaults to MAX_SESSION_RECOVERIES. */
+  maxRecoveries?: number;
+  /** Involuntary-session-event sink (see RotateSessionAuditEvent). Failure-proof by contract: a
+   *  synchronous throw AND a rejected promise are both swallowed (see `emit`), so no adapter can
+   *  fail the auth path. Returning a promise is allowed so the two paths that throw immediately
+   *  after emitting can await the write - a freeze-on-response runtime may otherwise never flush
+   *  it. Everywhere else it is fire-and-forget. */
+  audit?: (event: RotateSessionAuditEvent) => void | Promise<void>;
   logger?: Logger;
 }
 
@@ -82,9 +88,14 @@ const isReplayable = (session: IAuthSessionDocument, hash: string, now: Date): b
   session.graceExpiresAt > now;
 
 /**
- * Sliding session window: each rotation pushes expiry to now + the idle TTL, clamped to the
+ * Sliding session window: a true rotation pushes expiry to now + the idle TTL, clamped to the
  * absolute cap (createdAt + ABSOLUTE_SESSION_MAX_MS) and never below what the row already
  * promised (monotone - a slide must not shorten a session).
+ *
+ * Precondition: sessions are issued with a lifetime BELOW the cap. The monotone `max` means this
+ * is a slide-stop, not a terminator - a row already past `createdAt + cap` would simply stop
+ * sliding rather than expire - so ABSOLUTE_SESSION_MAX_MS bounds total lifetime only while
+ * DEFAULT_REFRESH_TTL_MS (and any `refreshTtlMs` override passed to issueSession) stays under it.
  */
 const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
   const slid = now.getTime() + DEFAULT_REFRESH_TTL_MS;
@@ -113,20 +124,33 @@ const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
  *     client (an in-flight response lands within seconds or never, and a delivered successor would
  *     be presented instead). Recovery: rotate forward FROM the previous secret via its own CAS,
  *     discarding the never-delivered current. The client gets a fresh token; the session lives.
+ *
  *     Cost, accepted deliberately: a thief holding the superseded secret can take the chain and
  *     work until the next collision with the real holder revokes the session. Detection fires at
  *     that collision - within one refresh interval for an active client, but deferred until an
- *     idle victim returns, and each re-recovery in between is visible only in the audit log. Before
- *     this change the thief's own attempt tripped detection immediately - and killed every
- *     lost-response victim with it. Every recovery is surfaced through `audit` so abuse is
- *     observable.
+ *     idle victim returns. Before this change the thief's own attempt tripped detection
+ *     immediately - and killed every lost-response victim with it.
+ *
+ *     Two bounds keep that window from being open-ended, because recovery leaves `previous` PINNED
+ *     (case 2 needs that) and so the same secret would otherwise satisfy this CAS again after every
+ *     grace window - a renewable credential, not a single shot:
+ *       - MAX_SESSION_RECOVERIES caps recoveries between true rotations. Escaping the cap means
+ *         rotating from the CURRENT secret, which moves `previous` off the stolen hash and re-arms
+ *         detection for the real holder's return.
+ *       - Recovery does NOT slide the expiry (only case 1 does), so replaying a superseded secret
+ *         can never hold a row open past the idle deadline its last true rotation set. Without
+ *         this an idle victim's session could be pushed to the absolute cap by the attacker's own
+ *         traffic.
+ *     Recoveries and revocations are RECORDED through `audit`. That is a forensic trail, not a
+ *     detection control: nothing currently alerts on it, so do not treat "it would show up in the
+ *     audit log" as a reason to widen anything here.
  *  4. Anything else -> an already-rotated or forged token was replayed. Treated as theft: the
  *     session is revoked and the caller rejected.
  *
- * Rotations (cases 1 and 3) also SLIDE the session expiry - see slideExpiresAt. Callers pass ONLY
- * opaque tokens here; legacy JWT refresh tokens are handled + lazily migrated at the endpoint
- * (which then calls issueSession). Throws UnauthorizedError for any invalid/expired/revoked/reused
- * token.
+ * Case 1 SLIDES the session expiry - see slideExpiresAt. Callers pass ONLY opaque tokens here;
+ * legacy JWT refresh tokens are handled + lazily migrated at the endpoint (which then calls
+ * issueSession). Throws UnauthorizedError for any invalid/expired/revoked/reused token, and
+ * TooManyRequestsError (never a revocation) for the ambiguous allowance-exhausted states.
  */
 export const rotateSession = async (
   opaqueToken: string,
@@ -135,6 +159,7 @@ export const rotateSession = async (
     signAccessToken,
     replayWindowMs = REFRESH_REPLAY_WINDOW_MS,
     maxReplayUses = MAX_REFRESH_REPLAY_USES,
+    maxRecoveries = MAX_SESSION_RECOVERIES,
     audit,
     logger,
   }: RotateSessionAdapters
@@ -148,11 +173,15 @@ export const rotateSession = async (
   const now = new Date();
   if (!isLive(session, now)) throw invalid();
 
-  const emit = (type: RotateSessionAuditEvent['type']): void => {
+  // Swallows both failure shapes: a synchronous throw, and a rejected promise from an async
+  // adapter (which type-checks against a `=> void` signature and would otherwise escape a bare
+  // try/catch as an unhandled rejection). Callers that are about to throw await this so the row is
+  // flushed; everyone else drops the promise.
+  const emit = (type: RotateSessionAuditEvent['type']): Promise<void> => {
     try {
-      audit?.({ type, sid, userId: session.userId });
+      return Promise.resolve(audit?.({ type, sid, userId: session.userId })).catch(() => {});
     } catch {
-      // The audit sink must never fail or slow authentication.
+      return Promise.resolve();
     }
   };
 
@@ -161,7 +190,9 @@ export const rotateSession = async (
     // least two generations stale. Revoke the whole session: if it is theft the attacker is
     // locked out; the (rare) benign holder of such a token re-authenticates.
     await db.authSessions.revokeBySid(sid);
-    emit('session_reuse_revoked');
+    // Awaited: this path throws on the next line, and `session_reuse_revoked` is the one event a
+    // post-mortem cannot do without. Cannot fail the request - see emit.
+    await emit('session_reuse_revoked');
     logger?.log('Refresh-token reuse detected; revoked session', sid);
     throw invalid();
   };
@@ -201,7 +232,7 @@ export const rotateSession = async (
         //  - a 401 would too, one step later, because the client's 401 interceptor reads 400/401
         //    from the refresh endpoint as a revocation and tears the session down. 429 is in the
         //    transient bucket it already retries instead.
-        emit('refresh_replay_capped');
+        await emit('refresh_replay_capped');
         logger?.log('Refresh replay allowance exhausted for session', sid);
         throw new TooManyRequestsError('Too many refresh attempts');
       }
@@ -212,32 +243,44 @@ export const rotateSession = async (
 
   // Case 3: recovery. The presented secret is one generation back and its coalesce window has
   // closed, so the successor's response never made it to the client. Rotate forward from what the
-  // client actually holds. The CAS (previous match + closed window, re-opened by the winner) makes
-  // exactly one recovery win; losers fall through to a coalesce inside the fresh window.
-  /**
-   * Takes the freshest row + clock the caller holds so the slid expiry never regresses behind a
-   * concurrent winner's write.
-   */
-  const recover = async (row: IAuthSessionDocument, at: Date): Promise<RotateSessionResult> => {
+  // client actually holds. The CAS (previous match + elapsed window + allowance, with the window
+  // re-opened by the winner) makes exactly one recovery win; losers fall through below.
+  //
+  // Takes no row/clock because it never slides the expiry: a superseded secret must not be able to
+  // extend the session it is used against. Only rotateHash slides - see slideExpiresAt.
+  const recover = async (): Promise<RotateSessionResult> => {
     const nextSecret = generateRefreshSecret();
     const updated = await db.authSessions.recoverRotateHash(sid, {
       expectedPreviousHash: presentedHash,
       nextHash: hashRefreshSecret(nextSecret),
       replayExpiresAt: new Date(Date.now() + replayWindowMs),
-      newExpiresAt: slideExpiresAt(row, at),
+      maxRecoveries,
     });
     if (updated) {
-      emit('session_recovered');
+      void emit('session_recovered');
       logger?.log('Recovered session', sid, 'from a lost rotation response');
       return finish(nextSecret);
     }
-    // The CAS did not apply. Re-read: a sibling's recovery re-opened the window for this same hash
-    // (coalesce there), or the session died. Deliberately NOT recursing into recover() - one
-    // recovery attempt per call keeps the failure modes finite.
+
+    // The CAS did not apply. Re-read to tell the three outcomes apart. Deliberately NOT recursing
+    // into recover() - one recovery attempt per call keeps the failure modes finite.
     const current = await db.authSessions.findBySid(sid);
     const after = new Date();
     if (!isLive(current, after)) throw invalid();
+    // (a) A sibling's recovery re-opened the window for this same hash: coalesce behind it.
     if (isReplayable(current, presentedHash, after)) return finish(null);
+    // (b) Still the pinned previous hash with the window elapsed - so either the allowance is
+    // spent, or this call stalled past the whole window between the CAS and this re-read. Both are
+    // ambiguous, and this file's rule for ambiguity is "try again", not "your session is gone"
+    // (see the replay-allowance branch above). Revoking here would be worse than a spurious
+    // logout: it would also stamp `session_reuse_revoked` on a benign transport stall, teaching
+    // the forensic log to report theft for the one failure mode it exists to explain.
+    if (presentedHash === current.previousRefreshTokenHash) {
+      await emit('refresh_recovery_capped');
+      logger?.log('Recovery allowance exhausted or lost for session', sid);
+      throw new TooManyRequestsError('Too many refresh attempts');
+    }
+    // (c) The previous hash moved on: the secret really is two or more generations stale.
     return revokeAsTheft();
   };
 
@@ -248,7 +291,7 @@ export const rotateSession = async (
     }
     // Case 2a: one generation behind, inside the window. A sibling rotated; do not fork the chain.
     if (isReplayable(session, presentedHash, now)) return finish(null);
-    return recover(session, now);
+    return recover();
   }
 
   const nextSecret = generateRefreshSecret();
@@ -274,6 +317,6 @@ export const rotateSession = async (
   // token MAY have been delivered in that gap; recovering anyway is never worse than the old
   // instant revoke (the jar's next refresh collides either way) and strictly better for
   // long-timeout non-browser callers.
-  if (presentedHash === current.previousRefreshTokenHash) return recover(current, after);
+  if (presentedHash === current.previousRefreshTokenHash) return recover();
   return revokeAsTheft();
 };

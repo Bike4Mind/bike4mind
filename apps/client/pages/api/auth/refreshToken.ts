@@ -57,10 +57,10 @@ const handler = baseApi({ auth: false })
         db: { authSessions: authSessionRepository, users: userRepository },
         signAccessToken,
         // Involuntary session outcomes -> the forensic audit log. The service's event types are
-        // valid UserAuthAuditEvent names by construction, and logAuthAudit swallows its own
-        // failures, so this is a straight fire-and-forget pass-through.
-        audit: event =>
-          void logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { sid: event.sid } }),
+        // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
+        // dropped so the service can await the write on the paths that throw immediately after
+        // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
+        audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { sid: event.sid } }),
         logger: req.logger,
       });
       requireNonSystemUser(rotated.user);

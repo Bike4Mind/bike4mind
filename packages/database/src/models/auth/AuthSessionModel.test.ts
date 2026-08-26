@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { AuthSessionModel, authSessionRepository } from './AuthSessionModel';
+
+/** rotateHash requires a slid expiry; tests that are not about sliding just need a live value. */
+const FAR_FUTURE = () => new Date(Date.now() + 30 * 86_400_000);
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
@@ -42,6 +45,7 @@ describe('AuthSessionModel repository', () => {
       expectedCurrentHash: 'h0',
       nextHash: 'h1',
       replayExpiresAt,
+      newExpiresAt: FAR_FUTURE(),
     });
     expect(updated?.refreshTokenHash).toBe('h1');
     expect(updated?.previousRefreshTokenHash).toBe('h0');
@@ -52,6 +56,7 @@ describe('AuthSessionModel repository', () => {
         expectedCurrentHash: 'hash-0',
         nextHash: 'x',
         replayExpiresAt,
+        newExpiresAt: FAR_FUTURE(),
       })
     ).toBeNull();
   });
@@ -59,7 +64,7 @@ describe('AuthSessionModel repository', () => {
   it('rotateHash is a compare-and-swap: only the first of two racing rotations applies', async () => {
     await authSessionRepository.create(base({ sid: 'cas', refreshTokenHash: 'h0' }));
     const replayExpiresAt = new Date(Date.now() + 5000);
-    const args = { expectedCurrentHash: 'h0', replayExpiresAt };
+    const args = { expectedCurrentHash: 'h0', replayExpiresAt, newExpiresAt: FAR_FUTURE() };
 
     // Both readers saw h0; issuing two tokens for one generation is exactly what strands a browser
     // cookie jar, so the loser must come back null rather than clobbering the winner.
@@ -128,6 +133,7 @@ describe('AuthSessionModel repository', () => {
       expectedCurrentHash: 'h0',
       nextHash: 'h1',
       replayExpiresAt: new Date(Date.now() + 5000),
+      newExpiresAt: FAR_FUTURE(),
     });
     expect((await authSessionRepository.findBySid('reset'))?.replayUses).toBe(0);
   });
@@ -146,9 +152,9 @@ describe('AuthSessionModel repository', () => {
     expect((await authSessionRepository.findActiveByUserId('u3')).map(s => s.sid)).toEqual(['keep']);
   });
 
-  it('rotateHash slides expiresAt when newExpiresAt is given, and leaves it alone when omitted', async () => {
+  it('rotateHash writes the slid expiry and clears the recovery allowance', async () => {
     const slid = new Date(Date.now() + 7 * 86_400_000);
-    await authSessionRepository.create(base({ sid: 'slide', refreshTokenHash: 'h0' }));
+    await authSessionRepository.create(base({ sid: 'slide', refreshTokenHash: 'h0', recoveries: 2 }));
     const updated = await authSessionRepository.rotateHash('slide', {
       expectedCurrentHash: 'h0',
       nextHash: 'h1',
@@ -156,13 +162,8 @@ describe('AuthSessionModel repository', () => {
       newExpiresAt: slid,
     });
     expect(updated?.expiresAt.getTime()).toBe(slid.getTime());
-
-    const untouched = await authSessionRepository.rotateHash('slide', {
-      expectedCurrentHash: 'h1',
-      nextHash: 'h2',
-      replayExpiresAt: new Date(Date.now() + 5000),
-    });
-    expect(untouched?.expiresAt.getTime()).toBe(slid.getTime());
+    // Possession of the CURRENT secret is the only thing that refills the recovery allowance.
+    expect(updated?.recoveries).toBe(0);
   });
 
   it('recoverRotateHash rotates from the previous hash once its grace window has closed', async () => {
@@ -175,20 +176,66 @@ describe('AuthSessionModel repository', () => {
         replayUses: 3,
       })
     );
+    const before = (await authSessionRepository.findBySid('rec'))!.expiresAt.getTime();
     const replayExpiresAt = new Date(Date.now() + 5000);
-    const slid = new Date(Date.now() + 7 * 86_400_000);
     const updated = await authSessionRepository.recoverRotateHash('rec', {
       expectedPreviousHash: 'held',
       nextHash: 'recovered',
       replayExpiresAt,
-      newExpiresAt: slid,
+      maxRecoveries: 3,
     });
     expect(updated?.refreshTokenHash).toBe('recovered');
-    // previous stays pinned so burst siblings still coalesce in the re-opened window.
+    // Previous stays PINNED so burst siblings still coalesce in the re-opened window instead of
+    // forking the chain. Do not "fix" this to advance: that is the property the recovery allowance
+    // below exists to bound, not an oversight.
     expect(updated?.previousRefreshTokenHash).toBe('held');
     expect(updated?.graceExpiresAt?.getTime()).toBe(replayExpiresAt.getTime());
     expect(updated?.replayUses).toBe(0); // fresh generation, fresh allowance
-    expect(updated?.expiresAt.getTime()).toBe(slid.getTime());
+    expect(updated?.recoveries).toBe(1); // spends one unit of the recovery allowance
+    // A superseded secret must never extend the session it is used against.
+    expect(updated?.expiresAt.getTime()).toBe(before);
+  });
+
+  it('recoverRotateHash refuses once the recovery allowance is spent', async () => {
+    await authSessionRepository.create(
+      base({
+        sid: 'rec-cap',
+        refreshTokenHash: 'orphaned',
+        previousRefreshTokenHash: 'held',
+        graceExpiresAt: new Date(Date.now() - 1000),
+        recoveries: 3,
+      })
+    );
+    expect(
+      await authSessionRepository.recoverRotateHash('rec-cap', {
+        expectedPreviousHash: 'held',
+        nextHash: 'nope',
+        replayExpiresAt: new Date(Date.now() + 5000),
+        maxRecoveries: 3,
+      })
+    ).toBeNull();
+  });
+
+  it('recoverRotateHash still serves rows written before `recoveries` existed', async () => {
+    // `$not: { $gte }` rather than `$lt`: a `$lt` filter silently skips a missing field, which
+    // would reject every in-flight session on deploy.
+    await authSessionRepository.create(
+      base({
+        sid: 'rec-legacy',
+        refreshTokenHash: 'orphaned',
+        previousRefreshTokenHash: 'held',
+        graceExpiresAt: new Date(Date.now() - 1000),
+      })
+    );
+    await AuthSessionModel.updateOne({ sid: 'rec-legacy' }, { $unset: { recoveries: '' } }).exec();
+    const updated = await authSessionRepository.recoverRotateHash('rec-legacy', {
+      expectedPreviousHash: 'held',
+      nextHash: 'recovered',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      maxRecoveries: 3,
+    });
+    expect(updated?.refreshTokenHash).toBe('recovered');
+    expect(updated?.recoveries).toBe(1);
   });
 
   it('recoverRotateHash refuses while the grace window is still open (coalesce territory)', async () => {
@@ -205,6 +252,7 @@ describe('AuthSessionModel repository', () => {
         expectedPreviousHash: 'held',
         nextHash: 'nope',
         replayExpiresAt: new Date(Date.now() + 5000),
+        maxRecoveries: 3,
       })
     ).toBeNull();
   });
@@ -223,6 +271,7 @@ describe('AuthSessionModel repository', () => {
         expectedPreviousHash: 'stolen-two-gens-back',
         nextHash: 'nope',
         replayExpiresAt: new Date(Date.now() + 5000),
+        maxRecoveries: 3,
       })
     ).toBeNull();
 
@@ -240,6 +289,7 @@ describe('AuthSessionModel repository', () => {
         expectedPreviousHash: 'held',
         nextHash: 'nope',
         replayExpiresAt: new Date(Date.now() + 5000),
+        maxRecoveries: 3,
       })
     ).toBeNull();
   });
@@ -253,7 +303,7 @@ describe('AuthSessionModel repository', () => {
         graceExpiresAt: new Date(Date.now() - 1000),
       })
     );
-    const params = { expectedPreviousHash: 'held', replayExpiresAt: new Date(Date.now() + 60_000) };
+    const params = { expectedPreviousHash: 'held', replayExpiresAt: new Date(Date.now() + 60_000), maxRecoveries: 3 };
     const [a, b] = await Promise.all([
       authSessionRepository.recoverRotateHash('rec-race', { ...params, nextHash: 'r1' }),
       authSessionRepository.recoverRotateHash('rec-race', { ...params, nextHash: 'r2' }),
