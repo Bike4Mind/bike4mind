@@ -423,6 +423,44 @@ describe('DataLakeManagerPanel - root view', () => {
   });
 });
 
+describe('DataLakeManagerPanel - pending-proposal chip', () => {
+  it('advertises the waiting review count on the lake row', () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 4 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 to review');
+  });
+
+  it('omits the chip at zero, so a row with nothing waiting is unchanged', () => {
+    // The guard is truthiness, not presence: a `!== undefined` check would render "0 to review"
+    // and invent a queue for every lake that has ever been reviewed clean.
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 0 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-mine')).not.toBeInTheDocument();
+    // The row still renders its ordinary content - the chip's absence costs nothing else.
+    expect(screen.getByTestId('datalake-manager-lake-mine')).toHaveTextContent('Mine');
+  });
+
+  it('omits the chip when the server sends no count at all', () => {
+    // The server omits the field for a lake the caller cannot manage, so a reader must see nothing.
+    renderPanel();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-mine')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-theirs')).not.toBeInTheDocument();
+  });
+
+  it('says "source is" for one and "sources are" for many', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 1 }], isLoading: false });
+    const { rerender } = renderPanel();
+    await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
+    expect(await screen.findByText('1 source is waiting for your review')).toBeInTheDocument();
+
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 3 }], isLoading: false });
+    rerenderPanel(rerender);
+    await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
+    expect(await screen.findByText('3 sources are waiting for your review')).toBeInTheDocument();
+  });
+});
+
 describe('DataLakeManagerPanel - lake navigation', () => {
   it('opens a lake on its categories (prefix root skipped) with the lake info on the right', async () => {
     const user = userEvent.setup();

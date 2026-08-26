@@ -430,6 +430,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   claimRestoring(id: string): Promise<boolean>;
   /**
+   * Enter `restoring` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
+   * claimed for the same reason: `unarchiveDataLake` pre-checks a document it read moments earlier,
+   * and `deleteDataLake` also accepts `archived`, so a delete landing in that gap must make this
+   * LOSE rather than be overwritten by it. A plain `$set` there leaves the lake `active` with every
+   * member soft-deleted and `restoreDeletedDataLake` refusing it, which strands the files.
+   * Re-entrant from `restoring` itself so a crashed prior attempt can retry. Returns whether this
+   * caller may proceed.
+   */
+  claimUnarchiving(id: string): Promise<boolean>;
+  /**
    * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
    * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
    * on `purging` so it can never resurrect a lake that some other transition has since moved.
@@ -641,6 +651,19 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
   setStatusIfActive(
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Guarded status transition to ANY status, terminal or not, carrying the client-supplied failure
+   * tallies in the same atomic write. The route variant of the two methods above: the PUT endpoint
+   * accepts any `BatchStatus` plus `failedFiles`/`failedFileNames`, which neither of them can
+   * express, and an unguarded `update` there could resurrect a batch the pipeline already settled.
+   * Returns the post-update doc to the single winner and null to a caller whose batch was already
+   * terminal, so the caller can tell a real transition from a no-op instead of inferring it from a
+   * stale read.
+   */
+  updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used

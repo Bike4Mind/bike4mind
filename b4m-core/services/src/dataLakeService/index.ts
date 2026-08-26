@@ -70,3 +70,6 @@ export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
 export * from './assembleLakeConfigHistory';
+export * from './canonicalSourceKey';
+export * from './proposeDataLakeContent';
+export * from './reviewDataLakeProposal';

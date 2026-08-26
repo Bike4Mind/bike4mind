@@ -44,6 +44,131 @@ export async function revokeToken(accessToken: string) {
   await oauth2Client.revokeToken(accessToken);
 }
 
+/** Outcome of a grant revocation attempt. `already_invalid` and `revoked` both mean nothing is live at Google. */
+export type RevokeOutcome = 'revoked' | 'already_invalid' | 'no_credential' | 'failed';
+
+/**
+ * Revoke a stored (encrypted) Google credential at Google, BEST EFFORT.
+ *
+ * Prefer handing this the REFRESH token: Google revokes the whole authorization grant, which
+ * cascades to every access token minted from it. Revoking an access token only kills that one token
+ * and leaves the grant (and its refresh token) live - which is why the caller must not fall back to
+ * the access token when a refresh token exists.
+ *
+ * Never throws. Local teardown must still complete when Google is unreachable, otherwise a provider
+ * outage leaves BOTH a live grant at Google AND our stored copy of the credential; dropping our copy
+ * is strictly better, and the user's own Google account page remains the backstop for the grant. The
+ * console lines are the only way a smoke test can tell "never attempted" from "attempted and
+ * swallowed", so every arm logs.
+ */
+export async function revokeDriveGrant(
+  encryptedToken: string | null | undefined,
+  context: string
+): Promise<RevokeOutcome> {
+  if (!encryptedToken) {
+    console.warn(`[googleDrive] revoke skipped (${context}): no stored credential`);
+    return 'no_credential';
+  }
+
+  let token: string | null;
+  try {
+    token = decryptToken(encryptedToken);
+  } catch (e) {
+    // Undecryptable (post key-rotation / partial restore): the grant is unreachable from here, so
+    // say so loudly rather than reporting a revoke that never happened.
+    console.error(`[googleDrive] revoke failed (${context}): stored credential is unreadable`, e);
+    return 'failed';
+  }
+  if (!token) {
+    console.warn(`[googleDrive] revoke skipped (${context}): stored credential decrypted to empty`);
+    return 'no_credential';
+  }
+
+  try {
+    await revokeToken(token);
+    console.log(`[googleDrive] revoked grant at Google (${context})`);
+    return 'revoked';
+  } catch (e) {
+    // A token Google no longer recognises (already revoked, or expired past its grant) leaves nothing
+    // live - the desired end state, not a failure to retry.
+    if (isUnknownTokenError(e)) {
+      console.log(`[googleDrive] revoke no-op (${context}): Google no longer recognises the token`);
+      return 'already_invalid';
+    }
+    console.error(`[googleDrive] revoke failed (${context}) - the grant may still be live at Google`, e);
+    return 'failed';
+  }
+}
+
+/**
+ * Google's revoke endpoint answers 400 both for a token it does not recognise (`invalid_token`) and
+ * for a request WE malformed (`invalid_request`). Only the former means "nothing left to revoke";
+ * matching on the status alone would let our own bad request read as a successful revocation, which
+ * is the exact failure mode that made this revoke a silent no-op in the first place.
+ */
+function isUnknownTokenError(e: unknown): boolean {
+  const err = e as { response?: { status?: number; data?: { error?: string } }; status?: number };
+  const status = err?.response?.status ?? err?.status;
+  return status === 400 && err?.response?.data?.error === 'invalid_token';
+}
+
+/**
+ * Decrypt a stored token for COMPARISON only - never throws, because an unreadable value simply has
+ * no identity to compare. Use revokeDriveGrant (which logs) when the decrypt outcome itself matters.
+ */
+export function decryptStoredToken(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    return decryptToken(value);
+  } catch {
+    return null;
+  }
+}
+
+/** The user's own decrypted Drive refresh token, or null when they have no readable connection. */
+async function personalRefreshTokenOf(userId: string): Promise<string | null> {
+  const user = await User.findById(userId, 'googleDrive');
+  return decryptStoredToken(user?.googleDrive?.refreshToken);
+}
+
+/**
+ * Tear down an org Drive connection: revoke its org-owned credential at Google (unless it is BORROWED
+ * - see below), then hard-delete the row, which releases the global driveFolderId claim.
+ *
+ * This is the single teardown seam on purpose - the revoke belongs to *releasing a connection*, not to
+ * one route. `release()` itself cannot do it: the crypto helpers live in apps/client and are not
+ * reachable from packages/database (same reason the encrypt guard lives at the writer). Any future
+ * caller that tears a connection down - lake purge included - must come through here, or it strands a
+ * live Google grant behind a credential no product surface can reach any more.
+ *
+ * Revoke-before-delete, so if the revoke is the step that fails the credential is still there to retry
+ * from; the revoke is best-effort, so an unreachable Google never blocks the disconnect.
+ *
+ * BORROWED credential: drive-sync copies the connecting user's personal refresh token verbatim, so the
+ * org's credential is usually the same token that user still holds. Revoking it would kill THEIR
+ * personal Drive (picker, attachments) from an org admin's click, leaving their profile still reading
+ * "connected" - reaching well past the org resource being disconnected. In that case deleting the row
+ * IS the full teardown of the org's copy, and the grant stays the user's to revoke from their own
+ * profile (which now genuinely revokes). A credential the user no longer holds has no such owner, so
+ * this connection is its last live handle and it does get revoked.
+ */
+export async function releaseDriveConnection(connectionId: string, organizationId: string): Promise<boolean> {
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
+  if (!connection) return false;
+
+  const connectionToken = decryptStoredToken(connection.oauthRefreshToken);
+  const isBorrowed = !!connectionToken && connectionToken === (await personalRefreshTokenOf(connection.connectedBy));
+  if (isBorrowed) {
+    console.log(
+      `[googleDrive] revoke skipped (org connection ${connectionId}): credential is the connecting user's own personal Drive token - dropping the org copy only`
+    );
+  } else {
+    await revokeDriveGrant(connection.oauthRefreshToken, `org connection ${connectionId}`);
+  }
+
+  return orgGoogleDriveConnectionRepository.release(connectionId, organizationId);
+}
+
 /**
  * Resolve a valid Google Drive access token for a user from their stored (encrypted) OAuth
  * credential, refreshing + persisting it if expired. Throws if the user has no connection or the

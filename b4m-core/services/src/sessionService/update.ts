@@ -11,6 +11,7 @@ import {
   SessionUpdateRequestSchema,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 import { secureParameters } from '@bike4mind/utils';
 import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
 import uniq from 'lodash/uniq.js';
@@ -33,6 +34,10 @@ interface UpdateSessionAdapters {
     caches: ICacheRepository;
   };
   storage: BaseStorage;
+  /** Optional so existing callers compile; without it a failed derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
 }
 
 export const updateSession = async (
@@ -65,6 +70,20 @@ export const updateSession = async (
   }
 
   session.name = name || session.name;
+  // Re-derive the lake scope whenever the attached set changes. Deriving only at CREATE left the
+  // most ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
+  // already-open notebook goes through here, and an empty `retrievalTags` is not a narrow scope -
+  // the search's tag clause is skipped entirely and retrieval falls through to every lake the
+  // caller can reach. Only ever ADDS a derived scope; an explicitly-set one is left alone.
+  if (knowledgeIds && !isEqual(session.knowledgeIds, knowledgeIds) && !session.retrievalTags?.length) {
+    const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
+      db: { fabFiles: db.fabFiles },
+      logger: adapters.logger,
+      resolveLakeAccess: adapters.resolveLakeAccess,
+    });
+    if (derived.length > 0) session.retrievalTags = derived;
+  }
+
   session.knowledgeIds = knowledgeIds || session.knowledgeIds;
   session.artifactIds = artifactIds || session.artifactIds;
   session.tags = tags || session.tags;

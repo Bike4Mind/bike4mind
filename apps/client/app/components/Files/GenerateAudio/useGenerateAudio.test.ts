@@ -109,3 +109,45 @@ describe('useGenerateAudio provider substitution', () => {
     );
   });
 });
+
+/**
+ * TTS reports "out of credits" as a 422 tagged `insufficient_credits`, the same as
+ * every other credit-metered route. This branch keys off the CLASSIFIER, not the
+ * status, because a plain validation failure is also a 422 - so a status-only
+ * check here would show "you are out of credits" for a malformed request.
+ */
+describe('useGenerateAudio credit exhaustion', () => {
+  it('surfaces the credits message from a classified 422', async () => {
+    mocks.post.mockRejectedValue(
+      axiosFailure(422, {
+        error: 'Insufficient credits for text-to-speech',
+        provider: 'openai',
+        errorCode: 'insufficient_credits',
+      })
+    );
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Insufficient credits for text-to-speech');
+  });
+
+  it('falls back to a generic line when the classified body carries no message', async () => {
+    mocks.post.mockRejectedValue(axiosFailure(422, { errorCode: 'insufficient_credits' }));
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('You do not have enough credits to generate this audio.');
+  });
+
+  // The trap this guards: an unclassified 422 is an ordinary bad request, and must
+  // NOT be reported as a billing problem.
+  it('does not claim a credit problem for an unclassified 422', async () => {
+    mocks.post.mockRejectedValue(
+      axiosFailure(422, { error: "The openai provider does not support the 'wav' output format" })
+    );
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith("The openai provider does not support the 'wav' output format");
+  });
+});

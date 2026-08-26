@@ -14,6 +14,7 @@ import {
   pickOverride,
   resolveScopedSetting,
   resolveScopedSettingValues,
+  scopeForCaller,
   scopeForFileOwner,
   scopeForLake,
 } from './resolveScopedSetting';
@@ -293,6 +294,22 @@ describe('scope builders', () => {
 
   it('scopeForFileOwner: an org-less file is individually owned', () => {
     const s = scopeForFileOwner({ userId: 'u1', organizationId: '' });
+    expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
+    expect(s.organizationId).toBeUndefined();
+    expect(s.lakeId).toBeUndefined();
+  });
+
+  it('scopeForCaller (#1955): an org member resolves at owner:<orgId>, with no lake rung', () => {
+    const s = scopeForCaller({ userId: 'u1', organizationId: 'o1' });
+    // Owner derivation mirrors scopeForLake/scopeForFileOwner: org member -> Organization owner, so
+    // an org-wide override written via any of the three paths lands at the same owner:o1 rung.
+    expect(s.owner).toEqual({ id: 'o1', type: CreditHolderType.Organization });
+    expect(s.organizationId).toBe('o1');
+    expect(s.lakeId).toBeUndefined();
+  });
+
+  it('scopeForCaller: an org-less caller is individually owned', () => {
+    const s = scopeForCaller({ userId: 'u1', organizationId: '' });
     expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
     expect(s.organizationId).toBeUndefined();
     expect(s.lakeId).toBeUndefined();

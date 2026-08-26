@@ -5,8 +5,7 @@ import {
   MementoFeature,
   SessionPromptFeature,
   shouldSummarizeSession,
-  SUMMARIZATION_CONFIG,
-} from './ChatCompletionFeatures';
+  SUMMARIZATION_CONFIG, LakeMemoryFeature } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
@@ -1720,6 +1719,16 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         chunkIds: ['chA1'],
         surface: 'forced-retrieval',
         queryText: 'pto policy',
+        // #1867 turn linkage + similarity scores: quest is a direct method param here, so
+        // zero new plumbing was needed - questId/sessionId come straight from it.
+        questId: 'quest1',
+        sessionId: 'session1',
+        // Pinned to the exact cosine, not expect.any(Number): the query embedding and chA1's
+        // vector are both [1, 0], so this is 1 by construction. A loose matcher here would pass
+        // for a wrong chunk's score or a rank index, which is the misattribution the
+        // scores/chunkIds alignment exists to prevent - this is the only forced-retrieval
+        // assertion that can fail on it.
+        scores: [1],
       })
     );
   });
@@ -1776,5 +1785,80 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
 
     expect(messages[0]?.content).toContain('Handbook.pdf');
     expect(record).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The session-altitude skip. Guards the composition that makes it safe: a personal-file notebook
+ * stops grounding against unrelated lakes, while a lake session keeps its lake. Both directions are
+ * asserted because the failing direction (never skipping) is silently today's behavior.
+ */
+describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
+  const makeSkipCtx = (personalCorpusOnly: boolean | undefined) => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'u1', tags: [], groups: [] },
+    personalCorpusOnly,
+    // Present so a NON-skipping run gets far enough to prove it did not return early.
+    db: { fabfiles: undefined, fabfilechunks: undefined },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+  });
+
+  const run = async (personalCorpusOnly: boolean | undefined, retrievalTags?: string[]) => {
+    const ctx = makeSkipCtx(personalCorpusOnly);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      retrievalTags
+    );
+    const messages = await feature.getContextMessages(
+      { id: 'q1' } as never,
+      { getDefaultEmbeddingModel: () => 'text-embedding-ada-002' } as never,
+      'what do my notes say'
+    );
+    return { ctx, messages };
+  };
+
+  it('skips retrieval entirely when the corpus is personal files', async () => {
+    const { messages } = await run(true);
+    expect(messages).toEqual([]);
+  });
+
+  it('does NOT skip a lake session, whose attachments are lake content', async () => {
+    const { messages } = await run(false, ['datalake:acme']);
+    // Reaches the repository guard instead of the skip - i.e. it did not return early.
+    expect(messages).not.toEqual([]);
+  });
+
+  it('does not skip when the flag is absent, so an unwired host keeps grounding', async () => {
+    const { messages } = await run(undefined);
+    expect(messages).not.toEqual([]);
+  });
+});
+
+describe('LakeMemoryFeature personal-corpus skip', () => {
+  it('injects nothing when the session corpus is personal files', async () => {
+    // Without this the card takes its empty-retrievalTags branch and falls back to the FULL entitled
+    // set - and personalCorpusOnly is only ever true when retrievalTags IS empty, so the two compose
+    // into exactly the always-on lake injection this change exists to stop.
+    const ctx = {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      personalCorpusOnly: true,
+      db: {},
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+      recallLakeMemory: vi.fn(),
+    };
+    const feature = new LakeMemoryFeature(
+      ctx as unknown as ConstructorParameters<typeof LakeMemoryFeature>[0],
+      []
+    );
+    const messages = await feature.getContextMessages({ id: 'q1' } as never);
+
+    expect(messages).toEqual([]);
+    // The LOG is the discriminator, deliberately. With a minimal fixture the un-skipped path also
+    // returns [] (no entitled tags to resolve), so asserting the empty result alone would pass
+    // whether or not the skip fired - which is exactly the vacuity this assertion replaces.
+    expect(ctx.logger.log).toHaveBeenCalledWith(expect.stringContaining('[lakeMemory] skipped'));
   });
 });

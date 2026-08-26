@@ -22,8 +22,11 @@ import {
   Textarea,
 } from '@mui/joy';
 import {
+  useDataLakeProposals,
   useDataLakeSpend,
   useLakeConfigHistory,
+  useReviewDataLakeProposal,
+  reviewProposalFailureMessage,
   useSetLakeVisibility,
   useUpdateDataLake,
 } from '@client/app/hooks/data/dataLakes';
@@ -39,10 +42,11 @@ import {
 import type { DataLakeGroundingMode } from '@bike4mind/common';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
+import { DataLakeProposalsPanel } from './DataLakeProposalsPanel';
 
-/** The modal's tabs. 'spend' and 'history' are both read-only and both permission-gated, so each
- *  can be absent for a given lake - see showSpendTab / showHistoryTab. */
-type DataLakeSettingsTab = 'settings' | 'spend' | 'history';
+/** The modal's tabs. Settings is always present; the other three are each permission-gated and only
+ *  appear when they have content - see showSpendTab / showHistoryTab / showProposalsTab. */
+type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals';
 
 /** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
 const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
@@ -120,15 +124,41 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // rejection - same derive-at-render shape as the spend tab, for the same reason (no error paint).
   const history = useLakeConfigHistory(lake?.id ?? null, !!lake?.canManage && tab === 'history');
   const showHistoryTab = !!lake?.canManage && !history.isForbidden;
+  // Fetched whenever a manager opens the modal, unlike spend (whose tab is decided by a field the
+  // lake list already carries): there is no precomputed "has proposals" signal, and a queue tab
+  // that only appears after you click it would never be found. One small read per modal open.
+  const proposals = useDataLakeProposals(lake?.id ?? null, 'pending', { enabled: !!lake?.canManage });
+  const reviewProposal = useReviewDataLakeProposal(lake?.id ?? '');
+  // Hidden while the queue is empty rather than shown with an empty state: until a producer runs
+  // there is nothing to review, and a permanently-empty tab reads as a broken feature.
+  const queueHasItems = !!lake?.canManage && !proposals.isForbidden && (proposals.data?.length ?? 0) > 0;
+  // STICKY for as long as the modal is open. Deriving visibility purely from the current count meant
+  // ruling on the last proposal made the tab vanish under the reviewer mid-action, silently
+  // relocating them to the Settings form - which reads as the app losing their place, and hid the
+  // confirmation that they had finished. Sticky keeps them on a "nothing waiting" panel instead, and
+  // the tab is still absent on the next open, so an always-empty tab never appears.
+  // Stores WHICH lake earned the tab rather than a bare boolean, so switching lakes invalidates it by
+  // comparison. A separate reset effect would race this one on mount - whichever is declared last
+  // wins, which silently defeated the stickiness.
+  const [queueSeenFor, setQueueSeenFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (queueHasItems && lake?.id) setQueueSeenFor(lake.id);
+  }, [queueHasItems, lake?.id]);
+  const showProposalsTab =
+    (queueHasItems || (!!lake?.id && queueSeenFor === lake.id)) && !!lake?.canManage && !proposals.isForbidden;
   // A tab that has just been retracted must not stay selected, or the panel renders blank.
   const activeTab: DataLakeSettingsTab =
-    (tab === 'spend' && !showSpendTab) || (tab === 'history' && !showHistoryTab) ? 'settings' : tab;
-  const showTabs = showSpendTab || showHistoryTab;
+    (tab === 'spend' && !showSpendTab) ||
+    (tab === 'history' && !showHistoryTab) ||
+    (tab === 'proposals' && !showProposalsTab)
+      ? 'settings'
+      : tab;
+  const showTabs = showSpendTab || showHistoryTab || showProposalsTab;
   // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
   // them means a future narrow read-only tab silently gets a Save button it must not have.
-  // Both non-settings panels are tabular and need the room; the settings form does not.
-  const isWideTab = activeTab === 'spend' || activeTab === 'history';
-  const isReadOnlyTab = activeTab === 'spend' || activeTab === 'history';
+  // Every non-settings panel is tabular and needs the room; the settings form does not.
+  const isWideTab = activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals';
+  const isReadOnlyTab = activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals';
   const { accounts, selectedAccount } = useAccounts();
   // Promotion targets the active account-switcher org, so the toggle is enabled only in a
   // Team context (a non-personal account selected) - matching what the create/visibility
@@ -508,6 +538,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       History
                     </Tab>
                   )}
+                  {showProposalsTab && (
+                    <Tab value="proposals" data-testid="datalake-settings-tab-proposals">
+                      {`Proposals (${proposals.data?.length ?? 0})`}
+                    </Tab>
+                  )}
                 </TabList>
                 <TabPanel value="settings" sx={{ p: 0 }}>
                   {settingsFields}
@@ -532,13 +567,35 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     error={history.isForbidden ? null : history.error}
                   />
                 </TabPanel>
+                <TabPanel value="proposals" sx={{ p: 0 }}>
+                  <DataLakeProposalsPanel
+                    proposals={proposals.data}
+                    isLoading={proposals.isLoading}
+                    error={proposals.isForbidden ? null : proposals.error}
+                    pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
+                    // Survives the toast: which source failed, and why, stays on its own card until
+                    // the next attempt on it.
+                    failure={
+                      reviewProposal.isError && reviewProposal.variables?.proposalId
+                        ? {
+                            proposalId: reviewProposal.variables.proposalId,
+                            message: reviewProposalFailureMessage(reviewProposal.error),
+                          }
+                        : undefined
+                    }
+                    onApprove={proposalId => reviewProposal.mutate({ proposalId, decision: 'approve' })}
+                    onDecline={(proposalId, reason) =>
+                      reviewProposal.mutate({ proposalId, decision: 'decline', reason })
+                    }
+                  />
+                </TabPanel>
               </Tabs>
             ) : (
               settingsFields
             )}
           </DialogContent>
-          {/* Save/Cancel apply to the Settings form only - the read-only Spend and History tabs
-              have nothing to save, so these belong to that tab, not the modal as a whole. */}
+          {/* Save/Cancel apply to the Settings form only - the read-only Spend, History and
+              Proposals tabs have nothing to save, so these belong to that tab, not the modal. */}
           {!isReadOnlyTab && (
             <DialogActions>
               <Button

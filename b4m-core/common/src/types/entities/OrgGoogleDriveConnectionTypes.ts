@@ -171,6 +171,14 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByDriveFolderId(driveFolderId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
+   * Every connection whose stored credential belongs to a given user. `connectedBy` is re-stamped
+   * together with the credential (see updateCredential), so it always names the credential's owner -
+   * which makes this the set of connections a profile-level Google revoke breaks. Deliberately
+   * CROSS-ORG for that reason; excludes credentials.
+   */
+  findByConnectedBy(connectedBy: string): Promise<IOrgGoogleDriveConnectionDocument[]>;
+
+  /**
    * Enabled, healthy ('connected') connections whose last poll is due (never polled, or older than
    * the cutoff), oldest-first and capped. The re-sync poll cron's scan primitive - it enqueues each
    * onto the same ingest queue the manual Re-sync uses, so both share one delta-aware apply path.

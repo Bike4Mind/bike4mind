@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ApiErrorCode } from '../apiErrorCodes';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -120,5 +121,7 @@ export const ApiErrorSchema = z.object({
  * on the sunset date) instead of leaving a bespoke copy behind to drift.
  */
 export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.literal('insufficient_credits').optional(),
+  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
+  // so a rename there breaks this rather than silently publishing a dead code.
+  errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
 });

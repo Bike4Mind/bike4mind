@@ -319,3 +319,73 @@ describe('updateSession - project propagation opt-out', () => {
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Attaching a lake file to an already-open notebook is the most ordinary way a user reaches a lake,
+ * and it goes through update() - which derived nothing, so the session stayed unscoped and retrieval
+ * fell through to every lake the caller could reach. An empty retrievalTags is NOT a narrow scope.
+ */
+describe('updateSession - lake-scope derivation on attach', () => {
+  const user = { id: 'user-1' } as IUserDocument;
+
+  const makeAdapters = (existing: Record<string, unknown>, lakeFiles: Array<Record<string, unknown>>) => {
+    const update = vi.fn();
+    return {
+      update,
+      adapters: {
+        db: {
+          sessions: {
+            shareable: {
+              findUpdateAccessById: vi.fn().mockResolvedValue({
+                id: 'session-1',
+                knowledgeIds: [],
+                artifactIds: [],
+                tags: [],
+                name: 'Session',
+                ...existing,
+              }),
+            },
+            update,
+          },
+          projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
+          fabFiles: {
+            findAllByIds: vi.fn().mockResolvedValue([]),
+            shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(lakeFiles) },
+          },
+          caches: {},
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape
+        } as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage isn't exercised here
+        storage: {} as any,
+      },
+    };
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('derives the lake tag when a lake file is attached to an open session', async () => {
+    const { update, adapters } = makeAdapters({}, [{ id: 'f1', tags: [{ name: 'datalake:acme' }] }]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: ['f1'] } as never, adapters as never);
+
+    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
+  });
+
+  it('derives nothing from a personal file, leaving the notebook unscoped', async () => {
+    const { update, adapters } = makeAdapters({}, [{ id: 'f2', tags: [{ name: 'notes' }] }]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: ['f2'] } as never, adapters as never);
+
+    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+  });
+
+  it('never overwrites a scope the session already has', async () => {
+    const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:chosen'] }, [
+      { id: 'f1', tags: [{ name: 'datalake:acme' }] },
+    ]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: ['f1'] } as never, adapters as never);
+
+    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:chosen'] });
+  });
+});

@@ -266,6 +266,128 @@ describe('wafPolicy', () => {
     });
   });
 
+  // The scope-down of a rate limit, whether asserted directly or negated with NotStatement.
+  // any: WAF statements nest differently per type; this reaches the ByteMatch in either shape.
+  function rateLimitByteMatch(rule: WafRule): any {
+    const scopeDown = (rule.Statement as any).RateBasedStatement?.ScopeDownStatement;
+    return scopeDown?.ByteMatchStatement ?? scopeDown?.NotStatement?.Statement?.ByteMatchStatement;
+  }
+
+  /** Every rate-based rule in a stage that narrows itself with a scope-down. */
+  function scopedRateLimits(stage: string): WafRule[] {
+    const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+    // any: see above
+    return rules.filter(r => (r.Statement as any).RateBasedStatement?.ScopeDownStatement);
+  }
+
+  // A rate limit that matches the raw path is evadable, and the ORDER of the transformations is
+  // the whole fix rather than their presence. They chain, each applied to the previous result, so
+  // NORMALIZE_PATH before URL_DECODE leaves nothing to normalize the decoded form: verified
+  // against staging with curl --path-as-is, /%2e/api/otc/send reaches the API with a 404
+  // application/json yet reduces to /./api/otc/send, which starts with neither /api/ nor
+  // /api/otc/send and is therefore counted by nothing. Decode, then normalize, then lowercase.
+  // Double encoding (/%252e/...) is served the SPA shell and never reaches an endpoint, so it is
+  // out of reach either way. Limits only: for an Allow or an exemption, a path that fails to
+  // match is the safe direction, which is why the exemptions keep NONE.
+  describe('rate limit path matching', () => {
+    for (const stage of ['dev', 'production']) {
+      it(`decodes before normalizing in every ${stage} rate limit`, () => {
+        const limits = scopedRateLimits(stage);
+        expect(limits.length).toBeGreaterThan(0);
+
+        for (const rule of limits) {
+          const byteMatch = rateLimitByteMatch(rule);
+          expect(byteMatch, `${rule.Name} scope-down must match on a path`).toBeDefined();
+
+          const ordered = [...(byteMatch.TextTransformations ?? [])]
+            .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
+            .map((t: { Type: string }) => t.Type);
+
+          expect(ordered, `${rule.Name} must decode, then normalize, then lowercase`).toEqual([
+            'URL_DECODE',
+            'NORMALIZE_PATH',
+            'LOWERCASE',
+          ]);
+        }
+      });
+
+      it(`anchors every ${stage} rate limit to a URI path prefix`, () => {
+        for (const rule of scopedRateLimits(stage)) {
+          const byteMatch = rateLimitByteMatch(rule);
+
+          expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
+          expect(byteMatch.PositionalConstraint, `${rule.Name} must be prefix-anchored`).toBe('STARTS_WITH');
+        }
+      });
+    }
+
+    // /_next/image is a live server-side fetch and resize, not a static file: it answers with
+    // application/json from a function. The blanket rule used to cover it and the scoped rule
+    // does not, so without this it is the one expensive path with no ceiling at all.
+    it('bounds the production image optimizer, below the static-asset ceiling', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const image = rules.find(r => r.Name === 'image-rate-limit');
+      expect(image).toBeDefined();
+
+      // any: see above
+      const rateBased = (image!.Statement as any).RateBasedStatement;
+      const staticRule = rules.find(r => r.Name === 'static-asset-rate-limit');
+      const staticLimit = (staticRule!.Statement as any).RateBasedStatement.Limit;
+
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/image');
+      expect(rateBased.Limit).toBeLessThan(staticLimit);
+    });
+
+    // Scoping api-rate-limit to /api/ left everything that is neither /api/ nor an asset with no
+    // ceiling, where the blanket rule had covered it. Next's rewrites run inside the server, so
+    // the WAF only sees the pre-rewrite URI: /p/* and /uc/* are unauthenticated Lambda
+    // invocations with an S3 fetch and no app-level limiter of their own.
+    it('keeps a default ceiling on everything that is not an asset', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const fallback = rules.find(r => r.Name === 'default-rate-limit');
+      expect(fallback, 'production needs a catch-all rate limit').toBeDefined();
+
+      // any: see above
+      const rateBased = (fallback!.Statement as any).RateBasedStatement;
+      const apiLimit = (rules.find(r => r.Name === 'api-rate-limit')!.Statement as any).RateBasedStatement.Limit;
+
+      // Excludes only real assets. /_next/static/ is the sole prefix CloudFront routes to the
+      // bucket, so /_next/data, /_next/image and any case variant stay function-backed and must
+      // fall through to this ceiling rather than into the 50000 asset bucket.
+      expect(rateBased.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString).toBe(
+        '/_next/static/'
+      );
+      // Pinned, not bounded: this number is about to be retuned off a shadow reading, and a
+      // greater-than assertion would pass a 10x loosening while failing a tightening.
+      expect(rateBased.Limit).toBe(5000);
+      expect(rateBased.Limit).toBeGreaterThan(apiLimit);
+    });
+
+    // Nothing else pins this. #1893's parity guard deep-equals Statement only, so flipping a
+    // production limit to Count is invisible to every other test in this file. When these do go
+    // to Count for a first week of measurement, this assertion is what makes coming back to
+    // Block something the build demands rather than something someone remembers.
+    it('enforces, rather than counts, every production rate limit', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      // any: see above
+      const limits = rules.filter(r => (r.Statement as any).RateBasedStatement);
+      expect(limits.length).toBeGreaterThan(0);
+
+      for (const rule of limits) {
+        expect(rule.Action, `${rule.Name} must Block, not Count`).toEqual({ Block: {} });
+      }
+    });
+  });
+
   describe('buildDevWafRuleJson — production stage', () => {
     it('pins Allow-LLM-API at Priority 0 so completions endpoint is not counted by ai-route-rate-limit', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
@@ -283,6 +405,41 @@ describe('wafPolicy', () => {
       const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
       expect(rateLimitRule).toBeDefined();
       expect(rateLimitRule.Statement.RateBasedStatement.Limit).toBe(2000);
+    });
+
+    // 2000 per IP per 5 min is a sane ceiling for API calls and a wrong one for a page load:
+    // roughly 56% of comparable traffic is /_next/static/ assets, and measured on staging the
+    // unscoped form would have counted 331,374 of 517,542 requests in a day, with single IPs
+    // reaching 18k in a 5-minute window. The limit was never the defect; applying it to every
+    // request was. Assert the scope-down so the blanket form cannot come back unnoticed.
+    it('scopes the production rate limit to /api/ so static assets do not consume the budget', () => {
+      const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
+      const parsed = JSON.parse(ruleJson);
+
+      const rateLimitRule = parsed.find((rule: WafRule) => rule.Name === 'api-rate-limit');
+      const rateBased = (rateLimitRule.Statement as any).RateBasedStatement;
+
+      expect(rateBased.ScopeDownStatement).toBeDefined();
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/api/');
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.PositionalConstraint).toBe('STARTS_WITH');
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.FieldToMatch.UriPath).toBeDefined();
+    });
+
+    // The asset backstop that makes the scope-down above safe: assets stop counting against the
+    // API budget, but are still bounded so they cannot become a free amplification target.
+    it('keeps a separate, higher ceiling for static assets', () => {
+      const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
+      const parsed = JSON.parse(ruleJson);
+
+      const assetRule = parsed.find((rule: WafRule) => rule.Name === 'static-asset-rate-limit');
+      expect(assetRule).toBeDefined();
+
+      const rateBased = (assetRule.Statement as any).RateBasedStatement;
+      expect(rateBased.Limit).toBe(50000);
+      // Only /_next/static/ is routed to the assets bucket: probed staging, /_next/static/x answers
+      // from AmazonS3 while /_next/x and /_NEXT/static/x both come from the default origin. So the
+      // carve-out stops here and everything else under /_next/ stays function-backed.
+      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/static/');
     });
 
     it('includes the ai-route-rate-limit rule at Priority 4', () => {

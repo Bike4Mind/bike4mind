@@ -172,3 +172,32 @@ describe('runQuestNode stale sweep', () => {
     expect(findUnfinishedByAgentExecutionIds).not.toHaveBeenCalled();
   });
 });
+
+describe('runQuestNode turn linkage (#1867)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // `[]`, not undefined: cleanupStaleActive returns the swept execution ids (#2012), and
+    // runQuestNode feeds them to findUnfinishedByAgentExecutionIds.
+    cleanupStaleActive.mockResolvedValue([]);
+    countActiveByUserId.mockResolvedValue(0);
+    claimForRun.mockResolvedValue(node({ status: 'in_progress' }));
+    questCreate.mockResolvedValue({ id: 'q1' });
+    create.mockResolvedValue({ id: 'exec-1' });
+    questUpdateOne.mockResolvedValue(undefined);
+    setExecution.mockResolvedValue(node({ status: 'in_progress', execution: { agentExecutionId: 'exec-1' } }));
+    lambdaSend.mockResolvedValue(undefined);
+    findUnfinishedByAgentExecutionIds.mockResolvedValue([]);
+    settleIfUnfinished.mockResolvedValue(true);
+  });
+
+  // Without this, a V5 execution that resumes (checkpoint / permission re-invoke) reaches
+  // resolveExecutionQuestId with no start payload AND no persisted id, so every LakeAccessEvent
+  // from the second invocation on is written unlinked. The first invocation is fine either way
+  // (the start payload carries the id), which is exactly what makes the gap silent.
+  it('stamps linkedQuestId with the real Quest id at execution-create time', async () => {
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0]).toMatchObject({ linkedQuestId: 'q1' });
+  });
+});

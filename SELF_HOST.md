@@ -177,6 +177,25 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+### Structured tool output (`toolPayloads`)
+
+The reply fields (`response`/`responses` synchronously, `reply`/`replies` when polling) carry the model's prose. A tool that produced machine-readable state - not just something to read - also reports it verbatim under **`toolPayloads`**, so a script can act on a turn without re-parsing English:
+
+```json
+{
+  "response": "Scheduled 3 jobs across 2 machines.",
+  "toolPayloads": [{ "type": "populateProblem", "payload": { "name": "shop", "jobs": [], "machines": [] } }]
+}
+```
+
+- Present on both read paths: the `wait: true` response above, and `GET /api/quests/{id}` when polling (which is also how you read an agent run's structured output).
+- Always an array, `[]` when the turn fired no such tool. No opt-in flag.
+- `type` tells you how to read `payload`; treat an unfamiliar `type` as "newer server than my client" and skip that entry.
+- Entries are in emission order, which matters for a multi-step turn.
+- Additive only - the prose reply is byte-for-byte what it was before, so nothing that reads `response` today needs to change.
+
+If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was *offered* to the model, which is not the same thing.
+
 ## Streaming completions API (`/api/ai/v1/completions`)
 
 `POST /api/chat` (above) is the high-level chat API. For a low-level streaming completion - one request in, a token-by-token Server-Sent Events (SSE) stream out - call `/api/ai/v1/completions`. This is the endpoint the CLI uses under the hood, and the one to target from a custom client or agent loop.

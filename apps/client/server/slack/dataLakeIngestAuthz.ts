@@ -58,7 +58,7 @@ export interface LakeAuthzDeps {
    * the check here.
    */
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-  /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
+  /** Entitlement keys for the actor; admins skip resolution unless the caller opts in (see below). */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
   /** Authoritative org membership set for the actor, mirroring `toAccessContext` (#1674). */
   resolveMembershipOrgIds(userId: string): Promise<string[]>;
@@ -76,7 +76,8 @@ export interface LakeAuthzDeps {
  */
 export async function buildSlackAccessContext(
   actor: SlackIngestActor,
-  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds'>
+  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds'>,
+  opts?: { resolveEntitlementsForAdmin?: boolean }
 ): Promise<AccessContext> {
   const isAdmin = !!actor.isAdmin;
   return {
@@ -84,7 +85,11 @@ export async function buildSlackAccessContext(
     isAdmin,
     userTags: actor.tags ?? [],
     organizationIds: await deps.resolveMembershipOrgIds(actor.id),
-    entitlementKeys: isAdmin ? [] : await deps.resolveEntitlementKeys(actor),
+    // Skipped for an admin by default, mirroring toAccessContext: the write gates grant an admin
+    // outright and never read the keys. `resolveEntitlementsForAdmin` exists for the one caller
+    // that deliberately evaluates an admin through the NON-admin arms (the `list` reply in
+    // handleDataLakeCommand), where the keys decide whether an entitlement-gated lake is reachable.
+    entitlementKeys: isAdmin && !opts?.resolveEntitlementsForAdmin ? [] : await deps.resolveEntitlementKeys(actor),
   };
 }
 
