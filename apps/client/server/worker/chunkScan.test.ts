@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
+import { CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
@@ -10,23 +11,34 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
     if (key === '$and') return (cond as Record<string, unknown>[]).every(sub => matches(doc, sub));
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
-    if (cond && typeof cond === 'object' && '$ne' in cond) {
-      const ne = (cond as { $ne: unknown }).$ne;
-      // Mongo treats a MISSING field as null, so `{$ne: null}` does not match one - which is the
-      // whole reason the stamped-file arm below can be written as `$ne: null` without matching every
-      // legacy row. Other `$ne` values (e.g. `isChunking: {$ne: true}`) do match a missing field.
-      if (ne === null) return value !== null && value !== undefined;
-      return value !== ne;
-    }
-    if (cond && typeof cond === 'object' && '$lt' in cond) return (value as Date) < (cond as { $lt: Date }).$lt;
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
-    if (cond && typeof cond === 'object' && '$not' in cond)
-      return !matches({ [key]: value }, { [key]: (cond as { $not: unknown }).$not });
-    // Mongo $in with null also matches a missing field.
-    if (cond && typeof cond === 'object' && '$in' in cond)
-      return (cond as { $in: unknown[] }).$in.some(v =>
-        v === null ? value === null || value === undefined : value === v
-      );
+    if (cond && typeof cond === 'object') {
+      // EVERY operator in the condition, not just the first one found: `notes` carries both a
+      // `$not` and a `$nin`, and a first-match-wins evaluator would silently ignore one of them -
+      // passing the tests while the real query behaved differently.
+      const ops = cond as Record<string, unknown>;
+      const checks: boolean[] = [];
+      if ('$ne' in ops) {
+        const ne = ops.$ne;
+        // Mongo treats a MISSING field as null, so `{$ne: null}` does not match one - which is the
+        // whole reason the stamped-file arm below can be written as `$ne: null` without matching every
+        // legacy row. Other `$ne` values (e.g. `isChunking: {$ne: true}`) do match a missing field.
+        checks.push(ne === null ? value !== null && value !== undefined : value !== ne);
+      }
+      if ('$lt' in ops) checks.push((value as Date) < (ops.$lt as Date));
+      if ('$not' in ops) checks.push(!matches({ [key]: value }, { [key]: ops.$not }));
+      // Mongo $in with null also matches a missing field.
+      if ('$in' in ops)
+        checks.push(
+          (ops.$in as unknown[]).some(v => (v === null ? value === null || value === undefined : value === v))
+        );
+      // $nin is the negation, and it MATCHES a missing field (null is not in a list of note strings).
+      if ('$nin' in ops)
+        checks.push(
+          !(ops.$nin as unknown[]).some(v => (v === null ? value === null || value === undefined : value === v))
+        );
+      if (checks.length > 0) return checks.every(Boolean);
+    }
     return value === cond;
   });
 
@@ -76,6 +88,28 @@ describe('buildFabFileChunkScanFilter', () => {
       notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
     };
     expect(matches(doc, filter)).toBe(false);
+  });
+
+  it.each([
+    ['the chunk-handler pause marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
+    ['the convergence pause marker', CONVERGENCE_PAUSED_NOTE],
+  ])('skips a file paused by the convergence kill switch - %s (#2120)', (_label, note) => {
+    // A paused file matches every OTHER clause: the reset zeroed chunkCount, the pause writes no
+    // error, and it clears chunkRebuildRequestedAt - which is also what drops it out of the media
+    // clause's stamped-file exception. So without this exclusion it is re-selected on every pass,
+    // re-enqueued, and bounced straight back by the chunk handler's own kill-switch check. While
+    // the switch is on, enough paused files consume the whole rescue cap and genuine lost-webhook
+    // candidates are never reached - the sweep silently stops working while reporting healthy.
+    const paused = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      chunkRebuildRequestedAt: null,
+      notes: note,
+    };
+    expect(matches(paused, filter)).toBe(false);
   });
 
   it('still selects a file with unrelated user notes', () => {

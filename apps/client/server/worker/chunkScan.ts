@@ -7,6 +7,7 @@
  * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
  * importing either boot graph.
  */
+import { CONVERGENCE_PAUSED_NOTES } from '@bike4mind/common';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -91,7 +92,16 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
   chunkCount: 0,
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
+  // Two exclusions on `notes`, both settled-state markers the sweep must not re-enqueue:
+  //  - the no-extractable-text note, this handler's own terminal outcome
+  //  - the convergence pause markers. A paused file matches EVERY other clause here (the reset
+  //    zeroed chunkCount, the pause writes no error, and it clears chunkRebuildRequestedAt - which
+  //    is also what drops it out of the media clause's stamped-file exception below). While the
+  //    kill switch is on it would be re-selected every pass, re-enqueued, and bounced straight back
+  //    by the handler's own kill-switch check - pure no-op work that consumes the rescue cap and
+  //    starves genuine lost-webhook candidates. Via CONVERGENCE_PAUSED_NOTES so this query and
+  //    isConvergencePausedNote cannot drift; both markers reach both.
+  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`), $nin: [...CONVERGENCE_PAUSED_NOTES] },
   error: { $in: [null, ''] },
   // Both clauses below are `$or`s, so they are nested under ONE `$and` rather than written as
   // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key
