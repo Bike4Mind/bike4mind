@@ -1,4 +1,4 @@
-import type { ModelInfo } from '@bike4mind/common';
+import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 
 /**
  * Which catalog models agent-ops may generate with. Shared by the AgentOpsTab picker and the
@@ -34,4 +34,53 @@ export function agentOpsModelRejection(models: ModelInfo[], modelId: string): st
 /** Whether an admin may newly pin `modelId`. Disabled models are listed but not saveable. */
 export function isSelectableAgentOpsModel(models: ModelInfo[], modelId: string): boolean {
   return agentOpsModelRejection(models, modelId) === null;
+}
+
+const BACKEND_LABELS: Partial<Record<ModelBackend, string>> = {
+  [ModelBackend.OpenAI]: 'OpenAI',
+  [ModelBackend.Bedrock]: 'Bedrock',
+  [ModelBackend.Anthropic]: 'Anthropic',
+  [ModelBackend.Gemini]: 'Gemini',
+  [ModelBackend.Ollama]: 'Ollama',
+  [ModelBackend.XAI]: 'xAI',
+  [ModelBackend.Kimi]: 'Kimi',
+  [ModelBackend.VoyageAI]: 'Voyage AI',
+  [ModelBackend.AWS]: 'AWS',
+  [ModelBackend.BFL]: 'BFL',
+  [ModelBackend.LocalImage]: 'Local',
+};
+
+const backendLabel = (backend: ModelBackend): string => BACKEND_LABELS[backend] ?? backend;
+
+/**
+ * Display label per model id, disambiguating names shared across backends. Two catalog models can
+ * carry the same `name` -- the direct-provider and Bedrock twins of "Claude 4 Opus" -- yet route to
+ * different credentials, and the picker rendered only the name, so an admin had no way to tell them
+ * apart and a wrong pick billed the unintended account (#1596). A name used by more than one option
+ * gets a `(Backend)` suffix on every twin; if the backend does not break the tie either, the model
+ * id is appended so every option stays distinguishable.
+ */
+export function agentOpsModelLabels(models: ModelInfo[]): Map<string, string> {
+  const byName = new Map<string, ModelInfo[]>();
+  for (const m of models) {
+    const group = byName.get(m.name);
+    if (group) group.push(m);
+    else byName.set(m.name, [m]);
+  }
+
+  const labels = new Map<string, string>();
+  for (const [name, group] of byName) {
+    if (group.length === 1) {
+      for (const m of group) labels.set(m.id, name);
+      continue;
+    }
+    const backendCounts = new Map<ModelBackend, number>();
+    for (const m of group) backendCounts.set(m.backend, (backendCounts.get(m.backend) ?? 0) + 1);
+    for (const m of group) {
+      const suffix =
+        (backendCounts.get(m.backend) ?? 0) > 1 ? `${backendLabel(m.backend)}: ${m.id}` : backendLabel(m.backend);
+      labels.set(m.id, `${name} (${suffix})`);
+    }
+  }
+  return labels;
 }

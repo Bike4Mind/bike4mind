@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { NotFoundError } from '@bike4mind/utils';
+import { ApiKeyScope } from '@bike4mind/common';
 
+// Captures the config so a test can assert requiredScopes: the scope gate lives in
+// apiKeyAuth (real middleware, not exercised here), so asserting the handler is
+// registered with it is the only guard available at this level.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
     const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
     chain.use = () => chain;
@@ -11,6 +15,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
       handlers.GET = fn;
       return chain;
     };
+    chain._config = config;
     return chain;
   },
 }));
@@ -60,6 +65,11 @@ describe('GET /api/admin/session-usage — access', () => {
     mockSessionBelongsToOwner.mockResolvedValue(true);
     mockSessionUsageSummary.mockResolvedValue(emptyUsage);
     mockFindBillingBySessionId.mockResolvedValue([]);
+  });
+
+  it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
+    const config = (handler as unknown as { _config?: { requiredScopes?: string[] } })._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
   });
 
   it('lets an admin read the whole session cross-org (unscoped queries, no ownership probe)', async () => {

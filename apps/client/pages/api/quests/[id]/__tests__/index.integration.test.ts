@@ -199,4 +199,114 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
+
+  describe('toolPayloads (structured tool output for programmatic callers)', () => {
+    const PROBLEM = { name: 'shop', jobs: [], machines: [] };
+
+    it('returns the structured payload ALONGSIDE the unchanged prose reply', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: 'Scheduled 3 jobs across 2 machines.',
+        replies: ['Scheduled 3 jobs across 2 machines.'],
+        promptMeta: {},
+        uiSideEffects: [{ type: 'populateProblem', payload: PROBLEM }],
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.reply).toBe('Scheduled 3 jobs across 2 machines.');
+      expect(body.toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+
+    it('returns an empty array when the turn fired no structured tool', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getJSONData().toolPayloads).toEqual([]);
+    });
+
+    it('publishes only type and payload, so a Mongoose subdocument _id never leaks', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        uiSideEffects: [{ _id: '507f1f77bcf86cd799439011', type: 'populateProblem', payload: PROBLEM }],
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(Object.keys(res._getJSONData().toolPayloads[0])).toEqual(['type', 'payload']);
+    });
+
+    it('serves them to a sharee too - the client already dispatches them off loaded quests', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        uiSideEffects: [{ type: 'populateProblem', payload: PROBLEM }],
+      });
+      // jwt-user is in session.users but is not session.userId, i.e. a share holder.
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+  });
+
+  describe('functionCalls redaction for non-owner viewers', () => {
+    const questWithFunctionCalls = () => ({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'completed',
+      reply: {},
+      replies: [],
+      promptMeta: {
+        functionCalls: [
+          { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
+        ],
+      },
+    });
+
+    it('strips returnValue for a sharee (jwt-user is not session.userId)', async () => {
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire({ apiKey: null }); // JWT_USER.id === 'jwt-user', a sharee not the owner
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      // Whole-response, not field-scoped: guards against the leak reappearing through a sibling
+      // field (e.g. executionTracking) that also reads off the unredacted quest.promptMeta.
+      expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+      expect(body.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
+    });
+
+    it('strips returnValue for a sharee polling via an API key (not just JWT/browser callers)', async () => {
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]); // resolves to userId 'user-1', a sharee per beforeEach
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
+    });
+
+    it('leaves returnValue untouched for the session owner', async () => {
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(JSON.stringify(body.promptMeta.functionCalls)).toContain('PRIVATE TOOL OUTPUT');
+    });
+  });
 });

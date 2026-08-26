@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Bike4Mind API",
-    "version": "3.0.0",
+    "version": "5.0.0",
     "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
@@ -47,7 +47,560 @@
       }
     },
     "schemas": {
-      "CompletionRequest": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlation id, mirrors the X-Request-ID header."
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "example": {
+          "error": "Missing or invalid toolName",
+          "request_id": "abc-123"
+        }
+      },
+      "sendChatMessageResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message_received": {
+            "type": "boolean"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "tracking_info": {
+            "type": "object",
+            "properties": {
+              "quest_id": {
+                "type": "string"
+              },
+              "check_status_url": {
+                "type": "string"
+              },
+              "poll_url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "quest_id",
+              "check_status_url"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message_received",
+          "timestamp",
+          "model",
+          "tracking_info"
+        ]
+      },
+      "sendChatMessageRequest": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "organizationId": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "max_tokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxOutputTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "historyCount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 10
+          },
+          "fileIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "wait": {
+            "type": "boolean",
+            "default": false
+          },
+          "enableTools": {
+            "type": "boolean",
+            "default": false
+          },
+          "toolMode": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "smart"
+            ]
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enableQuestMaster": {
+            "type": "boolean"
+          },
+          "enableMementos": {
+            "type": "boolean"
+          },
+          "enableAgents": {
+            "type": "boolean"
+          },
+          "promptMode": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "grounded",
+              "surface"
+            ]
+          },
+          "includePromptDetails": {
+            "type": "boolean"
+          },
+          "includeSystemPrompt": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "example": {
+          "message": "How do I reset my password?",
+          "toolMode": "smart"
+        }
+      },
+      "updateSessionResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "knowledgeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifactIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "strength": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "strength"
+              ]
+            }
+          },
+          "forceKnowledgeRetrieval": {
+            "type": "boolean"
+          },
+          "lastUsedModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstCreated": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUpdated": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "userId",
+          "firstCreated",
+          "lastUpdated"
+        ]
+      },
+      "updateSessionRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "knowledgeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifactIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "strength": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "strength"
+              ]
+            }
+          },
+          "lastUsedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it."
+          },
+          "forceKnowledgeRetrieval": {
+            "type": "boolean"
+          },
+          "propagateToProjects": {
+            "type": "boolean",
+            "description": "Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project."
+          }
+        },
+        "example": {
+          "knowledgeIds": [
+            "<fabFileId>"
+          ],
+          "forceKnowledgeRetrieval": true
+        }
+      },
+      "executeToolResponse200": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "result": {},
+          "error": {
+            "type": "string"
+          },
+          "errorType": {
+            "type": "string"
+          },
+          "executionTimeMs": {
+            "type": "number"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "example": {
+          "success": true,
+          "result": {
+            "summary": "Top results for the query."
+          },
+          "executionTimeMs": 842,
+          "request_id": "abc-123"
+        }
+      },
+      "executeToolResponse500": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "success": {
+                "type": "boolean"
+              },
+              "result": {},
+              "error": {
+                "type": "string"
+              },
+              "errorType": {
+                "type": "string"
+              },
+              "executionTimeMs": {
+                "type": "number"
+              },
+              "request_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "success",
+              "request_id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ]
+          }
+        ]
+      },
+      "executeToolRequest": {
+        "type": "object",
+        "properties": {
+          "toolName": {
+            "type": "string",
+            "enum": [
+              "weather_info",
+              "web_search",
+              "web_fetch"
+            ]
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "toolName",
+          "input"
+        ],
+        "example": {
+          "toolName": "web_search",
+          "input": {
+            "query": "how to reset a password"
+          }
+        }
+      },
+      "createCompletionResponse200": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "meta"
+                ]
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "requestId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "tool_use"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "arguments": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number"
+                  },
+                  "outputTokens": {
+                    "type": "number"
+                  },
+                  "cacheReadInputTokens": {
+                    "type": "number"
+                  },
+                  "cacheCreationInputTokens": {
+                    "type": "number"
+                  }
+                }
+              },
+              "credits": {
+                "type": "object",
+                "properties": {
+                  "used": {
+                    "type": "number"
+                  },
+                  "usdCost": {
+                    "type": "number"
+                  }
+                }
+              },
+              "responseFormatMode": {
+                "type": "string",
+                "enum": [
+                  "native",
+                  "tool_use",
+                  "best-effort"
+                ]
+              },
+              "stopReason": {
+                "type": "string"
+              },
+              "thinking": {
+                "type": "array",
+                "items": {}
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ]
+          }
+        ],
+        "example": {
+          "type": "content",
+          "text": "To reset your password, click 'Forgot password' on the login screen.",
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 12
+          },
+          "credits": {
+            "used": 1,
+            "usdCost": 0.00037
+          },
+          "stopReason": "end_turn"
+        }
+      },
+      "createCompletionRequest": {
         "type": "object",
         "properties": {
           "model": {
@@ -349,442 +902,446 @@
           "model",
           "messages"
         ],
-        "description": "OpenAI-compatible completion request. Top-level `response_format`, `stream`, `tools`, `temperature`, and `max_tokens` are also accepted nested under `options` (legacy shape).",
         "example": {
           "model": "claude-opus-4-8",
           "messages": [
-            {
-              "role": "system",
-              "content": "You are a support agent."
-            },
             {
               "role": "user",
               "content": "How do I reset my password?"
             }
           ],
-          "temperature": 0.7,
           "max_tokens": 500
         }
       },
-      "CompletionStreamEvent": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/CompletionMetaEvent"
-          },
-          {
-            "$ref": "#/components/schemas/CompletionContentEvent"
-          },
-          {
-            "$ref": "#/components/schemas/CompletionSseErrorEvent"
-          }
-        ],
-        "description": "One `data:` event in the `text/event-stream` response. Order: one `meta`, then one or more `content`/`tool_use` events, terminated by the literal line `data: [DONE]`. Comment lines (`: keep-alive`) are interleaved as heartbeats and carry no event.",
-        "example": {
-          "type": "content",
-          "text": "To reset your password, click 'Forgot password' on the login screen.",
-          "usage": {
-            "inputTokens": 42,
-            "outputTokens": 12
-          },
-          "credits": {
-            "used": 1,
-            "usdCost": 0.00037
-          }
-        }
-      },
-      "CompletionMetaEvent": {
+      "synthesizeSpeechResponse200": {
         "type": "object",
         "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "meta"
-            ]
-          },
-          "requestId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "requestId"
-        ],
-        "description": "First non-keepalive event; carries the correlation id for log lookup."
-      },
-      "CompletionContentEvent": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "content",
-              "tool_use"
-            ]
-          },
-          "text": {
+          "audio": {
             "type": "string"
           },
-          "tools": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "arguments": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name"
-              ]
-            }
-          },
-          "usage": {
-            "type": "object",
-            "properties": {
-              "inputTokens": {
-                "type": "number"
-              },
-              "outputTokens": {
-                "type": "number"
-              },
-              "cacheReadInputTokens": {
-                "type": "number"
-              },
-              "cacheCreationInputTokens": {
-                "type": "number"
-              }
-            }
-          },
-          "credits": {
-            "type": "object",
-            "properties": {
-              "used": {
-                "type": "number"
-              },
-              "usdCost": {
-                "type": "number"
-              }
-            }
-          },
-          "responseFormatMode": {
+          "format": {
             "type": "string",
             "enum": [
-              "native",
-              "tool_use",
-              "best-effort"
+              "mp3",
+              "wav",
+              "opus",
+              "aac",
+              "flac",
+              "pcm"
             ]
           },
-          "thinking": {
-            "type": "array",
-            "items": {}
-          }
-        },
-        "required": [
-          "type",
-          "text"
-        ],
-        "description": "A streamed chunk of assistant output; `usage`/`credits` ride on the final chunks."
-      },
-      "CompletionSseErrorEvent": {
-        "type": "object",
-        "properties": {
-          "type": {
+          "contentType": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "fabFileId": {
+            "type": "string"
+          },
+          "fileUrl": {
+            "type": "string"
+          },
+          "saveSkippedReason": {
             "type": "string",
             "enum": [
+              "storage_limit",
+              "file_too_large",
               "error"
             ]
           },
-          "message": {
-            "type": "string"
-          },
-          "requestId": {
-            "type": "string"
-          },
-          "code": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "message"
-        ],
-        "description": "In-band stream error. The completions endpoint reports failures as this SSE event (HTTP status stays 200 once the stream has opened), terminating the stream."
-      },
-      "ToolExecutionRequest": {
-        "type": "object",
-        "properties": {
-          "toolName": {
+          "provider": {
             "type": "string",
             "enum": [
-              "weather_info",
-              "web_search",
-              "web_fetch"
+              "openai",
+              "elevenlabs"
             ]
           },
-          "input": {
-            "type": "object",
-            "additionalProperties": {}
+          "fallbackFrom": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
           }
         },
         "required": [
-          "toolName",
-          "input"
+          "audio",
+          "format",
+          "contentType"
         ],
-        "description": "Server-side tool execution request. Not the same shape as a completion `tools` entry.",
         "example": {
-          "toolName": "web_search",
-          "input": {
-            "query": "how to reset a password"
-          }
+          "audio": "SUQzBAAAAAAA...",
+          "format": "mp3",
+          "contentType": "audio/mpeg",
+          "saved": true,
+          "fabFileId": "664f1c2b9a1e4d0012ab34cd"
         }
       },
-      "ToolExecutionResponse": {
-        "type": "object",
-        "properties": {
-          "success": {
-            "type": "boolean"
-          },
-          "result": {},
-          "error": {
-            "type": "string"
-          },
-          "errorType": {
-            "type": "string"
-          },
-          "executionTimeMs": {
-            "type": "number"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "success",
-          "request_id"
-        ],
-        "description": "Tool execution result. `success: false` carries `error`; `request_id` echoes X-Request-ID.",
-        "example": {
-          "success": true,
-          "result": {
-            "summary": "Top results for the query."
-          },
-          "executionTimeMs": 842,
-          "request_id": "abc-123"
-        }
-      },
-      "ErrorResponse": {
+      "synthesizeSpeechResponse401": {
         "type": "object",
         "properties": {
           "error": {
-            "type": "string",
-            "description": "Human-readable error message."
+            "type": "string"
           },
           "request_id": {
+            "type": "string"
+          },
+          "name": {
             "type": "string",
-            "description": "Correlation id, mirrors the X-Request-ID header."
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
           }
         },
         "required": [
           "error"
-        ],
-        "example": {
-          "error": "Missing or invalid toolName",
-          "request_id": "abc-123"
-        }
+        ]
       },
-      "sendChatMessageResponse200": {
+      "synthesizeSpeechResponse413": {
         "type": "object",
         "properties": {
-          "id": {
+          "error": {
             "type": "string"
           },
-          "status": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "saved": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "fabFileId": {
             "type": "string"
           },
-          "message_received": {
-            "type": "boolean"
-          },
-          "timestamp": {
+          "fileUrl": {
             "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "provider"
+        ]
+      },
+      "synthesizeSpeechResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse429": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse502": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
           },
           "model": {
             "type": "string"
           },
-          "message": {
+          "voice": {
             "type": "string"
           },
-          "tracking_info": {
-            "type": "object",
-            "properties": {
-              "quest_id": {
-                "type": "string"
-              },
-              "check_status_url": {
-                "type": "string"
-              },
-              "poll_url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "quest_id",
-              "check_status_url"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "status",
-          "message_received",
-          "timestamp",
-          "model",
-          "tracking_info"
-        ]
-      },
-      "sendChatMessageResponse400": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "sendChatMessageResponse404": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "sendChatMessageResponse429": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "sendChatMessageRequest": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": [
-              "string",
-              "null"
+          "format": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "wav",
+              "opus",
+              "aac",
+              "flac",
+              "pcm"
             ]
           },
-          "message": {
-            "type": "string"
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "base64"
+            ]
           },
-          "model": {
-            "type": "string"
-          },
-          "temperature": {
+          "stability": {
             "type": "number",
             "minimum": 0,
-            "maximum": 2
+            "maximum": 1
           },
-          "max_tokens": {
+          "similarityBoost": {
             "type": "number",
-            "exclusiveMinimum": 0
+            "minimum": 0,
+            "maximum": 1
           },
-          "maxTokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "maxOutputTokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "stream": {
-            "type": "boolean",
-            "default": false
-          },
-          "historyCount": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "default": 10
-          },
-          "fileIds": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "default": []
-          },
-          "wait": {
-            "type": "boolean",
-            "default": false
-          },
-          "enableTools": {
-            "type": "boolean",
-            "default": false
-          },
-          "toolMode": {
+          "languageCode": {
             "type": "string",
-            "enum": [
-              "fast",
-              "smart"
-            ]
+            "pattern": "^[a-z]{2}$"
           },
-          "tools": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "enableQuestMaster": {
-            "type": "boolean"
-          },
-          "enableMementos": {
-            "type": "boolean"
-          },
-          "enableAgents": {
-            "type": "boolean"
-          },
-          "promptMode": {
-            "type": "string",
-            "enum": [
-              "raw",
-              "grounded",
-              "surface"
-            ]
-          },
-          "includePromptDetails": {
+          "preview": {
             "type": "boolean"
           }
         },
         "required": [
-          "message"
+          "text"
         ],
         "example": {
-          "message": "How do I reset my password?",
-          "toolMode": "smart"
+          "text": "Your password has been reset.",
+          "provider": "openai",
+          "voice": "alloy",
+          "format": "mp3"
+        }
+      },
+      "generateMusicResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "generateMusicRequest": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "elevenlabs"
+            ],
+            "default": "elevenlabs"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "lengthMs": {
+            "type": "integer",
+            "minimum": 3000,
+            "maximum": 120000,
+            "default": 10000
+          },
+          "forceInstrumental": {
+            "type": "boolean"
+          },
+          "modelId": {
+            "type": "string",
+            "enum": [
+              "music_v1"
+            ],
+            "default": "music_v1"
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "example": {
+          "prompt": "calm lo-fi study beat with soft piano",
+          "lengthMs": 30000,
+          "forceInstrumental": true
+        }
+      },
+      "generateSoundEffectResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "generateSoundEffectRequest": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "elevenlabs"
+            ],
+            "default": "elevenlabs"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "durationSeconds": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 30
+          },
+          "promptInfluence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "example": {
+          "text": "heavy wooden door creaking open",
+          "durationSeconds": 3,
+          "promptInfluence": 0.5
         }
       }
     },
@@ -795,7 +1352,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "AI"
         ],
@@ -819,7 +1376,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
+            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
             "content": {
               "application/json": {
                 "schema": {
@@ -833,6 +1390,42 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
               }
             }
           },
@@ -841,7 +1434,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/sendChatMessageResponse400"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -850,6 +1443,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -895,7 +1524,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/sendChatMessageResponse404"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -905,11 +1534,47 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
               }
             }
           },
           "422": {
-            "description": "Request body failed validation.",
+            "description": "Request failed validation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -923,6 +1588,42 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
               }
             }
           },
@@ -931,7 +1632,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/sendChatMessageResponse429"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -940,6 +1641,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -968,11 +1705,422 @@
         ]
       }
     },
+    "/api/sessions/{id}": {
+      "put": {
+        "operationId": "updateSession",
+        "summary": "Update a session",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/updateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/updateSessionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session exists with the given id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "notebooks:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/sessions/<id>\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"knowledgeIds\": [\n    \"<fabFileId>\"\n  ],\n  \"forceKnowledgeRetrieval\": true\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/sessions/<id>\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"knowledgeIds\": [\n    \"<fabFileId>\"\n  ],\n  \"forceKnowledgeRetrieval\": true\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/sessions/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"knowledgeIds\": [\n            \"<fabFileId>\"\n        ],\n        \"forceKnowledgeRetrieval\": True\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/v1/tools": {
+      "post": {
+        "operationId": "executeTool",
+        "summary": "Execute a server-side tool",
+        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the X-Request-ID response header.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/executeToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool executed successfully (`success` is always true here).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/executeToolResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT (an API key is rejected here).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (100 requests/hour).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Tool execution failed (`success: false` with `error`) or an unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/executeToolResponse500"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/tools\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"toolName\": \"web_search\",\n        \"input\": {\n            \"query\": \"how to reset a password\"\n        }\n    },\n)"
+          }
+        ]
+      }
+    },
     "/api/ai/v1/completions": {
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "AI"
         ],
@@ -989,18 +2137,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CompletionRequest"
+                "$ref": "#/components/schemas/createCompletionRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "SSE stream of completion events (see CompletionStreamEvent).",
+            "description": "SSE stream of completion events (see the CompletionStreamEvent shape).",
             "content": {
               "text/event-stream": {
                 "schema": {
-                  "$ref": "#/components/schemas/CompletionStreamEvent"
+                  "$ref": "#/components/schemas/createCompletionResponse200"
                 }
               }
             },
@@ -1055,17 +2203,20 @@
         ]
       }
     },
-    "/api/ai/v1/tools": {
+    "/api/ai/tts": {
       "post": {
-        "operationId": "executeTool",
-        "summary": "Execute a server-side tool",
-        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the X-Request-ID response header.",
+        "operationId": "synthesizeSpeech",
+        "summary": "Synthesize speech from text",
+        "description": "Generates speech from text using OpenAI or ElevenLabs. The default `encoding: \"binary\"` streams raw audio bytes with an `audio/*` Content-Type; `encoding: \"base64\"` returns JSON instead. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported via `saved`/`fabFileId` and the `X-B4M-Audio-*` headers. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
-          "AI"
+          "Audio"
         ],
         "security": [
           {
-            "jwtAuth": []
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
           }
         ],
         "requestBody": {
@@ -1073,21 +2224,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ToolExecutionRequest"
+                "$ref": "#/components/schemas/synthesizeSpeechRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Tool executed successfully (`success` is always true here).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ToolExecutionResponse"
-                }
-              }
-            },
+            "description": "Speech synthesized. The default `encoding: \"binary\"` returns raw audio bytes whose Content-Type follows the requested `format` (`audio/mpeg` for mp3, else `audio/wav`, `audio/opus`, `audio/aac`, `audio/flac`, `audio/pcm`); `encoding: \"base64\"` returns the JSON body.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
@@ -1095,64 +2239,167 @@
                   "type": "string"
                 }
               },
-              "X-RateLimit-Limit": {
-                "description": "Request quota for the window.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining": {
-                "description": "Requests remaining in the window.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset": {
-                "description": "Unix epoch (seconds) when the window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Missing/invalid `toolName` or `input`.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "description": "Correlation id for this request; safe to log and quote in support requests.",
+              "X-B4M-Tts-Provider": {
+                "description": "The provider that produced the audio. Present only when a fallback happened.",
                 "schema": {
                   "type": "string"
                 }
               },
-              "X-RateLimit-Limit": {
-                "description": "Request quota for the window.",
+              "X-B4M-Tts-Provider-Fallback-From": {
+                "description": "The originally requested provider that could not serve the request. Present only on a fallback.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Remaining": {
-                "description": "Requests remaining in the window.",
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Reset": {
-                "description": "Unix epoch (seconds) when the window resets.",
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse200"
+                }
+              },
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/aac": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/flac": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/pcm": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
                 }
               }
             }
           },
           "401": {
-            "description": "Missing or invalid JWT (an API key is rejected here).",
+            "description": "Missing/invalid credentials, or no provider has a usable key (`provider_not_configured`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse401"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1166,21 +2413,111 @@
                 "schema": {
                   "type": "string"
                 }
+              }
+            }
+          },
+          "413": {
+            "description": "The audio was generated (and billed) but is too large to return over this endpoint. Retrieve it from `fileUrl` when a browsable copy was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse413"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
               },
-              "X-RateLimit-Limit": {
-                "description": "Request quota for the window.",
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Remaining": {
-                "description": "Requests remaining in the window.",
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Reset": {
-                "description": "Unix epoch (seconds) when the window resets.",
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: \"insufficient_credits\"`, so match on the classifier rather than the status to tell a billing failure from a bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
                 }
@@ -1188,7 +2525,268 @@
             }
           },
           "429": {
-            "description": "Rate limit exceeded (100 requests/hour).",
+            "description": "The provider rate-limited the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse429"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed to generate speech.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse502"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/tts\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"text\": \"Your password has been reset.\",\n  \"provider\": \"openai\",\n  \"voice\": \"alloy\",\n  \"encoding\": \"base64\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/tts\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"text\": \"Your password has been reset.\",\n  \"provider\": \"openai\",\n  \"voice\": \"alloy\",\n  \"encoding\": \"base64\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/tts\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"text\": \"Your password has been reset.\",\n        \"provider\": \"openai\",\n        \"voice\": \"alloy\",\n        \"encoding\": \"base64\"\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/music": {
+      "post": {
+        "operationId": "generateMusic",
+        "summary": "Generate background music",
+        "description": "Generates an instrumental or vocal background-music track from a text prompt and returns the raw audio bytes. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / `X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "Audio"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/generateMusicRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/L16": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/basic": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The billing user or organization could not be resolved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1203,32 +2801,86 @@
                   "type": "string"
                 }
               },
-              "X-RateLimit-Limit": {
-                "description": "Request quota for the window.",
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Remaining": {
-                "description": "Requests remaining in the window.",
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Reset": {
-                "description": "Unix epoch (seconds) when the window resets.",
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
                 }
               }
             }
           },
-          "500": {
-            "description": "Tool execution failed; body carries `success: false` with `error`.",
+          "401": {
+            "description": "Missing or invalid credentials.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ToolExecutionResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateMusicResponse422"
                 }
               }
             },
@@ -1239,20 +2891,146 @@
                   "type": "string"
                 }
               },
-              "X-RateLimit-Limit": {
-                "description": "Request quota for the window.",
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Remaining": {
-                "description": "Requests remaining in the window.",
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
                 "schema": {
                   "type": "integer"
                 }
               },
-              "X-RateLimit-Reset": {
-                "description": "Unix epoch (seconds) when the window resets.",
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed to generate the track; reserved credits are refunded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No provider API key is configured for this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
                 }
@@ -1260,21 +3038,429 @@
             }
           }
         },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
         "x-codeSamples": [
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}\nB4M_REQUEST_BODY"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/music\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"prompt\": \"calm lo-fi study beat with soft piano\",\n  \"lengthMs\": 30000,\n  \"forceInstrumental\": true\n}\nB4M_REQUEST_BODY"
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/tools\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/music\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"prompt\": \"calm lo-fi study beat with soft piano\",\n  \"lengthMs\": 30000,\n  \"forceInstrumental\": true\n}),\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"toolName\": \"web_search\",\n        \"input\": {\n            \"query\": \"how to reset a password\"\n        }\n    },\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/music\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"prompt\": \"calm lo-fi study beat with soft piano\",\n        \"lengthMs\": 30000,\n        \"forceInstrumental\": True\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/sound-effects": {
+      "post": {
+        "operationId": "generateSoundEffect",
+        "summary": "Generate a sound effect",
+        "description": "Generates a short sound effect from a text description and returns the raw audio bytes. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / `X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "Audio"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/generateSoundEffectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/L16": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/basic": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The billing user or organization could not be resolved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, or the caller cannot afford the effect - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed to generate the effect; reserved credits are refunded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No provider API key is configured for this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/sound-effects\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"text\": \"heavy wooden door creaking open\",\n  \"durationSeconds\": 3,\n  \"promptInfluence\": 0.5\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/sound-effects\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"text\": \"heavy wooden door creaking open\",\n  \"durationSeconds\": 3,\n  \"promptInfluence\": 0.5\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/sound-effects\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"text\": \"heavy wooden door creaking open\",\n        \"durationSeconds\": 3,\n        \"promptInfluence\": 0.5\n    },\n)"
           }
         ]
       }
@@ -1284,7 +3470,15 @@
   "tags": [
     {
       "name": "AI",
-      "description": "Completions and server-side tool execution."
+      "description": "Chat, completions, and server-side tool execution."
+    },
+    {
+      "name": "Sessions",
+      "description": "Sessions (called \"notebooks\" in the product UI) and their attached knowledge."
+    },
+    {
+      "name": "Audio",
+      "description": "Speech, music, and sound-effect generation."
     }
   ]
 }

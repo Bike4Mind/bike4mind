@@ -39,6 +39,7 @@ export const HelpModal: React.FC = () => {
   const logEvent = useLogEvent();
   const { settings, updatePreferences } = useUserSettings();
   const [feedbackContent, setFeedbackContent] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const theme = useTheme();
   const [productType] = useState<ProductType>(ProductType.Bike4Mind);
   const [productTitle] = useState<string>(APP_NAME);
@@ -75,16 +76,13 @@ export const HelpModal: React.FC = () => {
   };
 
   const handleSubmitFeedback = async () => {
+    if (isSubmitting) return;
+    if (!feedbackContent.trim()) {
+      console.error('Feedback content is empty');
+      return;
+    }
+    setIsSubmitting(true);
     try {
-      if (!feedbackContent.trim()) {
-        console.error('Feedback content is empty');
-        return;
-      }
-      toast.success('Thank you! Your feedback has been submitted.');
-      console.log('Submitting feedback:', currentUser?.email);
-
-      toggleShowHelp();
-
       const feedbackCreated = await createFeedbackOnServer({
         userId: userId,
         username: currentUser?.username ?? 'Unknown',
@@ -94,14 +92,45 @@ export const HelpModal: React.FC = () => {
         status: FeedbackStatus.New,
       });
 
+      // Close only once the outcome is known, so a rejection's error toast (in the catch
+      // below) still applies to a modal the user can see closing, not one already gone.
+      toggleShowHelp();
+
+      // Optional chaining: a rolling deploy can route this request to a server instance
+      // still on the pre-delivery-field handler, where the record saved but `delivery` is
+      // absent - fall back to the success toast (the pre-fix default) rather than throwing.
+      // contentStored false (with non-empty submitted text - this modal never sends an empty
+      // one) means the text-sibling write itself failed server-side: the report exists, but the
+      // words the user typed are gone, which is worth telling them rather than a plain success.
+      const deliveryFailed = feedbackCreated.delivery?.delivered === false;
+      if (feedbackCreated.contentStored === false) {
+        toast.warning('Your feedback was received, but we could not save the message text - please try again.');
+      } else if (feedbackCreated.contentTruncated && deliveryFailed) {
+        toast.warning(
+          'Your feedback was saved (trimmed a bit), but we could not notify the team - please ping support if it is urgent.'
+        );
+      } else if (feedbackCreated.contentTruncated) {
+        toast.warning('Your feedback was saved, but it was long enough that we had to trim it a bit.');
+      } else if (deliveryFailed) {
+        toast.warning('Saved your feedback, but we could not notify the team - please ping support if it is urgent.');
+      } else {
+        toast.success('Thank you! Your feedback has been submitted.');
+      }
+
+      // Never log the verbatim report text: CounterLog (where this analytics event lands)
+      // carries no TTL of its own, and doing so would defeat the 90-day retention the
+      // FeedbackText split otherwise enforces.
       logEvent.mutate({
         type: FeedbackEvents.FEEDBACK_SENT,
-        metadata: { id: feedbackCreated.id, content: feedbackCreated.content },
+        metadata: { id: feedbackCreated.id },
       });
 
       setFeedbackContent('');
     } catch (error) {
       console.error('Failed to submit feedback:', error);
+      toast.error('Could not submit your feedback. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
   if (!settings.showHelp) return null;
@@ -207,12 +236,14 @@ export const HelpModal: React.FC = () => {
 
         <Box display="flex" flexDirection="column" alignItems="flex-end">
           <Textarea
+            data-testid="help-modal-feedback-textarea"
             minRows={8}
             value={feedbackContent}
             onChange={e => setFeedbackContent(e.target.value)}
             sx={theme => ({ width: '100%', mt: 1, color: theme.palette.feedback.border })}
           />
           <Button
+            data-testid="help-modal-feedback-submit-btn"
             sx={{
               mt: 2,
               backgroundColor: 'green',
@@ -222,6 +253,7 @@ export const HelpModal: React.FC = () => {
               },
             }}
             onClick={handleSubmitFeedback}
+            disabled={isSubmitting}
           >
             Send Feedback
           </Button>

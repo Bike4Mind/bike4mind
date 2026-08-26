@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { buildUserActivityPipeline } from './userActivityQuery';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * Agreement test: the unit tests assert the pipeline's SHAPE, which cannot catch a stage
@@ -59,12 +63,12 @@ beforeAll(async () => {
     // Outside the requested window.
     log({ datetime: new Date('2026-06-01T10:00:00.000Z') }),
   ]);
-}, 60000);
+});
 
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 60000);
+});
 
 describe('user activity pipeline against MongoDB', () => {
   it('groups per day, counter and user, and counts the repeats', async () => {

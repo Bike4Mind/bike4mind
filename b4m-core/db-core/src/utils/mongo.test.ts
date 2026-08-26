@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
+import { ChunkClaimLostError } from '@bike4mind/common';
 import {
   compareMongoIds,
   convertId,
@@ -146,6 +147,14 @@ describe('MongoDB Utility Functions', () => {
     it('should return false for non-object errors', () => {
       expect(isTransientTransactionError('error string')).toBe(false);
       expect(isTransientTransactionError(123)).toBe(false);
+    });
+
+    // #1802 Phase 2 T5: a lost chunk claim is a benign no-op the caller must NOT retry as
+    // transient - it carries no MongoDB errorLabels/code, so this must return false, or
+    // withTransaction would retry (and then eventually rethrow) a condition that will never
+    // resolve differently on retry - the successor already owns the claim.
+    it('should return false for ChunkClaimLostError', () => {
+      expect(isTransientTransactionError(new ChunkClaimLostError('file-1'))).toBe(false);
     });
 
     it('should return false for errors without code or labels', () => {

@@ -15,6 +15,7 @@ import {
   type ResponseFormat,
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
+import type { RecordableToolUse } from './recordToolResult';
 
 /** Maximum number of recursive tool calls to prevent infinite loops */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -195,7 +196,17 @@ export interface ICompletionOptions {
      * so the terminal turn must emit the full accumulated list or earlier tool
      * calls are lost. Internal - do not set manually.
      */
-    accumToolsUsed?: Array<{ name: string; arguments?: string; id?: string }>;
+    accumToolsUsed?: Array<RecordableToolUse>;
+    /**
+     * Ids of tool_use blocks minted LIVE during this same completion chain (Gemini only) -
+     * threaded through recursive complete() calls so formatMessagesIntoGeminiContent can tell
+     * a block it just generated apart from one reconstructed from persisted history by
+     * fetchAndProcessPreviousMessages's replay path. Both can lack a thought_signature, but
+     * only the replayed case is a guaranteed-missing signature this backend should degrade for;
+     * a live call missing one is the pre-existing, already-handled "Gemini rejects the request"
+     * case. Internal - do not set manually.
+     */
+    liveToolUseIds?: string[];
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
@@ -262,12 +273,7 @@ export type CompletionInfo = {
   outputTokens?: number;
   creditsUsed?: number;
   usdCost?: number;
-  toolsUsed?: Array<{
-    name: string;
-    arguments?: string;
-    /** Tool use ID for Anthropic API tool pairing */
-    id?: string;
-  }>;
+  toolsUsed?: Array<RecordableToolUse>;
   /**
    * The complete assistant message content including thinking blocks.
    * Required for Anthropic extended thinking when tools are used,

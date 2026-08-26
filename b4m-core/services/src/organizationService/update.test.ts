@@ -224,6 +224,47 @@ describe('organizationService - update', () => {
     expect(persisted.userId).toBe('user1');
   });
 
+  it('sets a positive per-member cap when admin', async () => {
+    const result = await update(mockAdminUser as IUserDocument, { id: 'org1', maxCreditsPerMember: 500 }, mockAdapters);
+
+    expect(result.maxCreditsPerMember).toBe(500);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org1', maxCreditsPerMember: 500 })
+    );
+  });
+
+  it('clears the per-member cap to null (not undefined) so $set actually unsets it', async () => {
+    // Regression: `?? undefined` left the old cap in place because BSON drops undefined from
+    // `$set`, so a "set null" PUT silently no-oped. The cleared cap MUST persist as null.
+    const cappedOrg = { ...existingOrganization, maxCreditsPerMember: 5 };
+    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(cappedOrg);
+    mockAdapters.db.organizations.findById.mockResolvedValue(cappedOrg);
+
+    const result = await update(
+      mockAdminUser as IUserDocument,
+      { id: 'org1', maxCreditsPerMember: null },
+      mockAdapters
+    );
+
+    expect(result.maxCreditsPerMember).toBeNull();
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted.maxCreditsPerMember).toBeNull();
+    expect(persisted.maxCreditsPerMember).not.toBeUndefined();
+  });
+
+  it('ignores a per-member cap change from a non-admin', async () => {
+    const cappedOrg = { ...existingOrganization, maxCreditsPerMember: 5 };
+    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(cappedOrg);
+
+    const result = await update(
+      mockRegularUser as IUserDocument,
+      { id: 'org1', maxCreditsPerMember: 999 },
+      mockAdapters
+    );
+
+    expect(result.maxCreditsPerMember).toBe(5); // unchanged
+  });
+
   it('should allow non-admin users to update other fields but not currentCredits', async () => {
     const updateParams = {
       id: 'org1',

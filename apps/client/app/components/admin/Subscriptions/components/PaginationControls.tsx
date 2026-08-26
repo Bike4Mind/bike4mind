@@ -13,6 +13,7 @@ interface PaginationControlsProps {
   showItemsPerPage?: boolean;
   showTotal?: boolean;
   pageLimitOptions?: number[];
+  disabled?: boolean;
 }
 
 const PaginationControls = ({
@@ -25,6 +26,7 @@ const PaginationControls = ({
   showItemsPerPage = true,
   showTotal = true,
   pageLimitOptions = [10, 20, 50, 100],
+  disabled = false,
 }: PaginationControlsProps) => {
   const isMobile = useIsMobile();
 
@@ -35,7 +37,7 @@ const PaginationControls = ({
         <IconButton
           size="sm"
           variant="outlined"
-          disabled={currentPage <= 1}
+          disabled={disabled || currentPage <= 1}
           onClick={() => onPageChange(currentPage - 1)}
           aria-label="Previous page"
         >
@@ -47,7 +49,7 @@ const PaginationControls = ({
         <IconButton
           size="sm"
           variant="outlined"
-          disabled={currentPage >= totalPages}
+          disabled={disabled || currentPage >= totalPages}
           onClick={() => onPageChange(currentPage + 1)}
           aria-label="Next page"
         >
@@ -70,6 +72,7 @@ const PaginationControls = ({
               size="sm"
               value={itemsPerPage}
               onChange={(_, value) => onItemsPerPageChange(value as number)}
+              disabled={disabled}
               sx={{ minWidth: 110 }}
             >
               {pageLimitOptions.map(value => (
@@ -79,7 +82,7 @@ const PaginationControls = ({
               ))}
             </Select>
           ) : (
-            <FormControl>
+            <FormControl disabled={disabled}>
               <RadioGroup
                 orientation="horizontal"
                 value={itemsPerPage}
@@ -87,7 +90,7 @@ const PaginationControls = ({
                 sx={{ display: 'grid', gridTemplateColumns: `repeat(${pageLimitOptions.length}, 1fr)`, gap: 1 }}
               >
                 {pageLimitOptions.map(value => (
-                  <Radio key={value} value={value} label={`${value} per page`} size="sm" />
+                  <Radio key={value} value={value} label={`${value} per page`} size="sm" disabled={disabled} />
                 ))}
               </RadioGroup>
             </FormControl>

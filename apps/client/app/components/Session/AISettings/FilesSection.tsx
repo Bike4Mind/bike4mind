@@ -26,6 +26,7 @@ import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
+import { clampChunkSize } from '@client/app/utils/chunkSize';
 import { renameDuplicateFiles } from '@client/app/utils/fabFileUtils';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { useQueryClient } from '@tanstack/react-query';
@@ -162,7 +163,10 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
   // Fall back to the canonical chunker default, not a third hand-copied number.
-  const defaultChunkSize = useGetSettingsValue('DefaultChunkSize') || DEFAULT_PASSAGE_TOKEN_TARGET;
+  // clamped - see clampChunkSize (chunkSize.ts)
+  const defaultChunkSize = clampChunkSize(
+    Number(useGetSettingsValue('DefaultChunkSize')) || DEFAULT_PASSAGE_TOKEN_TARGET
+  );
   const chunkFile = useChunkFile();
   const queryClient = useQueryClient();
 
@@ -201,7 +205,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
       const isSystemFile = systemFiles.some(sysFile => sysFile.id === file.id);
 
       chunkFile.mutate(
-        { fabFileId: file.id, chunkSize: Number(defaultChunkSize) }, // Use default chunk size from settings
+        { fabFileId: file.id, chunkSize: defaultChunkSize }, // Use default chunk size from settings
         {
           onSuccess: () => {
             toast.success(`Successfully reprocessed "${file.fileName}" with the current embedding model`);
@@ -455,6 +459,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-system-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
@@ -558,6 +563,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-workbench-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"

@@ -57,7 +57,10 @@ async function loadArtifact(publicId: string): Promise<ArtifactGateLean | null> 
 
 /** The gate context for annotation reads/writes: a passphrase gate is satisfied
  *  by the per-artifact proof cookie the viewer already holds from unlocking the
- *  page (annotation requests are same-origin, so the cookie rides along). */
+ *  page. NOTE the cookie does not ride along automatically - the widget sends
+ *  `credentials: 'omit'` by default and only re-sends with `same-origin` after a
+ *  401 (see authedFetch in publish/widget.ts), so a caller that omits credentials
+ *  reaches here with no proof and is correctly told the passphrase is required. */
 function gateContext(req: Request, artifact: ArtifactGateLean) {
   return {
     passphraseVerified: artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId),

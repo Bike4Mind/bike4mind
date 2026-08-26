@@ -3,19 +3,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The @datalake grammar parser is unit-tested in the slack package; here we mock it and exercise
 // the handler's dispatch, listing and ingest-reply behavior in isolation.
 const { parseDataLakeCommand } = vi.hoisted(() => ({ parseDataLakeCommand: vi.fn() }));
-const { ingestSlackFilesIntoLake, buildSlackAccessContext } = vi.hoisted(() => ({
+const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessContext } = vi.hoisted(() => ({
   ingestSlackFilesIntoLake: vi.fn(),
+  ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
 const { listDataLakes } = vi.hoisted(() => ({ listDataLakes: vi.fn() }));
 
 vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes } }));
-vi.mock('./dataLakeFileIngest', () => ({ ingestSlackFilesIntoLake, buildSlackAccessContext }));
+// Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
+// dispatch and reply composition only. Each path's own behavior has its own test file.
+vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
+vi.mock('./dataLakeFileIngest', () => ({ ingestSlackFilesIntoLake }));
+vi.mock('./dataLakeLinkIngest', () => ({ ingestSlackLinkIntoLake }));
 
 import { handleDataLakeCommand, runDataLakeSlackCommand, formatIngestOutcome } from './handleDataLakeCommand';
 
-const actor = { id: 'u1', isAdmin: false, organizationId: 'org1' };
+const actor = { id: 'u1', isAdmin: false };
 const ingestDeps = { dataLakes: {} } as never;
 
 const baseParams = (overrides: Record<string, unknown> = {}) => ({
@@ -67,9 +72,9 @@ describe('handleDataLakeCommand', () => {
     });
 
     it('caps a long list with a "+N more" tail instead of overrunning Slack', async () => {
-      // For an admin, findAccessible returns every draft/active lake on the platform, all
-      // canManage. Past Slack's 40k-character text limit chat.postMessage errors and the
-      // orchestrator's catch turns the whole reply into "something went wrong".
+      // A caller in a large org can have more manageable lakes than fit Slack's 40k-character
+      // text limit; past it chat.postMessage errors and the orchestrator's catch turns the whole
+      // reply into "something went wrong".
       listDataLakes.mockResolvedValue(
         Array.from({ length: 63 }, (_, i) => ({ slug: `lake-${i}`, name: `Lake ${i}`, canManage: true }))
       );
@@ -89,6 +94,177 @@ describe('handleDataLakeCommand', () => {
 
       expect(reply).toMatch(/cannot add to any data lakes/i);
     });
+
+    describe('scoping', () => {
+      const adminCtx = { userId: 'u1', isAdmin: true, userTags: [], entitlementKeys: [], organizationIds: ['org-a'] };
+      const printedSlugs = (reply: string) => Array.from(reply.matchAll(/^- `([^`]+)`/gm), m => m[1]);
+
+      beforeEach(() => buildSlackAccessContext.mockResolvedValue(adminCtx));
+
+      it('queries the row set with the platform-admin bypass suppressed', async () => {
+        listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
+
+        await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        // The disclosure in question is findAccessible's admin short-circuit returning every lake
+        // on the platform. This surface must never take it: the reply is a channel message.
+        expect(listDataLakes).toHaveBeenCalledWith(
+          expect.objectContaining({ isAdmin: false, userId: 'u1' }),
+          expect.anything()
+        );
+      });
+
+      it('resolves entitlement keys for an admin, since the row set is built from the non-admin arms', async () => {
+        listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
+
+        await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        // Without the keys, an entitlement-gated lake in the admin's own org fails findAccessible's
+        // requirement constraint and drops off a list that `add` still accepts.
+        expect(buildSlackAccessContext).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+          resolveEntitlementsForAdmin: true,
+        });
+      });
+
+      it('omits a lake belonging to an organization the caller is not a member of', async () => {
+        listDataLakes.mockResolvedValue([
+          { slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
+          { slug: 'theirs', name: 'Theirs', canManage: true, organizationId: 'org-b' },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('ours');
+        // findBySlug is org-scoped, so this slug would refuse on `add` - and naming another org's
+        // lake in a shared channel is the disclosure itself.
+        expect(reply).not.toContain('theirs');
+      });
+
+      it('never offers a built-in registry lake, which is read-only even for an admin', async () => {
+        // listDataLakes stamps every static-registry lake canManage:false because assertLakeWritable
+        // refuses an admin too, so the admin manage label must not be restored over one.
+        listDataLakes.mockResolvedValue([
+          { id: 'opti-knowledge', slug: 'opti-knowledge', name: 'Optimization Knowledge Base', canManage: false },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
+      it('omits a cross-org PUBLIC lake, which findAccessible returns but findBySlug cannot resolve', async () => {
+        listDataLakes.mockResolvedValue([
+          { slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
+      it("keeps an org-less lake and one in the caller's own org", async () => {
+        listDataLakes.mockResolvedValue([
+          { slug: 'personal', name: 'Personal', canManage: true },
+          { slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(printedSlugs(reply)).toEqual(['personal', 'ours']);
+      });
+
+      it('labels a scoped row manageable for an admin even when the suppressed context did not', async () => {
+        // Suppressing isAdmin for the query also silences canManageLake's admin rung, so an org
+        // lake the admin did not create comes back canManage:false. The label is restored; the row
+        // set is not widened.
+        listDataLakes.mockResolvedValue([{ slug: 'ours', name: 'Ours', canManage: false, organizationId: 'org-a' }]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('ours');
+      });
+
+      it('prints one row per slug, naming the lake `add` would resolve', async () => {
+        listDataLakes.mockResolvedValue([
+          { slug: 'notes', name: 'Org-less Notes', canManage: true },
+          { slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(printedSlugs(reply)).toEqual(['notes']);
+        // findBySlug prefers an own-org lake over the org-less fallback, so that is the lake the
+        // printed slug actually targets.
+        expect(reply).toContain('Org Notes');
+        expect(reply).not.toContain('Org-less Notes');
+      });
+
+      it('drops a slug whose WINNING lake is unwritable, even when a lower-priority one is writable', async () => {
+        // findBySlug takes the own-org lake by priority alone and never falls back when it turns
+        // out to be unwritable, so `add` would refuse this slug outright. Printing the org-less
+        // lake because it happens to be writable would name a lake the command never targets.
+        listDataLakes.mockResolvedValue([
+          { slug: 'notes', name: 'My Org-less Notes', canManage: true },
+          { slug: 'notes', name: 'Read-only Org Notes', canManage: false, organizationId: 'org-a' },
+        ]);
+
+        buildSlackAccessContext.mockResolvedValue({ ...adminCtx, isAdmin: false });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: false } }));
+
+        expect(printedSlugs(reply)).not.toContain('notes');
+        expect(reply).not.toContain('My Org-less Notes');
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
+      it('never prints a slug `add` cannot resolve (listed implies addable)', async () => {
+        const catalog = [
+          { slug: 'personal', name: 'Personal', canManage: true },
+          { slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
+          { slug: 'theirs', name: 'Theirs', canManage: true, organizationId: 'org-b' },
+          { slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
+          { slug: 'notes', name: 'Org-less Notes', canManage: true },
+          { slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
+          // Deliberately NOT uniformly writable: the winning lake for `shared` is unwritable, so
+          // `add` refuses the slug and the guard must see the reply omit it rather than print the
+          // writable org-less one. A catalog with canManage: true everywhere cannot catch that.
+          { slug: 'shared', name: 'Writable Org-less Shared', canManage: true },
+          { slug: 'shared', name: 'Read-only Org Shared', canManage: false, organizationId: 'org-a' },
+        ];
+        listDataLakes.mockResolvedValue(catalog);
+
+        // Mirrors DataLakeModel.findBySlug: an own-org match first (lowest org id), then the
+        // org-less fallback. If that rule changes, this guard is what catches the divergence.
+        const findBySlug = (slug: string) => {
+          const own = catalog
+            .filter(l => l.slug === slug && l.organizationId && adminCtx.organizationIds.includes(l.organizationId))
+            .sort((a, b) => String(a.organizationId).localeCompare(String(b.organizationId)));
+          return own[0] ?? catalog.find(l => l.slug === slug && !l.organizationId) ?? null;
+        };
+
+        // Both actors, because the write gate differs: an admin is granted outright on any
+        // non-registry lake, so an admin-only run cannot see an unwritable winner at all.
+        for (const isAdmin of [true, false]) {
+          buildSlackAccessContext.mockResolvedValue({ ...adminCtx, isAdmin });
+
+          const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin } }));
+
+          const slugs = printedSlugs(reply);
+          expect(slugs.length, `no rows printed for isAdmin=${isAdmin}`).toBeGreaterThan(0);
+          for (const slug of slugs) {
+            const resolved = findBySlug(slug);
+            expect(resolved, `add to \`${slug}\` would be refused`).not.toBeNull();
+            expect(reply).toContain(resolved!.name);
+            // `add` gates the lake findBySlug returned, with no retry against a same-slug sibling,
+            // so a printed slug whose winner fails that gate is a promise the command breaks.
+            // No registry lakes in this catalog, so the admin arm of isWritable is just isAdmin.
+            expect(resolved!.canManage || isAdmin, `add to \`${slug}\` resolves a lake this caller cannot write`).toBe(
+              true
+            );
+          }
+        }
+      });
+    });
   });
 
   describe('add', () => {
@@ -101,13 +277,47 @@ describe('handleDataLakeCommand', () => {
       expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
     });
 
-    it('refuses a bare link (LINK ingest is M3) instead of silently ingesting nothing', async () => {
+    it('ingests a bare link through the LINK path, not the file path', async () => {
       parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'An Article',
+        sourceUrl: 'https://x',
+      });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [] }));
 
-      expect(reply).toMatch(/link is not supported yet/i);
+      expect(ingestSlackLinkIntoLake).toHaveBeenCalledWith(
+        { actor, lakeSlug: 'sales', link: 'https://x', channel: 'C1', messageTs: '1700000000.0001' },
+        ingestDeps
+      );
+      // No attachments, so the file path must not run at all.
       expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
+      expect(reply).toContain('Added 1 file to *Sales*: "An Article"');
+    });
+
+    it('surfaces a link refusal verbatim', async () => {
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Could not fetch that link.',
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toBe('Could not fetch that link.');
+    });
+
+    it('asks for a file or a link when the message carries neither', async () => {
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toMatch(/attach a file or include a link/i);
+      expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
+      expect(ingestSlackLinkIntoLake).not.toHaveBeenCalled();
     });
 
     it('passes the actor, files and Slack origin through to the ingest', async () => {
@@ -143,7 +353,9 @@ describe('handleDataLakeCommand', () => {
       expect(reply).toBe('You can only add files to a data lake you created.');
     });
 
-    it('says the link was ignored when a message carries BOTH a file and a link', async () => {
+    it('ingests BOTH when a message carries a file and a link, reporting each', async () => {
+      // M2 replied "Ignored the link" here because LINK ingest did not exist. Now both run, so the
+      // reply must account for both - under-reporting would be the new version of that same lie.
       parseDataLakeCommand.mockReturnValue({
         subcommand: 'add',
         lakeSlug: 'sales',
@@ -157,18 +369,95 @@ describe('handleDataLakeCommand', () => {
         duplicates: [],
         rejected: [],
       });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'A Doc',
+        sourceUrl: 'https://example.com/doc',
+      });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
 
-      // The files-present case falls past the bare-link refusal, so silence about the URL would
-      // read as if the link had been taken too.
-      expect(reply).toContain('Added 1 file to *Sales*');
-      expect(reply).toMatch(/ignored the link/i);
+      expect(ingestSlackFilesIntoLake).toHaveBeenCalled();
+      expect(ingestSlackLinkIntoLake).toHaveBeenCalled();
+      expect(reply).toContain('"a.pdf"');
+      expect(reply).toContain('"A Doc"');
+      expect(reply).not.toMatch(/ignored the link/i);
     });
 
-    it('does NOT mention the ignored link when the ingest was refused', async () => {
-      // Appending it to a refusal tells someone denied by the write gate that their link was
-      // "ignored", which implies the rest of the request went through.
+    it('still reports the file when the link half fails', async () => {
+      // One half failing must not swallow the other, in either direction.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        added: ['a.pdf'],
+        duplicates: [],
+        rejected: [],
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Could not fetch that link.',
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      expect(reply).toContain('"a.pdf"');
+      expect(reply).toContain('Could not fetch that link.');
+    });
+
+    it('does not print the SAME refusal twice on a mixed message', async () => {
+      // Both halves authorize independently, so an unauthorized actor is refused by each. Two
+      // identical sentences read as a stutter rather than as two half-outcomes.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      const refusal = 'You do not have permission to add to *Sales*. Ask a lake admin.';
+      ingestSlackFilesIntoLake.mockResolvedValue({ ok: false, reason: 'not_authorized', message: refusal });
+      ingestSlackLinkIntoLake.mockResolvedValue({ ok: false, reason: 'not_authorized', message: refusal });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      expect(reply).toBe(refusal);
+      expect(reply.split(refusal).length - 1).toBe(1);
+    });
+
+    it('does NOT collapse two identical SUCCESS lines, only refusals', async () => {
+      // A swallowed success would misreport what is actually in the lake, so de-duplication is scoped
+      // to refusals. Contrived here, but the collision is possible when a file name coincides with the
+      // link's page title in the same lake.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        added: ['same.pdf'],
+        duplicates: [],
+        rejected: [],
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({ ok: true, lakeName: 'Sales', fileName: 'same.pdf' });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'same.pdf' }] }));
+
+      expect(reply.split('\n').length).toBe(2);
+    });
+
+    it('still reports two DIFFERENT outcomes separately', async () => {
+      // The de-duplication must not collapse genuine half-outcomes, which always differ because each
+      // names its own file or link.
       parseDataLakeCommand.mockReturnValue({
         subcommand: 'add',
         lakeSlug: 'sales',
@@ -177,14 +466,19 @@ describe('handleDataLakeCommand', () => {
       });
       ingestSlackFilesIntoLake.mockResolvedValue({
         ok: false,
-        reason: 'not_authorized',
-        message: 'You can only add files to a data lake you created.',
+        reason: 'link_fetch_failed',
+        message: 'First problem.',
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Second problem.',
       });
 
-      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1' }] }));
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
 
-      expect(reply).toBe('You can only add files to a data lake you created.');
-      expect(reply).not.toMatch(/ignored the link/i);
+      expect(reply).toContain('First problem.');
+      expect(reply).toContain('Second problem.');
     });
   });
 });

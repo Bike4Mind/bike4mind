@@ -4,11 +4,12 @@ import {
   ApiKeyType,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
-  GEMINI_IMAGE_MODELS,
   GenerateImageToolCall,
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
+  supportsImageEdit,
+  EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -24,18 +25,6 @@ import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
 import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
-
-// Models that support image editing.
-// All Gemini image models support editing, so derive that portion from
-// GEMINI_IMAGE_MODELS to avoid drift as new Gemini models are added.
-const EDIT_SUPPORTED_MODELS = [
-  ImageModels.GPT_IMAGE_1,
-  ImageModels.GPT_IMAGE_1_5,
-  ImageModels.GPT_IMAGE_1_MINI,
-  ImageModels.GPT_IMAGE_2,
-  ImageModels.FLUX_PRO_FILL,
-  ...GEMINI_IMAGE_MODELS,
-];
 
 async function downloadImage(url: string) {
   // Handle data URLs (base64 images)
@@ -311,8 +300,8 @@ export const imageEditTool: ToolDefinition = {
       }
 
       // Validate that the edit model supports editing
-      if (!(EDIT_SUPPORTED_MODELS as readonly string[]).includes(editModel)) {
-        return `Error: Model ${editModel} does not support image editing. Supported models for editing: ${EDIT_SUPPORTED_MODELS.join(', ')}.
+      if (!supportsImageEdit(editModel)) {
+        return `Error: Model ${editModel} does not support image editing. Supported models for editing: ${EDIT_SUPPORTED_IMAGE_MODELS.join(', ')}.
 
 Please select a supported edit model in your image settings modal.`;
       }

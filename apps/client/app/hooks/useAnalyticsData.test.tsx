@@ -79,6 +79,25 @@ describe('useAnalyticsData - user activity', () => {
     expect(lastCall().metadataFilters).toEqual([{ field: 'source', operator: 'exists' }]);
   });
 
+  it('keeps the previous page on screen while the next page is loading', async () => {
+    fetchCounterLogs.mockResolvedValueOnce({ logs: [{ date: 'page-1' }], total: 4210 });
+    const { result, rerender } = renderHook(() => useAnalyticsData(), { wrapper });
+    await waitFor(() => expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-1' }));
+
+    let resolveNextPage: (value: { logs: { date: string }[]; total: number }) => void = () => {};
+    fetchCounterLogs.mockImplementationOnce(() => new Promise(resolve => (resolveNextPage = resolve)));
+    useAnalyticsStore.getState().setPage(2);
+    rerender();
+
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-1' });
+    expect(result.current.isPlaceholderData).toBe(true);
+
+    resolveNextPage({ logs: [{ date: 'page-2' }], total: 4210 });
+    await waitFor(() => expect(result.current.isPlaceholderData).toBe(false));
+    expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-2' });
+  });
+
   it('does not page the report tabs, which return a single cached document', async () => {
     useAnalyticsStore.setState({ activeSubTab: AnalyticsSubTab.DailyReport });
     fetchCounterLogs.mockResolvedValue({ reports: [{ date: '2026-07-28', report: 'x' }] });
@@ -87,5 +106,61 @@ describe('useAnalyticsData - user activity', () => {
 
     await waitFor(() => expect(fetchCounterLogs).toHaveBeenCalled());
     expect(lastCall().page).toBeUndefined();
+  });
+
+  it('does not carry a report tab result over as placeholder data after switching to the grid', async () => {
+    useAnalyticsStore.setState({ activeSubTab: AnalyticsSubTab.DailyReport });
+    fetchCounterLogs.mockResolvedValueOnce({ reports: [{ date: '2026-07-28', report: 'x' }] });
+
+    const { result, rerender } = renderHook(() => useAnalyticsData(), { wrapper });
+    await waitFor(() => expect(result.current.data?.reports).toHaveLength(1));
+
+    let resolveGridFetch: (value: { logs: { date: string }[]; total: number }) => void = () => {};
+    fetchCounterLogs.mockImplementationOnce(() => new Promise(resolve => (resolveGridFetch = resolve)));
+    useAnalyticsStore.getState().setActiveSubTab(AnalyticsSubTab.UserActivity);
+    rerender();
+
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    expect(result.current.isPlaceholderData).toBe(false);
+    expect(result.current.data?.logs).toBeUndefined();
+    expect(result.current.isLoading).toBe(true);
+
+    resolveGridFetch({ logs: [{ date: 'page-1' }], total: 1 });
+    await waitFor(() => expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-1' }));
+  });
+});
+
+describe('useAnalyticsData - report mode', () => {
+  beforeEach(() => {
+    fetchCounterLogs.mockReset();
+    useAnalyticsStore.setState({
+      activeSubTab: AnalyticsSubTab.DailyReport,
+      selectedOrganizations: [ALL_VALUE],
+      excludedOrgs: { millionOnMars: false, unknown: false, personal: false },
+      userActivityFilters: { counterNameSearch: '', userEmailSearch: '' },
+      metadataFilters: [],
+      page: 1,
+      limit: 25,
+    });
+  });
+
+  it('does not apply placeholder data across a date range change, unlike the grid', async () => {
+    fetchCounterLogs.mockResolvedValueOnce({ reports: [{ date: '2026-07-28', report: 'x' }] });
+    const { result, rerender } = renderHook(
+      ({ startDate }: { startDate: string }) => useAnalyticsData({ startDate, report: true }),
+      { wrapper, initialProps: { startDate: '2026-07-21' } }
+    );
+    await waitFor(() => expect(result.current.data?.reports).toHaveLength(1));
+
+    let resolveNextRange: (value: { reports: { date: string; report: string }[] }) => void = () => {};
+    fetchCounterLogs.mockImplementationOnce(() => new Promise(resolve => (resolveNextRange = resolve)));
+    rerender({ startDate: '2026-07-28' });
+
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.isPlaceholderData).toBe(false);
+
+    resolveNextRange({ reports: [{ date: '2026-08-04', report: 'y' }] });
+    await waitFor(() => expect(result.current.data?.reports).toMatchObject([{ date: '2026-08-04' }]));
   });
 });

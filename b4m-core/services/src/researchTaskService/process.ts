@@ -1,8 +1,10 @@
 import {
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
   IUserDocument,
   IUserRepository,
   IFabFileRepository,
+  IDataLakeRepository,
   KnowledgeType,
   ITaskScheduleRepository,
   ResearchTaskExecutionType,
@@ -14,6 +16,7 @@ import {
   IResearchTask,
   IResearchTaskDeepResearch,
   IApiKeyRepository,
+  IOrganizationRepository,
 } from '@bike4mind/common';
 import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -46,9 +49,23 @@ interface ResearchTaskProcessAdapters {
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
     users: Pick<IUserRepository, 'findById'>;
     adminSettings: IAdminSettingsRepository;
+    // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
+    // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
+    // per-org/owner/lake override silently does nothing on this door.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
     researchDatas: IResearchDataRepository;
     taskSchedules: ITaskScheduleRepository;
     apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndType' | 'findByUserIdAndTypes'>;
+    // Widened to match ToolContext.db.dataLakes below (this whole `db` object is passed through
+    // to it), not just what the new write-gate call needs.
+    dataLakes: Pick<
+      IDataLakeRepository,
+      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'
+    >;
+    // Required: this whole `db` object is passed through to ToolContext.db below, whose
+    // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
+    // `findMembershipOrgIds` off it).
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];
