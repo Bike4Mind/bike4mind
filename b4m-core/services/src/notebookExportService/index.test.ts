@@ -181,6 +181,31 @@ describe('notebook export', () => {
     expect(find).toHaveBeenCalledWith(expect.objectContaining({ deletedAt: null }));
   });
 
+  it('leaves out an artifact the exporter cannot read, and scopes the query to them', async () => {
+    // `session.artifactIds` is client-supplied and written through unvalidated, so an id arriving
+    // at the export is not necessarily the caller's. The normal read path denies such a row; the
+    // export must not be the way around it. The stub answers only when the query carries the
+    // access clause, so this cannot pass by resolving everything.
+    const find = vi.fn().mockImplementation((query: Record<string, unknown>) => {
+      if (!query.$or) return [{ id: 'artifact-1', title: 'Someone Elses Artifact', type: 'react' }];
+      return [];
+    });
+
+    const payload = await exportOnce({ artifactRepository: { find } });
+
+    expect(payload.notebooks[0].artifacts).toEqual([]);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: [
+          { userId: 'user-1' },
+          { 'permissions.canRead': 'user-1' },
+          { visibility: 'public' },
+          { 'permissions.isPublic': true },
+        ],
+      })
+    );
+  });
+
   it('names an artifact from its title, which is the field the entity actually has', async () => {
     const payload = await exportOnce({
       artifactRepository: {
