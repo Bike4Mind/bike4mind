@@ -41,6 +41,7 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   mcpServerRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
@@ -1349,6 +1350,7 @@ async function processExecution(
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -2973,6 +2975,7 @@ async function processSubagentDispatch(
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
+        scopedSettings: scopedSettingsRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

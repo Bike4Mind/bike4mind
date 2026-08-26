@@ -47,6 +47,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
   lakeAccessEventRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
@@ -264,6 +265,7 @@ async function buildEmbedServerTools(args: {
       organizations: organizationRepository,
       usageEvents: usageEventRepository,
       lakeAccessEvents: lakeAccessEventRepository,
+      scopedSettings: scopedSettingsRepository,
     },
     entitlementKeys: [],
     kbScope: { fileIds: kbFileIds },

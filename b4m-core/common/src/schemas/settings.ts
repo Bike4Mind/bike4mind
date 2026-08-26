@@ -19,7 +19,11 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
-import { KB_SEARCH_DEFAULT_RESULTS_DEFAULT } from '../constants/knowledgeBaseSearch';
+import {
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+} from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
@@ -304,6 +308,8 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxChunks',
   'forcedRetrievalCharBudget',
   'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -1405,6 +1411,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeSearchMaxChunks', order: 3 },
       { key: 'forcedRetrievalCharBudget', order: 4 },
       { key: 'kbSearchDefaultResults', order: 5 },
+      { key: 'kbSearchResultTokenBudget', order: 6 },
+      { key: 'kbSearchMinRelevancePct', order: 7 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3303,14 +3311,67 @@ export const settingsMap = {
     max: 10,
     description:
       'Passages the search_knowledge_base tool returns when a model call omits max_results, ' +
-      'which is most calls. Raising it admits more of a growing knowledge base per call, at the ' +
-      "cost of prompt tokens on every search. Does NOT raise the tool's advertised ceiling (10) - " +
-      "a model that reads max_results up to 10 from its own tool schema won't ask for more than " +
-      'that regardless of this setting. Platform-only for now: this read does not go through the ' +
-      'scoped-settings resolver, so a `settableAt` block here would be inert metadata at best.',
+      'which is most calls. This is the exact bound while kbSearchResultTokenBudget is unset (0). ' +
+      'Once a token budget is set, it takes over as the primary bound for search results (this ' +
+      "setting's own value is then unused there, though it still governs the keyword-search " +
+      'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
+      "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
+      "from its own tool schema won't ask for more than that regardless of this setting.",
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 5,
+    // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
+    // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
+    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  kbSearchResultTokenBudget: makeNumberSetting({
+    key: 'kbSearchResultTokenBudget',
+    name: 'Knowledge Base Search Result Token Budget',
+    defaultValue: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+    min: 0,
+    // Above this, kbSearchDefaultResults' safety ceiling (KB_SEARCH_MAX_RESULTS, the tool's hard
+    // maximum of 10 passages) always binds first, so a larger value could never be reached:
+    // KB_SEARCH_MAX_RESULTS (10) x SERVE_CHUNK_CHARS_CEILING (8000, chunking.ts), at ~4 chars/token.
+    // Deliberately NOT the codebase's own CHARS_PER_TOKEN_SERVE_BOUND (6, chunking.ts) - that
+    // constant upper-bounds chars-per-token to keep a CHARACTER budget generous; a token CEILING
+    // needs the opposite direction (fewer chars per token -> more tokens for the same text), so 6
+    // would understate the true worst case and let a real value slip past this write-time cap.
+    max: 20_000,
+    description:
+      'Approximate tokens of served passage TEXT (post-trim, post-clip - what the model actually ' +
+      'receives, not the raw stored chunk) the search_knowledge_base tool may return in one call. ' +
+      'Counted with a fixed tokenizer as a proxy, not billed against any specific model. Replaces a ' +
+      'passage count as the primary bound once set, since it is invariant to chunk size - a lake ' +
+      'chunked smaller no longer silently returns less material for the same setting. 0 (default) ' +
+      'disables it: search_knowledge_base then serves exactly kbSearchDefaultResults passages, ' +
+      'unchanged from before this setting existed. The FIRST matching passage is always returned ' +
+      'even if it alone exceeds the budget - a search that found something never returns nothing.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 6,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  kbSearchMinRelevancePct: makeNumberSetting({
+    key: 'kbSearchMinRelevancePct',
+    name: 'Knowledge Base Search Minimum Relevance (%)',
+    defaultValue: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    description:
+      'Minimum cosine relevance, as a percent, a passage must clear to be returned by ' +
+      'search_knowledge_base. 0 (default) matches current behavior (no relevance floor beyond a ' +
+      'non-negative cosine score). Raising it lets breadth adapt per query - a narrow question can ' +
+      'return fewer, more relevant passages instead of always padding out to the configured count. ' +
+      'Cosine similarity is not comparable across embedding models: a floor tuned for one model can ' +
+      'filter out an entire alternate model, when a lake mixes embedding models, more aggressively ' +
+      "than intended. Start low and raise gradually while watching the tool's own retrieval-" +
+      'skipped notices.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 7,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',
