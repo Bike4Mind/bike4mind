@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
@@ -165,6 +165,22 @@ export default function PublishedArtifactsTabContent() {
   const artifacts = data?.artifacts ?? [];
   const total = data?.total ?? 0;
 
+  // Backstop alongside `wasLastOnPage` below: that flag is computed at click time from the
+  // render-time array, which retains its stale value while an invalidation is in flight, so a
+  // second delete fired in that window can still land on an empty page it didn't think it caused.
+  // `data?.skip === skip` is an exact freshness check (the server echoes back the page it
+  // answered, apps/client/pages/api/publish/artifacts/index.ts) that closes both the error case
+  // (no `data`) and the stale-key case (an older page's leftover response) in one condition, so
+  // this only reacts to the CURRENT page's real, settled result - never a placeholder or a failure.
+  useEffect(() => {
+    if (data?.skip === skip && artifacts.length === 0 && skip > 0) {
+      // Clamp-on-settle is the intent (adjusting state in response to a server response the
+      // component doesn't otherwise re-render for), so the setState here is deliberate.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSkip(Math.max(0, Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE));
+    }
+  }, [data, artifacts.length, skip, total]);
+
   const facets: ManagedListFacets = facetData?.facets ?? {
     kind: {},
     visibility: {},
@@ -269,6 +285,9 @@ export default function PublishedArtifactsTabContent() {
       // end of a now-shorter list: the page renders empty and - because `total` has dropped to a
       // single page - the pager disappears too, leaving no control to get back. Same reasoning as
       // resetting skip on a filter change, applied to the mutation that can shrink the set.
+      // Deliberately kept alongside the settle-driven clamp effect above (which corrects this same
+      // case a beat later from the real response): this fast path just avoids a visible flash of
+      // the empty-page copy on the common single-delete click.
       if (v.wasLastOnPage) setSkip(cur => Math.max(0, cur - PAGE_SIZE));
       invalidate();
       // A delete takes that artifact's tags out of the vocabulary counts, so the suggestions have
@@ -499,7 +518,7 @@ export default function PublishedArtifactsTabContent() {
           <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-no-matches">
             {filtering
               ? 'Nothing matches those filters. Clear them to see your whole library.'
-              : 'This page is empty - returning you to the first page.'}
+              : 'This page is empty - returning you to the last page that has results.'}
           </Typography>
         ) : (
           <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-empty">

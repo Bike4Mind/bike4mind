@@ -18,6 +18,7 @@ import {
   IUsageEventRepository,
   IOrganizationRepository,
   ILakeAccessEventRepository,
+  IScopedSettingsRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -75,6 +76,18 @@ export interface ToolContext {
    * Optional because some non-chat tool harnesses build a context without a session.
    */
   sessionId?: string;
+  /**
+   * Quest (turn) id of the current chat, for lake-access audit rows (recordLakeAccessEvent) to
+   * join back to their turn - a diagnostic join key, never authorization data. Optional for the
+   * same reason as `sessionId`, plus one agent-mode-specific case: an agent execution's real Quest
+   * id is only known from the point `agentExecutor` resolves it (see the dispatch-time capture in
+   * `agentExecute.ts` and its resume-path fallback) - a tool call before that point genuinely has
+   * none to supply. On the agent path this must come from that resolved id
+   * (`AgentExecution.linkedQuestId`), never from `AgentExecution.questId`, which holds different
+   * things depending on which dispatcher created the execution and so cannot be interpreted by any
+   * consumer - see its own doc comment.
+   */
+  questId?: string;
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {
     latticeModels?: {
@@ -126,6 +139,12 @@ export interface ToolContext {
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
      */
     lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
+    /**
+     * Scoped-settings overlay for org/owner setting rungs (epic #1658 seam). Optional -
+     * `resolveSearchBudgets` falls back to the byte-identical platform path when this is absent,
+     * so a lean tool harness that omits it keeps platform-only resolution rather than failing.
+     */
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side
@@ -156,6 +175,29 @@ export interface ToolContext {
    * would silently read unscoped.
    */
   kbScope?: KbScope;
+  /**
+   * True when this session's attached corpus is entirely PERSONAL - nothing belonging to a data
+   * lake the caller can reach (see ChatCompletionProcess.personalCorpusOnly). The knowledge tools
+   * then search WITHOUT their lake arms, so a notebook about its own uploads stops grounding on an
+   * unrelated product's lake.
+   *
+   * Deliberately a flag and NOT a file-id scope. Routing it through `kbScope` made the attached ids
+   * the sole authority (`restrictToFileIds` + `skipOwnership`, no owner/shared expansion), which
+   * suppressed the lakes AND the rest of the caller's own library - so a user who attached one file
+   * could no longer find anything in the other fifty they own. Suppressing the lake arms is the
+   * whole of the fix; narrowing to the attachments was collateral.
+   *
+   * Distinct from `kbScope` for the same reason: that one is a hard, fail-closed agent restriction
+   * where an empty list reads NOTHING, and this is a corpus-shaping hint on an ordinary session.
+   */
+  suppressLakeArms?: boolean;
+  /**
+   * The session's lake scope (`session.retrievalTags`). Narrows the knowledge tools' owner-wide lake
+   * access to the lake(s) this session is FOR, so a session created for one lake stops searching
+   * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
+   * documents why the prefix buckets are filtered rather than rebuilt. Absent/empty = unscoped.
+   */
+  sessionRetrievalTags?: string[];
   /**
    * FabFile ids attached to THIS session whose text was actually delivered into this turn's
    * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT

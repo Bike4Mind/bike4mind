@@ -98,6 +98,30 @@ export interface ILakeAccessEvent {
   returnedChunkIds: string[];
   /** Some surfaces (whole-document retrieval) are file-granular and never see a chunk id. */
   returnedFileIds: string[];
+  /**
+   * Per-chunk similarity score, index-aligned with `returnedChunkIds` (`scores[i]` corresponds to
+   * `returnedChunkIds[i]`) - never independent, or a length mismatch would misattribute a score to
+   * the wrong chunk. `record()` re-derives and enforces this alignment itself rather than trusting
+   * the caller (see its own docblock on why nothing here is caller-trusted).
+   *
+   * Absent, not an empty array, on any surface with no similarity-search concept (a direct
+   * file_id/tag lookup, a keyword/text-match arm) - distinguishes "no score concept for this
+   * surface" from "ran, found nothing."
+   *
+   * NOT COMPARABLE ACROSS ROWS, and not necessarily within one row: these are raw cosine
+   * similarities, and `semanticDataLakeSearch` merges an alternate-embedding-model ANN arm into
+   * the same top-K (see its own "Cross-model caveat" block), so one array can hold scores computed
+   * in two different vector spaces. Alignment to `returnedChunkIds` still holds - each score
+   * belongs to its own chunk - but a consumer must not average, threshold, or rank ACROSS rows,
+   * and should not present a bare "top match 0.71" as if the number were absolute.
+   *
+   * DIAGNOSTIC JOIN KEY ONLY, same caution as `questId` below: must never be projected into the
+   * manager-gated, cross-tenant-visible `LakeAccessView` (see `assembleLakeAccessView.ts` /
+   * `LakeAccessHistoryEntry`) - it rides this event's own 450-day retention, not the shorter,
+   * opt-in query-text retention, as a deliberate choice (a bare float reveals little on its own,
+   * and `returnedChunkIds` already persists rank order).
+   */
+  scores?: number[];
   /** Pre-truncation counts, so volume stays measurable even when identifiersTruncated is true -
    * tracked separately because a file-granular surface (see returnedFileIds) contributes only to
    * the file count, and a chunk-granular one only to the chunk count. */
@@ -105,6 +129,23 @@ export interface ILakeAccessEvent {
   returnedFileCount: number;
   identifiersTruncated: boolean;
   surface: LakeAccessSurface;
+  /**
+   * The turn this retrieval happened during, for joining this audit row back to its Quest. A
+   * DIAGNOSTIC JOIN KEY, not the source of the turn's own verdict - `promptMeta.retrieval` (see
+   * PR #1971) already gives every turn, including agent-mode ones, a correct top-level result
+   * independent of this field. Absent on: rows that predate this field, the quest-less HTTP data-
+   * lake routes (no Quest/session concept at all), and an agent-mode row whose execution has not
+   * yet reached the point of having a real Quest id available (see the `questId` threading notes
+   * on `ToolContext`).
+   *
+   * MUST NEVER be projected into the manager-gated `LakeAccessView` (see `scores` above) - it is
+   * a pointer into a Quest document a lake manager is not otherwise authorized to read.
+   */
+  questId?: string;
+  /** Session the turn belongs to. Real and stable from the start of both the live-chat and
+   * agent-mode paths (unlike `questId` in agent mode - see its own doc comment), so this is
+   * populated far more consistently. Same diagnostic-join-key caution applies. */
+  sessionId?: string;
   /** Whether a query-text sibling document was written for this event (see
    * LakeAccessQueryTextModel). Reflects the OUTCOME of the write attempt, not just the opt-in
    * decision - a swallowed failure on the best-effort text write must not leave this true with no
@@ -124,7 +165,15 @@ export interface RecordLakeAccessEventInput {
   resolvedLakeIds: string[];
   chunkIds?: string[];
   fileIds?: string[];
+  /** Per-chunk similarity score, index-aligned with `chunkIds` at the point of the call - see
+   * `ILakeAccessEvent.scores`'s doc comment for the full rationale. `record()` re-validates and
+   * re-slices this itself rather than trusting the alignment holds. */
+  scores?: number[];
   surface: LakeAccessSurface;
+  /** See `ILakeAccessEvent.questId`'s doc comment - diagnostic join key, not authorization data. */
+  questId?: string;
+  /** See `ILakeAccessEvent.sessionId`'s doc comment. */
+  sessionId?: string;
   /** Dropped before it can reach Mongo unless every resolved lake has opted in - see
    * LakeAccessQueryTextModel and the unanimity rule in `record()`. */
   queryText?: string;

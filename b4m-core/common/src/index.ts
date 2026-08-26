@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './apiErrorCodes';
 export * from './groupTypes';
 export * from './insufficientCredits';
 export * from './validation';
@@ -34,6 +35,7 @@ export * from './constants/chunking';
 export * from './constants/lakeHealth';
 export * from './constants/lakeConvergence';
 export * from './constants/lakeAccessAudit';
+export * from './constants/feedbackRetention';
 export * from './constants/lakeConfigAudit';
 export * from './constants/forcedRetrieval';
 export * from './constants/knowledgeBaseSearch';

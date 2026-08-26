@@ -5,7 +5,7 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260820000000_lake-audit-total-order-indexes';
+import migration from './20260826000000_lake-audit-total-order-indexes';
 
 const LEGACY = [
   { collection: () => LakeConfigChangeEventModel.collection, key: { dataLakeId: 1, createdAt: -1 } },

@@ -43,7 +43,7 @@ const SUPERSEDED: Array<{ collection: mongoose.Collection; replacement: object; 
 ];
 
 const migration: MigrationFile = {
-  id: 20260820000000,
+  id: 20260826000000,
   name: 'lake audit total order indexes',
 
   up: async () => {

@@ -88,6 +88,27 @@ describe('semanticDataLakeSearch retrieval exclusion', () => {
     expect(findVectors.mock.calls[0][0]).toEqual(['m', 'c']);
   });
 
+  /**
+   * The bail above is an optimization for a caller who HAS no lake. A caller whose lakes were
+   * suppressed deliberately still has a corpus - their own and shared files, which collectScopedFiles
+   * admits via includeShared - and bailing there drops the turn to metadata-only keyword search.
+   *
+   * Exercises the real function rather than a mock of it on purpose: the tool-level test asserts the
+   * CALL shape (dataLakeTags: []), which passes whether or not this bail fires, so a fix that never
+   * ran read as verified for a whole round.
+   */
+  it('ownFilesOnly: with no lake tags it still scopes the caller\'s own files instead of bailing', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const adapters = makeAdapters(findVectors);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, adapters as never);
+    // The DB is consulted - the thing the default path skips.
+    expect(adapters.db.fabfiles.search).toHaveBeenCalled();
+    const opts = (adapters.db.fabfiles.search as ReturnType<typeof vi.fn>).mock.calls[0][5];
+    // ...over own + shared files, with no lake arms.
+    expect(opts.includeShared).toBe(true);
+    expect(opts.dataLakeTags).toEqual([]);
+  });
+
   it('tag path unchanged after core extraction: no data-lake tags returns empty without touching the DB', async () => {
     const findVectors = vi.fn().mockResolvedValue([]);
     const adapters = makeAdapters(findVectors);

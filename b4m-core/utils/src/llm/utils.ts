@@ -497,6 +497,7 @@ export async function fetchAndProcessPreviousMessages(
   {
     db,
     verbatimTokenBudget,
+    excludeCurrentPrompt = false,
     model,
   }: {
     db: {
@@ -509,6 +510,13 @@ export async function fetchAndProcessPreviousMessages(
      * contextSummary. Omit to keep the legacy count-only behavior.
      */
     verbatimTokenBudget?: number;
+    /**
+     * Drop the newest quest - the turn being processed - even when it is the only one in the
+     * window. History normally pops it, but a session's first turn used to be exempt, so its
+     * prompt reached the model both as history and as the current user message. Callers whose
+     * contract is a bare completion (API promptMode raw) set this to get the message exactly once.
+     */
+    excludeCurrentPrompt?: boolean;
     /**
      * The model this history is being fetched for. Used to decide whether Priority 2
      * tool-pairing reconstruction is safe for the TARGET backend - currently, Gemini is
@@ -575,8 +583,9 @@ export async function fetchAndProcessPreviousMessages(
   // Reverse the chat history items and remove the last item (the current prompt)
   chatHistoryItems.reverse();
 
-  // Keep the current prompt if it is the only item, so a session's first prompt stays in history.
-  if (chatHistoryItems.length > 1) {
+  // Keep the current prompt if it is the only item, so a session's first prompt stays in history -
+  // unless the caller needs history to hold no part of the current turn (see excludeCurrentPrompt).
+  if (chatHistoryItems.length > 1 || excludeCurrentPrompt) {
     chatHistoryItems.pop();
   }
 

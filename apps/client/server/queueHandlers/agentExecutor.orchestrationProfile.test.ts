@@ -243,8 +243,25 @@ describe('pickEffectiveEnabledTools', () => {
     isSynthetic: true,
   };
 
+  // The payload wins outright for a non-exclusive profile: the client's briefcase-override
+  // contract (`resolveDispatchTools`) depends on a pinned selection surviving whatever
+  // profile the run resolves, and questmaster v5 nodes ship scoped toolsets the same way.
   it('returns the payload set when non-empty', () => {
     expect(pickEffectiveEnabledTools(['file_read'], profile)).toEqual(['file_read']);
+  });
+
+  it('ignores the payload entirely for a profile whose toolset is exclusive', () => {
+    const exclusive: ResolvedOrchestrationProfile = { ...profile, toolsetIsExclusive: true };
+    expect(pickEffectiveEnabledTools(['web_search'], exclusive)).toEqual(['web_search', 'coordinate_task']);
+  });
+
+  it('still subtracts deniedTools from an exclusive toolset', () => {
+    const exclusive: ResolvedOrchestrationProfile = {
+      ...profile,
+      toolsetIsExclusive: true,
+      deniedTools: ['coordinate_task'],
+    };
+    expect(pickEffectiveEnabledTools(['coordinate_task'], exclusive)).toEqual(['web_search']);
   });
 
   it('falls through to the profile when payload is undefined', () => {

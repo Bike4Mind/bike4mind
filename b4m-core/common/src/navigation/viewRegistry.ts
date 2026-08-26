@@ -376,12 +376,12 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.feedbacks',
+    id: 'admin.feedback',
     section: 'admin',
-    label: 'Feedbacks',
+    label: 'Feedback',
     description: 'View and manage user feedback, bug reports, and feature requests',
     navigationType: 'tab',
-    target: '2', // AdminTab.Feedbacks
+    target: '2', // AdminTab.Feedback
     keywords: ['feedback', 'bug reports', 'feature requests', 'user feedback', 'complaints'],
     requiresAdmin: true,
   },

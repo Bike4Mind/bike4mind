@@ -67,7 +67,6 @@ import type { ManagerLake } from './shared';
 import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
 
-
 // Left sidebar
 
 interface ManagerNavProps {
@@ -158,24 +157,20 @@ export default function ManagerNav({
   const uncategorizedFiles = useMemo(() => {
     if (!activeLake) return [];
     const prefix = normalizePrefix(activeLake.fileTagPrefix);
-    return [...articles]
-      .filter(
-        f =>
-          !satisfiesTagPrefix(
-            (f.tags ?? []).map(t => t.name),
-            prefix
-          )
-      );
+    return [...articles].filter(
+      f =>
+        !satisfiesTagPrefix(
+          (f.tags ?? []).map(t => t.name),
+          prefix
+        )
+    );
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
 
   // TreeView highlights a SET of files (chat mode attaches several); the manager opens one at a
   // time, so this is that one id as a set.
-  const selectedFileIds = useMemo(
-    () => new Set(selectedFileId ? [selectedFileId] : []),
-    [selectedFileId]
-  );
+  const selectedFileIds = useMemo(() => new Set(selectedFileId ? [selectedFileId] : []), [selectedFileId]);
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];

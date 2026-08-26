@@ -208,3 +208,30 @@ describe('count_knowledge_base', () => {
     expect(out).toContain('rather than guessing a number');
   });
 });
+
+describe('count_knowledge_base honours the personal-corpus scope', () => {
+  it('counts only the session corpus and never enumerates the owner lakes', async () => {
+    // Enumerating lakes here leaks their NAMES across a session's stated scope, which is a
+    // disclosure even when no document content is returned.
+    const ctx = makeContext({ suppressLakeArms: true } as never);
+    await run(ctx);
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('count_knowledge_base narrows lake access to the session lake', () => {
+  it('counts only the session lake, not every lake the owner can reach', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:mine', 'datalake:unrelated'],
+      dataLakeTagPrefixes: ['mine:', 'unrel:'],
+      scopedTagPrefixes: [],
+      lakes: [
+        { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+        { id: 'l2', name: 'Unrelated-Product-KB', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:', source: 'registry' },
+      ],
+    });
+    const out = await run(makeContext({ sessionRetrievalTags: ['datalake:mine'] } as never));
+    // Naming the other lake is a disclosure even when none of its content is returned.
+    expect(out).not.toContain('Unrelated-Product-KB');
+  });
+});

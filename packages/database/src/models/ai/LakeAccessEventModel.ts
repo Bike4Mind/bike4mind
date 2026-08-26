@@ -47,11 +47,24 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
     // just the naming-convention guard the corpus-leak test already covers.
     returnedChunkIds: { type: [{ type: String, maxlength: LAKE_ACCESS_IDENTIFIER_MAX_CHARS }], default: [] },
     returnedFileIds: { type: [{ type: String, maxlength: LAKE_ACCESS_IDENTIFIER_MAX_CHARS }], default: [] },
+    // default: undefined, not omitted: Mongoose's own built-in default for an array-type path is
+    // [], regardless of whether `default` is specified at all - the same auto-vivification trap
+    // QuestModel.ts's subSchema convention exists to prevent, just without the nested-object shape
+    // that trap description usually invokes. Without this override, every row would carry
+    // scores: [] and "no similarity-search concept on this surface" would be indistinguishable
+    // from "ran, found nothing" - see ILakeAccessEvent.scores's doc comment. record() enforces
+    // index-alignment with returnedChunkIds itself rather than trusting the caller.
+    scores: { type: [Number], default: undefined },
     returnedChunkCount: { type: Number, required: true, min: 0 },
     returnedFileCount: { type: Number, required: true, min: 0 },
     identifiersTruncated: { type: Boolean, default: false },
     surface: { type: String, enum: LAKE_ACCESS_SURFACES, required: true },
     queryTextLogged: { type: Boolean, default: false },
+    // No enum: this is a diagnostic join key, not a value this schema's job is to validate - see
+    // ILakeAccessEvent.questId's doc comment. Absent on quest-less HTTP surfaces and (until an
+    // agent execution reaches the point of having a linked Quest id) some agent-mode rows.
+    questId: { type: String },
+    sessionId: { type: String },
     // Computed at write time from the floor-clamped retention. `immutable` blocks the ordinary
     // updateOne/updateMany/findOneAndUpdate paths (Mongoose strips immutable fields from a query
     // update's cast unless the caller explicitly passes `overwriteImmutable: true`) - it is a
@@ -79,6 +92,18 @@ LakeAccessEventSchema.index({ principalKind: 1, principalId: 1, createdAt: -1, _
 // Multikey: "who read this lake?" - the core audit query.
 LakeAccessEventSchema.index({ resolvedLakeIds: 1, createdAt: -1, _id: -1 });
 LakeAccessEventSchema.index({ organizationId: 1, createdAt: -1 });
+// Single-field, no createdAt companion (unlike the three above): rows per questId are bounded by
+// the turn, at one row per content-returning tool call. That is single-digit in classic chat, but
+// in AGENT mode one dispatch-time Quest spans a whole ReAct run, so a 25-iteration execution
+// (the default maxIterations) searching each iteration lands ~25 rows under one questId - and
+// more if a single iteration issues parallel tool calls. Still trivial to sort in memory, which is
+// why the decision holds; contrast resolvedLakeIds/organizationId/(principalKind,principalId),
+// which span thousands of rows over the 450-day retention window and genuinely need the companion.
+// sparse: most rows have no questId (quest-less HTTP surfaces, pre-migration rows, an agent-mode
+// row before its execution has a linked Quest id) - a sparse index indexes only the linked ones.
+// Built via a migration, not relying on autoIndex's lazy cold-boot build - see the migration's
+// own doc comment for why.
+LakeAccessEventSchema.index({ questId: 1 }, { sparse: true });
 
 export const LakeAccessEventModel: ILakeAccessEventModel =
   (mongoose.models[ModelName] as ILakeAccessEventModel) ||
@@ -110,6 +135,19 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     const returnedFileCount = fileIds.length;
     const identifiersTruncated =
       chunkIds.length > LAKE_ACCESS_EVENT_MAX_IDS || fileIds.length > LAKE_ACCESS_EVENT_MAX_IDS;
+    // Never trust the caller's alignment: a scores array that doesn't match chunkIds 1:1 (before
+    // truncation) would misattribute a score to the wrong chunk once both are sliced - so a
+    // mismatch drops scores entirely rather than risk a silent wrong pairing. Sliced through the
+    // SAME cap as returnedChunkIds, never independently.
+    if (input.scores && input.scores.length !== chunkIds.length) {
+      console.warn(
+        `[lakeAccessEvent] scores.length (${input.scores.length}) !== chunkIds.length (${chunkIds.length}) - dropping scores`
+      );
+    }
+    const scores =
+      input.scores && input.scores.length === chunkIds.length
+        ? input.scores.slice(0, LAKE_ACCESS_EVENT_MAX_IDS)
+        : undefined;
 
     // The query-text write happens BEFORE the event, keyed to a pre-generated id, so
     // `queryTextLogged` on the event always reflects the true OUTCOME of the attempt - never just
@@ -132,11 +170,26 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         resolvedLakeIds: input.resolvedLakeIds,
         returnedChunkIds: chunkIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
         returnedFileIds: fileIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
+        // `scores?.length`, not `scores` - an empty array is truthy, so a caller passing
+        // `scores: []` would otherwise persist one. Note this COLLAPSES the absent-vs-empty
+        // distinction the `default: undefined` above preserves, rather than protecting it: an
+        // explicitly-empty array is stored as absent. That is sound only because the empty state
+        // is unreachable - every scored writer skips the write on zero results (the semantic arm
+        // returns `output: null` and never reaches here), and an empty `scores` alongside
+        // `chunkIds: []` would carry nothing `returnedChunkCount: 0` does not. If a surface ever
+        // records a genuine zero-result semantic search, revisit this rather than the default.
+        ...(scores?.length ? { scores } : {}),
         returnedChunkCount,
         returnedFileCount,
         identifiersTruncated,
         surface: input.surface,
         queryTextLogged,
+        // `|| undefined`, so an empty string is stored as absent rather than indexed: the questId
+        // index is sparse, and `''` would occupy it as a row that looks linked and joins to
+        // nothing. No caller produces `''` today - this keeps the field honest to this function's
+        // own contract that nothing is trusted from the caller.
+        questId: input.questId || undefined,
+        sessionId: input.sessionId || undefined,
         expiresAt,
       });
       return created.toJSON() as unknown as ILakeAccessEventDocument;

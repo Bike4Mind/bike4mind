@@ -797,6 +797,10 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
         fileIds: ['f1'],
         surface: 'data-lake-semantic-search',
         queryText: 'pto policy',
+        // #1867 similarity scores: this is a quest-less HTTP route, so no questId/sessionId,
+        // but the semantic search result carries a real per-chunk score, index-aligned with
+        // chunkIds.
+        scores: [0.82],
       })
     );
   });

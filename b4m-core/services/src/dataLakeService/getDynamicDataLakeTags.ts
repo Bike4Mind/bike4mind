@@ -117,6 +117,27 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   dataLakeTagPrefixes: string[];
   scopedTagPrefixes: string[];
   lakes: ResolvedLakeAccess[];
+  /**
+   * True when the dynamic-lake read either succeeded or was never configured. False when it failed
+   * and the sets below are the static registry alone.
+   *
+   * Precisely: it records that THIS RESOLVER saw everything it was asked to see. It is not a claim
+   * that the lists are exhaustive of the caller's access forever after - a later transform may
+   * deliberately reduce them (narrowLakeAccessToSession) while carrying the flag - so a consumer
+   * that treats it as "this list is complete" must be reading the resolver's own output, not a
+   * derived one.
+   *
+   * Exists because "this lake is not in your access" and "I could not see your lakes just now" are
+   * indistinguishable in the tag lists, and one consumer must tell them apart: a caller that treats
+   * an absent tag as proof of unreachability will discard a correct scope during a read failure.
+   * See the intersection in sessionService/deriveRetrievalTags.
+   *
+   * OPTIONAL, and consumers must require a positive `true` to treat the view as authoritative - so
+   * a transform that rebuilds this object and forgets the field degrades to "do not narrow", which
+   * is the safe direction. Both known rebuild sites preserve it deliberately
+   * (narrowLakeAccessToSession, resolveRetrievalLakeScope's withStaticRegistryBypass).
+   */
+  lakeViewComplete?: boolean;
 }> {
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
@@ -129,6 +150,9 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // members inside the try below, so an absent repo or a failed read leave it empty by
   // construction rather than by a reader's reasoning.
   const ownedDynamicIds = new Set<string>();
+  // Complete unless the read below throws. An absent `db.dataLakes` is NOT degraded: a deployment
+  // with no dynamic-lake repo has no dynamic lakes to miss, so its registry-only answer is whole.
+  let lakeViewComplete = true;
   // Same reason as ownedDynamicIds: createdByUserId survives only on the raw documents, and
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
@@ -181,6 +205,9 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       // dynamic lakes", so a read failure would quietly restore the pre-unification behavior.
       // Still non-fatal: the collection may simply not exist yet.
       context.logger?.warn('[dataLakes] dynamic lake lookup failed; falling back to the static registry', err);
+      // The warn above is the only other trace of this, and it is dropped when no logger is passed.
+      // This flag is what lets a consumer act on the degradation instead of misreading it as access.
+      lakeViewComplete = false;
     }
   }
   const accessibleLakes = getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys);
@@ -226,6 +253,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   const isShadowedRegistryTag = (dl: DataLakeConfig) => dynamicIds.has(dl.id) && reservedTags.has(dl.datalakeTag);
   return {
+    lakeViewComplete,
     dataLakeTags: resolvedLakes.filter(dl => !isShadowedRegistryTag(dl)).map(dl => dl.datalakeTag),
     dataLakeTagPrefixes: resolvedLakes.filter(dl => !dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
     scopedTagPrefixes: resolvedLakes.filter(dl => dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
