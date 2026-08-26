@@ -88,6 +88,12 @@ Code describes *what* it does and comments explain the *why* that the code can't
 - Run one side only with `pnpm --filter @bike4mind/client exec vitest run --project node`.
 - Watch out for mocks that were silently dead under jsdom and now bite: `vi.mock('crypto', …)` in particular takes effect under `node`, so an assertion that contradicted its own mock starts failing (correctly).
 
+**The `apps/client` unit suite is sharded in CI** across three `test-shards` legs (`Run Tests (client 1/3)` …), each running `--shard=i/3`. vitest slices a hash-sorted list of file paths, so the legs tile the file set exactly and a new test file lands in exactly one of them — nothing to update when you add a test.
+
+- Reproduce one leg locally: `pnpm --filter @bike4mind/client test --shard=2/3`.
+- **Never add a `--` before test-command args in CI.** `pnpm … test -- --shard=2/3` forwards the literal `--` to vitest, which reads the rest as positional path filters: the shard is ignored, the leg silently runs the whole suite, and nothing errors. `packages/scripts/src/checkClientTestShards.test.ts` fails the build if that separator or a leg goes missing.
+- Balance is by file **count**, not duration, so the legs are not equally long. The per-shard duration in each job's summary is how you spot one drifting.
+
 **Element selection:** always use `data-testid` (naming `component-action-element`, e.g. `modal-confirm-btn`) — never CSS class names (MUI/Emotion generates random class names).
 
 **MUI Joy component tests need the theme wrapper** (custom palette tokens like `background.surface2` break without it):
