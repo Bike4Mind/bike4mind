@@ -39,6 +39,7 @@ export interface PersonalCorpusInput {
 export async function resolvePersonalCorpusOnly(input: PersonalCorpusInput): Promise<boolean> {
   const { requestedKnowledgeIds, resolvedFiles, accessibleLakeTags, retrievalTags, corpusGroundingMode } = input;
 
+
   if (requestedKnowledgeIds.length === 0) return false; // nothing attached -> nothing to classify
   if (resolvedFiles === null) return false; // lookup failed -> cannot judge
   if (accessibleLakeTags.size === 0) return false; // lake access unresolved -> cannot judge

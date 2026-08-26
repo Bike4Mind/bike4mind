@@ -84,15 +84,11 @@ describe('resolvePersonalCorpusOnly', () => {
    * makes the classification authoritative rather than reader-dependent.
    */
   it('is FALSE when the lake arm reports attached lake content, whatever the other reader saw', async () => {
-    await expect(resolvePersonalCorpusOnly({ ...base, countLakeReachableAttachments: async () => 1 })).resolves.toBe(
-      false
-    );
+    await expect(resolvePersonalCorpusOnly({ ...base, countLakeReachableAttachments: async () => 1 })).resolves.toBe(false);
   });
 
   it('is FALSE when lake reachability could not be determined', async () => {
-    await expect(resolvePersonalCorpusOnly({ ...base, countLakeReachableAttachments: async () => null })).resolves.toBe(
-      false
-    );
+    await expect(resolvePersonalCorpusOnly({ ...base, countLakeReachableAttachments: async () => null })).resolves.toBe(false);
   });
 
   it('tolerates a duplicated id - the reader returns distinct docs, so raw lengths would never match', async () => {
@@ -102,8 +98,6 @@ describe('resolvePersonalCorpusOnly', () => {
   });
 
   it('is false with nothing attached', async () => {
-    await expect(resolvePersonalCorpusOnly({ ...base, requestedKnowledgeIds: [], resolvedFiles: [] })).resolves.toBe(
-      false
-    );
+    await expect(resolvePersonalCorpusOnly({ ...base, requestedKnowledgeIds: [], resolvedFiles: [] })).resolves.toBe(false);
   });
 });

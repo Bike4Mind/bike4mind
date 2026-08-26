@@ -126,9 +126,9 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
         // follow the creator-identity widening an organization lake uses. Request-free variant: this
         // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
-            logger,
-          }),
+          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(
+            user, { logger }
+          ),
       }
     );
     // Bind into the outer `let session` and keep a narrowed const for the rest of the block -

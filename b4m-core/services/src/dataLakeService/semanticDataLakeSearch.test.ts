@@ -97,7 +97,7 @@ describe('semanticDataLakeSearch retrieval exclusion', () => {
    * CALL shape (dataLakeTags: []), which passes whether or not this bail fires, so a fix that never
    * ran read as verified for a whole round.
    */
-  it("ownFilesOnly: with no lake tags it still scopes the caller's own files instead of bailing", async () => {
+  it('ownFilesOnly: with no lake tags it still scopes the caller\'s own files instead of bailing', async () => {
     const findVectors = vi.fn().mockResolvedValue([]);
     const adapters = makeAdapters(findVectors);
     await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, adapters as never);

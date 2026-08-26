@@ -136,7 +136,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
           // Narrowed INSIDE the chain so the memo stays a Promise (it is shared by several later
           // awaits) and so every consumer sees the session-scoped set, not the owner-wide one.
-          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context));
+          const dynamicAccess = () =>
+            (dynamicAccessPromise ??= resolveSessionLakeAccess(context));
 
           let files: IFabFileDocument[] = [];
 

@@ -5,9 +5,7 @@ import {
   MementoFeature,
   SessionPromptFeature,
   shouldSummarizeSession,
-  SUMMARIZATION_CONFIG,
-  LakeMemoryFeature,
-} from './ChatCompletionFeatures';
+  SUMMARIZATION_CONFIG, LakeMemoryFeature } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
@@ -1851,7 +1849,10 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       recallLakeMemory: vi.fn(),
     };
-    const feature = new LakeMemoryFeature(ctx as unknown as ConstructorParameters<typeof LakeMemoryFeature>[0], []);
+    const feature = new LakeMemoryFeature(
+      ctx as unknown as ConstructorParameters<typeof LakeMemoryFeature>[0],
+      []
+    );
     const messages = await feature.getContextMessages({ id: 'q1' } as never);
 
     expect(messages).toEqual([]);
