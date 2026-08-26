@@ -931,6 +931,38 @@ describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', (
     expect((await dataLakeBatchRepository.findStuck(CUTOFF)).map(b => b.id)).toEqual([older.id, newer.id]);
     expect((await dataLakeBatchRepository.findStuck(CUTOFF, 1)).map(b => b.id)).toEqual([older.id]);
   });
+
+  it('excludes the per-file manifest and fileAssignments - the reconciler only reads scalars', async () => {
+    const stale = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: stale.id },
+      { $set: { updatedAt: new Date('2020-01-01T00:00:00Z') } },
+      { timestamps: false }
+    );
+
+    const [stuck] = await dataLakeBatchRepository.findStuck(CUTOFF);
+    // A `.select('-files')` exclusion omits the key entirely (not an empty array) - this
+    // asserts the projection is actually active, not just that the field happens to be empty.
+    expect(stuck.files).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.fileAssignments).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    // The scalars reconcileStuckBatches actually reads must survive the projection.
+    expect(stuck.id).toBe(stale.id);
+    expect(stuck.status).toBe('processing');
+    expect(stuck.dataLakeId).toBe('lake1');
+    expect(stuck.updatedAt).toEqual(new Date('2020-01-01T00:00:00Z'));
+  });
 });
 
 describe('DataLakeBatchRepository.setTaxonomyStatusIfActive - guarded taxonomy-phase transition', () => {
@@ -1040,6 +1072,31 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
 
     const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
     expect(stuck.map(b => b.id)).toEqual([oldest.id, newest.id]);
+  });
+
+  it('excludes the per-file manifest and fileAssignments - the reconciler only reads scalars', async () => {
+    const stale = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      taxonomyStartedAt: STALE,
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [stuck] = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.files).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.fileAssignments).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    // The scalars reconcileStuckTaxonomy actually reads must survive the projection.
+    expect(stuck.id).toBe(stale.id);
+    expect(stuck.taxonomyStatus).toBe('analyzing');
+    expect(stuck.taxonomyStartedAt).toEqual(STALE);
   });
 });
 

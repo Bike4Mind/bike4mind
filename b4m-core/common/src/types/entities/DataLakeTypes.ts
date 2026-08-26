@@ -596,7 +596,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * inside its Lambda timeout; the sweep is idempotent so any residue is picked up next run.
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
-  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -672,7 +672,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
    * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
-  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   /**
    * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
    * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -
