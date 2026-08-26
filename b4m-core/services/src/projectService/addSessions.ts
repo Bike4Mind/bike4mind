@@ -46,7 +46,10 @@ export const addSessions = async (
     throw new NotFoundError('Project not found');
   }
 
-  project.sessionIds = uniq([...project.sessionIds, ...sessionIds]);
+  // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
+  // findAllAccessibleByIds now skips entries that cannot address a row rather than throwing, so
+  // pushing the raw list would persist a junk sessionId that the read-side guard then hides.
+  project.sessionIds = uniq([...project.sessionIds, ...sessions.map(session => session.id)]);
   project.updatedAt = new Date();
 
   const fileIds = await updateShareableSessions(user, { project, sessions }, adapters);

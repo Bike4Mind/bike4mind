@@ -17,8 +17,9 @@ import type {
 import * as addFilesModule from './addFiles';
 
 /**
- * Pins WHICH ids `addSessions` copies into `project.fileIds`. The larger `addSessions.test.ts`
- * suite is skipped, so without this the only behaviour change on this path is untested.
+ * Pins WHICH ids `addSessions` copies into `project.sessionIds` and `project.fileIds`. The larger
+ * `addSessions.test.ts` suite is skipped, so without this the behaviour changes on this path are
+ * untested. Both writes must persist what RESOLVED, never the raw list handed in.
  *
  * The set pushed is what `findAllByIds` RESOLVED, which is narrower than "the castable ids":
  * `softDeletePlugin` adds `deletedAt: null` to every `find`, so a soft-deleted row is missing
@@ -77,7 +78,7 @@ beforeEach(() => {
   ]);
 });
 
-describe('addSessions - which knowledge ids reach project.fileIds', () => {
+describe('addSessions - which ids reach the project', () => {
   it('copies the id that resolved to a row', async () => {
     await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
       db: { projects, sessions, fabFiles },
@@ -103,6 +104,17 @@ describe('addSessions - which knowledge ids reach project.fileIds', () => {
     } as never);
 
     expect(project.fileIds).not.toContain(SOFT_DELETED_ID);
+  });
+
+  it('copies only the session ids that resolved into project.sessionIds', async () => {
+    // findAllAccessibleByIds now skips an uncastable id instead of throwing, so the raw request
+    // list must not be persisted: a junk sessionId would survive there and the read-side guard
+    // on findAllByIds would then hide it forever.
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [JUNK_ID, SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.sessionIds).toEqual([SESSION_ID]);
   });
 
   it('queries the repository with the session raw list, leaving the filtering to the guard', async () => {
