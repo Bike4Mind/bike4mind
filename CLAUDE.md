@@ -76,6 +76,18 @@ Code describes *what* it does and comments explain the *why* that the code can't
 - **Exception:** files under `pages/` use a `__tests__/` subdirectory (Next.js treats every file in `pages/` as a route).
 - Pure utilities with no single owner may use a `__tests__/` subdirectory.
 
+**Test environment in `apps/client`** — the package runs two vitest projects (`apps/client/vitest.config.mts`), because a DOM is expensive and most of this package doesn't need one:
+
+| project | covers | environment |
+|---|---|---|
+| `node` | `server/**`, `pages/**` (route/queue/cron handlers, server libs) | `node` |
+| `jsdom` | everything else (`app/**` components and hooks) | `jsdom` |
+
+- A file that needs the other environment says so **per file**, as the first line: `// @vitest-environment jsdom` (or `node`). Prefer that over widening a project's globs.
+- A `server/`/`pages/` test that touches `document`/`window`/`render` fails immediately with `ReferenceError: document is not defined` — that's the signal to add the docblock, not to change the config.
+- Run one side only with `pnpm --filter @bike4mind/client exec vitest run --project node`.
+- Watch out for mocks that were silently dead under jsdom and now bite: `vi.mock('crypto', …)` in particular takes effect under `node`, so an assertion that contradicted its own mock starts failing (correctly).
+
 **Element selection:** always use `data-testid` (naming `component-action-element`, e.g. `modal-confirm-btn`) — never CSS class names (MUI/Emotion generates random class names).
 
 **MUI Joy component tests need the theme wrapper** (custom palette tokens like `background.surface2` break without it):
