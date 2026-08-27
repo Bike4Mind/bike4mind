@@ -17,10 +17,13 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
  * paths cannot drift - a gate that is correct for attachments and stale for links would be worse
  * than no sharing at all, and LINK ingest runs the identical resolve-gate-status-tag sequence.
  *
- * The gate is the SAME one the web doors use (`assertLakeWriteAccess` -> `canManageLake` =
- * admin-or-creator, plus `assertCanWriteDataLakeTags` as defense in depth). Slack gets no bypass:
- * reading a lake in the web app does not let you write to it, and reaching it from Slack must not
- * change that.
+ * The gate is the SAME one the web doors use (`assertLakeWriteAccess` -> `canManageLake`, plus
+ * `assertCanWriteDataLakeTags` as defense in depth). Slack gets no bypass: reading a lake in the web
+ * app does not let you write to it, and reaching it from Slack must not change that. "No bypass"
+ * cuts both ways, and the second half is the one that broke: both gates must be handed the FULL
+ * context and the grant repo, or Slack silently enforces a NARROWER rule than the web doors -
+ * `canManageLake` is five rungs (platform admin, creator, user grant, org admin, org grant), not the
+ * admin-or-creator this comment used to claim.
  */
 
 /** The resolved B4M user behind the Slack message. Never built from the Slack event body. */
@@ -217,9 +220,23 @@ export async function authorizeLakeForWrite(
   // mixed-case stored tag resolves to no lake. `createDataLake` now lowercases the slug at the mint
   // point, so no NEW lake can land in that state - the residual exposure is lakes persisted before
   // that change. A lake soft-deleted between this gate and the one above lands here too.
+  //
+  // MUST be given the SAME actor and the SAME grant repo as the gate above. Defense in depth means
+  // this gate re-resolves the lake (by meta-tag, not by slug) and re-decides - never that it decides
+  // on LESS. A hand-built `{ userId, isAdmin }` actor drops `administeredOrgIds`, and a db without
+  // `dataLakeAccessGrants` drops grant supersession, either of which collapses
+  // `resolveCanManageLake` to creator-or-platform-admin and refuses the org admin or curator gate 1
+  // just authorized - the lake would LIST as addable and then refuse the add. Nothing here fails
+  // loudly if it regresses: `ManageActor.administeredOrgIds` is optional for back-compat, so a
+  // narrowed actor typechecks green and the org rung silently stops firing. `createFabFile` and
+  // both presign doors pass their full `ctx` for this same reason.
   try {
-    await dataLakeService.assertCanWriteDataLakeTags({ userId: ctx.userId, isAdmin: ctx.isAdmin }, [datalakeTag], {
-      db: { dataLakes: deps.dataLakes, adminSettings: deps.adminSettings },
+    await dataLakeService.assertCanWriteDataLakeTags(ctx, [datalakeTag], {
+      db: {
+        dataLakes: deps.dataLakes,
+        dataLakeAccessGrants: deps.dataLakeAccessGrants,
+        adminSettings: deps.adminSettings,
+      },
     });
   } catch (err) {
     // Same class-based split as the gate above: only a refusal is reported as one, and anything
