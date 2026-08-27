@@ -1043,10 +1043,29 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
   });
 
   it('searches on the length estimate when the tokenizer fails, rather than 500ing', async () => {
+    // 200 chars estimates to 50, which the happy-path tokenizer mock (3) can never return -
+    // so the settled token count proves the fallback ran, not just that the search survived.
+    const query = 'o'.repeat(200);
     mockCountTokens.mockRejectedValueOnce(new Error('tiktoken encoder unavailable'));
+
+    await handler(makeReq({ query }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 50 }),
+      expect.anything()
+    );
+  });
+
+  it('bills nobody when the organization read fails, rather than charging the member personally', async () => {
+    // A half-resolved pair would skip the member cap and land org usage on the member's own
+    // balance, which is worse than the pre-existing behaviour of charging nobody.
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1', currentCredits: 0 }));
+    mockFindOrgById.mockRejectedValue(new Error('organizations read failed'));
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
   });
 });

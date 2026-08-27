@@ -312,10 +312,14 @@ const handler = baseApi()
       let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
       let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
       try {
-        billingUser = await userRepository.findById(req.user.id);
-        billingOrg = billingUser?.organizationId
-          ? await organizationRepository.findById(billingUser.organizationId)
+        // Both assigned only after both reads succeed: a half-resolved pair (user set, org
+        // null) would skip the member cap and bill the member personally for org usage.
+        const resolvedUser = await userRepository.findById(req.user.id);
+        const resolvedOrg = resolvedUser?.organizationId
+          ? await organizationRepository.findById(resolvedUser.organizationId)
           : null;
+        billingUser = resolvedUser;
+        billingOrg = resolvedOrg;
       } catch (billingErr) {
         req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
       }
@@ -329,7 +333,10 @@ const handler = baseApi()
 
       if (shouldBill && billingUser && embeddingCostUsd > 0) {
         // Deterministic round-up, never the stochastic settlement rounding: eligibility must
-        // not turn on a coin flip.
+        // not turn on a coin flip. Scoped to the primary model only: the mixed-embeddingModel
+        // ANN cutover can also embed up to MAX_ALTERNATE_ANN_MODELS alternates, which are not
+        // known until the search runs, so settlement below can exceed this by a few credits on
+        // a mixed-embedding-space corpus.
         const requiredCredits = usdToCredits(embeddingCostUsd);
 
         // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
@@ -456,7 +463,8 @@ const handler = baseApi()
       // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
       // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
       // are the same documents the credit pre-flight above read, so the check and the charge can
-      // never disagree about which holder pays, and every recording runs concurrently.
+      // never disagree about which holder pays (they can differ on amount - the pre-flight prices
+      // the primary model only), and every recording runs concurrently.
       // Best-effort as a whole: a recording failure must never fail the search response, and one
       // model's recording failure must never skip another's.
       try {
