@@ -202,6 +202,25 @@ describe('FabFileChunkRepository.retrievalIndexModelsByFabFileIds', () => {
     expect(byFile.f2).toEqual(['model-c']);
   });
 
+  // The write vectorize actually makes: residency rides along with the chunk's vector through
+  // `update`. Mongoose drops any field the schema does not declare, so a schema that lost
+  // retrievalIndexModel would leave this silently unwritten and the resolvers permanently blind -
+  // which no mocked-repository test can catch.
+  it('sees residency written by the repository update that carries the vector', async () => {
+    const [chunk] = await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1 }]);
+
+    await fabFileChunkRepository.update({
+      id: String(chunk._id),
+      vector: [0.1, 0.2],
+      retrievalIndexModel: 'model-a',
+    });
+
+    const stored = await FabFileChunk.findById(chunk._id);
+    expect(stored?.retrievalIndexModel).toBe('model-a');
+    expect(stored?.embeddingModel).toBeUndefined();
+    expect(await fabFileChunkRepository.retrievalIndexModelsByFabFileIds(['f1'])).toEqual({ f1: ['model-a'] });
+  });
+
   it('an empty id list returns nothing without querying', async () => {
     await FabFileChunk.create([{ fabFileId: 'f1', text: 'a', tokenCount: 1, embeddingModel: 'model-a' }]);
 
