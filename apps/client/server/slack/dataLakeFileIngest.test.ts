@@ -165,10 +165,16 @@ describe('authorization comes before any side effect', () => {
   it('also gates the meta-tag it is about to apply (defense in depth)', async () => {
     await run();
 
+    // Pins the FULL context and the grant repo, not just that the gate ran. This assertion
+    // previously named `{ userId, isAdmin }` exactly - which codified the bug it was meant to guard:
+    // gate 2 decided on less than gate 1, so an org admin or curator was authorized to write and
+    // then refused here. Narrowing either argument is the regression, so both are asserted.
     expect(assertCanWriteDataLakeTags).toHaveBeenCalledWith(
-      { userId: 'user-1', isAdmin: false },
+      expect.objectContaining({ userId: 'user-1', isAdmin: false, administeredOrgIds: ['org-2'] }),
       ['datalake:sales'],
-      expect.anything()
+      expect.objectContaining({
+        db: expect.objectContaining({ dataLakeAccessGrants: expect.anything() }),
+      })
     );
   });
 
