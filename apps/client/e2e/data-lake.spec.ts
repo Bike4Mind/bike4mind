@@ -92,7 +92,7 @@ test.describe('Data Lake - feature gate', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// In-chat surface - the only entry point now that /data-lakes is retired
+// In-chat surface - the only entry point now that the /data-lakes page is gone
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - in-chat surface', () => {
   test('the header pill turns a chat into the Data Lake surface', async ({ dataLakePage }) => {

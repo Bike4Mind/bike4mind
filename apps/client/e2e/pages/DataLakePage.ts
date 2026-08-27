@@ -3,7 +3,7 @@ import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
 
 /**
- * Page object for the Data Lakes surface. The standalone `/data-lakes` route is retired, so
+ * Page object for the Data Lakes surface. The standalone `/data-lakes` page is gone, so
  * every UI path starts in a chat: the header's Data Lake pill turns the session into the
  * tree-left/chat-right surface, and the tree's footer opens the create wizard and the
  * two-pane management modal. Selectors mirror the data-testid attributes in
@@ -383,7 +383,14 @@ export class DataLakePage extends BasePage {
         .catch(() => 'timeout' as const),
     ]);
     if (outcome === 'error') {
-      const message = await newError.innerText().catch(() => '(could not read toast)');
+      // nth(errorsBefore) is the right WAIT (it means "the count grew") but the wrong read:
+      // sonner prepends (`[toast, ...toasts]`), so DOM index 0 is the NEWEST toast and the stale
+      // ones shift down. Reading nth(errorsBefore) would report the oldest stale toast's text
+      // precisely when one was on screen - the case this barrier exists for.
+      const message = await errorToast
+        .first()
+        .innerText()
+        .catch(() => '(could not read toast)');
       throw new Error(`Data lake archive failed: ${message}`);
     }
 
