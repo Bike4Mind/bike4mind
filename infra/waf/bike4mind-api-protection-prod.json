@@ -160,7 +160,7 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Count": {}
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -202,7 +202,7 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Count": {}
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -430,7 +430,7 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Count": {}
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -447,32 +447,176 @@
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
-            "ByteMatchStatement": {
-              "SearchString": "/_next/static/",
-              "FieldToMatch": {
-                "UriPath": {}
-              },
-              "TextTransformations": [
+            "OrStatement": {
+              "Statements": [
                 {
-                  "Priority": 0,
-                  "Type": "URL_DECODE"
+                  "ByteMatchStatement": {
+                    "SearchString": "/_next/static/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
                 },
                 {
-                  "Priority": 1,
-                  "Type": "NORMALIZE_PATH"
+                  "ByteMatchStatement": {
+                    "SearchString": "/icons/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
                 },
                 {
-                  "Priority": 2,
-                  "Type": "LOWERCASE"
+                  "ByteMatchStatement": {
+                    "SearchString": "/images/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/scripts/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/app-config/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/version.json",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/favicon.ico",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
                 }
-              ],
-              "PositionalConstraint": "STARTS_WITH"
+              ]
             }
           }
         }
       },
       "Action": {
-        "Block": {}
+        "Count": {}
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -514,7 +658,7 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Count": {}
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -533,26 +677,170 @@
           "ScopeDownStatement": {
             "NotStatement": {
               "Statement": {
-                "ByteMatchStatement": {
-                  "SearchString": "/_next/static/",
-                  "FieldToMatch": {
-                    "UriPath": {}
-                  },
-                  "TextTransformations": [
+                "OrStatement": {
+                  "Statements": [
                     {
-                      "Priority": 0,
-                      "Type": "URL_DECODE"
+                      "ByteMatchStatement": {
+                        "SearchString": "/_next/static/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
                     },
                     {
-                      "Priority": 1,
-                      "Type": "NORMALIZE_PATH"
+                      "ByteMatchStatement": {
+                        "SearchString": "/icons/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
                     },
                     {
-                      "Priority": 2,
-                      "Type": "LOWERCASE"
+                      "ByteMatchStatement": {
+                        "SearchString": "/images/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/scripts/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/app-config/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/version.json",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/favicon.ico",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
                     }
-                  ],
-                  "PositionalConstraint": "STARTS_WITH"
+                  ]
                 }
               }
             }
@@ -560,7 +848,7 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Count": {}
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,

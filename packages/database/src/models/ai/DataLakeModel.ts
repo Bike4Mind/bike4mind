@@ -798,13 +798,16 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
-  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchSummary[]> {
     // status equality prefix + updatedAt range -> served by the { status:1, updatedAt:1 } index.
+    // Projects out the per-file manifest and fileAssignments like the sibling finders:
+    // reconcileStuckBatches only reads scalars, and this scan pulls up to `limit` docs per run.
     const results = await this.batchModel
       .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
       .sort({ updatedAt: 1 })
-      .limit(limit);
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+      .limit(limit)
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   async updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void> {
@@ -958,7 +961,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
-  async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+  async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchSummary[]> {
     // taxonomyStatus equality prefix + taxonomyStartedAt range -> served by the
     // { taxonomyStatus:1, taxonomyStartedAt:1 } index, mirroring findStuck. Deliberately NOT
     // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
@@ -974,8 +977,9 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         taxonomyStartedAt: { $not: { $gte: cutoff } },
       })
       .sort({ taxonomyStartedAt: 1 })
-      .limit(limit);
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+      .limit(limit)
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   /**

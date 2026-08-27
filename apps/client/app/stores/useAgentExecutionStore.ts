@@ -157,7 +157,10 @@ export interface ParentExecution {
 
 /** One outstanding `reconnect` request, waiting for the response that answers it. */
 export interface PendingReconnect {
-  sessionId: string;
+  /** Absent when the sweep asked about a run whose session the store never learned -
+   *  consuming such an entry returns undefined and hydrate falls back to the
+   *  execution's own stored sessionId. */
+  sessionId?: string;
   /** Absent when the caller was asking "is anything running here?" and had no id yet. */
   executionId?: string;
 }
@@ -296,7 +299,7 @@ interface AgentExecutionState {
   registerPendingDispatch: (sessionId: string) => void;
   consumePendingDispatch: () => string | undefined;
   /** `executionId` when the caller already knows which run it is asking about. */
-  registerPendingReconnect: (sessionId: string, executionId?: string) => void;
+  registerPendingReconnect: (sessionId: string | undefined, executionId?: string) => void;
   /** Pass the id the response carries; falls back to FIFO for un-keyed entries. */
   consumePendingReconnect: (executionId?: string) => string | undefined;
 
