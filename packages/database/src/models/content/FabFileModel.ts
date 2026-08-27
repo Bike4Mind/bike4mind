@@ -64,26 +64,50 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     await this.fabFileChunkModel.deleteMany({ fabFileId });
   }
 
-  async distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
+  async distinctRetrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
-    // Uses the { fabFileId: 1, _id: 1 } compound index below for the filter half of the scan.
-    return this.fabFileChunkModel.distinct('embeddingModel', {
-      fabFileId: { $in: fabFileIds },
-      embeddingModel: { $ne: null },
-    });
+    // Both fields, not just the readiness stamp - see IFabFileChunk.retrievalIndexModel. Two
+    // `distinct` calls rather than one aggregate so each still rides the { fabFileId: 1, _id: 1 }
+    // compound index below for the filter half of the scan.
+    const [indexed, stamped] = await Promise.all([
+      this.fabFileChunkModel.distinct('retrievalIndexModel', {
+        fabFileId: { $in: fabFileIds },
+        retrievalIndexModel: { $ne: null },
+      }),
+      this.fabFileChunkModel.distinct('embeddingModel', {
+        fabFileId: { $in: fabFileIds },
+        embeddingModel: { $ne: null },
+      }),
+    ]);
+    return [...new Set([...indexed, ...stamped])];
   }
 
-  async embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>> {
+  async retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>> {
     if (fabFileIds.length === 0) return {};
-    // Same filter as distinctEmbeddingModelsByFabFileIds (so it rides the same
-    // { fabFileId: 1, _id: 1 } index), grouped instead of flattened. `$addToSet` dedupes per file,
-    // matching `distinct`'s semantics within each group.
-    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; models: string[] }>([
-      { $match: { fabFileId: { $in: fabFileIds }, embeddingModel: { $ne: null } } },
-      { $group: { _id: '$fabFileId', models: { $addToSet: '$embeddingModel' } } },
+    // Same fields as distinctRetrievalIndexModelsByFabFileIds, grouped instead of flattened.
+    // `$addToSet` dedupes per file, matching `distinct`'s semantics within each group; it skips a
+    // MISSING field but keeps an explicit null, hence the filter when the two sets are merged.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; models: (string | null)[] }>([
+      {
+        $match: {
+          fabFileId: { $in: fabFileIds },
+          $or: [{ retrievalIndexModel: { $ne: null } }, { embeddingModel: { $ne: null } }],
+        },
+      },
+      {
+        $group: {
+          _id: '$fabFileId',
+          models: { $addToSet: '$retrievalIndexModel' },
+          stampedModels: { $addToSet: '$embeddingModel' },
+        },
+      },
+      { $project: { models: { $setUnion: ['$models', '$stampedModels'] } } },
     ]);
     const byFile: Record<string, string[]> = {};
-    for (const row of rows) byFile[String(row._id)] = row.models;
+    for (const row of rows) {
+      const models = row.models.filter((model): model is string => typeof model === 'string');
+      if (models.length > 0) byFile[String(row._id)] = models;
+    }
     return byFile;
   }
 
@@ -389,6 +413,9 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
     charLength: { type: Number, required: false },
     vector: { type: [Number], required: false },
     embeddingModel: { type: String, required: false },
+    // Index residency, NOT readiness - see IFabFileChunk.retrievalIndexModel for why the two
+    // cannot be the same field.
+    retrievalIndexModel: { type: String, required: false },
   },
   {
     timestamps: true,
