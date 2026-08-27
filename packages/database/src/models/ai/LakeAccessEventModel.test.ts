@@ -31,6 +31,12 @@ const optedInLake = async (auditQueryTextEnabled = true) => {
   return lake.id;
 };
 
+const dropIndexByKey = async (key: Record<string, number>) => {
+  const indexes = await LakeAccessEventModel.collection.indexes();
+  const match = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(key));
+  if (match?.name) await LakeAccessEventModel.collection.dropIndex(match.name);
+};
+
 describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
   setupMongoTest();
   // setupMongoTest's beforeEach dropDatabase()s (indexes included), and these models are not in
@@ -310,12 +316,18 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       // at `createdAt` (it cannot supply `_id` order, so the planner drops the indexed sort and
       // SORTs the lake's whole 450-day retention window above FETCH) and green again when the
       // superseded two-key index lingers beside the new one.
+      // Seed a real array value first: on an empty collection `resolvedLakeIds` is never flagged
+      // multikey, and a non-multikey plan is not the plan production gets. The isMultiKey
+      // assertion is what keeps this honest.
+      await repo.record(baseInput({ resolvedLakeIds: ['lake-1', 'lake-2'] }));
+
       const plan = await LakeAccessEventModel.find({ resolvedLakeIds: 'lake-1' })
         .sort({ createdAt: -1, _id: -1 })
         .limit(3)
         .explain('queryPlanner');
       const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
       expect(winning).toContain('IXSCAN');
+      expect(winning).toContain('"isMultiKey":true');
       expect(winning).not.toContain('"stage":"SORT"');
     });
 
@@ -475,6 +487,13 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
     it('listByLake orders same-millisecond events stably across repeated paged loads', async () => {
       // Same clock for every write, so `createdAt` alone leaves the order to Mongo - and the row a
       // page of 3 cuts at its boundary would then differ between two loads of that same page.
+      // Read against the two-key index the tie-break supersedes, on purpose: under the declared
+      // `{ resolvedLakeIds: 1, createdAt: -1, _id: -1 }` the IXSCAN already walks a tie in
+      // _id-descending order, so this stays green even with `_id` deleted from the sort clause -
+      // the index would be doing the work, and the sort clause is what this test exists to pin.
+      await dropIndexByKey({ resolvedLakeIds: 1, createdAt: -1, _id: -1 });
+      await LakeAccessEventModel.collection.createIndex({ resolvedLakeIds: 1, createdAt: -1 });
+
       for (let i = 0; i < 5; i++) {
         await repo.record(baseInput({ resolvedLakeIds: ['lake-tie'], principalId: `p${i}` }));
       }

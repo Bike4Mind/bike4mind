@@ -63,6 +63,24 @@ describe('ensure-lake-audit-tiebreak-indexes migration (real DB)', () => {
     expect(accessKeys).toContain(key({ principalKind: 1, principalId: 1, createdAt: -1 }));
   }, 60000);
 
+  it('refuses to drop a legacy index when its replacement was not built, leaving the read covered', async () => {
+    await LakeConfigChangeEventModel.collection.createIndex(LEGACY.config);
+    // Suppress the index build so `up()` reaches the drop loop with the replacement missing - the
+    // shape a failed or partial createIndexes leaves behind, and the only thing the guard exists
+    // for. Nothing else in the migration can produce it.
+    const configBuild = vi.spyOn(LakeConfigChangeEventModel, 'createIndexes').mockResolvedValue(undefined);
+    const accessBuild = vi.spyOn(LakeAccessEventModel, 'createIndexes').mockResolvedValue(undefined);
+
+    try {
+      await expect(migration.up()).rejects.toThrow(/Refusing to drop/);
+      const configKeys = (await LakeConfigChangeEventModel.collection.indexes()).map(i => key(i.key as never));
+      expect(configKeys).toContain(key(LEGACY.config));
+    } finally {
+      configBuild.mockRestore();
+      accessBuild.mockRestore();
+    }
+  }, 60000);
+
   it('is idempotent on re-run and on an environment that never had the legacy indexes', async () => {
     await migration.up();
     await migration.up();

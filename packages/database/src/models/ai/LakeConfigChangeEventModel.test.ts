@@ -30,6 +30,12 @@ const baseInput = (overrides: Partial<RecordLakeConfigChangeInput> = {}): Record
   ...overrides,
 });
 
+const dropIndexByKey = async (key: Record<string, number>) => {
+  const indexes = await LakeConfigChangeEventModel.collection.indexes();
+  const match = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(key));
+  if (match?.name) await LakeConfigChangeEventModel.collection.dropIndex(match.name);
+};
+
 describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', () => {
   setupMongoTest();
   // setupMongoTest's beforeEach dropDatabase()s (indexes included) and this model is not in its
@@ -282,6 +288,13 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
     // createdAt alone is not a total order, and the paged reader treats the last row of a window as
     // that window's boundary - so a tie straddling the page boundary must not be able to reshuffle.
     it('orders same-millisecond events stably across repeated paged loads', async () => {
+      // Read against the two-key index the tie-break supersedes, on purpose. Under the declared
+      // `{ dataLakeId: 1, createdAt: -1, _id: -1 }` the IXSCAN already walks a createdAt tie in
+      // _id-descending order, so this stays green even with `_id` deleted from the sort clause -
+      // the index would be doing the work, and the sort clause is what this test exists to pin.
+      await dropIndexByKey({ dataLakeId: 1, createdAt: -1, _id: -1 });
+      await LakeConfigChangeEventModel.collection.createIndex({ dataLakeId: 1, createdAt: -1 });
+
       for (let i = 0; i < 5; i++) {
         await repo.record(baseInput({ changes: [nameChange('old', `e${i}`)] }));
       }
