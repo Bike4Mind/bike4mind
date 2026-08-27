@@ -913,7 +913,14 @@ describe('FabFile data lake lifecycle membership', () => {
     it('projects the three fields the producer reads and NONE of the heavy payload', async () => {
       const rows = await seedLakeRows();
       // A member carrying every field the old unprojected read would have pulled into the Lambda.
-      await FabFile.updateOne(
+      //
+      // The RAW DRIVER, not `FabFile.updateOne`: none of `content`, `chunks` or `vector` is a declared
+      // path on FabFileSchema, so mongoose strict mode drops all three from the update silently (the
+      // same footgun the `sourceType` comment at the schema's provenance block records). Seeding through
+      // mongoose leaves the document with no heavy payload at all, which makes the assertion below pass
+      // for the wrong reason - it would still pass with `content: 1` added to the projection. The raw
+      // driver is also how these fields reach production documents in the first place.
+      await FabFile.collection.updateOne(
         { _id: rows.metaTagged._id },
         { $set: { content: 'x'.repeat(50_000), chunks: ['a', 'b'], vector: [0.1, 0.2, 0.3] } }
       );
