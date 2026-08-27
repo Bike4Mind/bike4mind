@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
+import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
@@ -181,5 +181,21 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
     // enqueue, so a still-running (not crashed) file isn't double-processed.
     expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
     expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
+  });
+});
+
+describe('buildChunkScanQueuePayload', () => {
+  it('stamps convergence origin even when the file has no batch, so the kill switch can halt it', () => {
+    // A paused file carries no batchId, and an un-stamped message reads as `user` work
+    // (isConvergenceHalted fails soft) - which is how a paused file used to get re-chunked.
+    expect(buildChunkScanQueuePayload('ff1', 'u1')).toEqual({
+      fabFileId: 'ff1',
+      userId: 'u1',
+      origin: 'convergence',
+    });
+  });
+
+  it('sends no lakeId: a global sweep is halted by the platform switch, not a per-lake pause', () => {
+    expect(buildChunkScanQueuePayload('ff1', 'u1')).not.toHaveProperty('lakeId');
   });
 });

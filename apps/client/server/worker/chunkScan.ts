@@ -4,9 +4,11 @@
  * If the ingest event (MinIO webhook on self-host, S3 ObjectCreated on hosted) is ever missed -
  * or auto-chunk was disabled when the file landed - this sweep re-enqueues files that completed
  * upload but were never chunked. Consumed by the self-host worker (main.ts) and the hosted
- * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
- * importing either boot graph.
+ * dataLakeBatchReconcile cron. The selection filter and the queue payload both live here so both
+ * drivers share one producer, and so both are unit-testable without importing either boot graph.
  */
+
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -124,4 +126,26 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
         }
       : { isChunking: { $ne: true } },
   ],
+});
+
+/**
+ * The chunk-queue payload for a file this scan selected. Shared by both sweep drivers (the
+ * self-host worker's fabFileChunkScan and the hosted dataLakeBatchReconcile cron) so the two
+ * can't drift on provenance.
+ *
+ * `origin` is stamped UNCONDITIONALLY, not just for files carrying a `batchId`. A scheduled rescue
+ * sweep is background work by definition, so it must be haltable by the convergence kill switch:
+ * with the switch on, the chunk handler parks a file with a paused note but leaves it matching this
+ * scan's filter, and an un-stamped re-enqueue would be read as `user` work (isConvergenceHalted
+ * fails soft to `user`) and chunked anyway - spending exactly the budget the switch was set to stop.
+ * The tradeoff, which is the switch working as designed: while it is on, the sweep rescues nothing,
+ * including a genuinely stranded non-lake file. It resumes on its own once the switch clears.
+ *
+ * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
+ * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).
+ */
+export const buildChunkScanQueuePayload = (fabFileId: string, userId: string) => ({
+  fabFileId,
+  userId,
+  origin: CONVERGENCE_ORIGIN,
 });

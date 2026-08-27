@@ -16,12 +16,12 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import {
+  buildChunkScanQueuePayload,
   buildFabFileChunkScanFilter,
   CHUNK_SCAN_BATCH,
   CHUNK_SCAN_MIN_AGE_MS,
   CHUNK_CLAIM_STALE_MS,
 } from './chunkScan';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -147,7 +147,7 @@ async function main() {
     const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
     const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
     const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
-      .select('_id userId batchId')
+      .select('_id userId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
@@ -156,13 +156,8 @@ async function main() {
     // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
     // file is not re-sent every pass.
     const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
-    const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
     for (const id of userById.keys()) {
-      await sendToQueue(Resource.fabFileChunkQueue.url, {
-        fabFileId: id,
-        userId: userById.get(id)!,
-        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
-      });
+      await sendToQueue(Resource.fabFileChunkQueue.url, buildChunkScanQueuePayload(id, userById.get(id)!));
     }
     if (userById.size > 0) {
       bootLogger.info(`[fabFileChunkScan] enqueued ${userById.size} un-chunked file(s)`);

@@ -56,10 +56,11 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' }, fabFileChunkQueue: { url: 'http://sqs/fabFileChunkQueue' } },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/worker/chunkScan', () => ({
+// Only the filter is stubbed (so the call args are assertable); the payload builder stays real so
+// these tests pin the provenance the sweep actually sends.
+vi.mock('@server/worker/chunkScan', async importActual => ({
+  ...(await importActual<typeof import('@server/worker/chunkScan')>()),
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
-  CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
-  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
@@ -207,13 +208,15 @@ describe('dataLakeBatchReconcile cron handler', () => {
       // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
       // the worker can reject a duplicate/superseded delivery.
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-      // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
+      // EVERY message is stamped convergence, with or without a batch: a scheduled sweep is
+      // background work, so it must stay haltable by the kill switch. An un-stamped re-enqueue
+      // reads as `user` and would re-chunk a file the switch had just parked as paused.
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        origin: 'convergence',
       });
-      // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
-      // sweep carries no lakeId (platform switch only).
+      // A global sweep carries no lakeId, so only the platform-scope switch halts it.
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',
@@ -243,6 +246,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
