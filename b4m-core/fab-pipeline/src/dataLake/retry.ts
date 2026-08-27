@@ -96,8 +96,12 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
         throw error;
       }
 
-      // Honor a server-requested Retry-After (capped) over the calculated backoff.
-      const retryAfterMs = getRetryAfterMs?.(err) ?? null;
+      // Honor a server-requested Retry-After (capped) over the calculated backoff - but only a
+      // POSITIVE one. `getRetryAfterMs` is caller-injected, so this cannot rely on the producer
+      // having the rule: a zero or negative hint would otherwise win over the backoff (it is not
+      // null) and collapse every remaining attempt into an immediate burst.
+      const rawRetryAfterMs = getRetryAfterMs?.(err) ?? null;
+      const retryAfterMs = rawRetryAfterMs !== null && rawRetryAfterMs > 0 ? rawRetryAfterMs : null;
       const delayMs =
         retryAfterMs !== null
           ? Math.min(retryAfterMs, maxDelayMs)

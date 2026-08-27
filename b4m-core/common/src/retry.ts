@@ -147,6 +147,20 @@ export function isUserInitiatedAbort(error: Error, userSignal?: AbortSignal): bo
 /**
  * Extract retry delay from error response (e.g., Retry-After header)
  */
+/**
+ * A Retry-After hint is only useful if it asks us to wait. `Retry-After: 0`, a negative value, or an
+ * HTTP date that has already passed all carry no timing information - and the callers below treat any
+ * non-null return as authoritative *over* the exponential backoff, so returning 0 does not mean "wait
+ * a moment", it means "abandon the backoff entirely and retry immediately".
+ *
+ * That inverts the retry budget exactly when it matters: a server sends Retry-After when it is
+ * already struggling, so honouring a zero turns the remaining attempts into an instant burst against
+ * a service asking for room. Null instead, so the caller falls through to its own backoff.
+ */
+function positiveDelayOrNull(ms: number): number | null {
+  return ms > 0 ? ms : null;
+}
+
 export function getRetryAfterMs(error: Error): number | null {
   if (!isAxiosError(error)) {
     return null;
@@ -160,13 +174,13 @@ export function getRetryAfterMs(error: Error): number | null {
   // Retry-After can be a number of seconds or an HTTP date
   const seconds = parseInt(retryAfter, 10);
   if (!isNaN(seconds)) {
-    return seconds * 1000;
+    return positiveDelayOrNull(seconds * 1000);
   }
 
   // Try parsing as HTTP date
   const date = Date.parse(retryAfter);
   if (!isNaN(date)) {
-    return Math.max(0, date - Date.now());
+    return positiveDelayOrNull(date - Date.now());
   }
 
   return null;

@@ -79,6 +79,27 @@ export function isIndexNotFoundError(error: Error): boolean {
 }
 
 /**
+ * A Retry-After hint is only useful if it asks us to wait. `Retry-After: 0`, a negative value, or an
+ * already-elapsed HTTP date carry no timing information - and `withRetry` treats any non-null return
+ * as authoritative OVER its exponential backoff, so returning 0 does not mean "wait a moment", it
+ * means "abandon the backoff and retry immediately".
+ *
+ * That inverts the retry budget precisely when it matters: a cluster sends Retry-After when it is
+ * already under pressure, and the chunk-removal path fans out at REMOVAL_CHUNK_SIZE, so honouring a
+ * zero turns the remaining attempts into an instant burst against a circuit-breaking node. Null
+ * instead, so withRetry falls through to its own backoff.
+ *
+ * The elapsed-date case needs no misbehaving server at all - clock skew, or a few seconds of queueing
+ * between the cluster writing the header and this code reading it, is enough.
+ *
+ * MUST STAY IN SYNC with the same rule in @bike4mind/common's retry.ts, per the note at the top of
+ * retry.ts about keeping the backoff semantics of the two copies aligned.
+ */
+function positiveDelayOrNull(ms: number): number | null {
+  return ms > 0 ? ms : null;
+}
+
+/**
  * Extract a `Retry-After` delay (ms) from an opensearch-js `ResponseError`, if the cluster
  * sent one. opensearch-js exposes response headers on `error.headers` (and `error.meta.headers`).
  * `Retry-After` is either a number of seconds or an HTTP date. Returns null when absent/unparseable.
@@ -92,12 +113,12 @@ export function getOpenSearchRetryAfterMs(error: Error): number | null {
 
   const seconds = parseInt(String(raw), 10);
   if (!Number.isNaN(seconds)) {
-    return seconds * 1000;
+    return positiveDelayOrNull(seconds * 1000);
   }
 
   const dateMs = Date.parse(String(raw));
   if (!Number.isNaN(dateMs)) {
-    return Math.max(0, dateMs - Date.now());
+    return positiveDelayOrNull(dateMs - Date.now());
   }
 
   return null;
