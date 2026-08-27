@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import type {
   IDataLakeDocument,
   IDataLakeRepository,
@@ -836,6 +837,78 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { $set: { 'files.$.status': to } }
     );
     return res.modifiedCount === 1;
+  }
+
+  /**
+   * Exact inverse of the per-file failure accounting in fabFileChunk.ts's accountFileFailure:
+   * pull ONE manifest entry back out of 'failed' into `to`, drop the error text it carries, and
+   * hand back the failedFiles/processingFailedFiles that entry took - all in one write, so the
+   * manifest and the tally can never disagree. `alsoIncrement` carries whatever the new status
+   * itself owes the batch (a file whose chunks already hold every vector lands straight on
+   * 'complete', which owes a vectorizedFiles).
+   *
+   * Why this exists at all: claimFileStatus can only move an entry BETWEEN the states it is given,
+   * and no success path lists 'failed' as a legal `from` - so without an explicit revoke, a file
+   * that recovers after a failure was recorded is counted failed forever (#1412 is the same gate
+   * seen from the other side).
+   *
+   * `errorPrefix` is the ownership guard, mirroring the FabFile-side rule in fabFileChunk.ts: only
+   * the caller whose own failure text is on the entry may revoke it, so a real chunking failure
+   * recorded by something else is never quietly un-counted.
+   *
+   * Deliberately NOT guarded on a non-terminal batch, unlike incrementCounters: a strand that
+   * finalized the batch 'completed_with_errors' is exactly the case this has to repair. Callers
+   * reopen the batch first (see reopenFinalizedWithErrors).
+   */
+  async revertFileFailure(
+    batchId: string,
+    fabFileId: string,
+    to: BatchFileStatus,
+    opts: { errorPrefix: string; alsoIncrement?: Partial<Record<BatchCounterField, number>> }
+  ): Promise<IDataLakeBatchDocument | null> {
+    const match = {
+      _id: batchId,
+      files: {
+        $elemMatch: { fabFileId, status: 'failed', error: { $regex: `^${escapeRegex(opts.errorPrefix)}` } },
+      },
+    };
+    const set = { $set: { 'files.$.status': to }, $unset: { 'files.$.error': 1 } };
+
+    // $inc has no clamp, so the counters must be there to give back. They usually are, but
+    // accountFileFailure's manifest write is unguarded while its $inc is guarded on a non-terminal
+    // batch - a failure recorded onto an already-terminal batch leaves 'failed' with nothing
+    // counted, and decrementing then would push the tally negative.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { ...match, failedFiles: { $gte: 1 }, processingFailedFiles: { $gte: 1 } },
+      { ...set, $inc: { failedFiles: -1, processingFailedFiles: -1, ...opts.alsoIncrement } },
+      { new: true }
+    );
+    if (doc) return doc.toJSON() as IDataLakeBatchDocument;
+
+    const repaired = await this.batchModel.findOneAndUpdate(
+      match,
+      opts.alsoIncrement ? { ...set, $inc: opts.alsoIncrement } : set,
+      { new: true }
+    );
+    return (repaired?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Reopen a batch whose ONLY terminal outcome was 'completed_with_errors', so a file that has
+   * since recovered can still be counted: every counter write here is guarded on a non-terminal
+   * batch, so a settled batch would otherwise swallow the increment that makes it 'completed'.
+   *
+   * Narrow on purpose. 'cancelled' and 'failed' are decisions, not tallies, and 'completed' cannot
+   * be reached with a failed file in the first place - only the errors variant is a verdict that a
+   * recovery can legitimately overturn. Everything else stays settled (#2102).
+   */
+  async reopenFinalizedWithErrors(batchId: string): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: 'completed_with_errors' },
+      { $set: { status: 'processing' }, $unset: { completedAt: 1, completionReason: 1 } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   async incrementCounter(

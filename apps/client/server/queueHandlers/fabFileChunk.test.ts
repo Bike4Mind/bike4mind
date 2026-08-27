@@ -47,6 +47,8 @@ const h = vi.hoisted(() => {
     incrementCounter: vi.fn(),
     incrementCounters: vi.fn(),
     claimFileStatus: vi.fn(),
+    revertFileFailure: vi.fn(),
+    reopenFinalizedWithErrors: vi.fn(),
     getSettingsValue: vi.fn(),
     sendToClient: vi.fn(async () => undefined),
     finalizeBatchIfComplete: vi.fn(),
@@ -72,6 +74,8 @@ vi.mock('@bike4mind/database', () => ({
     incrementCounter: h.incrementCounter,
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
+    revertFileFailure: h.revertFileFailure,
+    reopenFinalizedWithErrors: h.reopenFinalizedWithErrors,
   },
   fabFileChunkRepository: { findVectorlessChunkIds: h.findVectorlessChunkIds },
   fabFileRepository: {
@@ -848,6 +852,8 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     h.deferFailureIfRetryable.mockResolvedValue(false);
     h.findVectorlessChunkIds.mockResolvedValue([]);
     h.sendToQueue.mockResolvedValue(undefined);
+    h.reopenFinalizedWithErrors.mockResolvedValue(null);
+    h.revertFileFailure.mockResolvedValue({ failedFiles: 0, processingFailedFiles: 0, vectorizedFiles: 1 });
   });
 
   it('stamps the file, records the failure and rethrows when the fan-out fails', async () => {
@@ -966,5 +972,96 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     expect(h.sendToQueue).toHaveBeenCalledTimes(3);
     const sizes = h.sendToQueue.mock.calls.map(([, msg]) => (msg as { chunkIds: string[] }).chunkIds.length);
     expect(sizes).toEqual([50, 50, 20]);
+  });
+
+  // The batch-accounting half of the same recovery. The strand wrote three things (file error,
+  // manifest entry, both failure counters) and the resume used to reverse only the first, so a
+  // file that recovered still reported as a failure on its batch - and 'failed' is in no success
+  // path's claim set, so it could never reach 'complete' either.
+  describe('reverses the batch accounting the strand wrote', () => {
+    const stranded = {
+      id: 'ff1',
+      batchId: 'batch-1',
+      chunked: true,
+      error: 'Could not hand off for vector indexing: SQS throttled',
+      vectorizeEnqueueFailedAt: new Date(),
+    };
+
+    it('puts the entry back to chunking and hands the failure counters back before re-sending', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.revertFileFailure).toHaveBeenCalledWith('batch-1', 'ff1', 'chunking', {
+        errorPrefix: 'Could not hand off for vector indexing',
+      });
+      // Ordering is load-bearing: the vectorize handler claims from ['chunking','uploaded',
+      // 'pending'], so a message that lands while the entry still reads 'failed' loses its claim.
+      const revertOrder = h.revertFileFailure.mock.invocationCallOrder[0];
+      expect(revertOrder).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
+    });
+
+    it('reopens a batch the strand already finalized, so the recovered file can still be counted', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+      expect(h.reopenFinalizedWithErrors).toHaveBeenCalledWith('batch-1');
+      expect(h.reopenFinalizedWithErrors.mock.invocationCallOrder[0]).toBeLessThan(
+        h.revertFileFailure.mock.invocationCallOrder[0]
+      );
+    });
+
+    it('claims a file whose chunks already hold every vector straight to complete, and pays it its vectorizedFiles', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue([]);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.revertFileFailure).toHaveBeenCalledWith('batch-1', 'ff1', 'complete', {
+        errorPrefix: 'Could not hand off for vector indexing',
+        alsoIncrement: { vectorizedFiles: 1 },
+      });
+      expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+    });
+
+    it('touches no batch accounting for a file that was never stranded', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true });
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+      expect(h.revertFileFailure).not.toHaveBeenCalled();
+      expect(h.reopenFinalizedWithErrors).not.toHaveBeenCalled();
+    });
+
+    it('leaves the batch alone when the entry carries a failure this handler does not own', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+      h.revertFileFailure.mockResolvedValue(null); // no entry of ours matched
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+      expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+      expect(h.sendToQueue).toHaveBeenCalled(); // the recovery itself still runs
+    });
+
+    it('never fails the delivery over the correction: the file keeps its vectors either way', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+      h.revertFileFailure.mockRejectedValue(new Error('mongo down'));
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+      expect(h.sendToQueue).toHaveBeenCalled();
+    });
+
+    it('re-records the failure on the batch when the resumed fan-out fails again', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+      h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
+
+      // The undo cleared the file's error first, so markFailedIfNotAlready wins again and the
+      // batch is re-charged the failure it was just given back - never left short of one.
+      expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', expect.stringContaining(ENQUEUE_ERR));
+      expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    });
   });
 });

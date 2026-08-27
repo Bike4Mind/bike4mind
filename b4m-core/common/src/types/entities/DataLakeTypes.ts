@@ -620,6 +620,27 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * caller skips the counter increment.
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
+  /**
+   * Exact inverse of a per-file failure accounting: move ONE manifest entry out of 'failed' into
+   * `to`, drop its error text and give back the failedFiles/processingFailedFiles it took, in a
+   * single write. `alsoIncrement` carries what the new status itself owes (landing straight on
+   * 'complete' owes a vectorizedFiles). `errorPrefix` is the ownership guard - only the caller
+   * whose own failure text is on the entry may revoke it. Needed because claimFileStatus can
+   * never move an entry back OUT of 'failed', so a file that recovers stays counted failed
+   * forever without this. Returns the post-update batch, or null if nothing matched.
+   */
+  revertFileFailure(
+    batchId: string,
+    fabFileId: string,
+    to: BatchFileStatus,
+    opts: { errorPrefix: string; alsoIncrement?: Partial<Record<BatchCounterField, number>> }
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Reopen a batch settled as 'completed_with_errors' back to 'processing', so a recovered file
+   * can still be counted (every counter write is guarded on a non-terminal batch). Narrow by
+   * design: 'cancelled'/'failed' are decisions rather than tallies and stay settled.
+   */
+  reopenFinalizedWithErrors(batchId: string): Promise<IDataLakeBatchDocument | null>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
    * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
