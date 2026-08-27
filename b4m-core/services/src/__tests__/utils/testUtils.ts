@@ -161,6 +161,7 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     findBySid: vi.fn(),
     findActiveByUserId: vi.fn(),
     rotateHash: vi.fn(),
+    recoverRotateHash: vi.fn(),
     registerReplayUse: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),

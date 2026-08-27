@@ -5,6 +5,7 @@ import { dataLakeRepository, dataLakeAccessGrantRepository, fabFileRepository } 
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 /**
  * DELETE /api/data-lakes/:id/files/:fabFileId
@@ -25,7 +26,11 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
-    const result = await dataLakeService.removeFileFromDataLake(ctx, lake.id, fabFileId, {
+    // The removal recomputes stats, which can flip a draft lake active and emit a config-change
+    // row; `auditPrincipal` is what keeps a key-driven removal from being recorded as the human.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+
+    const result = await dataLakeService.removeFileFromDataLake(actor, lake.id, fabFileId, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,

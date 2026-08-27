@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   activateIfDraft: vi.fn(),
   find: vi.fn(),
   storageDelete: vi.fn(),
+  recordConfigChange: vi.fn(),
 }));
 
 // Same callable chain as index.put.test.ts: the module registers get/put/delete in sequence and
@@ -47,7 +48,13 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, setStats: h.setStats, find: h.find },
+  dataLakeRepository: {
+    findByDatalakeTag: h.findByDatalakeTag,
+    setStats: h.setStats,
+    find: h.find,
+    activateIfDraft: h.activateIfDraft,
+  },
+  lakeConfigChangeEventRepository: { record: h.recordConfigChange },
   fabFileChunkRepository: { deleteManyByFabFileId: h.deleteManyByFabFileId },
   fabFileRepository: {
     findByIdAndUserId: h.findByIdAndUserId,
@@ -56,7 +63,10 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     computeDataLakeStats: h.computeDataLakeStats,
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
-  adminSettingsRepository: {},
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
   userRepository: { findById: h.userFindById },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
@@ -93,16 +103,18 @@ const makeRes = () => {
 
 const logger = { updateMetadata: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() };
 
-const req = (id: string = FILE_ID) =>
+const req = (id: string = FILE_ID, over: Record<string, unknown> = {}) =>
   ({
     method: 'DELETE',
     user: { id: OWNER, isAdmin: false },
     ability: {},
     query: { id },
     logger,
+    ...over,
   }) as never;
 
-const run = (res: unknown, id?: string) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(id), res);
+const run = (res: unknown, id?: string, over?: Record<string, unknown>) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(id, over), res);
 
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
   id: FILE_ID,
@@ -213,6 +225,56 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
 
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
     expect(json.mock.calls[0][0]).toMatchObject({ action: 'deleted' });
+  });
+});
+
+/**
+ * A delete can empty a lake's last non-member and, on the other side, leave enough files behind to
+ * flip a draft lake active - which writes an append-only config-change row an owner reads. The
+ * actor is built HERE, so this is the only place the attribution can be pinned.
+ *
+ * Silent failure mode: drop the `auditPrincipal` line from the route and every other suite stays
+ * green while key-driven deletes are recorded as the owning human's own edit, permanently.
+ */
+describe('DELETE /api/files/[id] - auto-activate attribution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.update.mockResolvedValue(undefined);
+    h.deleteManyByFabFileId.mockResolvedValue(undefined);
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 3, totalSizeBytes: 300, totalChunkedChars: 0 });
+    h.setStats.mockResolvedValue(undefined);
+    h.activateIfDraft.mockResolvedValue(true);
+    h.recordConfigChange.mockResolvedValue({});
+  });
+
+  const recorded = () => {
+    expect(h.recordConfigChange).toHaveBeenCalledTimes(1);
+    return h.recordConfigChange.mock.calls[0][0];
+  };
+
+  it('names the deleting user as the principal on a session request', async () => {
+    givenOwnedFile([{ name: LAKE.datalakeTag, strength: 1 }]);
+    const { res } = makeRes();
+
+    await run(res);
+
+    expect(recorded()).toMatchObject({ action: 'auto-activate', principalKind: 'user', principalId: OWNER });
+  });
+
+  it('names the KEY, not the human it acts for, on an API-key request', async () => {
+    givenOwnedFile([{ name: LAKE.datalakeTag, strength: 1 }]);
+    const { res } = makeRes();
+
+    await run(res, undefined, { apiKeyInfo: { keyId: 'key-abc' } });
+
+    expect(recorded()).toMatchObject({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: OWNER,
+    });
   });
 });
 

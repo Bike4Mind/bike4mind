@@ -1038,3 +1038,49 @@ describe('useAgentExecutionStore - final_answer collapse (issue #35)', () => {
     expect(child.pendingTextByIteration).toBeUndefined();
   });
 });
+
+describe('useAgentExecutionStore -- keyed entries that can never match do not decay into steals', () => {
+  beforeEach(resetStore);
+
+  it('a keyed miss with no un-keyed entry consumes nothing', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('session-A', 'exec-1');
+
+    // The arm that carries the "a keyed entry cannot offset the un-keyed FIFO"
+    // argument: a response for an unknown run must not touch exec-1's entry.
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-unknown')).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'session-A', executionId: 'exec-1' },
+    ]);
+  });
+
+  it('a session-less sweep entry answers its own id and leaves the probe entry alone', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    // The sweep can ask about a run whose session the store never learned
+    // (a stray event synthesises an active, session-less execution). Its entry
+    // must still exist, keyed - otherwise its response would drain the probe's.
+    registerPendingReconnect(undefined, 'exec-orphan');
+    registerPendingReconnect('sess-probe');
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-orphan')).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([{ sessionId: 'sess-probe' }]);
+  });
+
+  // The arm the found:false comment in useAgentExecution.ts reasons about, and the
+  // one it used to get wrong: a keyed sweep request whose run is gone server-side
+  // is answered by a BARE found:false, which drains the un-keyed probe entry it
+  // does not answer. The residual is documented there; this pins the behaviour so
+  // the next reader cannot re-derive the comfortable version of it.
+  it('a found:false drains the oldest un-keyed entry even when a keyed entry is queued', () => {
+    const { registerPendingReconnect } = useAgentExecutionStore.getState();
+    registerPendingReconnect('sess-stale', 'exec-gone'); // sweep entry, run gone server-side
+    registerPendingReconnect('sess-probe'); // concurrent mount probe
+
+    expect(useAgentExecutionStore.getState().consumePendingReconnect(undefined)).toBe('sess-probe');
+    // The probe's entry is gone, so its own response has nothing left to pair with.
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: 'sess-stale', executionId: 'exec-gone' },
+    ]);
+    expect(useAgentExecutionStore.getState().consumePendingReconnect('exec-live')).toBeUndefined();
+  });
+});
