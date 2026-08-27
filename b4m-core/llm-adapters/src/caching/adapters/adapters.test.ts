@@ -318,7 +318,13 @@ describe('AnthropicCachingAdapter', () => {
       expect(countMarkers(result)).toBeLessThanOrEqual(4);
     });
 
-    it('drops the history anchor first, keeping the durable system and tool breakpoints', () => {
+    /**
+     * A marker on the last system block already caches all tools plus all system, so a tools
+     * marker covers a strict subset of it. Under pressure the tools slot is therefore the one
+     * worth losing - not the history anchor, which is the only breakpoint covering the
+     * conversation, i.e. where a multi-turn tool loop's reusable tokens actually are.
+     */
+    it('drops the redundant tools marker first, keeping system and the history anchor', () => {
       const result = adapter.applyCaching(
         {
           tools: [{ name: 'a' }],
@@ -336,10 +342,32 @@ describe('AnthropicCachingAdapter', () => {
       const tools = result.tools as Record<string, unknown>[];
       const messages = result.messages as Record<string, unknown>[];
 
-      // Budget was 2: system tail and tools claim it, history goes without.
+      // Budget was 2: system tail and the history anchor claim it, tools goes without.
       expect(system[2].cache_control).toBeDefined();
+      expect((messages[0].content as Record<string, unknown>[])[0].cache_control).toBeDefined();
+      expect(tools[0].cache_control).toBeUndefined();
+      expect(countMarkers(result)).toBe(4);
+    });
+
+    /** `tools` still earns the slot when no system breakpoint was placed to subsume it. */
+    it('keeps the tools marker when the system breakpoint was not placed', () => {
+      const result = adapter.applyCaching(
+        {
+          tools: [{ name: 'a' }],
+          system: [
+            { type: 'text', text: 'a', cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: 'b', cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: 'tail' },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+        { ...allBreakpoints, cacheSystemPrompt: false }
+      );
+
+      const tools = result.tools as Record<string, unknown>[];
+      const messages = result.messages as Record<string, unknown>[];
+      expect((messages[0].content as Record<string, unknown>[])[0].cache_control).toBeDefined();
       expect(tools[0].cache_control).toBeDefined();
-      expect(messages[0].content).toBe('hi');
       expect(countMarkers(result)).toBe(4);
     });
 
@@ -409,7 +437,7 @@ describe('AnthropicCachingAdapter', () => {
       expect(logger.error).not.toHaveBeenCalled();
       const [message, detail] = logger.warn.mock.calls[0];
       expect(message).toContain('budget exhausted');
-      expect((detail as { dropped: string[] }).dropped).toEqual(['history']);
+      expect((detail as { dropped: string[] }).dropped).toEqual(['tools']);
       expect((detail as { outbound: { total: number } }).outbound.total).toBe(4);
     });
 

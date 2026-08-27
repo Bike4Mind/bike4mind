@@ -59,10 +59,17 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     const modifiedParams = { ...apiParams };
     const cacheControl = { type: 'ephemeral', ...(ttl === '1h' ? { ttl } : {}) };
 
-    // Budget = the ceiling minus what upstream already attached. Breakpoints are added in
-    // descending durability below, so when the budget runs out the LEAST valuable one is the
-    // one dropped: the history anchor moves every turn and yields the shortest-lived prefix,
-    // while the system prefix and the tool schemas are stable across a whole conversation.
+    // Budget = the ceiling minus what upstream already attached. Breakpoints are claimed below in
+    // descending order of how much cacheable prefix each one buys, so when the budget runs out the
+    // least valuable is what drops. Anthropic assembles that prefix as tools -> system -> messages
+    // and a marker caches everything up to and including its block, so the coverage nests:
+    //
+    //   system  covers tools + system                      (large, stable across the conversation)
+    //   history covers tools + system + messages-to-anchor  (largest; where a tool loop's tokens are)
+    //   tools   covers tools alone                          (a strict subset of what system covers)
+    //
+    // `tools` therefore goes last: it is redundant whenever the system breakpoint was placed, and
+    // still gets the slot when it was not.
     const inbound = censusMarkers(modifiedParams);
     let budget = MAX_CACHE_CONTROL_BLOCKS - inbound.total;
     const dropped: string[] = [];
@@ -91,17 +98,6 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
           systemArray[systemArray.length - 1] = { ...lastBlock, cache_control: cacheControl };
           modifiedParams.system = systemArray;
         }
-      }
-    }
-
-    // Cache tools (mark last tool) - stable for as long as the tool set is.
-    const tools = modifiedParams.tools as unknown[] | undefined;
-    if (strategy.cacheTools && Array.isArray(tools) && tools.length > 0) {
-      const toolsCopy = [...tools];
-      const lastTool = toolsCopy[toolsCopy.length - 1] as Record<string, unknown>;
-      if (claim('tools', hasMarker(lastTool))) {
-        toolsCopy[toolsCopy.length - 1] = { ...lastTool, cache_control: cacheControl };
-        modifiedParams.tools = toolsCopy;
       }
     }
 
@@ -138,6 +134,24 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
       }
     }
 
+    // Cache tools (mark last tool) - claimed LAST, so it is the one dropped under pressure.
+    //
+    // Anthropic assembles the cacheable prefix as tools, then system, then messages, and a marker
+    // caches everything up to and including its own block. So a marker on the last system block
+    // already covers all tools, and a marker on the last tool covers a strict subset of it - it
+    // only earns its slot when no system breakpoint was placed (cacheSystemPrompt off, or no
+    // system on the request), which the ordering handles on its own: the budget is still there
+    // for tools when system did not spend it.
+    const tools = modifiedParams.tools as unknown[] | undefined;
+    if (strategy.cacheTools && Array.isArray(tools) && tools.length > 0) {
+      const toolsCopy = [...tools];
+      const lastTool = toolsCopy[toolsCopy.length - 1] as Record<string, unknown>;
+      if (claim('tools', hasMarker(lastTool))) {
+        toolsCopy[toolsCopy.length - 1] = { ...lastTool, cache_control: cacheControl };
+        modifiedParams.tools = toolsCopy;
+      }
+    }
+
     const outbound = censusMarkers(modifiedParams);
 
     // Two distinct situations, and the difference matters:
@@ -159,11 +173,19 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     // would be invisible in exactly the environments that reproduce this. A request sitting at
     // the ceiling is the interesting one, so that logs at `info`; quieter requests stay at
     // `debug` rather than adding a line to every LLM call in the platform.
+    //
+    // The at-ceiling line falls back to `console` like the two branches below, because the
+    // Bedrock call site passes no logger (`bedrockBackend/anthropic.ts`, see its TODO) and Bedrock
+    // is the backend this cap exists for - gating it on `logger` would emit the census only on the
+    // path that does not reproduce. The `debug` half stays logger-only: it is the high-volume one.
     const census = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
     const nearCap = outbound.total >= MAX_CACHE_CONTROL_BLOCKS;
-    if (logger) {
-      if (nearCap) logger.info('[PromptCache] cache_control census at the ceiling', census);
-      else logger.debug('[PromptCache] cache_control census', census);
+    if (nearCap) {
+      const message = '[PromptCache] cache_control census at the ceiling';
+      if (logger) logger.info(message, census);
+      else console.info(message, JSON.stringify(census));
+    } else if (logger) {
+      logger.debug('[PromptCache] cache_control census', census);
     }
 
     if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
