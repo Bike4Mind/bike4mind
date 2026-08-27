@@ -325,7 +325,12 @@ describe('wafPolicy', () => {
         for (const rule of scopedRateLimits(stage)) {
           for (const byteMatch of rateLimitByteMatches(rule)) {
             expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
-            expect(byteMatch.PositionalConstraint, `${rule.Name} must be prefix-anchored`).toBe('STARTS_WITH');
+            // EXACTLY is accepted alongside STARTS_WITH because it is strictly tighter: it is what
+            // single files such as /version.json use, so the match cannot creep to /version.jsonx.
+            // What this rejects is CONTAINS and ENDS_WITH, neither anchored at the path root.
+            expect(['STARTS_WITH', 'EXACTLY'], `${rule.Name} must be anchored at the path root`).toContain(
+              byteMatch.PositionalConstraint
+            );
           }
         }
       });
@@ -344,8 +349,8 @@ describe('wafPolicy', () => {
 
       // any: see above
       const rateBased = (image!.Statement as any).RateBasedStatement;
-      const staticRule = rules.find(r => r.Name === 'static-asset-rate-limit');
-      const staticLimit = (staticRule!.Statement as any).RateBasedStatement.Limit;
+      const assetRule = rules.find(r => r.Name === 'static-asset-rate-limit');
+      const staticLimit = (assetRule!.Statement as any).RateBasedStatement.Limit;
 
       expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/image');
       expect(rateBased.Limit).toBeLessThan(staticLimit);
@@ -367,18 +372,29 @@ describe('wafPolicy', () => {
       const rateBased = (fallback!.Statement as any).RateBasedStatement;
       const apiLimit = (rules.find(r => r.Name === 'api-rate-limit')!.Statement as any).RateBasedStatement.Limit;
 
-      // Excludes only real assets. /_next/static/ is the sole prefix CloudFront routes to the
-      // bucket, so /_next/data, /_next/image and any case variant stay function-backed and must
-      // fall through to this ceiling rather than into the 50000 asset bucket.
-      // Excludes every bucket-served prefix, each confirmed by probing staging for an AmazonS3
-      // server header. /_next/static/ alone was not enough: in the worst 5-minute window, 84% of
-      // what this rule counted was /icons/, /images/, /scripts/, /version.json and /app-config/,
-      // so the fall-through budget was being spent on cache-cheap files rather than on the
-      // function-backed paths this ceiling exists to bound.
-      const excluded = rateLimitByteMatches(fallback!).map(m => m.SearchString);
-      expect(excluded).toEqual(
-        expect.arrayContaining(['/_next/static/', '/icons/', '/images/', '/scripts/', '/app-config/'])
-      );
+      // Every prefix this rule excludes has to be picked up by the asset backstop instead. Taking
+      // paths out of one ceiling without putting them into another is what image-rate-limit was
+      // created to fix for /_next/image, and the first version of this exclusion repeated that
+      // mistake six times over. Comparing the two sets keeps the partition total rather than
+      // trusting it stays that way. Each prefix was confirmed bucket-served by probing staging
+      // for an AmazonS3 server header rather than inferred from its name.
+      const key = (m: { PositionalConstraint: string; SearchString: string }) =>
+        `${m.PositionalConstraint} ${m.SearchString}`;
+      const assetRule = rules.find(r => r.Name === 'static-asset-rate-limit');
+      const excluded = rateLimitByteMatches(fallback!).map(key).sort();
+      const covered = rateLimitByteMatches(assetRule!).map(key).sort();
+
+      expect(excluded, 'every excluded prefix must land in the asset backstop').toEqual(covered);
+      // Pinned as well, so the set cannot quietly shrink to nothing and still match.
+      expect(excluded).toEqual([
+        'EXACTLY /favicon.ico',
+        'EXACTLY /version.json',
+        'STARTS_WITH /_next/static/',
+        'STARTS_WITH /app-config/',
+        'STARTS_WITH /icons/',
+        'STARTS_WITH /images/',
+        'STARTS_WITH /scripts/',
+      ]);
       // Pinned, not bounded: this number is about to be retuned off a shadow reading, and a
       // greater-than assertion would pass a 10x loosening while failing a tightening.
       expect(rateBased.Limit).toBe(5000);
@@ -485,7 +501,9 @@ describe('wafPolicy', () => {
       // Only /_next/static/ is routed to the assets bucket: probed staging, /_next/static/x answers
       // from AmazonS3 while /_next/x and /_NEXT/static/x both come from the default origin. So the
       // carve-out stops here and everything else under /_next/ stays function-backed.
-      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/static/');
+      // Covers every bucket-served prefix, the same set default-rate-limit excludes, so asserting
+      // one prefix here would go stale the moment that set changes. The partition test owns it.
+      expect(rateLimitByteMatches(assetRule!).length).toBeGreaterThan(1);
     });
 
     it('includes the ai-route-rate-limit rule at Priority 4', () => {
