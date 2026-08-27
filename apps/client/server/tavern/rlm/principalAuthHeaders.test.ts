@@ -21,8 +21,15 @@ describe('resolvePrincipalAuthHeaders', () => {
   });
 
   it('fails closed rather than substituting a shared identity', () => {
-    expect(resolvePrincipalAuthHeaders({})).toBeNull();
-    expect(resolvePrincipalAuthHeaders({ 'x-api-key': '   ', authorization: '' })).toBeNull();
+    const original = process.env.B4M_LOCAL_API_KEY;
+    process.env.B4M_LOCAL_API_KEY = 'b4m_shared_service_key';
+    try {
+      expect(resolvePrincipalAuthHeaders({})).toBeNull();
+      expect(resolvePrincipalAuthHeaders({ 'x-api-key': '   ', authorization: '' })).toBeNull();
+    } finally {
+      if (original === undefined) delete process.env.B4M_LOCAL_API_KEY;
+      else process.env.B4M_LOCAL_API_KEY = original;
+    }
   });
 
   it('ignores non-credential headers', () => {

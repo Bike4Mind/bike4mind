@@ -5,13 +5,18 @@ import type { IncomingHttpHeaders } from 'http';
  * and /api/files/*, so those calls authenticate as the SAME principal that
  * authenticated the outer request.
  *
- * This is the whole point of the type: every downstream lake scope
- * (resolveAccessibleLakes, resolveRetrievalLakeScope) is derived from the
- * authenticated principal, so a loopback call carrying anything other than the
- * caller's own credential reads a scope the caller was never granted. There is
- * deliberately no shared/service-key path - see resolvePrincipalAuthHeaders.
+ * This is the whole point of the type: the data-lake routes derive their scope
+ * from the authenticated principal (resolveAccessibleLakes,
+ * resolveRetrievalLakeScope), so a loopback call carrying anything other than
+ * the caller's own credential reads a scope the caller was never granted. There
+ * is deliberately no shared/service-key path - see resolvePrincipalAuthHeaders.
+ *
+ * NOTE: /api/files/presigned-url does NOT scope by principal - it signs whatever
+ * filePath it is handed. The only thing gating it here is that getArticle's
+ * filePath came from the lake-gated articles?id= hop. Do not add a files/*
+ * loopback call assuming the forwarded principal scopes it.
  */
-export type PrincipalAuthHeaders = Record<string, string>;
+export type PrincipalAuthHeaders = { 'x-api-key'?: string; authorization?: string };
 
 /**
  * Forwarded verbatim rather than reconstructed: `apiKeyAuth` accepts a key as
