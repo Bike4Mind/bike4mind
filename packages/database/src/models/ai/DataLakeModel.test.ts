@@ -951,6 +951,88 @@ describe('DataLakeBatchRepository.revertFileFailure - the exit from failed', () 
     });
     expect(updated).toBeNull();
   });
+
+  // Cancel is a status-only transition that neither stops in-flight messages nor clears the
+  // FabFile markers, so the rescue sweep does reach a stranded file on a settled batch - and must
+  // not rewrite the tally of a batch someone deliberately settled (#2102).
+  it.each(['cancelled', 'failed'] as const)('leaves a %s batch untouched - a decision, not a tally', async status => {
+    const batch = await failedBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, status);
+    const updated = await dataLakeBatchRepository.revertFileFailure(batch.id, 'ff1', 'complete', {
+      errorPrefix: PREFIX,
+      alsoIncrement: { vectorizedFiles: 1 },
+    });
+    expect(updated).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.status).toBe(status);
+    expect(fresh?.failedFiles).toBe(1);
+    expect(fresh?.vectorizedFiles).toBe(0);
+    expect(fresh?.files[0].status).toBe('failed');
+  });
+
+  // Attribution: two entries can sit at 'failed' with only ONE of them charged, so a batch-level
+  // failedFiles >= 1 is not evidence that THIS entry's recovery is owed a decrement.
+  describe('with a second failed file on the batch', () => {
+    const twoFailed = async () => {
+      // A: charged. B: 'failed' with nothing counted (its $inc was swallowed by a terminal batch).
+      const batch = await dataLakeBatchRepository.create({
+        dataLakeId: 'lake1',
+        userId: 'u1',
+        totalFiles: 2,
+        failedFiles: 1,
+        processingFailedFiles: 1,
+      } as never);
+      await dataLakeBatchRepository.appendFiles(batch.id, [
+        { fabFileId: 'ffA', fileName: 'a.pdf', status: 'failed', error: `${PREFIX}: SQS throttled` },
+        { fabFileId: 'ffB', fileName: 'b.pdf', status: 'failed', error: `${PREFIX}: SQS throttled` },
+      ]);
+      await dataLakeBatchRepository.markFailureCounted(batch.id, 'ffA', true);
+      await dataLakeBatchRepository.markFailureCounted(batch.id, 'ffB', false);
+      return batch;
+    };
+
+    it("does not spend another file's failure counters when the recovered entry was never charged", async () => {
+      const batch = await twoFailed();
+      const updated = await dataLakeBatchRepository.revertFileFailure(batch.id, 'ffB', 'complete', {
+        errorPrefix: PREFIX,
+        alsoIncrement: { vectorizedFiles: 1 },
+      });
+      // B is repaired, but A's counters stay spent - dropping failedFiles to 0 here would make the
+      // batch report clean over a file that is still genuinely failed.
+      expect(updated?.files[1].status).toBe('complete');
+      expect(updated?.failedFiles).toBe(1);
+      expect(updated?.processingFailedFiles).toBe(1);
+      expect(updated?.vectorizedFiles).toBe(1);
+      expect(updated?.files[0].status).toBe('failed');
+    });
+
+    it('hands back exactly the counters the recovered entry was charged', async () => {
+      const batch = await twoFailed();
+      const updated = await dataLakeBatchRepository.revertFileFailure(batch.id, 'ffA', 'chunking', {
+        errorPrefix: PREFIX,
+      });
+      expect(updated?.files[0].status).toBe('chunking');
+      expect(updated?.failedFiles).toBe(0);
+      expect(updated?.files[1].status).toBe('failed'); // B untouched
+    });
+
+    it('clears the counted marker with the revert, so a later re-failure re-charges cleanly', async () => {
+      const batch = await twoFailed();
+      await dataLakeBatchRepository.revertFileFailure(batch.id, 'ffA', 'chunking', { errorPrefix: PREFIX });
+      const fresh = await dataLakeBatchRepository.findById(batch.id);
+      expect(fresh?.files[0].failureCounted).toBeUndefined();
+    });
+  });
+
+  // Entries written before failureCounted existed carry no marker but DID spend their counters,
+  // so absent must keep meaning "counted" or the tally would be stuck a failure high forever.
+  it('treats an entry predating the marker as counted', async () => {
+    const batch = await failedBatch();
+    const updated = await dataLakeBatchRepository.revertFileFailure(batch.id, 'ff1', 'chunking', {
+      errorPrefix: PREFIX,
+    });
+    expect(updated?.failedFiles).toBe(0);
+  });
 });
 
 describe('DataLakeBatchRepository.reopenFinalizedWithErrors', () => {

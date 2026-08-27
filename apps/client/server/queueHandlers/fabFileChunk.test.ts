@@ -49,6 +49,7 @@ const h = vi.hoisted(() => {
     claimFileStatus: vi.fn(),
     revertFileFailure: vi.fn(),
     reopenFinalizedWithErrors: vi.fn(),
+    markFailureCounted: vi.fn(),
     getSettingsValue: vi.fn(),
     sendToClient: vi.fn(async () => undefined),
     finalizeBatchIfComplete: vi.fn(),
@@ -77,6 +78,7 @@ vi.mock('@bike4mind/database', () => ({
     claimFileStatus: h.claimFileStatus,
     revertFileFailure: h.revertFileFailure,
     reopenFinalizedWithErrors: h.reopenFinalizedWithErrors,
+    markFailureCounted: h.markFailureCounted,
   },
   fabFileChunkRepository: { findVectorlessChunkIds: h.findVectorlessChunkIds },
   fabFileRepository: {
@@ -864,6 +866,7 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     h.findVectorlessChunkIds.mockResolvedValue([]);
     h.sendToQueue.mockResolvedValue(undefined);
     h.reopenFinalizedWithErrors.mockResolvedValue(null);
+    h.markFailureCounted.mockResolvedValue(undefined);
     h.revertFileFailure.mockResolvedValue({ failedFiles: 0, processingFailedFiles: 0, vectorizedFiles: 1 });
   });
 
@@ -874,6 +877,15 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, markerWrite);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining(ENQUEUE_ERR));
     expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    // Per-entry, because revertFileFailure decides per-entry whether to hand the counters back.
+    expect(h.markFailureCounted).toHaveBeenCalledWith('batch-1', 'ff1', true);
+  });
+
+  it('records the failure as uncounted when the guarded counter write was swallowed', async () => {
+    h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
+    h.incrementCounters.mockResolvedValue(null); // batch already terminal - the $inc is guarded
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
+    expect(h.markFailureCounted).toHaveBeenCalledWith('batch-1', 'ff1', false);
   });
 
   it('leaves file and batch state untouched on a non-final attempt, but still stamps it', async () => {
@@ -1050,8 +1062,20 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
       h.findVectorlessChunkIds.mockResolvedValue(['c0']);
       h.revertFileFailure.mockResolvedValue(null); // no entry of ours matched
       await dispatch(makeEvent(payload), {} as never, mockLogger);
+      // Nothing was reopened here (the batch was never terminal), so there is no verdict to put back.
       expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
       expect(h.sendToQueue).toHaveBeenCalled(); // the recovery itself still runs
+    });
+
+    it('re-settles a batch it reopened when the revoke turns out not to be ours', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.findVectorlessChunkIds.mockResolvedValue(['c0']);
+      h.reopenFinalizedWithErrors.mockResolvedValue({ id: 'batch-1', failedFiles: 1 });
+      h.revertFileFailure.mockResolvedValue(null);
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+      // Nothing else re-finalizes a reopened batch: finalizeBatchIfComplete only runs off counter
+      // increments, so leaving it would park a settled batch at 'processing' until the daily cron.
+      expect(h.finalizeBatchIfComplete).toHaveBeenCalledWith({ id: 'batch-1', failedFiles: 1 }, expect.anything());
     });
 
     it('never fails the delivery over the correction: the file keeps its vectors either way', async () => {

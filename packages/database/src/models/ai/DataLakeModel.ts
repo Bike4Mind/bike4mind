@@ -683,6 +683,7 @@ const DataLakeBatchFileSchema = new mongoose.Schema(
       default: 'pending',
     },
     error: { type: String },
+    failureCounted: { type: Boolean },
   },
   { _id: false }
 );
@@ -861,7 +862,15 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
    *
    * Deliberately NOT guarded on a non-terminal batch, unlike incrementCounters: a strand that
    * finalized the batch 'completed_with_errors' is exactly the case this has to repair. Callers
-   * reopen the batch first (see reopenFinalizedWithErrors).
+   * reopen the batch first (see reopenFinalizedWithErrors) - and a reopen makes
+   * finalizeBatchIfComplete's whole post-finalize block run a second time, which for
+   * enqueueLakeMemoryExtractionIfWanted means a full-lake extraction may re-fire (bounded by the
+   * per-lake daily cap and de-duped by its ledger).
+   *
+   * It IS guarded on 'cancelled'/'failed', the same invariant reopenFinalizedWithErrors protects:
+   * those are decisions, not tallies, and a late recovery must not rewrite a batch someone
+   * deliberately settled (#2102) - cancel is a status-only transition that neither stops in-flight
+   * messages nor clears the FabFile markers, so the rescue sweep does reach files on one.
    */
   async revertFileFailure(
     batchId: string,
@@ -869,31 +878,49 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     to: BatchFileStatus,
     opts: { errorPrefix: string; alsoIncrement?: Partial<Record<BatchCounterField, number>> }
   ): Promise<IDataLakeBatchDocument | null> {
-    const match = {
-      _id: batchId,
-      files: {
-        $elemMatch: { fabFileId, status: 'failed', error: { $regex: `^${escapeRegex(opts.errorPrefix)}` } },
-      },
+    const entry = { fabFileId, status: 'failed', error: { $regex: `^${escapeRegex(opts.errorPrefix)}` } };
+    const match = { _id: batchId, status: { $nin: ['cancelled', 'failed'] } };
+    const set = {
+      $set: { 'files.$.status': to },
+      $unset: { 'files.$.error': 1, 'files.$.failureCounted': 1 },
     };
-    const set = { $set: { 'files.$.status': to }, $unset: { 'files.$.error': 1 } };
 
-    // $inc has no clamp, so the counters must be there to give back. They usually are, but
-    // accountFileFailure's manifest write is unguarded while its $inc is guarded on a non-terminal
-    // batch - a failure recorded onto an already-terminal batch leaves 'failed' with nothing
-    // counted, and decrementing then would push the tally negative.
+    // Whether to give the counters back is a PER-ENTRY fact, not a batch-level one: two entries can
+    // sit at 'failed' with only one of them charged (accountFileFailure's manifest write is
+    // unguarded while its $inc is guarded on a non-terminal batch), and a global failedFiles >= 1
+    // would happily spend the other file's counters - dropping the tally to 0 while that file is
+    // still genuinely failed. `failureCounted` records the $inc that actually landed
+    // (markFailureCounted); absent means pre-dates the flag, so trust the counters as before.
+    const counted = { ...match, files: { $elemMatch: { ...entry, failureCounted: { $ne: false } } } };
+
+    // $inc has no clamp, so the counters must still be there to give back.
     const doc = await this.batchModel.findOneAndUpdate(
-      { ...match, failedFiles: { $gte: 1 }, processingFailedFiles: { $gte: 1 } },
+      { ...counted, failedFiles: { $gte: 1 }, processingFailedFiles: { $gte: 1 } },
       { ...set, $inc: { failedFiles: -1, processingFailedFiles: -1, ...opts.alsoIncrement } },
       { new: true }
     );
     if (doc) return doc.toJSON() as IDataLakeBatchDocument;
 
+    // Nothing was charged for this entry (or the counters are already gone): repair the status
+    // alone rather than pushing a tally that belongs to another file's failure negative.
     const repaired = await this.batchModel.findOneAndUpdate(
-      match,
+      { ...match, files: { $elemMatch: entry } },
       opts.alsoIncrement ? { ...set, $inc: opts.alsoIncrement } : set,
       { new: true }
     );
     return (repaired?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Record on the manifest entry itself whether the failure counters were actually charged for it,
+   * so revertFileFailure can tell whose counters it is handing back (see the attribution note
+   * there). Must stay paired with accountFileFailure's guarded incrementCounters call.
+   */
+  async markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void> {
+    await this.batchModel.updateOne(
+      { _id: batchId, 'files.fabFileId': fabFileId },
+      { $set: { 'files.$.failureCounted': counted } }
+    );
   }
 
   /**

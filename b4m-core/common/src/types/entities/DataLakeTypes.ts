@@ -497,6 +497,12 @@ export interface IDataLakeBatchFile {
   contentHash?: string;
   status: BatchFileStatus;
   error?: string;
+  /**
+   * Whether the failure counters (failedFiles/processingFailedFiles) were actually charged for
+   * THIS entry. Absent on an entry that predates the flag. Read by revertFileFailure, which must
+   * not hand back counters that belong to a different file's failure.
+   */
+  failureCounted?: boolean;
 }
 
 /**
@@ -625,9 +631,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * `to`, drop its error text and give back the failedFiles/processingFailedFiles it took, in a
    * single write. `alsoIncrement` carries what the new status itself owes (landing straight on
    * 'complete' owes a vectorizedFiles). `errorPrefix` is the ownership guard - only the caller
-   * whose own failure text is on the entry may revoke it. Needed because claimFileStatus can
-   * never move an entry back OUT of 'failed', so a file that recovers stays counted failed
-   * forever without this. Returns the post-update batch, or null if nothing matched.
+   * whose own failure text is on the entry may revoke it, and the entry's own `failureCounted`
+   * decides whether the counters are actually given back, so one file's recovery can never spend
+   * another file's failure counters. Needed because claimFileStatus can never move an entry back
+   * OUT of 'failed', so a file that recovers stays counted failed forever without this. Refuses a
+   * 'cancelled'/'failed' batch. Returns the post-update batch, or null if nothing matched.
    */
   revertFileFailure(
     batchId: string,
@@ -641,6 +649,10 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * design: 'cancelled'/'failed' are decisions rather than tallies and stay settled.
    */
   reopenFinalizedWithErrors(batchId: string): Promise<IDataLakeBatchDocument | null>;
+  /** Record on the manifest entry whether the failure counters were actually charged for it - the
+   * per-entry fact revertFileFailure needs to attribute a decrement. Pair with the guarded
+   * incrementCounters call that records the failure. */
+  markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
    * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
