@@ -121,6 +121,16 @@ describe('GET /api/data-lakes/[id]/access', () => {
     expect(body).toContain('"user","u2","Bob","reader","active"');
   });
 
+  it('still streams CSV when format is repeated, rather than 500ing on the array (#2095)', async () => {
+    // `?format=csv&format=csv` arrives as an array. `(format ?? '').toLowerCase()` threw a TypeError
+    // on it - a 500 raised AFTER the manage gate and the whole access aggregation had already run,
+    // so the work was done and then thrown away.
+    const { res, send, setHeader } = makeRes();
+    await call(req({ id: 'lake1', format: ['csv', 'csv'] }), res);
+    expect(setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+    expect(send.mock.calls[0][0] as string).toContain('# Members and grants');
+  });
+
   it('applies the identical manage gate to the CSV path (403 before assembling, no attachment)', async () => {
     h.canManageLake.mockReturnValue(false);
     const { res, send, setHeader } = makeRes();

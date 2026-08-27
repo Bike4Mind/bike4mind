@@ -22,10 +22,18 @@ vi.mock('../../../../dataLakeService/semanticDataLakeSearch', () => ({
   fileScopedSemanticSearch: (...args: unknown[]) => fileScopedSemanticSearchMock(...args),
 }));
 
-// Keep the utils barrel real except the tokenizer (avoids tiktoken init in unit tests).
+// Keep the utils barrel real except the tokenizer (avoids tiktoken init in unit tests). Delegates
+// to a module-level vi.fn rather than returning a fresh stub per call: getSharedTokenizer (index.ts)
+// caches its ITokenizer as a module-level singleton, calling createTokenizer only once for the
+// whole test file, so a per-test override of countTokensMock's behavior must reach that one cached
+// instance to have any effect (#1955 token-budget tests need per-test control over passage cost).
+const countTokensMock = vi.fn().mockResolvedValue(3);
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return { ...actual, createTokenizer: () => ({ countTokens: async () => 3 }) };
+  return {
+    ...actual,
+    createTokenizer: () => ({ countTokens: (...args: unknown[]) => countTokensMock(...args) }),
+  };
 });
 
 const getEffectiveLLMApiKeysMock = vi.fn().mockResolvedValue({ openai: 'k' });
@@ -79,6 +87,7 @@ beforeEach(() => {
   // return type, and these mocks are untyped, so omitting them surfaces only at runtime.
   semanticDataLakeSearchMock.mockClear().mockResolvedValue(emptySemanticResult());
   fileScopedSemanticSearchMock.mockClear().mockResolvedValue(emptySemanticResult());
+  countTokensMock.mockClear().mockResolvedValue(3);
 });
 
 const ADA = 'text-embedding-ada-002';
@@ -2208,24 +2217,33 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
    * ChatCompletionFeatures.ts - unset/unusable/outage all fall back to the coded default, a
    * configured value is honored, and it never overrides an explicit model-supplied max_results.
    */
-  describe('operator-configurable default (kbSearchDefaultResults, #1831)', () => {
+  describe('operator-configurable default (kbSearchDefaultResults, #1831/#1955)', () => {
+    // #1955 moved kbSearchDefaultResults onto resolveSearchBudgets, which reads through
+    // getSettingsByNames (findAll/findBySettingNames + the shared settings cache) instead of a
+    // direct getSettingsValue('kbSearchDefaultResults') call. getSettingsValue is still stubbed
+    // here because resolveEmbeddingContext reads defaultEmbeddingModel/EnableDataLakeVectorSearch
+    // through it directly - only the kb* budgets moved to the row-stub path.
     function contextWithConfiguredDefault(configured: unknown): {
       context: ToolContext;
       getSettingsValue: ReturnType<typeof vi.fn>;
+      findBySettingNames: ReturnType<typeof vi.fn>;
     } {
       const getSettingsValue = vi.fn(async (key: string) =>
         key === 'kbSearchDefaultResults' ? configured : 'text-embedding-ada-002'
       );
+      const rows =
+        configured === undefined ? [] : [{ settingName: 'kbSearchDefaultResults', settingValue: String(configured) }];
+      const findBySettingNames = vi.fn().mockResolvedValue(rows);
       const context = semanticContext({
         db: {
           fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
           fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
-          adminSettings: { getSettingsValue },
+          adminSettings: { getSettingsValue, findAll: findBySettingNames, findBySettingNames },
           apiKeys: {},
           usageEvents: { record: vi.fn() },
         } as never,
       });
-      return { context, getSettingsValue };
+      return { context, getSettingsValue, findBySettingNames };
     }
 
     beforeEach(() => {
@@ -2238,6 +2256,7 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       // Otherwise an earlier test's warn call in this block satisfies a later
       // toHaveBeenCalledWith assertion even when that later case never calls warn itself.
       clampLogger.warn.mockClear();
+      invalidateSettingsCache();
     });
 
     it('serves the configured count when max_results is omitted', async () => {
@@ -2258,41 +2277,48 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
     it('falls back to the coded default and warns when the stored value is unusable', async () => {
       const { context } = contextWithConfiguredDefault('not-a-number');
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      // positiveIntOr's per-key warn (single string argument) - this survives #1955 unchanged
+      // since resolveSearchBudgets still calls positiveIntOr per key, same message shape.
       expect(clampLogger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchDefaultResults'));
     });
 
     it('falls back to the coded default and warns when the settings read throws (outage)', async () => {
-      // Only kbSearchDefaultResults is unavailable - defaultEmbeddingModel still resolves, so the
-      // semantic arm runs and this isolates the outage to the setting under test.
-      const getSettingsValue = vi.fn(async (key: string) =>
-        key === 'kbSearchDefaultResults' ? Promise.reject(new Error('outage')) : 'text-embedding-ada-002'
-      );
+      const findBySettingNames = vi.fn(async () => {
+        throw new Error('outage');
+      });
       const context = semanticContext({
         db: {
           fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
           fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
-          adminSettings: { getSettingsValue },
+          adminSettings: {
+            getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+            findAll: findBySettingNames,
+            findBySettingNames,
+          },
           apiKeys: {},
           usageEvents: { record: vi.fn() },
         } as never,
       });
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
-      // The resolver's own catch block warns with (message, err) - two arguments, matching
-      // resolveForcedRetrievalCharBudget's shape - unlike positiveIntOr's single-argument warn
-      // the "unusable value" test above exercises.
+      // #1955: an outage now degrades ALL scan+kb budgets through one shared resolver, so the
+      // warn names the shared read rather than one setting - resolveSearchBudgets's own outage
+      // message, not the deleted per-setting resolveKbSearchDefaultResults's.
       expect(clampLogger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('kbSearchDefaultResults'),
+        expect.stringContaining('could not read scan-budget settings'),
         expect.anything()
       );
     });
 
-    it('resolves the setting once per completion, not once per search call', async () => {
-      const { context, getSettingsValue } = contextWithConfiguredDefault(7);
+    it('resolves the settings once per completion, not once per search call', async () => {
+      const { context, findBySettingNames } = contextWithConfiguredDefault(7);
       const tool = knowledgeBaseSearchTool.implementation(context, undefined);
       await tool.toolFn({ query: 'first' });
       await tool.toolFn({ query: 'second' });
-      const kbCalls = getSettingsValue.mock.calls.filter(([key]) => key === 'kbSearchDefaultResults');
-      expect(kbCalls.length).toBe(1);
+      // #1955: budgets resolve through the shared settings cache (populated via findAll) as well
+      // as the per-completion budgetsPromise closure, so this proves the OBSERVABLE guarantee -
+      // one DB round-trip per turn, not per search call - rather than pinning which layer caches
+      // it.
+      expect(findBySettingNames.mock.calls.length).toBe(1);
     });
 
     it('clamps a stored default above the tool ceiling', async () => {
@@ -2301,5 +2327,411 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const { context } = contextWithConfiguredDefault(99);
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
     });
+  });
+
+  /** Context wiring a row-stub adminSettings, and optionally a scoped-overlay store, for #1955's
+   *  relevance-threshold and token-budget knobs. Mirrors contextWithConfiguredDefault's shape. */
+  function contextWithKbSettings(
+    settings: Record<string, string>,
+    opts?: {
+      scopedOverrides?: Array<{ scopeLevel: string; scopeId: string; settingName: string; settingValue: string }>;
+    },
+    overrides: Partial<ToolContext> = {}
+  ): ToolContext {
+    const rows = Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+    const findBySettingNames = vi.fn().mockResolvedValue(rows);
+    return semanticContext({
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: {
+          getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+          findAll: findBySettingNames,
+          findBySettingNames,
+        },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+        ...(opts?.scopedOverrides
+          ? {
+              scopedSettings: {
+                findOverrides: vi.fn(async (scopes: Array<{ scopeLevel: string; scopeId: string }>, names: string[]) =>
+                  opts.scopedOverrides!.filter(
+                    o =>
+                      names.includes(o.settingName) &&
+                      scopes.some(s => s.scopeLevel === o.scopeLevel && s.scopeId === o.scopeId)
+                  )
+                ),
+              },
+            }
+          : {}),
+      } as never,
+      ...overrides,
+    });
+  }
+
+  describe('relevance threshold (kbSearchMinRelevancePct, #1955)', () => {
+    beforeEach(() => {
+      invalidateSettingsCache();
+      clampLogger.log.mockClear();
+    });
+
+    it('passes minScore: 0 to both arms when nothing is configured (byte-identical to pre-#1955)', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({ results: hits(3), totalChunksSearched: 3, filesInScope: 3, scan });
+      await runWith({}, contextWithKbSettings({}));
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].minScore).toBe(0);
+
+      fileScopedSemanticSearchMock.mockResolvedValue({
+        results: hits(3),
+        totalChunksSearched: 3,
+        filesInScope: 3,
+        scan,
+      });
+      await runWith({}, contextWithKbSettings({}, undefined, { kbScope: { fileIds: ['f1'] } as never }));
+      expect(fileScopedSemanticSearchMock.mock.calls[0][0].minScore).toBe(0);
+    });
+
+    it('passes the configured relevance threshold as a 0..1 fraction to both arms', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({ results: hits(3), totalChunksSearched: 3, filesInScope: 3, scan });
+      await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '30' }));
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].minScore).toBeCloseTo(0.3);
+
+      fileScopedSemanticSearchMock.mockResolvedValue({
+        results: hits(3),
+        totalChunksSearched: 3,
+        filesInScope: 3,
+        scan,
+      });
+      await runWith(
+        {},
+        contextWithKbSettings({ kbSearchMinRelevancePct: '30' }, undefined, { kbScope: { fileIds: ['f1'] } as never })
+      );
+      expect(fileScopedSemanticSearchMock.mock.calls[0][0].minScore).toBeCloseTo(0.3);
+    });
+
+    it('logs the relevance floor when a threshold empties an otherwise-thin result set, distinguishing it from a thin corpus', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({ results: [], totalChunksSearched: 3, filesInScope: 3, scan });
+      await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(clampLogger.log).toHaveBeenCalledWith(expect.stringContaining('relevance floor 0.50'));
+    });
+
+    it('a relevance floor that empties the semantic arm reaches the MODEL via the keyword-arm fallback, not just a server log', async () => {
+      // The keyword arm is metadata-only, so formatSkipNotice(semantic.skipNotice) is the sole
+      // channel that still reaches the model on this path - a server-only log would leave the
+      // model reading a bare listing as "the knowledge base has nothing on this topic".
+      semanticDataLakeSearchMock.mockResolvedValue({ results: [], totalChunksSearched: 3, filesInScope: 3, scan });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
+      expect(out).toContain('Tell the user the knowledge base may be returning partial results');
+    });
+
+    it('an org-rung override on kbSearchMinRelevancePct reaches minScore end-to-end', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({ results: hits(3), totalChunksSearched: 3, filesInScope: 3, scan });
+      const context = contextWithKbSettings(
+        { kbSearchMinRelevancePct: '10' },
+        {
+          scopedOverrides: [
+            {
+              scopeLevel: 'organization',
+              scopeId: 'org-1',
+              settingName: 'kbSearchMinRelevancePct',
+              settingValue: '40',
+            },
+          ],
+        },
+        { user: { id: 'u1', groups: [], organizationId: 'org-1' } as never }
+      );
+      await runWith({}, context);
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].minScore).toBeCloseTo(0.4);
+    });
+  });
+
+  describe('token-budget bounding (kbSearchResultTokenBudget, #1955)', () => {
+    beforeEach(() => {
+      invalidateSettingsCache();
+      countTokensMock.mockClear().mockResolvedValue(3);
+    });
+
+    it('unset: passage count and topK stay byte-identical to pre-#1955 behavior, with no passage-pricing calls', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(100),
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+      const out = await runWith({}, contextWithKbSettings({}));
+      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(Math.max(KB_SEARCH_DEFAULT_RESULTS_DEFAULT, 6));
+      // countTokensMock is still called ONCE for query-token billing (recordEmbeddingUsage), which
+      // is unrelated to the disabled token budget - assert no ADDITIONAL (passage-pricing) calls.
+      expect(countTokensMock).toHaveBeenCalledTimes(1);
+      expect(countTokensMock).toHaveBeenCalledWith('anything', 'text-embedding-ada-002');
+    });
+
+    it('configured: passage count derives from token math (not kbDefaultResults), and topK opens to the ceiling', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(10),
+        totalChunksSearched: 10,
+        filesInScope: 10,
+        scan,
+      });
+      countTokensMock.mockResolvedValue(80); // 3 fit in 250 (240 <= 250); a 4th would be 320 > 250.
+      const out = await runWith({}, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
+      expect(passageCount(out)).toBe(3);
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(KB_SEARCH_MAX_RESULTS);
+      expect(out).toContain('further relevant passage(s) matched but were not included');
+      // Same discipline as the truncated/partial notices: our own framing must sit OUTSIDE the
+      // untrusted content block, or defangRetrievedContent would indent it as if it were a passage.
+      expect(out.indexOf('further relevant passage(s)')).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+    });
+
+    it('an explicit max_results still narrows the served count even with a budget configured', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(10),
+        totalChunksSearched: 10,
+        filesInScope: 10,
+        scan,
+      });
+      countTokensMock.mockResolvedValue(10); // cheap enough that the budget itself never binds
+      const out = await runWith({ max_results: 3 }, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
+      expect(passageCount(out)).toBe(3);
+      // topK widens off "is ANY adaptive knob on", not "would THIS explicit request still benefit from
+      // it" - a configured relevance floor could still need the wider candidate pool even when the
+      // token budget alone would not, so the widening is deliberately unconditional on max_results.
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(KB_SEARCH_MAX_RESULTS);
+    });
+
+    it('does not emit the budget notice when nothing was actually dropped', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({ results: hits(2), totalChunksSearched: 2, filesInScope: 2, scan });
+      countTokensMock.mockResolvedValue(10);
+      const out = await runWith({}, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
+      expect(passageCount(out)).toBe(2);
+      expect(out).not.toContain('further relevant passage(s) matched but were not included');
+    });
+
+    it('droppedCount is computed against the ceiling the walk actually operated on, not the full retrieved set', async () => {
+      // An explicit max_results narrows the ceiling below the budget-widened topK, so
+      // search.results can hold more candidates than were ever admissible - the budget must only
+      // be blamed for what it itself withheld, not for the narrowing the model's own param caused.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(10),
+        totalChunksSearched: 10,
+        filesInScope: 10,
+        scan,
+      });
+      countTokensMock.mockResolvedValue(200); // 1 fits in 250; a 2nd would be 400 > 250
+      const out = await runWith({ max_results: 3 }, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
+      expect(passageCount(out)).toBe(1);
+      // Budget withheld 2 (of the 3 ever admissible under the explicit max_results=3 ceiling) -
+      // NOT 9 (of the full 10-hit retrieved set the widened topK fetched).
+      expect(out).toContain('2 further relevant passage(s) matched but were not included');
+      expect(out).not.toContain('9 further relevant passage(s)');
+    });
+
+    it('combined: a relevance floor and a token budget both apply to the same search', async () => {
+      // Stands in for a floor-thinned pool (5 of a wider corpus already cleared the threshold) -
+      // the mock can't simulate real minScore filtering, but the tool-level wiring under test
+      // (both knobs passed through and both bounding the same result set) does not depend on that.
+      semanticDataLakeSearchMock.mockResolvedValue({ results: hits(5), totalChunksSearched: 5, filesInScope: 5, scan });
+      countTokensMock.mockResolvedValue(80); // 3 fit in 250; a 4th would be 320 > 250
+      const out = await runWith(
+        {},
+        contextWithKbSettings({ kbSearchMinRelevancePct: '30', kbSearchResultTokenBudget: '250' })
+      );
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].minScore).toBeCloseTo(0.3);
+      expect(passageCount(out)).toBe(3);
+      expect(out).toContain('2 further relevant passage(s) matched but were not included');
+    });
+
+    it('the keyword (metadata-only) fallback keeps kbDefaultResults, not the token-widened ceiling - the two bounds diverge on purpose', async () => {
+      // Force both semantic arms to fall through: no accessible data lake for the unscoped arm.
+      getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+        dataLakeTags: [],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+      });
+      const manyFiles = Array.from({ length: 8 }, (_, i) => ({
+        id: `k${i}`,
+        fileName: `Keyword ${i}.pdf`,
+        tags: [],
+        vectorized: true,
+        mimeType: 'application/pdf',
+      }));
+      const context = contextWithKbSettings(
+        { kbSearchResultTokenBudget: '999999' }, // would open the semantic ceiling to 10 if it ever ran
+        undefined,
+        {
+          db: {
+            fabfiles: { search: vi.fn().mockResolvedValue({ data: manyFiles, total: manyFiles.length }) },
+          } as never,
+        }
+      );
+      const out = await runWith({}, context);
+      const keywordCount = (out.match(/^\d+\. \*\*Keyword /gm) ?? []).length;
+      expect(keywordCount).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+
+    it('a tokenizer failure degrades to the passage-count bound and still returns a non-empty answer', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(10),
+        totalChunksSearched: 10,
+        filesInScope: 10,
+        scan,
+      });
+      countTokensMock.mockRejectedValue(new Error('tiktoken WASM unavailable'));
+      const out = await runWith({}, contextWithKbSettings({ kbSearchResultTokenBudget: '250' }));
+      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+      expect(clampLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('token-budget pricing failed'),
+        expect.anything()
+      );
+    });
+
+    it('citables reflect the BOUNDED set, not the full ranked result set', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(10),
+        totalChunksSearched: 10,
+        filesInScope: 10,
+        scan,
+      });
+      countTokensMock.mockResolvedValue(80);
+      const context = contextWithKbSettings({ kbSearchResultTokenBudget: '250' });
+      await runWith({}, context);
+      const statusUpdate = context.statusUpdate as ReturnType<typeof vi.fn>;
+      const citablesCall = statusUpdate.mock.calls.find(
+        ([payload]) => (payload as { promptMeta?: { citables?: unknown[] } }).promptMeta?.citables
+      );
+      const citables = (citablesCall?.[0] as { promptMeta: { citables: unknown[] } }).promptMeta.citables;
+      expect(citables.length).toBe(3);
+    });
+  });
+});
+
+/**
+ * Personal-corpus sessions search WITHOUT their lake arms. The load-bearing assertions are that the
+ * lake corpus walk does not run, AND that the caller's own library stays reachable - routing this
+ * through kbScope previously made the attached ids the sole authority, which suppressed the lakes
+ * and the rest of the owner's files together.
+ */
+describe('search_knowledge_base personal-corpus scoping', () => {
+  function makePersonalContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      suppressLakeArms: true,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'own1', fileName: 'work-notes.txt', tags: [], vectorized: true, mimeType: 'text/plain' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('searches with NO lake arms and never consults owner-wide lake access', async () => {
+    await run(makePersonalContext());
+
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+    // The unscoped semantic arm still runs: collectScopedFiles admits the caller's own and shared
+    // files via includeShared, so the corpus is real - it simply carries no lake tags.
+    expect(semanticDataLakeSearchMock).toHaveBeenCalled();
+    // `ownFilesOnly` is the half that makes the empty-tag case actually search rather than bail.
+    // Asserting only `dataLakeTags: []` left the wiring untested: deleting the flag at the call site
+    // passed the entire suite, so R3 could regress to its original broken state with CI green.
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      dataLakeTags: [],
+      ownFilesOnly: true,
+    });
+  });
+
+  it('does NOT restrict to the attached files - the rest of the owner library stays searchable', async () => {
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makePersonalContext();
+    await run(ctx);
+
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    const [, , filters, , , opts] = searchMock.mock.calls[0];
+    expect(filters.restrictToFileIds).toBeUndefined();
+    expect(opts.skipOwnership).not.toBe(true);
+    expect(opts.includeShared).toBe(true);
+    expect(opts.dataLakeTags).toEqual([]);
+  });
+
+  it('an agent kbScope still hard-restricts, independent of lake suppression', async () => {
+    await run(makePersonalContext({ kbScope: { fileIds: ['agent1'] } }));
+    expect(fileScopedSemanticSearchMock.mock.calls[0][0]).toMatchObject({ fileIds: ['agent1'] });
+  });
+});
+
+/**
+ * Session lake scoping. narrowLakeAccessToSession is NOT mocked here, so these exercise the real
+ * narrowing. Both arms are asserted: a keyword fallback that re-widened would undo the scope on
+ * exactly the turns semantic search found nothing.
+ */
+describe('search_knowledge_base narrows lake access to the session lake', () => {
+  const twoLakes = {
+    dataLakeTags: ['datalake:mine', 'datalake:other'],
+    dataLakeTagPrefixes: ['mine:', 'other:'],
+    scopedTagPrefixes: [],
+    lakes: [
+      { id: 'l1', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+      { id: 'l2', datalakeTag: 'datalake:other', fileTagPrefix: 'other:', source: 'registry' },
+    ],
+  };
+
+  function makeLakeContext(sessionRetrievalTags?: string[]): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      sessionRetrievalTags,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'd1', fileName: 'Doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+  }
+
+  it('the semantic arm searches only the session lake', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    await run(makeLakeContext(['datalake:mine']));
+
+    expect(semanticDataLakeSearchMock).toHaveBeenCalled();
+    const args = semanticDataLakeSearchMock.mock.calls[0][0];
+    expect(args.dataLakeTags).toEqual(['datalake:mine']);
+    expect(args.dataLakeTagPrefixes).toEqual(['mine:']);
+    expect(args.dataLakeTags).not.toContain('datalake:other');
+  });
+
+  it('the keyword fallback narrows identically, so it cannot re-widen', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeLakeContext(['datalake:mine']);
+    await run(ctx);
+
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    const opts = searchMock.mock.calls[0]?.[5];
+    expect(opts.dataLakeTags).toEqual(['datalake:mine']);
+    expect(opts.dataLakeTags).not.toContain('datalake:other');
+  });
+
+  it('an unscoped session keeps full access, so this cannot narrow an ordinary notebook', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
+    await run(makeLakeContext(undefined));
+
+    const args = semanticDataLakeSearchMock.mock.calls[0][0];
+    expect(args.dataLakeTags).toEqual(['datalake:mine', 'datalake:other']);
   });
 });

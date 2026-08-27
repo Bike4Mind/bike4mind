@@ -66,6 +66,9 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     });
     // Static DATA_LAKES: the opti lake requires the Opti tag.
     expect(res.dataLakeTags.sort()).toEqual(['datalake:opti-knowledge']);
+    // An absent repo is NOT a degraded view: there are no dynamic lakes to have missed, so this
+    // registry-only answer is the whole picture and may be used to prove a tag unreachable.
+    expect(res.lakeViewComplete).toBe(true);
   });
 
   it('resolves the membership set via db.organizations and passes it to the collection query', async () => {
@@ -160,6 +163,9 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(warn).toHaveBeenCalled();
     // Degrades to the static registry rather than throwing - narrowing, never widening.
     expect(res.scopedTagPrefixes).toEqual([]);
+    // The warn is dropped whenever no logger is passed, so the flag is the only durable signal.
+    // Consumers that would otherwise read an absent tag as proof of unreachability key on this.
+    expect(res.lakeViewComplete).toBe(false);
   });
 
   it('propagates a membership-lookup failure instead of degrading to member-of-nothing', async () => {

@@ -480,3 +480,45 @@ describe('useAgentExecutionSubscriptions -- the sweep runs on the transition, no
     expect(reconnectCalls()).toHaveLength(1);
   });
 });
+
+describe('useAgentExecutionSubscriptions -- sweep hygiene', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('a swept run with no sessionId still gets a keyed queue entry (no send-without-enqueue)', () => {
+    // A stray event synthesises an active execution with no sessionId; the sweep
+    // must still enqueue for it, or its keyed response would drain a concurrent
+    // mount-time probe's un-keyed entry and stamp that session onto the wrong run.
+    useAgentExecutionStore.getState().setStatus('exec-orphan', 'running');
+    ws.readyState = 1; // OPEN
+
+    mountSubscriptions();
+
+    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
+      { sessionId: undefined, executionId: 'exec-orphan' },
+    ]);
+  });
+
+  it('a churning dispatcher identity does not re-fire the sweep (the ref guard)', () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
+    ws.readyState = 1; // OPEN
+    const { rerender } = mountSubscriptions();
+    const sent = () =>
+      ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect');
+    expect(sent()).toHaveLength(1);
+
+    // The token refresh case: `sendJsonMessage` gets a new identity every refresh,
+    // so the dispatcher memoised over it churns too. Keyed on readyState alone (via
+    // the ref), the sweep must not re-send.
+    ws.sendJsonMessage = vi.fn();
+    rerender();
+
+    expect(
+      ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect')
+    ).toHaveLength(0);
+  });
+});

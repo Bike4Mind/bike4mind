@@ -34,6 +34,7 @@ const { deletedFeedbackDoc } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: { findOneAndDelete: vi.fn().mockResolvedValue(deletedFeedbackDoc) },
+  FeedbackTextModel: { deleteOne: vi.fn().mockResolvedValue({}) },
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));

@@ -1,6 +1,6 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB, FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { taskScheduleRepository, connectDB } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -15,13 +15,7 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import {
-  buildChunkScanQueuePayload,
-  buildFabFileChunkScanFilter,
-  CHUNK_SCAN_BATCH,
-  CHUNK_SCAN_MIN_AGE_MS,
-  CHUNK_CLAIM_STALE_MS,
-} from './chunkScan';
+import { runChunkRescueSweep } from './chunkRescueSweep';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -138,30 +132,10 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. The selection filter
-  // (buildFabFileChunkScanFilter) skips uploads that never completed so the scan can't churn.
+  // notification is missed, sweep un-chunked files and enqueue them. Selection and enqueue
+  // accounting live in chunkRescueSweep.ts, shared in shape with the hosted daily cron.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
-
-    const now = Date.now();
-    const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
-    const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
-      .select('_id userId')
-      .limit(CHUNK_SCAN_BATCH)
-      .lean();
-
-    // Enqueue the selected ids directly. No producer-side claim: the chunk worker's compare-and-set
-    // (fabFileChunk.ts) is the single point of mutual exclusion, so a file already in flight loses
-    // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
-    // file is not re-sent every pass.
-    const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
-    for (const id of userById.keys()) {
-      await sendToQueue(Resource.fabFileChunkQueue.url, buildChunkScanQueuePayload(id, userById.get(id)!));
-    }
-    if (userById.size > 0) {
-      bootLogger.info(`[fabFileChunkScan] enqueued ${userById.size} un-chunked file(s)`);
-    }
+    await runChunkRescueSweep(bootLogger);
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):

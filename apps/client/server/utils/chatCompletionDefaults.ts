@@ -23,6 +23,7 @@ import {
   rapidReplyMappingRepository,
   rapidReplyResultRepository,
   Session,
+  scopedSettingsRepository,
   sessionRepository,
   skillRepository,
   usageEventRepository,
@@ -178,6 +179,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
+      scopedSettings: scopedSettingsRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

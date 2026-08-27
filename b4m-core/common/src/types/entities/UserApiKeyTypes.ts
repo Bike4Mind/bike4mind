@@ -30,6 +30,20 @@ export enum ApiKeyScope {
   HEARTH_READ = 'hearth:read',
   /** Append Hearth events, create channels, and advance actor cursors. */
   HEARTH_WRITE = 'hearth:write',
+  /**
+   * Read OptiHashi problems, runs, and run artifacts. Deliberately split from
+   * {@link OPTIHASHI_COMPUTE}: a key that only inspects results is structurally
+   * unable to start a billable solve, so an agent-held key can be handed the
+   * read half alone. Like every scope, it authorizes but never entitles - the
+   * OptiHashi entitlement check still runs and can refuse on its own.
+   */
+  OPTIHASHI_READ = 'optihashi:read',
+  /**
+   * Submit OptiHashi compute (solve/decompose/schedule) and cancel a run. This
+   * is the spend half of the OptiHashi pair: it commissions external compute
+   * that costs real money, so it is never implied by {@link OPTIHASHI_READ}.
+   */
+  OPTIHASHI_COMPUTE = 'optihashi:compute',
 }
 
 export enum ApiKeyStatus {

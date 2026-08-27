@@ -38,6 +38,10 @@ function FeedbackModelMock(this: any, data: unknown) {
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: FeedbackModelMock,
+  FeedbackTextModel: {
+    create: vi.fn().mockResolvedValue({}),
+    deleteOne: vi.fn().mockResolvedValue({}),
+  },
   User: { findOne: vi.fn().mockReturnValue({ populate: vi.fn().mockResolvedValue(null) }) },
   adminSettingsRepository: {},
 }));
@@ -105,6 +109,7 @@ const run = () => {
     },
   });
   (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
+  (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 };
 

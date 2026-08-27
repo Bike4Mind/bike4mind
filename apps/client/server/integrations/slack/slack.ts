@@ -213,6 +213,65 @@ export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promi
   }
 }
 
+/**
+ * Announce a NEW paid subscription (first charge only) to Slack.
+ *
+ * Called from the invoice.payment_succeeded subscriber AFTER the subscription and
+ * credits are recorded, so the message means "this actually completed", not "Stripe
+ * said something".
+ *
+ * First charge only: the caller gates on Stripe's `billing_reason ===
+ * 'subscription_create'`. Renewals (`subscription_cycle`) would otherwise post every
+ * month per customer and drown the signal this exists to give.
+ *
+ * No enable flag: an unset webhook URL is the off switch, matching the convention
+ * used for the analytics ids. Add a SettingKey gate if the channel is configured but
+ * the announcements should be pausable separately.
+ *
+ * Never throws. Its caller is an event subscriber whose failure would be retried,
+ * and a retry re-runs credit granting - so a Slack outage must not turn into
+ * double-granted credits.
+ */
+export async function postNewSubscriptionToSlack(payload: {
+  planName: string;
+  amount: number;
+  currency: string;
+  /** Stripe invoice id - the natural dedupe key if this is ever redelivered. */
+  invoiceId: string;
+  email?: string;
+  ownerType?: string;
+  organizationName?: string;
+}): Promise<void> {
+  try {
+    // A paid signup is a business event, not an operational alert -> general channel.
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    const slackWebhookUrl = resolveSlackWebhookUrl('SlackGeneralWebhookUrl', settings);
+    if (!slackWebhookUrl) {
+      // Debug, not error: unconfigured is a valid state (the feature is simply off),
+      // unlike the low-credits alert where a missing URL loses an operational signal.
+      Logger.debug('Skipping new-subscription Slack post: no SlackGeneralWebhookUrl / SlackDefaultWebhookUrl set');
+      return;
+    }
+
+    const formattedAmount = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: payload.currency.toUpperCase(),
+    }).format(payload.amount);
+
+    const lines = [
+      `:tada: *New paid subscription* - ${payload.planName} (${formattedAmount})`,
+      payload.email ? `*Customer:* ${payload.email}` : undefined,
+      payload.organizationName ? `*Organization:* ${payload.organizationName}` : undefined,
+      payload.ownerType ? `*Type:* ${payload.ownerType}` : undefined,
+      `*Invoice:* ${payload.invoiceId}`,
+    ].filter(Boolean);
+
+    await axios.post(slackWebhookUrl, { text: lines.join('\n') }, { headers: { 'Content-Type': 'application/json' } });
+  } catch (error) {
+    Logger.error('Error posting new subscription notification to Slack:', error);
+  }
+}
+
 export async function postLowCreditsNotificationToSlack(
   userId: string,
   username: string,
