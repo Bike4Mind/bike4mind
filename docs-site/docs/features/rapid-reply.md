@@ -34,6 +34,18 @@ This gives you immediate visual feedback that the AI is working on your request,
 
 The feature activates automatically in your chat sessions. No additional configuration is needed — the system selects an appropriate fast model for the acknowledgment based on your primary model.
 
+## Troubleshooting
+
+**No acknowledgment appears, but the full answer arrives normally.** Rapid Reply is best-effort: it
+never blocks or changes your answer. It is skipped silently when the fast model configured for your
+primary model cannot be reached -- usually because that model has been retired and no substitute in
+its fallback chain is reachable with the configured API keys. Your conversation is unaffected; you
+just lose the instant acknowledgment. Ask your administrator to check the Rapid Reply admin tab,
+where an affected model mapping is flagged directly.
+
+**The acknowledgment reads differently than usual.** When the configured fast model is retired, the
+platform substitutes the closest reachable equivalent, which can have a slightly different voice.
+
 ---
 
 ## Related Features
