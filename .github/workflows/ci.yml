@@ -90,6 +90,16 @@ jobs:
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 
+      # Also runs in `help-docs` below, and it has to live in both: this job is gated on
+      # `deployable`, that one on `docs-changed`, and the two shapes miss each other. An
+      # artifacts-only change (the generated JSON under apps/client/app/generated/, which
+      # no docs-path matches) is deployable-but-not-docs, so `help-docs` skips and the
+      # index-vs-embeddings invariant would go unguarded - it is pre-commit otherwise, and
+      # --no-verify walks past that. A docs-only change is the reverse: this job skips.
+      # Cheap enough to run twice on a code+docs PR, and cheaper than a job on every PR.
+      - name: Check help artifacts agree
+        run: sh .husky/check-help-content.sh
+
       # Resolve what "added" means for the two ASCII checks below.
       #
       # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -
