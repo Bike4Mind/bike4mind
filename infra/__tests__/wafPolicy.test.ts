@@ -266,11 +266,19 @@ describe('wafPolicy', () => {
     });
   });
 
-  // The scope-down of a rate limit, whether asserted directly or negated with NotStatement.
-  // any: WAF statements nest differently per type; this reaches the ByteMatch in either shape.
-  function rateLimitByteMatch(rule: WafRule): any {
-    const scopeDown = (rule.Statement as any).RateBasedStatement?.ScopeDownStatement;
-    return scopeDown?.ByteMatchStatement ?? scopeDown?.NotStatement?.Statement?.ByteMatchStatement;
+  // Every path match in a rate limit's scope-down, at any nesting depth. A limit may assert one
+  // prefix directly, or negate a whole set of them with NotStatement wrapping an OrStatement, so
+  // returning a list is what lets one assertion cover both shapes.
+  // any: WAF statements nest differently per type and the tree is not usefully typed here.
+  function rateLimitByteMatches(rule: WafRule): any[] {
+    const found: any[] = [];
+    const walk = (node: any): void => {
+      if (!node || typeof node !== 'object') return;
+      if (node.ByteMatchStatement) found.push(node.ByteMatchStatement);
+      Object.values(node).forEach(walk);
+    };
+    walk((rule.Statement as any).RateBasedStatement?.ScopeDownStatement);
+    return found;
   }
 
   /** Every rate-based rule in a stage that narrows itself with a scope-down. */
@@ -296,27 +304,34 @@ describe('wafPolicy', () => {
         expect(limits.length).toBeGreaterThan(0);
 
         for (const rule of limits) {
-          const byteMatch = rateLimitByteMatch(rule);
-          expect(byteMatch, `${rule.Name} scope-down must match on a path`).toBeDefined();
+          const matches = rateLimitByteMatches(rule);
+          expect(matches.length, `${rule.Name} scope-down must match on a path`).toBeGreaterThan(0);
 
-          const ordered = [...(byteMatch.TextTransformations ?? [])]
-            .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
-            .map((t: { Type: string }) => t.Type);
+          for (const byteMatch of matches) {
+            const ordered = [...(byteMatch.TextTransformations ?? [])]
+              .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
+              .map((t: { Type: string }) => t.Type);
 
-          expect(ordered, `${rule.Name} must decode, then normalize, then lowercase`).toEqual([
-            'URL_DECODE',
-            'NORMALIZE_PATH',
-            'LOWERCASE',
-          ]);
+            expect(ordered, `${rule.Name} must decode, then normalize, then lowercase`).toEqual([
+              'URL_DECODE',
+              'NORMALIZE_PATH',
+              'LOWERCASE',
+            ]);
+          }
         }
       });
 
       it(`anchors every ${stage} rate limit to a URI path prefix`, () => {
         for (const rule of scopedRateLimits(stage)) {
-          const byteMatch = rateLimitByteMatch(rule);
-
-          expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
-          expect(byteMatch.PositionalConstraint, `${rule.Name} must be prefix-anchored`).toBe('STARTS_WITH');
+          for (const byteMatch of rateLimitByteMatches(rule)) {
+            expect(byteMatch.FieldToMatch.UriPath, `${rule.Name} must match on UriPath`).toBeDefined();
+            // EXACTLY is accepted alongside STARTS_WITH because it is strictly tighter: it is what
+            // single files such as /version.json use, so the match cannot creep to /version.jsonx.
+            // What this rejects is CONTAINS and ENDS_WITH, neither anchored at the path root.
+            expect(['STARTS_WITH', 'EXACTLY'], `${rule.Name} must be anchored at the path root`).toContain(
+              byteMatch.PositionalConstraint
+            );
+          }
         }
       });
     }
@@ -334,8 +349,8 @@ describe('wafPolicy', () => {
 
       // any: see above
       const rateBased = (image!.Statement as any).RateBasedStatement;
-      const staticRule = rules.find(r => r.Name === 'static-asset-rate-limit');
-      const staticLimit = (staticRule!.Statement as any).RateBasedStatement.Limit;
+      const assetRule = rules.find(r => r.Name === 'static-asset-rate-limit');
+      const staticLimit = (assetRule!.Statement as any).RateBasedStatement.Limit;
 
       expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/image');
       expect(rateBased.Limit).toBeLessThan(staticLimit);
@@ -357,33 +372,80 @@ describe('wafPolicy', () => {
       const rateBased = (fallback!.Statement as any).RateBasedStatement;
       const apiLimit = (rules.find(r => r.Name === 'api-rate-limit')!.Statement as any).RateBasedStatement.Limit;
 
-      // Excludes only real assets. /_next/static/ is the sole prefix CloudFront routes to the
-      // bucket, so /_next/data, /_next/image and any case variant stay function-backed and must
-      // fall through to this ceiling rather than into the 50000 asset bucket.
-      expect(rateBased.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString).toBe(
-        '/_next/static/'
-      );
+      // Every prefix this rule excludes has to be picked up by the asset backstop instead. Taking
+      // paths out of one ceiling without putting them into another is what image-rate-limit was
+      // created to fix for /_next/image, and the first version of this exclusion repeated that
+      // mistake six times over. Comparing the two sets keeps the partition total rather than
+      // trusting it stays that way. Each prefix was confirmed bucket-served by probing staging
+      // for an AmazonS3 server header rather than inferred from its name.
+      const key = (m: { PositionalConstraint: string; SearchString: string }) =>
+        `${m.PositionalConstraint} ${m.SearchString}`;
+      const assetRule = rules.find(r => r.Name === 'static-asset-rate-limit');
+      const excluded = rateLimitByteMatches(fallback!).map(key).sort();
+      const covered = rateLimitByteMatches(assetRule!).map(key).sort();
+
+      expect(excluded, 'every excluded prefix must land in the asset backstop').toEqual(covered);
+      // Pinned as well, so the set cannot quietly shrink to nothing and still match.
+      expect(excluded).toEqual([
+        'EXACTLY /favicon.ico',
+        'EXACTLY /version.json',
+        'STARTS_WITH /_next/static/',
+        'STARTS_WITH /app-config/',
+        'STARTS_WITH /icons/',
+        'STARTS_WITH /images/',
+        'STARTS_WITH /scripts/',
+      ]);
       // Pinned, not bounded: this number is about to be retuned off a shadow reading, and a
       // greater-than assertion would pass a 10x loosening while failing a tightening.
       expect(rateBased.Limit).toBe(5000);
       expect(rateBased.Limit).toBeGreaterThan(apiLimit);
     });
 
-    // Nothing else pins this. #1893's parity guard deep-equals Statement only, so flipping a
-    // production limit to Count is invisible to every other test in this file. When these do go
-    // to Count for a first week of measurement, this assertion is what makes coming back to
-    // Block something the build demands rather than something someone remembers.
-    it('enforces, rather than counts, every production rate limit', () => {
+    // Production's rate limits are in Count for one measurement week, deliberately, and this
+    // assertion is the thing that makes going back to Block a build requirement rather than
+    // something someone remembers. Nothing else in the file would notice: #1893's parity guard
+    // deep-equals Statement and never the rule object.
+    //
+    // What has to be true before each rule flips back to Block:
+    //   api-rate-limit         a week of CountedRequests on production traffic, not staging's,
+    //                          since the January 0.7% was measured on the old blanket shape
+    //   default-rate-limit     5000 has no measurement under it anywhere yet
+    //   image-rate-limit       1000 likewise, and it is the one expensive non-API path
+    //   ai-route, register     both shadows have read zero on staging for weeks, so a Count week
+    //                          is the first real signal either has produced
+    //   static-asset           a DoS backstop, so the reading matters least of the six
+    //
+    // Flip the rule and this assertion together, per rule, as each reading justifies it.
+    // emergency-ip-block and the managed rule groups are untouched and stay enforcing.
+    it('counts, rather than blocks, every production rate limit during the measurement week', () => {
       const rules: WafRule[] = JSON.parse(
         buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
       );
 
-      // any: see above
+      // any: RateBasedStatement shape is deeply nested and varies by statement type
       const limits = rules.filter(r => (r.Statement as any).RateBasedStatement);
       expect(limits.length).toBeGreaterThan(0);
 
       for (const rule of limits) {
-        expect(rule.Action, `${rule.Name} must Block, not Count`).toEqual({ Block: {} });
+        expect(rule.Action, `${rule.Name} is in Count for the measurement week`).toEqual({ Count: {} });
+      }
+    });
+
+    // The break-glass control and the managed rule groups are not part of the measurement week.
+    // If Count ever spreads to these, production has no enforcing rule left at all.
+    it('keeps the emergency IP block enforcing throughout', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const emergency = rules.find(r => r.Name === 'emergency-ip-block');
+      expect(emergency).toBeDefined();
+      expect(emergency!.Action).toEqual({ Block: {} });
+
+      for (const rule of rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement)) {
+        expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
+          None: {},
+        });
       }
     });
   });
@@ -439,7 +501,9 @@ describe('wafPolicy', () => {
       // Only /_next/static/ is routed to the assets bucket: probed staging, /_next/static/x answers
       // from AmazonS3 while /_next/x and /_NEXT/static/x both come from the default origin. So the
       // carve-out stops here and everything else under /_next/ stays function-backed.
-      expect(rateBased.ScopeDownStatement.ByteMatchStatement.SearchString).toBe('/_next/static/');
+      // Covers every bucket-served prefix, the same set default-rate-limit excludes, so asserting
+      // one prefix here would go stale the moment that set changes. The partition test owns it.
+      expect(rateLimitByteMatches(assetRule!).length).toBeGreaterThan(1);
     });
 
     it('includes the ai-route-rate-limit rule at Priority 4', () => {

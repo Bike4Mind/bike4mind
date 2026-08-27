@@ -113,6 +113,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     return this._bedrockRuntime.send(command, { abortSignal });
   }
 
+  /**
+   * The reasoning blocks the just-translated assistant turn produced, cleared as they are
+   * taken. A backend whose provider signs thinking blocks overrides this so the tool loop
+   * below can replay them onto the assistant turns it rebuilds; providers that sign nothing
+   * keep the default. @see AnthropicBedrockBackend.takeReasoningBlocks
+   */
+  protected takeReasoningBlocks(): unknown[] {
+    return [];
+  }
+
   protected updateClientForModel(model: string): void {
     const requiredRegion = this.getRegionForModel(model);
     this._options.region = requiredRegion;
@@ -488,6 +498,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   }
             );
 
+            // Taken ONCE for the whole round, not once per tool: every assistant message
+            // rebuilt below stands in for the same provider turn, so they all have to replay
+            // that turn's reasoning blocks. Taking inside the loop gives them to the first
+            // tool only and sends the rest as a bare tool_use - the shape that makes the
+            // continuation round come back empty.
+            const roundReasoningBlocks = this.takeReasoningBlocks();
+
             // Inject results in original order
             for (const outcome of outcomes) {
               if (outcome.ok) {
@@ -501,7 +518,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
+                  resultStr,
+                  roundReasoningBlocks
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -517,7 +535,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  observation
+                  observation,
+                  roundReasoningBlocks
                 );
               }
             }
@@ -532,7 +551,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               messages,
               {
                 ...options,
-                thinking: { enabled: false, budget_tokens: 0 },
+                // `thinking` carries forward rather than being forced off: pushToolMessages
+                // replays this turn's signed thinking blocks, and those belong on a request
+                // that declares thinking the same way the round that produced them did.
+                // Matches anthropicBackend, which spreads options unchanged on its recursion.
+                //
                 // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
                 // tool_choice, so this is a no-op today but keeps the recursion uniform.
                 tool_choice: 'auto',
@@ -594,6 +617,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
 
             if (executable.length > 0) {
+              // One take for the whole round - see the streaming path above.
+              const roundReasoningBlocks = this.takeReasoningBlocks();
+
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
               for (const { id, name, parameters } of executable) {
@@ -621,7 +647,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 });
 
                 recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
-                this.pushToolMessages(messages, { id, name, parameters }, result.toString());
+                this.pushToolMessages(messages, { id, name, parameters }, result.toString(), roundReasoningBlocks);
               }
 
               // Add newline separator before recursive call to ensure proper markdown rendering
@@ -635,7 +661,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 messages,
                 {
                   ...options,
-                  thinking: { enabled: false, budget_tokens: 0 },
+                  // `thinking` carries forward, not forced off - see the streaming recursion above.
+                  //
                   // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
                   // tool_choice, so this is a no-op today but keeps the recursion uniform.
                   tool_choice: 'auto',
