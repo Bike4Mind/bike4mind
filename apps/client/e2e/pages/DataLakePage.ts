@@ -273,7 +273,15 @@ export class DataLakePage extends BasePage {
     await this.wizardStartUploadBtn.click();
 
     const success = this.page.locator('[data-sonner-toast]').filter({ hasText: /uploaded successfully|uploaded,/ });
-    const errorToast = this.page.locator('[data-sonner-toast][data-type="error"]');
+    // Filtered on the Retry action, not just data-type=error. An unfiltered wait is satisfied by a
+    // toast ALREADY on screen when the click lands, and the config step auto-fires an advisory
+    // dedup check on arrival whose failure raises its own error toast - which would otherwise fail
+    // a SUCCEEDING upload with "Failed to check for duplicates". The commit paths are the only
+    // ones that attach a Retry action (see dataLakeWizard's shared data-lake-batch-upload-error
+    // toast), so that action is what marks the error as this upload's own.
+    const errorToast = this.page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ has: this.page.getByRole('button', { name: 'Retry' }) });
 
     const outcome = await Promise.race([
       success
@@ -294,6 +302,18 @@ export class DataLakePage extends BasePage {
       throw new Error(`Data lake upload failed: ${message}`);
     }
     await expect(success).toBeVisible({ timeout: TIMEOUTS.POST_ACTION });
+  }
+
+  /**
+   * Follow a shared `/data-lakes?article=` deep link. The PAGE behind that path is gone, but the
+   * route survives as a redirect into a Data-Lake-mode chat (see router.tsx) - keeping those
+   * already-shared links working is the only reason it still exists, so this drives the redirect,
+   * never a page.
+   */
+  async gotoArticle(fabFileId: string) {
+    await this.page.goto(`/data-lakes?article=${fabFileId}`, { waitUntil: 'domcontentloaded' });
+    await this.dismissModals();
+    await expect(this.explorer).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
   /** Close the wizard via the footer Cancel, accepting the unsaved-progress confirm dialog. */
@@ -337,6 +357,12 @@ export class DataLakePage extends BasePage {
 
   /** Archive the lake selected in the manager; the panel falls back to the root overview. */
   async archive(id: string) {
+    // Counted before the click: waitFor({ state: 'visible' }) is satisfied by an error toast that
+    // was already on screen, so nth(errorsBefore) is what makes the wait below mean "this archive
+    // failed" rather than "an error toast exists". The archive error carries no Retry action to
+    // filter on, unlike the upload's.
+    const errorToast = this.page.locator('[data-sonner-toast][data-type="error"]');
+    const errorsBefore = await errorToast.count();
     await this.archiveBtn(id).click();
 
     // Archive cancels in-flight batches and soft-hides files server-side, then invalidates and
@@ -345,22 +371,19 @@ export class DataLakePage extends BasePage {
     // toast so a real archive failure fails fast with the server message instead of timing out on
     // toBeHidden), then assert the row is gone on the larger ACTION budget.
     const success = this.page.locator('[data-sonner-toast]').filter({ hasText: 'Data lake archived' });
-    const errorToast = this.page.locator('[data-sonner-toast][data-type="error"]');
+    const newError = errorToast.nth(errorsBefore);
     const outcome = await Promise.race([
       success
         .waitFor({ state: 'visible', timeout: TIMEOUTS.ACTION })
         .then(() => 'success' as const)
         .catch(() => 'timeout' as const),
-      errorToast
+      newError
         .waitFor({ state: 'visible', timeout: TIMEOUTS.ACTION })
         .then(() => 'error' as const)
         .catch(() => 'timeout' as const),
     ]);
     if (outcome === 'error') {
-      const message = await errorToast
-        .first()
-        .innerText()
-        .catch(() => '(could not read toast)');
+      const message = await newError.innerText().catch(() => '(could not read toast)');
       throw new Error(`Data lake archive failed: ${message}`);
     }
 
@@ -368,23 +391,31 @@ export class DataLakePage extends BasePage {
   }
 
   /**
-   * Expand a lifecycle accordion. An EMPTY section renders as a static row (no chevron, a
-   * trailing "No files") whose click does nothing, so wait for the refetched list to turn it
-   * into a real toggle first - otherwise a just-archived lake races the invalidation and the
-   * click lands on the dead row.
+   * Expand a lifecycle accordion and wait for one lake's row to arrive in it.
+   *
+   * Two distinct hazards, which is why the CARD is the signal and the section is only the gate:
+   * an empty section renders as a plain Box with no onClick (navChrome), so a click lands and
+   * does nothing; and a just-archived lake races the query invalidation, so the section can be
+   * open while its row is still missing. The section's "No files" label settles neither - it
+   * renders only on the `lakes.length === 0` branch, so it is equally absent while the query is
+   * in flight and whenever the section already holds somebody else's lake.
+   *
+   * The role gate is what keeps this to a single click: clicking again to retry would collapse
+   * a section that had already opened.
    */
-  private async expandLifecycleSection(testid: string) {
+  private async expandLifecycleSection(testid: string, card: Locator) {
     const toggle = this.managerNav.getByTestId(testid);
-    await expect(toggle).not.toContainText('No files', { timeout: TIMEOUTS.ACTION });
+    await expect(toggle).toHaveRole('button', { timeout: TIMEOUTS.ACTION });
     await toggle.click();
+    await expect(card).toBeVisible({ timeout: TIMEOUTS.ACTION });
   }
 
-  async expandArchived() {
-    await this.expandLifecycleSection('datalake-archived-section-toggle');
+  async expandArchived(id: string) {
+    await this.expandLifecycleSection('datalake-archived-section-toggle', this.archivedCard(id));
   }
 
-  async expandDeleted() {
-    await this.expandLifecycleSection('datalake-deleted-section-toggle');
+  async expandDeleted(id: string) {
+    await this.expandLifecycleSection('datalake-deleted-section-toggle', this.deletedCard(id));
   }
 
   archivedCard(id: string): Locator {

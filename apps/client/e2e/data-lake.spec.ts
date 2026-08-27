@@ -10,6 +10,7 @@ import {
   apiListDataLakes,
   apiListDataLakesStatus,
   apiLakeLifecycle,
+  apiSeedLakeArticle,
   apiUpdateDataLake,
   apiSetDataLakeVisibility,
   type DataLake,
@@ -214,6 +215,11 @@ test.describe('Data Lake - create wizard', () => {
     await dataLakePage.taxonomyToggle.check();
     await dataLakePage.wizardNext();
     await expect(dataLakePage.configStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    // ...and the opt-in reached the summary, which is what makes it a background job rather than
+    // a checkbox that goes nowhere. This copy is gated on exactly `optionalSteps.taxonomy`, so it
+    // pins the other half of this test's name without having to create a lake.
+    await expect(dataLakePage.configStep).toContainText('run in the background after upload');
   });
 
   test('closing with loaded files prompts the unsaved-progress confirm', async ({ dataLakePage }) => {
@@ -264,7 +270,7 @@ test.describe('Data Lake - lifecycle', () => {
     // Archiving drops the lake, so the panel falls back to the root overview on its own.
     await expect(dataLakePage.managerOverview).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
 
-    await dataLakePage.expandArchived();
+    await dataLakePage.expandArchived(lake.id);
     await expect(dataLakePage.archivedCard(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 
@@ -281,7 +287,7 @@ test.describe('Data Lake - lifecycle', () => {
     expect(await apiLakeLifecycle(request, ownerToken(), lake.id, 'delete')).toBe(200);
 
     await dataLakePage.openManagerFromChat();
-    await dataLakePage.expandDeleted();
+    await dataLakePage.expandDeleted(lake.id);
     await expect(dataLakePage.deletedCard(lake.id)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
 
     await dataLakePage.purge(lake.id);
@@ -560,6 +566,42 @@ test.describe('Data Lake - append (full upload)', () => {
 // Group J - In-chat file actions (articles seeded via API to avoid the upload pipeline)
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - in-chat file actions', () => {
+  // The page's inline reader and its "Ask about this article" hand-off went away with the page:
+  // the chat now sits beside the tree, so the article opens in the viewer and the hand-off is the
+  // row's Attach-to-chat action below. What must NOT break is the shared link itself. `/data-lakes`
+  // is redirect-only now and exists for exactly this, and the redirect is the fragile half - it
+  // flips a Zustand store from `beforeLoad` and is deliberately ungated by EnableDataLakes, so a
+  // change to validateSearch, the store flip or the redirect target breaks every shared link with
+  // nothing else in the repo failing.
+  test('a shared /data-lakes?article= link lands in the in-chat surface with the file open', async ({
+    request,
+    dataLakePage,
+    page,
+  }) => {
+    const lake = await seedLake(request, ownerToken(), {
+      name: `E2E DeepLink ${RUN}`,
+      fileTagPrefix: `e2edeep${RUN}:`,
+    });
+    // Marked per-run so the assertion below cannot match another test's seeded article.
+    const body = `Sinigang is a sour Filipino soup. Deep link marker ${RUN}.`;
+    const fileId = await apiSeedLakeArticle(request, ownerToken(), lake, {
+      fileName: `deep-link-${RUN}.txt`,
+      content: body,
+    });
+
+    await dataLakePage.gotoArticle(fileId);
+
+    // Redirected off the page-less path into a chat...
+    await expect(page).toHaveURL(/\/new/, { timeout: TIMEOUTS.NAVIGATION });
+    // ...with Data Lake mode already on: gotoArticle never clicks the pill, and the pill hides
+    // itself once mode is on, so its absence is the store flip in `beforeLoad` having happened.
+    await expect(dataLakePage.modeToggle).toBeHidden();
+    // ...and the deep-linked file actually open. Assert the file's CONTENT, not its name: the
+    // name also sits in the preview's file-picker combobox, which is hidden here, so a
+    // getByText(name) matches that first and fails on a page that is in fact correct.
+    await expect(page.getByText(body)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+
   test('attaching a lake file on /new mints the grounded session and navigates to it', async ({
     request,
     dataLakePage,
