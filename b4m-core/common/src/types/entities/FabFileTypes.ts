@@ -1017,6 +1017,21 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     }>
   >;
   /**
+   * One page of a lake's live members for the lake-memory extraction producer, ascending by `_id`.
+   * Projects ONLY the three fields that producer reads - it replaced a
+   * `findIdsByDataLakeTag` + `findAllByIds` pair that hydrated every member's `content`, `chunks` and
+   * `vector` before the producer's per-run cap applied, which OOMed the extraction Lambda on any large
+   * lake and re-OOMed on every SQS redelivery.
+   *
+   * `after` is a keyset boundary (ObjectId order is creation order, so a mid-scan upload sorts after it
+   * and waits for a later run); an unparseable value is ignored rather than throwing. Ask for one row
+   * past the cap to tell "the lake continues" from "the slice filled exactly" without a count query.
+   */
+  findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>>;
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */

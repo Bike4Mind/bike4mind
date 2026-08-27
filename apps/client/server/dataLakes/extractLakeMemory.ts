@@ -163,16 +163,6 @@ export async function extractLakeMemoryForBatch(
     }
 
     const extractor = new LakeMemoryExtractionService(logger);
-    const allDocIds = await fabFileRepository.findIdsByDataLakeTag(dataLakeService.lakeMembershipScope(lake));
-    // Drop tombstones BEFORE applying the cap, and sort by id so the continuation cursor is a stable
-    // keyset boundary. `findIdsByDataLakeTag` includes soft-deleted/archived ids (it must, for
-    // lifecycle), so filtering first keeps tombstones from consuming cap slots and pushing live docs out
-    // (a lake of 40 tombstones + 10 live would otherwise fold nothing). FabFile ids are ObjectId hex,
-    // whose lexicographic order is creation order, so a new upload sorts AFTER the cursor and is picked
-    // up on a later run rather than shifting the window under an in-progress scan.
-    const liveDocs = (await fabFileRepository.findAllByIds(allDocIds))
-      .filter(f => !f.deletedAt && !f.archivedAt)
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
     // Bounded continuation: resume AFTER the last document a prior interrupted run attempted (the
     // persisted cursor), not from the cap boundary - the deadline guard can end a run mid-slice, so the
@@ -185,12 +175,32 @@ export async function extractLakeMemoryForBatch(
     // lease exists to prevent. Falls back to the pre-claim value if the re-read fails.
     const claimedLake = await dataLakeRepository.findById(lake.id).catch(() => null);
     const cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
-    const remainingDocs = cursor ? liveDocs.filter(f => f.id > cursor) : liveDocs;
-    const docs = remainingDocs.slice(0, MAX_DOCS_PER_RUN);
-    if (remainingDocs.length > docs.length) {
+
+    // ONE read for the slice this run will actually work on: live members only, ordered by id, bounded
+    // to the cap, and projected down to the three fields used below. Live-only matters beyond the byte
+    // count: its lifecycle sibling `findIdsByDataLakeTag` reports tombstones too (it must - the chunk
+    // sweep needs them), and a tombstone that reaches this loop consumes a cap slot, so a lake of 40
+    // tombstones and 10 live docs would fold nothing. This used to enumerate every id the
+    // lake had ever held and then hydrate all of them UNPROJECTED - `content`, `chunks` and `vector`
+    // included - before slicing to the cap, so a lake of a few thousand ~1MB documents pulled GBs into
+    // the Lambda and was killed before the deadline guard below ever got to yield. Every SQS redelivery
+    // was killed the same way, so the run never progressed and never stopped costing, which is the exact
+    // outcome that guard exists to prevent. Filtering and bounding in the database is what keeps the
+    // guard reachable.
+    //
+    // The extra row past the cap is a PROBE: it distinguishes "the lake continues past this slice" from
+    // "the slice happened to fill exactly", which is what the continuation bookkeeping below needs, and
+    // is cheaper than a second count query. It is dropped from `docs` and never processed.
+    const page = await fabFileRepository.findLakeMemoryExtractionMembers(dataLakeService.lakeMembershipScope(lake), {
+      after: cursor,
+      limit: MAX_DOCS_PER_RUN + 1,
+    });
+    const docs = page.slice(0, MAX_DOCS_PER_RUN);
+    const moreBeyondThisSlice = page.length > docs.length;
+    if (moreBeyondThisSlice) {
       logger.info(
-        `[lakeMemory] lake ${datalakeTag}: ${remainingDocs.length} docs remain this scan, extracting ` +
-          `${docs.length} now; a continuation run will cover the rest`
+        `[lakeMemory] lake ${datalakeTag}: extracting ${docs.length} docs now (the per-run cap) and ` +
+          `more remain; a continuation run will cover the rest`
       );
     }
 
@@ -205,7 +215,7 @@ export async function extractLakeMemoryForBatch(
     let factsWritten = 0;
     let docsAttempted = 0;
     let lastAttemptedId: string | null = null;
-    for (const file of docs) {
+    for (const doc of docs) {
       // Yield rather than get killed. Checked BEFORE starting a doc, since the expensive, unresumable
       // part (the LLM call) is at the start of one. Unlike before, the uncovered docs are NOT lost: the
       // cursor bookkeeping below persists progress and a continuation run picks them up.
@@ -218,9 +228,9 @@ export async function extractLakeMemoryForBatch(
         break;
       }
       docsAttempted++;
-      lastAttemptedId = file.id;
+      lastAttemptedId = doc.fabFileId;
       try {
-        const chunks = await fabFileChunkRepository.findTextsByFabFileId(file.id, { limit: CHUNK_PAGE_LIMIT });
+        const chunks = await fabFileChunkRepository.findTextsByFabFileId(doc.fabFileId, { limit: CHUNK_PAGE_LIMIT });
         const text = chunks
           .map(c => c.text)
           .join('\n')
@@ -230,16 +240,19 @@ export async function extractLakeMemoryForBatch(
         docsProcessed++;
         const facts = await extractor.evaluate({
           apiKeyTable,
-          docTitle: file.fileName,
+          // The id as a last-resort title: the projected row types `fileName` as optional (legacy rows
+          // can lack it, as the sibling lake readers assume), and handing the extractor `undefined`
+          // would put the literal string in the prompt.
+          docTitle: doc.fileName ?? doc.fabFileId,
           docText: text,
           endUserId: ownerUserId,
         });
         if (!facts?.length) continue;
 
-        const tier = evidenceTierForDoc((file.tags ?? []).map(t => t.name));
+        const tier = evidenceTierForDoc((doc.tags ?? []).map(t => t.name));
         for (const { fact } of facts) {
           const embedding = await embed(fact).catch(() => undefined);
-          await session.append({ summary: fact, evidenceTier: tier, sources: [file.id], embedding });
+          await session.append({ summary: fact, evidenceTier: tier, sources: [doc.fabFileId], embedding });
           factsWritten++;
         }
       } catch (err) {
@@ -248,16 +261,19 @@ export async function extractLakeMemoryForBatch(
         // precedes the ledger de-dup), it throws again, and the run DLQs - docs after it never fold. Skip
         // + log so the rest of the lake still folds; a re-scan retries the bad doc.
         logger.warn(
-          `[lakeMemory] doc ${file.id} failed; skipping it this run: ${err instanceof Error ? err.message : String(err)}`
+          `[lakeMemory] doc ${doc.fabFileId} failed; skipping it this run: ${err instanceof Error ? err.message : String(err)}`
         );
       }
     }
 
-    // Continuation bookkeeping. `uncovered` counts docs in THIS scan not yet attempted, whether the run
-    // stopped at the cap or the deadline.
-    const uncovered = remainingDocs.length - docsAttempted;
+    // Continuation bookkeeping. Two independent ways this scan can leave work behind, and both must
+    // count: the deadline stopped the loop partway through the slice, or the probe row showed the lake
+    // continues past it. `unattemptedInSlice` is exact; what lies beyond the slice is only known to be
+    // non-empty, since the read is bounded rather than counted - hence "at least" in the logs.
+    const unattemptedInSlice = docs.length - docsAttempted;
+    const hasUncovered = unattemptedInSlice > 0 || moreBeyondThisSlice;
     let hasMore = false;
-    if (docsAttempted > 0 && uncovered > 0 && lastAttemptedId) {
+    if (docsAttempted > 0 && hasUncovered && lastAttemptedId) {
       try {
         // Resume from what was ATTEMPTED, not the cap: persist the last attempted id as the cursor.
         await dataLakeRepository.setLakeMemoryCursor(lake.id, lastAttemptedId);
@@ -269,12 +285,11 @@ export async function extractLakeMemoryForBatch(
         // from the top; failing loudly here rather than papering over it.
         logger.warn(
           `[lakeMemory] lake ${datalakeTag} could not persist the continuation cursor; the remaining ` +
-            `${uncovered} doc(s) will be picked up on the next finalize: ${
-              err instanceof Error ? err.message : String(err)
-            }`
+            `doc(s) (at least ${unattemptedInSlice + (moreBeyondThisSlice ? 1 : 0)}) will be picked up on ` +
+            `the next finalize: ${err instanceof Error ? err.message : String(err)}`
         );
       }
-    } else if (uncovered === 0) {
+    } else if (!hasUncovered) {
       // Whole scan covered. Clear the cursor so the next batch finalize does a fresh full re-scan, which
       // re-asserts existing facts and keeps their ACT-R salience hot (the idempotency contract above).
       // Best-effort: a failed clear self-heals - the next run resumes from a cursor past the last doc,
@@ -294,8 +309,9 @@ export async function extractLakeMemoryForBatch(
       // uncovered > 0 but nothing attempted: the deadline hit before the first doc. Advancing the cursor
       // or re-enqueuing here would be a no-progress loop, so do neither - the next finalize retries.
       logger.warn(
-        `[lakeMemory] lake ${datalakeTag} made no progress before the deadline; ${uncovered} doc(s) still ` +
-          `uncovered, not enqueuing a continuation (would loop)`
+        `[lakeMemory] lake ${datalakeTag} made no progress before the deadline; at least ` +
+          `${unattemptedInSlice + (moreBeyondThisSlice ? 1 : 0)} doc(s) still uncovered, not enqueuing a ` +
+          `continuation (would loop)`
       );
     }
 
@@ -303,6 +319,10 @@ export async function extractLakeMemoryForBatch(
       dataLakeId: params.dataLakeId,
       docsProcessed,
       factsWritten,
+      // Where the slice started. The read ignores a cursor it cannot parse and pages from the top
+      // instead of throwing the run into the DLQ, so without this in the summary that rewind would be
+      // invisible - it would just look like an unexplained full re-scan.
+      resumedFromCursor: cursor,
       // `docsAttempted < docs.length` is the deadline-stop signal; `hasMore` is whether a continuation
       // was enqueued (cap or deadline left docs uncovered and we made progress).
       docsAttempted,
