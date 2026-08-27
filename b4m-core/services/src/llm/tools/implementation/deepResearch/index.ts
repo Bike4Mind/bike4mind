@@ -306,7 +306,8 @@ export async function performDeepResearch(
     await analysisLlm.complete(
       analysisModel,
       [{ role: 'user', content: prompt }],
-      { temperature: 0.1, stream: false },
+      // abortSignal: see ToolContext.getAbortSignal - Stop must reach nested generation too.
+      { temperature: 0.1, stream: false, abortSignal: context.getAbortSignal?.() },
       async (chunks, info) => {
         result += chunks[0] || '';
         if (info) completionInfo = info;
@@ -365,6 +366,15 @@ export async function performDeepResearch(
     while (state.depth < maxDepth && !state.completed) {
       const timeElapsed = Date.now() - startTime;
       if (timeElapsed >= timeLimit) {
+        break;
+      }
+
+      // Threading the signal into the analysis sub-call above is not enough on its own: every
+      // phase below (searcher calls, content extraction, analysis) is separately billable, and
+      // each one's catch swallows its error, so an aborted run would otherwise keep iterating
+      // to maxDepth doing real work. End the loop instead.
+      if (context.getAbortSignal?.()?.aborted) {
+        log('🔬 Deep Research: aborted by the caller - ending the research loop');
         break;
       }
 

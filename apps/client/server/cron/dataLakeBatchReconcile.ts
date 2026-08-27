@@ -48,14 +48,25 @@ const MAX_PER_RUN = 500;
 const CHUNK_RESCUE_MAX_PER_RUN = 500;
 
 /**
+ * How many rescue sends are in flight at once, matching driveLakeResyncPoll's sweep. The bound is
+ * what makes the per-file catch below safe: sendToQueue builds a fresh SQSClient per call
+ * (server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and every
+ * failed send pays its full attempt budget with no back-off. Run one-at-a-time, a degraded queue
+ * could take CHUNK_RESCUE_MAX_PER_RUN of those past this cron's 10-minute Lambda (infra/cron.ts) -
+ * and a timeout costs the heartbeat and these counts entirely, which is worse than the abandonment
+ * the catch fixes. This sweep also runs LAST, after two other up-to-500 sequential loops.
+ */
+const ENQUEUE_CONCURRENCY = 10;
+
+/**
  * Hosted counterpart of the self-host worker's fabFileChunkScan (worker/main.ts): re-enqueue
  * files that completed upload but were never chunked, so they stop being silently unsearchable
  * (#1420 - e.g. uploads that landed while enableAutoChunk was off, or whose S3 event was lost).
  * The shared filter excludes terminal outcomes (no-text note, chunk error), so a file is swept
  * at most once per cause; a repeat appearance means the queue message itself was lost.
  */
-async function rescueUnchunkedFiles(): Promise<number> {
-  if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return 0;
+async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: number }> {
+  if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return { enqueued: 0, failed: 0 };
 
   const now = Date.now();
   const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
@@ -71,14 +82,45 @@ async function rescueUnchunkedFiles(): Promise<number> {
   // file is not re-sent every pass.
   const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
   const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
-  for (const id of userById.keys()) {
-    await sendToQueue(Resource.fabFileChunkQueue.url, {
-      fabFileId: id,
-      userId: userById.get(id)!,
-      ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
-    });
+
+  // Bounded-concurrency fan-out with a PER-FILE catch. A throttled or unroutable send used to reject
+  // out of a sequential loop and abandon every candidate behind it, and because the caller turns a
+  // throw into 0 it also reported a sweep that had already rescued files as having rescued none.
+  // This sweep is the safety net for files the chunk pipeline lost, so it matters most under exactly
+  // the cluster/queue stress that makes a transient send failure likely - the failure mode was to
+  // give up when it was needed most. See ENQUEUE_CONCURRENCY for why removing that early exit
+  // required bounding the wall-clock too.
+  // Read the queue URL once: an unlinked-resource fault is one config error, not 500 identical logs.
+  const queueUrl = Resource.fabFileChunkQueue.url;
+  let enqueued = 0;
+  let failed = 0;
+  const enqueueOne = async (id: string) => {
+    try {
+      await sendToQueue(queueUrl, {
+        fabFileId: id,
+        userId: userById.get(id)!,
+        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
+      });
+      enqueued++;
+    } catch (e) {
+      failed++;
+      logger.error('[DataLakeBatchReconcile] failed to enqueue un-chunked file for rescue', {
+        fabFileId: id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+  const ids = [...userById.keys()];
+  for (let i = 0; i < ids.length; i += ENQUEUE_CONCURRENCY) {
+    await Promise.all(ids.slice(i, i + ENQUEUE_CONCURRENCY).map(id => enqueueOne(id)));
   }
-  return userById.size;
+
+  // A failed send changes nothing about the file, so it still matches the scan filter and a later run
+  // retries it. Not necessarily the NEXT one: the candidate query has no sort, so while the backlog
+  // exceeds CHUNK_RESCUE_MAX_PER_RUN a given file is only eventually reached. `failed` is a signal
+  // that sends are being lost, not a marker of work dropped for good. It currently reaches operators
+  // through the sweep's log line only - there is no metric or alarm on it yet.
+  return { enqueued, failed };
 }
 
 /**
@@ -170,9 +212,9 @@ export async function handler() {
   });
 
   // Isolated so a rescue failure never blocks the batch reconciliation above.
-  const rescuedChunkFiles = await rescueUnchunkedFiles().catch(err => {
+  const { enqueued: rescuedChunkFiles, failed: rescueFailures } = await rescueUnchunkedFiles().catch(err => {
     logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
-    return 0;
+    return { enqueued: 0, failed: 0 };
   });
   const rescuedVectorizeFiles = await rescueStrandedVectorizeFiles().catch(err => {
     logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue sweep failed: ${err}`);
@@ -189,6 +231,7 @@ export async function handler() {
     taxonomyForced: forcedTaxonomy.length,
     rescuedChunkFiles,
     rescuedVectorizeFiles,
+    rescueFailures,
   });
   return {
     statusCode: 200,
@@ -199,6 +242,7 @@ export async function handler() {
       taxonomyForced: forcedTaxonomy.length,
       rescuedChunkFiles,
       rescuedVectorizeFiles,
+      rescueFailures,
     }),
   };
 }

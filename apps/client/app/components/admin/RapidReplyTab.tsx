@@ -379,6 +379,10 @@ const RapidReplyTab: React.FC = () => {
     experimentalSettings?.find(s => s.settingName === 'EnableRapidReply')?.settingValue === 'true';
   const { data: modelInfos } = useModelInfo();
   const { data: mappings, isLoading: mappingsLoading } = useRapidReplyMappings();
+  // Computed server-side against the same getAvailableModels call the rapid-reply endpoint
+  // makes, rather than re-derived from `modelInfos` here: that list comes from the picker
+  // route, which excludes private models and would report false rot for one.
+  const unavailableRapidModelIds: string[] = mappings?.unavailableRapidModelIds ?? [];
   const { data: metrics } = useRapidReplyMetrics();
   // const { data: prompts } = useRapidReplyPrompts(); // Will be used for prompt management feature
 
@@ -732,9 +736,26 @@ const RapidReplyTab: React.FC = () => {
                                     </Stack>
                                   </td>
                                   <td>
-                                    <Typography level="body-sm" fontWeight="md">
-                                      {mapping.rapidModelId}
-                                    </Typography>
+                                    <Stack spacing={0.5} alignItems="flex-start">
+                                      <Typography level="body-sm" fontWeight="md">
+                                        {mapping.rapidModelId}
+                                      </Typography>
+                                      {/* A rotted row still "works" - the endpoint degrades to a
+                                          fallback model - so without this the only trace is a
+                                          request-log warn nobody reads. */}
+                                      {unavailableRapidModelIds.includes(mapping.rapidModelId) && (
+                                        <Chip
+                                          size="sm"
+                                          color="warning"
+                                          variant="soft"
+                                          startDecorator={<WarningIcon fontSize="small" />}
+                                          data-testid="rapid-reply-mapping-unavailable-chip"
+                                          title="This model is no longer available (sunset or disabled). Rapid replies for it fall back to another fast model - point the mapping at a current model to control which one."
+                                        >
+                                          Model unavailable
+                                        </Chip>
+                                      )}
+                                    </Stack>
                                   </td>
                                   <td>
                                     <Typography level="body-sm" fontWeight="md">

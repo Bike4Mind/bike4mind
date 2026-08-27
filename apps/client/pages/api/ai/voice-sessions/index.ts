@@ -126,9 +126,7 @@ const handler = baseApi().post(async (req, res) => {
         // follow the creator-identity widening an organization lake uses. Request-free variant: this
         // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(
-            req.user!
-          ),
+          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
       }
     );
   }

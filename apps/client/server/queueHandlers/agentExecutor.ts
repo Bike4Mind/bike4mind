@@ -3049,7 +3049,13 @@ async function processSubagentDispatch(
       toolAvailability
     );
 
+    // Created here rather than alongside its watchdog below because the tools built on the next
+    // line need its signal: a tool that runs its own llm.complete (deep_research, blog_draft, ...)
+    // otherwise keeps generating past both abort triggers. See ToolContext.getAbortSignal.
+    const abortController = new AbortController();
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
@@ -3126,7 +3132,6 @@ async function processSubagentDispatch(
     // LIMITATION: 0..5s window where an aborted child keeps running before
     // the next poll tick. Acceptable - the agent stops at the next iteration
     // boundary inside the LLM call.
-    const abortController = new AbortController();
     const abortPoller = setInterval(() => {
       // Cheap synchronous check first - no DB roundtrip if we're already done.
       if (context.getRemainingTimeInMillis() < PARENT_DEADLINE_BUFFER_MS && !abortController.signal.aborted) {

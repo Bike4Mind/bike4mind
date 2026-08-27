@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { shouldTriggerFallback, isOverloadedError, validateFallbackModel, getLlmWithFallback } from './fallback';
+import {
+  shouldTriggerFallback,
+  isOverloadedError,
+  validateFallbackModel,
+  getLlmWithFallback,
+  findFallbackForMissingModel,
+} from './fallback';
 import { AxiosError } from 'axios';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 
@@ -629,5 +635,77 @@ describe('getLlmWithFallback - cross-provider guarantee (preferUntriedBackend)',
       preferUntriedBackend: true,
     });
     expect(result).toBeNull();
+  });
+});
+
+describe('findFallbackForMissingModel', () => {
+  // The position getLlmWithFallback cannot serve: the requested id is not in availableModels
+  // at all, so there is no ModelInfo to pass as its `originalModel`. Reproduces the production
+  // shape - a catalog lifecycle row hid the Bedrock Haiku 4.5 id, and every consumer holding
+  // that id (a rapid-reply mapping row, a session pin) needs a substitute rather than a throw.
+  const haiku45Direct = createModelInfo({ id: 'claude-haiku-4-5-20251001', backend: ModelBackend.Anthropic });
+  const gptMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
+  const sonnet5 = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+  const BEDROCK_HAIKU_45 = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+
+  it('leads with the Anthropic-direct twin for a hidden Bedrock Haiku id', () => {
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [haiku45Direct, gptMini, sonnet5],
+      { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result).not.toBeNull();
+    // Same model family, same latency class - what the optimization depends on.
+    expect(result!.model.id).toBe('claude-haiku-4-5-20251001');
+    expect(result!.attempt).toBe(1);
+  });
+
+  it('advances to the next chain entry when the twin has no key', () => {
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [haiku45Direct, gptMini],
+      { openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result!.model.id).toBe('gpt-4o-mini');
+  });
+
+  it('skips a disabled chain entry rather than returning a model that must never run', () => {
+    // A disabled model is still listed so the picker can grey it out. Selecting one here would
+    // trade a clean substitution for a raw provider error on dispatch.
+    const disabledTwin = { ...haiku45Direct, disabled: true, disabledReason: 'gated' };
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [disabledTwin, gptMini],
+      { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result!.model.id).toBe('gpt-4o-mini');
+  });
+
+  it('returns null when no candidate has a usable key', () => {
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [haiku45Direct, gptMini],
+      { anthropic: 'expired' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('falls back through DEFAULT_FALLBACK_CHAIN for an id with no chain of its own', () => {
+    const result = findFallbackForMissingModel(
+      'some.retired.vendor.model-v1:0',
+      [sonnet5, gptMini],
+      { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result!.model.id).toBe('claude-sonnet-5');
   });
 });

@@ -1,5 +1,5 @@
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
-import { CreditHolderType, type CreditTransactionType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, type CreditTransactionType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@server/utils/errors';
@@ -52,7 +52,12 @@ export interface IUserCreditAdjustment {
   amount?: number;
 }
 
-const handler = baseApi().get(
+// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+// before req.user is set, so a key issued for a narrow integration can't read a
+// user's credit ledger (including Stripe payment intent ids) just because its
+// owner is an admin. JWT/browser admins skip that check and still pass the
+// isAdmin gate below.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   // `userId` is always present - it is the `[userId]` route segment.
   asyncHandler<{}, unknown, unknown, { userId: string; days?: string; types?: string }>(async (req, res) => {
     if (!req.user?.isAdmin) {
