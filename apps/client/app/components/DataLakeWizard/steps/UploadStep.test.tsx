@@ -192,3 +192,103 @@ describe('UploadStep - in-progress failure alert (#1412)', () => {
     expect(screen.queryByText(/failed/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The fileless Drive commit (#1916) shares uploadProgress with the upload path, so this step has to
+ * tell them apart: with zero files every counter is 0, and the file-count screens above would read
+ * that as "nothing uploaded" - a failure - for what is a successful hand-off to Drive ingest.
+ */
+describe('UploadStep - Drive-only commit (#1916)', () => {
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  function renderDriveCommit(status: UploadProgress['status'], overrides: Partial<UploadProgress> = {}) {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: null,
+      allFiles: [],
+      pendingDriveFolder: { driveFolderId: 'FOLDER1', folderName: 'Contracts' },
+      uploadProgress: { ...state.uploadProgress, totalFiles: 0, status, ...overrides },
+    }));
+    return render(
+      <TestWrapper>
+        <UploadStep />
+      </TestWrapper>
+    );
+  }
+
+  it('reports the folder it is about to sync while idle', () => {
+    renderDriveCommit('idle');
+    expect(screen.getByTestId('drive-only-commit-idle')).toHaveTextContent('Contracts');
+  });
+
+  it('reports the create + connect in progress, not an upload', () => {
+    renderDriveCommit('uploading');
+    expect(screen.getByTestId('drive-only-commit-pending')).toBeInTheDocument();
+    expect(screen.queryByText(/Uploading files/)).toBeNull();
+  });
+
+  it('reads success as a created lake with ingest running, not zero files uploaded', () => {
+    renderDriveCommit('complete');
+    const complete = screen.getByTestId('drive-only-commit-complete');
+    expect(complete).toHaveTextContent('Contracts');
+    expect(complete).toHaveTextContent('background');
+    expect(screen.queryByText('Upload Complete!')).toBeNull();
+  });
+
+  // Pins the word spacing, not just the words. Built from JSX text interleaved with {DATA_LAKE}
+  // expressions, this sentence rendered live as "Data Lakeslist" - JSX drops the space between an
+  // expression and the text after it, and toHaveTextContent's substring match never saw it.
+  it('keeps the spaces around the branded nouns in the syncing sentence', () => {
+    renderDriveCommit('complete');
+    const text = screen.getByTestId('drive-only-commit-complete').textContent ?? '';
+    expect(text).toContain('Files appear in this Data Lake as they are pulled in');
+    expect(text).toContain('the Data Lakes list shows');
+    expect(text).not.toMatch(/Data Lakes\S/);
+  });
+
+  it('surfaces the refusal and says the new lake was rolled back', () => {
+    // Matches useCreateLakeFromDrive's rollback: a failed connect archives the lake it created, so
+    // the user has nothing to clean up before retrying. Archive, not erase - the copy must not
+    // promise a hard delete (verified live: the row survives with status 'archived').
+    renderDriveCommit('error', {
+      errorMessage: 'This Drive folder is already connected to another data lake',
+      driveRollback: 'archived',
+    });
+    const failed = screen.getByTestId('drive-only-commit-error');
+    expect(failed).toHaveTextContent('This Drive folder is already connected to another data lake');
+    expect(failed).toHaveTextContent('The new Data Lake was rolled back');
+  });
+
+  // The compound failure: connect refused AND the rollback archive itself failed. The lake is still
+  // live in the user's list, so claiming it was rolled back would send them off looking for nothing.
+  it('does not claim a rollback when the rollback itself failed', () => {
+    renderDriveCommit('error', { errorMessage: 'nope', driveRollback: 'failed' });
+    const failed = screen.getByTestId('drive-only-commit-error');
+    expect(failed).not.toHaveTextContent('The new Data Lake was rolled back');
+    expect(failed).toHaveTextContent('may still be in your Data Lakes list');
+    expect(failed.textContent ?? '').not.toMatch(/Data Lakes\S/);
+  });
+
+  it('claims nothing about a rollback that was never attempted', () => {
+    // No driveRollback means no delete ran (e.g. the create itself was refused), so the screen
+    // states only the refusal.
+    renderDriveCommit('error', { errorMessage: 'nope' });
+    const failed = screen.getByTestId('drive-only-commit-error');
+    expect(failed).not.toHaveTextContent('rolled back');
+    expect(failed).not.toHaveTextContent('may still be in your');
+  });
+
+  it('sends a failed commit back to Configure, where the name and prefix can be fixed', () => {
+    renderDriveCommit('error', { errorMessage: 'nope' });
+    screen.getByText('Back to Configuration').click();
+    expect(useDataLakeWizardStore.getState().step).toBe('config');
+  });
+
+  it('keeps the file-count screens when files were uploaded alongside a Drive folder', () => {
+    // The mixed path is a real upload, so it must keep the upload UI even though a folder is pending.
+    renderDriveCommit('complete', { totalFiles: 2, uploadedFiles: 2, chunkedFiles: 2, vectorizedFiles: 2 });
+    expect(screen.getByText('Upload Complete!')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-only-commit-complete')).toBeNull();
+  });
+});

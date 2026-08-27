@@ -39,6 +39,9 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
   }
 
   const updatedQuest = await questRepository.update({ id: quest.id, ...recovery });
+  if (!updatedQuest) {
+    throw new NotFoundError('Quest not found');
+  }
   return res.json(updatedQuest);
 });
 

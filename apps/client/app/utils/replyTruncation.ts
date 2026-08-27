@@ -2,31 +2,12 @@
 // the output-token ceiling. Lives outside PromptReplies.tsx so the rules are unit-testable
 // without mounting the whole reply renderer.
 
-/**
- * Provider stop reasons that mean the model finished its turn normally (vs being cut off at
- * the output-token ceiling). Values are the normalized vocabulary produced by
- * `@bike4mind/llm-adapters` stopReason.ts - must stay in sync with it.
- */
-export const CLEAN_FINISH_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
+// The stop-reason vocabulary is shared, not restated: it used to be hand-copied here with a
+// "must stay in sync" note, which is a drift hazard the CLI would have tripled.
+import { CLEAN_FINISH_REASONS, DEGENERATE_FINISH_REASON, EARLY_STOP_FINISH_REASONS } from '@bike4mind/common';
 
-/** Normalized stop reason for "generation was cut off at the output-token limit". */
-const TRUNCATED_FINISH_REASON = 'max_tokens';
-
-/**
- * Stop reason for "we aborted the stream because it degenerated into repetition"
- * (`DEGENERATE_STREAM_STOP_REASON` in `@bike4mind/llm-adapters`). Kept distinct
- * from `max_tokens` because the explanation the user needs is different: the
- * ceiling wording ("ask me to continue") is actively wrong advice here, since
- * continuing from a degenerated tail is what tends to reproduce the loop.
- */
-const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
-
-/**
- * Every reason that means "this reply stopped early". Membership - not equality
- * with one literal - is what lets a new early-stop reason surface a notice; an
- * ABSENT reason still surfaces nothing (see the branch comment below).
- */
-const EARLY_STOP_FINISH_REASONS = new Set([TRUNCATED_FINISH_REASON, DEGENERATE_FINISH_REASON]);
+// Re-exported so existing importers of these names from this module keep working.
+export { CLEAN_FINISH_REASONS, DEGENERATE_FINISH_REASON, EARLY_STOP_FINISH_REASONS };
 
 /**
  * Which truncation notice (if any) to render. Exactly one at a time:

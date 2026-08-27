@@ -13,6 +13,7 @@ export const GithubManagerAgent = (config?: ServerAgentConfig): ServerAgentDefin
     description:
       'GitHub operations (issues, pull requests, code search, branches, workflows, reviews). ALWAYS delegate GitHub requests to this agent — you do not have direct access to these tools',
     model: config?.model ?? ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
+    fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1],
     defaultThoroughness: config?.defaultThoroughness ?? 'medium',
     maxIterations: { quick: 3, medium: 8, very_thorough: 15 },
     allowedTools: ['github__*', ...(config?.extraAllowedTools ?? [])],

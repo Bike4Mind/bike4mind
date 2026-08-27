@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { IChatHistoryItemDocument } from '@bike4mind/common';
+import { IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
 
@@ -43,14 +43,27 @@ const handler = baseApi().get(
         query['promptMeta.model.name'] = model;
       }
 
-      // Add search filter
+      // Add search filter. promptMeta.context.systemPrompt/userPrompt are deliberately never
+      // persisted (see ChatCompletionProcess.ts's leak-avoidance comments), so those two arms
+      // can never match - dropped rather than fixed. promptMeta.prompt IS persisted
+      // (ChatCompletionProcess.ts) and covers the same "search the user's prompt text" intent
+      // without that leak risk, so it replaces the dropped userPrompt arm rather than just
+      // deleting the capability. executionTracking.steps is an array of objects, so a bare
+      // $regex against the array never matches - $elemMatch is the correct way to regex a field
+      // inside each element (same pattern already used in fabFileSearchQuery.ts's tag search).
+      // Only `name` is included there: `result`/`error` are declared on the step schema but
+      // nothing in ChatCompletionProcess.ts ever writes them, so a $regex arm against either
+      // would be dead weight, same class of issue as the two dropped context arms.
       if (search) {
         const escapedSearch = escapeRegex(search);
         query.$or = [
           { 'promptMeta.model.name': { $regex: escapedSearch, $options: 'i' } },
-          { 'promptMeta.context.systemPrompt': { $regex: escapedSearch, $options: 'i' } },
-          { 'promptMeta.context.userPrompt': { $regex: escapedSearch, $options: 'i' } },
-          { 'promptMeta.executionTracking.steps': { $regex: escapedSearch, $options: 'i' } },
+          { 'promptMeta.prompt': { $regex: escapedSearch, $options: 'i' } },
+          {
+            'promptMeta.executionTracking.steps': {
+              $elemMatch: { name: { $regex: escapedSearch, $options: 'i' } },
+            },
+          },
         ];
       }
 
@@ -62,11 +75,22 @@ const handler = baseApi().get(
       console.log('Found logs:', logs.length);
 
       // Transform logs to match the expected format
-      const transformedLogs = logs.map((log: IChatHistoryItemDocument) => ({
-        id: log.id,
-        timestamp: log.timestamp.toISOString(),
-        ...log.promptMeta,
-      }));
+      // This route serves logs across ALL users to any admin - redact the same owner-only
+      // fields (functionCalls[].returnValue/.error) every other cross-user read path does,
+      // rather than trusting every future reader of this endpoint to redact it themselves.
+      const transformedLogs = logs.map((log: IChatHistoryItemDocument) => {
+        // log.promptMeta is a hydrated Mongoose subdocument, not a plain object - its declared
+        // type has no toJSON, but the runtime instance has one. redactPromptMetaForViewer's
+        // shallow spread needs a clean plain object; spreading the raw subdocument directly
+        // leaked the unredacted returnValue right back in via its internal _doc/$__ structure.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-only toJSON, not on the declared PromptMeta type
+        const plainPromptMeta = (log.promptMeta as any)?.toJSON?.() ?? log.promptMeta;
+        return {
+          id: log.id,
+          timestamp: log.timestamp.toISOString(),
+          ...redactPromptMetaForViewer(plainPromptMeta, false),
+        };
+      });
 
       console.log('Transformed logs:', transformedLogs.length);
 

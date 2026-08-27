@@ -227,3 +227,68 @@ describe('CacheRepository.findByKey', () => {
     expect(await cacheRepository.findByKey(key)).toBeTruthy();
   });
 });
+
+describe('CacheRepository.tryAddWithinLimitFixedWindow', () => {
+  const windowMs = 60_000;
+
+  it('meters weighted amounts and denies all-or-nothing at the boundary', async () => {
+    const key = `spend:${Date.now()}-1`;
+    const limit = 100;
+
+    expect((await cacheRepository.tryAddWithinLimitFixedWindow(key, 60, limit, windowMs)).success).toBe(true);
+    expect(await cacheRepository.tryAddWithinLimitFixedWindow(key, 40, limit, windowMs)).toMatchObject({
+      success: true,
+      count: 100,
+    });
+
+    // Exactly at the limit now - any further amount is denied and nothing is applied.
+    const denied = await cacheRepository.tryAddWithinLimitFixedWindow(key, 1, limit, windowMs);
+    expect(denied.success).toBe(false);
+    expect(denied.count).toBe(100);
+  });
+
+  it('denies an amount that cannot fit even in a fresh window instead of seeding count > limit', async () => {
+    const key = `spend:${Date.now()}-2`;
+    const denied = await cacheRepository.tryAddWithinLimitFixedWindow(key, 200, 100, windowMs);
+    expect(denied.success).toBe(false);
+    // Nothing was seeded - a subsequent fitting amount opens the window normally.
+    const fits = await cacheRepository.tryAddWithinLimitFixedWindow(key, 100, 100, windowMs);
+    expect(fits).toMatchObject({ success: true, count: 100 });
+  });
+
+  it('treats amount <= 0 as a no-op success that consumes nothing', async () => {
+    const key = `spend:${Date.now()}-3`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 100, 100, windowMs);
+    const noop = await cacheRepository.tryAddWithinLimitFixedWindow(key, 0, 100, windowMs);
+    expect(noop).toMatchObject({ success: true, count: 100 });
+  });
+
+  it('denies on limit <= 0 (the operator STOP value)', async () => {
+    const key = `spend:${Date.now()}-4`;
+    expect((await cacheRepository.tryAddWithinLimitFixedWindow(key, 1, 0, windowMs)).success).toBe(false);
+  });
+
+  it('never jointly breaches the limit under concurrent reservations', async () => {
+    const key = `spend:${Date.now()}-5`;
+    const limit = 100;
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => cacheRepository.tryAddWithinLimitFixedWindow(key, 30, limit, windowMs))
+    );
+    const granted = results.filter(r => r.success).length;
+    expect(granted).toBe(3); // 4 x 30 would breach 100
+
+    const state = await cacheRepository.findByKey(key);
+    expect((state?.result as { count: number }).count).toBe(90);
+  });
+
+  it('keeps tryIncrementWithinLimitFixedWindow behavior as the amount=1 case', async () => {
+    const key = `spend:${Date.now()}-6`;
+    for (let i = 1; i <= 3; i++) {
+      expect(await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 3, windowMs)).toMatchObject({
+        success: true,
+        count: i,
+      });
+    }
+    expect((await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 3, windowMs)).success).toBe(false);
+  });
+});

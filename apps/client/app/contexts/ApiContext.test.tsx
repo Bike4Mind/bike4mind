@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import { ApiProvider, api, resetRefreshPromise, resetRedirectingGuard } from './ApiContext';
+import { ApiProvider, api, resetRedirectingGuard } from './ApiContext';
+import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { useAccessToken } from '../hooks/useAccessToken';
 
 // clearClientCaches touches localStorage/IndexedDB; the redirect chain doesn't depend
@@ -52,7 +53,7 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
   let realAdapter: AxiosAdapter | undefined;
 
   beforeEach(() => {
-    resetRefreshPromise();
+    resetRefreshCoordinator();
     resetRedirectingGuard();
     replace = vi.fn();
     // Replace window.location with a plain stub so the interceptor reads a known,
@@ -128,6 +129,73 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     const res = await api.get('/api/mcp-servers');
 
     expect(res.data).toEqual({ ok: true });
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().accessToken).toBe('new-access');
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
+
+  it('tears down to /login when a refresh succeeds but the retried request STILL 401s (the persistent "reload cannot fix" loop)', async () => {
+    // The server hands back a fresh access token on every refresh, but the access verifier
+    // keeps rejecting it (a server-side token/session mismatch), so the retried request 401s
+    // again. Without teardown the session stays alive and every repeating trigger re-drives
+    // this cycle forever - only a manual re-login breaks it. The interceptor must instead
+    // recognize a post-refresh 401 as unrecoverable and force a clean session_expired redirect.
+    let refreshCalls = 0;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        refreshCalls += 1;
+        return Promise.resolve(ok(config, { accessToken: 'new-access', refreshToken: 'new-refresh' }));
+      }
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/identify')).rejects.toBeTruthy();
+
+    // Refresh fired exactly once (not looped), and the still-401 retry tore the session down.
+    expect(refreshCalls).toBe(1);
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledWith('/login?error=session_expired&redirectTo=%2Fnew');
+    const state = useAccessToken.getState();
+    expect(state.accessToken).toBeNull();
+    expect(state.expired).toBe(true);
+    expect(state.expiredReason).toBe('expired');
+  });
+
+  it('does NOT tear down on a post-refresh 401 that carries a domain error code (e.g. Notion reconnect)', async () => {
+    // A 401 with an application-level `code` PASSED auth and failed for a domain reason (the
+    // fresh token is fine) - tearing the whole session down here would log the user out on a
+    // routine, scoped error. It must reject silently (pre-PR behavior), not redirect.
+    const make401WithCode = (config: InternalAxiosRequestConfig): AxiosError =>
+      new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
+        status: 401,
+        statusText: 'Unauthorized',
+        data: { error: 'Reconnect required', code: 'NOTION_RECONNECT_REQUIRED' },
+        headers: {},
+        config,
+      } as AxiosResponse);
+
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        return Promise.resolve(ok(config, { accessToken: 'new-access', refreshToken: 'new-refresh' }));
+      }
+      return Promise.reject(make401WithCode(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers/notion/pages')).rejects.toBeTruthy();
+
+    // Session preserved: no redirect, token intact, not marked expired.
     expect(replace).not.toHaveBeenCalled();
     expect(useAccessToken.getState().accessToken).toBe('new-access');
     expect(useAccessToken.getState().expired).toBe(false);
@@ -360,5 +428,110 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(res.data).toEqual({ data: [{ id: 's1' }], hasMore: false });
     expect(replace).not.toHaveBeenCalled();
     expect(useAccessToken.getState().accessToken).toBe('new-access');
+  });
+
+  it('collapses concurrent 401s from a burst of parallel requests into one refresh', async () => {
+    let refreshCalls = 0;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        refreshCalls += 1;
+        return Promise.resolve(ok(config, { accessToken: 'new-access' }));
+      }
+      // Every request 401s until it carries the post-refresh token - a burst of 5 all miss
+      // on their first attempt (stale token) and must all queue on the SAME refresh.
+      if (config.headers?.Authorization === 'Bearer new-access') {
+        return Promise.resolve(ok(config, { ok: true }));
+      }
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    const results = await Promise.all([
+      api.get('/api/a'),
+      api.get('/api/b'),
+      api.get('/api/c'),
+      api.get('/api/d'),
+      api.get('/api/e'),
+    ]);
+
+    expect(results.every(r => r.data.ok === true)).toBe(true);
+    expect(refreshCalls).toBe(1);
+  });
+
+  // Was FP-4: the in-flight guard clears as soon as the initiating request's refresh settles, so a
+  // second request whose own 401 lands just after that started its OWN exchange - against a cookie
+  // the first rotation had already consumed. The server rejected it with a 400, which reads as a
+  // revocation, and the user was logged out of a healthy session. Now the interceptor notices the
+  // 401 names a token we have already replaced and simply retries with the current one.
+  it('does not spuriously log the user out when a second, near-simultaneous 401 starts a refresh against an already-rotated cookie', async () => {
+    let refreshCalls = 0;
+    let releaseB: (() => void) | undefined;
+    const bGate = new Promise<void>(resolve => {
+      releaseB = resolve;
+    });
+
+    api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        refreshCalls += 1;
+        if (refreshCalls === 1) {
+          return ok(config, { accessToken: 'rotated' });
+        }
+        // Second refresh attempt: the refresh token was already consumed by the first
+        // request's rotation - the server sees this as an invalid_grant, not a fluke.
+        throw makeStatus(config, 400);
+      }
+      // '/api/y' is "already in flight": held open until request A's refresh has fully landed and
+      // cleared the in-flight guard, then rejects the STALE token it was sent with. Like any real
+      // endpoint it accepts the rotated one, so a retry is all it ever needed.
+      if (config.url === '/api/y') await bGate;
+      if (config.headers?.Authorization === 'Bearer rotated') {
+        return ok(config, { ok: true });
+      }
+      throw make401(config);
+    }) as AxiosAdapter;
+
+    const bPromise = api.get('/api/y');
+    const aResult = await api.get('/api/x');
+
+    expect(aResult.data).toEqual({ ok: true });
+    expect(useAccessToken.getState().accessToken).toBe('rotated');
+
+    releaseB?.();
+    await expect(bPromise).resolves.toMatchObject({ data: { ok: true } });
+
+    // One exchange for the pair: B's 401 named a token already replaced, so it retried rather
+    // than spending a second rotation on a cookie the first one consumed.
+    expect(refreshCalls).toBe(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
+
+  it('tries a token that arrived mid-retry instead of tearing down a session it never attempted', async () => {
+    // The teardown's premise is "we refreshed and the token we minted was STILL rejected". A
+    // sibling tab's broadcast can replace the store between the retry being sent and its 401
+    // arriving, which falsifies that premise: there is a newer token nobody has tried. Evaluating
+    // the teardown first signed the user out while holding a working credential - the exact
+    // failure class this whole change exists to remove.
+    let refreshCalls = 0;
+    api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        refreshCalls += 1;
+        return ok(config, { accessToken: 'B' });
+      }
+      const presented = String(config.headers?.Authorization ?? '');
+      if (presented === 'Bearer C') return ok(config, { ok: true });
+      // The retry carrying B lands just after a sibling broadcast swapped the store to C.
+      if (presented === 'Bearer B') {
+        useAccessToken.getState().setVerifiedSession('C');
+        throw make401(config);
+      }
+      throw make401(config);
+    }) as AxiosAdapter;
+
+    const result = await api.get('/api/notebooks');
+
+    expect(result.data).toEqual({ ok: true });
+    expect(refreshCalls).toBe(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().expired).toBe(false);
   });
 });

@@ -183,6 +183,55 @@ describe('resolveOutputMaxTokens', () => {
     });
   });
 
+  /**
+   * The resolver has to be total. It sizes a credit reservation two call sites downstream,
+   * and `Math.min(n, undefined)` is NaN - which reached a Mongoose `currentCredits` write as
+   * an opaque mid-stream cast error, and slipped past the org per-member cap on the way
+   * (`used + NaN > cap` is false). `ModelInfo.max_tokens` is typed `number`, but that is a
+   * claim about catalog data: a row built anywhere other than toModelInfo can omit it.
+   */
+  describe('an unusable model cap does not poison the budget', () => {
+    const capped = (max_tokens: unknown): ModelInfo => ({ ...legacyModel, max_tokens }) as ModelInfo;
+
+    it('falls back to the fallback when a non-reasoning row declares no cap', () => {
+      expect(resolve(undefined, capped(undefined))).toBe(4096);
+    });
+
+    it('keeps the adaptive floor rather than re-pinning to 4096 when the cap is absent', () => {
+      expect(resolve(undefined, { ...adaptiveModel, max_tokens: undefined } as ModelInfo)).toBe(
+        ADAPTIVE_THINKING_MAX_TOKENS_FLOOR
+      );
+    });
+
+    // An unknown cap must not silently shrink a deliberate choice - that is the same class of
+    // bug as the starvation above, just aimed at the caller instead of the model.
+    it('honors an explicit budget when the cap is absent', () => {
+      expect(resolve(32_000, capped(undefined))).toBe(32_000);
+    });
+
+    it.each([
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+      ['zero', 0],
+      ['negative', -1],
+    ])('treats a %s cap as unknown rather than clamping to it', (_label, value) => {
+      expect(resolve(undefined, capped(value))).toBe(4096);
+    });
+
+    it('never returns a non-finite budget for any of those rows', () => {
+      for (const value of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+        expect(Number.isFinite(resolve(undefined, capped(value)))).toBe(true);
+        expect(Number.isFinite(resolve(8192, capped(value)))).toBe(true);
+      }
+    });
+
+    // A caller can hand us junk too, and it lands on the same money path.
+    it('treats a non-finite requested budget as no preference', () => {
+      expect(resolve(Number.NaN, legacyModel)).toBe(4096);
+      expect(resolve(Number.NaN, adaptiveModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+  });
+
   // Bedrock's Kimi ids reason inside max_tokens but match none of the shape checks:
   // no adaptive thinkingStyle, no reasoning_effort, plain max_tokens. Left on the
   // 4096 fallback, k2-thinking spent the whole budget on its monologue and the reply

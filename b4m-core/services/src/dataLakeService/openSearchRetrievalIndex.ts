@@ -2,7 +2,7 @@ import type { IFabFileChunkRepository } from '@bike4mind/common';
 import type { RetrievalIndexPort, RetrievalIndexRemoval } from './ports';
 
 export interface OpenSearchRetrievalIndexAdapters {
-  db: { fabFileChunks: Pick<IFabFileChunkRepository, 'distinctEmbeddingModelsByFabFileIds'> };
+  db: { fabFileChunks: Pick<IFabFileChunkRepository, 'embeddingModelsByFabFileIds'> };
   searchIndex: { deleteByFabFileIdOrThrow: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
@@ -25,9 +25,14 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
  * resolve which model(s) each file's chunks actually used before it knows which index to hit.
  *
  * `RetrievalIndexRemoval` carries only fabFileIds, not embeddingModel (see ports.ts - the port is
- * intentionally scope-agnostic), so this resolves it per-batch from the chunk store rather than
- * trusting FabFile.embeddingModel, which is only a file's CURRENT model and can miss chunks left
- * behind by an earlier embed (see IFabFileChunk.embeddingModel).
+ * intentionally scope-agnostic), so this resolves it from the chunk store rather than trusting
+ * FabFile.embeddingModel, which is only a file's CURRENT model and can miss chunks left behind by
+ * an earlier embed (see IFabFileChunk.embeddingModel).
+ *
+ * Resolved PER FILE, not per batch. Pairing every file with every model seen across the batch is a
+ * cross-product: a 5,000-file lake spanning two models issues 10,000 requests, half of them against
+ * a model that file never used. Beyond the waste, it also widens any per-index failure from "the
+ * files on that model" to "every file in the removal".
  *
  * Deliberately failure-neutral: uses `deleteByFabFileIdOrThrow`, NOT the fail-open
  * `deleteByFabFileId` the write/delete paths use directly. This port backs both
@@ -43,8 +48,12 @@ export function openSearchRetrievalIndex(adapters: OpenSearchRetrievalIndexAdapt
   return {
     async removeForDataLake({ fabFileIds }: RetrievalIndexRemoval): Promise<void> {
       if (fabFileIds.length === 0) return;
-      const models = await adapters.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds(fabFileIds);
-      const pairs = fabFileIds.flatMap(fabFileId => models.map(model => ({ fabFileId, model })));
+      const modelsByFile = await adapters.db.fabFileChunks.embeddingModelsByFabFileIds(fabFileIds);
+      // A file absent from the map has no model-bearing chunks, so it has nothing in any index -
+      // iterating the map rather than fabFileIds is what drops those no-op requests.
+      const pairs = Object.entries(modelsByFile).flatMap(([fabFileId, models]) =>
+        models.map(model => ({ fabFileId, model }))
+      );
       await inChunks(pairs, REMOVAL_CHUNK_SIZE, ({ fabFileId, model }) =>
         adapters.searchIndex.deleteByFabFileIdOrThrow(fabFileId, model)
       );

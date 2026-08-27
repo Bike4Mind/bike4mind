@@ -7,6 +7,7 @@ import {
   ALLOWED_MIME_PREFIXES,
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
+  normalizePublishTags,
 } from '@bike4mind/common';
 import {
   checkScopePermission,
@@ -120,6 +121,7 @@ const handler = baseApi().post(async (req, res) => {
   const draftPrefix = `drafts/${draftId}/`;
   const expiresAt = new Date(Date.now() + PRESIGNED_URL_EXPIRY_SECONDS * 1000).toISOString();
 
+  const draftTags = normalizePublishTags(body.tags ?? []);
   const draftManifest = {
     draftId,
     createdAt: new Date().toISOString(),
@@ -129,6 +131,11 @@ const handler = baseApi().post(async (req, res) => {
     slug: body.slug,
     title: body.title,
     description: body.description,
+    // Carried on the draft so finalize can write them with the artifact - one publish call sets the
+    // tags, rather than the caller having to follow up with a PATCH. Normalize FIRST and only carry a
+    // non-empty result, so neither `[]` nor `['  ']` travels as "clear the tags"; finalize guards
+    // the same way.
+    tags: draftTags.length ? draftTags : undefined,
     visibility: viz.visibility,
     gatedToGroupId: body.gatedToGroupId,
     commentPolicy: body.commentPolicy ?? 'none',

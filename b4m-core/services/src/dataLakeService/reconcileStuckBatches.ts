@@ -6,6 +6,7 @@ import type {
 } from '@bike4mind/common';
 import { BATCH_NON_TERMINAL_STATUSES } from '@bike4mind/common';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
  * Default stuck-batch timeout: a non-terminal batch idle longer than this is forced terminal.
@@ -28,6 +29,13 @@ interface ReconcileStuckBatchesAdapters {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
+    // Forwarded straight to recomputeLakeStats. This reconciler forces terminal exactly the
+    // batches that never reached `finalizeBatchIfComplete`, so it is the ONLY path that can
+    // activate those lakes - without these the draft -> active flip for an abandoned upload would
+    // be recorded nowhere. Optional, matching LakeConfigAuditAdapters: absent, it records nothing
+    // rather than failing the reconcile.
+    lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
+    adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
   };
   logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
   /**
@@ -91,7 +99,10 @@ export const reconcileStuckBatches = async (
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);
       if (lake) {
-        await recomputeLakeStats(lake, { db });
+        // `logger` forwarded, not just `db`: the audit write inside is best-effort and reports a
+        // failure through `warn`, so without it an audit going dark on this path falls to
+        // console.warn where log-based alerting cannot see it.
+        await recomputeLakeStats(lake, { db, logger });
       }
     } catch (error) {
       logger?.warn(`Reconciler stat recompute failed for batch ${batch.id}:`, error);

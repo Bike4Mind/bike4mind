@@ -1,4 +1,12 @@
-import { adminSettingsRepository, dataLakeRepository, fabFileRepository, withTransaction } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  scopedSettingsRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  organizationRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { User } from '@bike4mind/database/auth';
 import { FabFile } from '@bike4mind/database/content';
 import { fabFilesService } from '@bike4mind/services';
@@ -6,6 +14,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { getFilesStorage } from '@server/utils/storage';
 import type { DataLakeCommandRepo } from './handleDataLakeCommand';
 import type { SlackLakeIngestDeps } from './dataLakeFileIngest';
+import type { SlackLinkIngestDeps } from './dataLakeLinkIngest';
 
 /**
  * Bind the Slack data-lake ingest to the app's real repositories and storage. Kept out of
@@ -19,9 +28,46 @@ import type { SlackLakeIngestDeps } from './dataLakeFileIngest';
 export function buildSlackLakeIngestDeps(args: {
   downloadFile: (url: string, fileName: string) => Promise<Buffer>;
   logger: SlackLakeIngestDeps['logger'];
-}): SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo } {
+}): SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo } {
+  // Shared by the attachment and link paths so a Slack-ingested file lands identically however it
+  // arrived. Declared once rather than per-call: two copies is how the two paths would drift.
+  const db = {
+    adminSettings: adminSettingsRepository,
+    fabFiles: FabFile,
+    users: User,
+    // Required by createFabFile's tag gate (assertCanWriteDataLakeTags +
+    // assertCanWriteStaticRegistryTags), which every caller now passes through. Declared on the
+    // shared adapter so BOTH the attachment and link paths are gated - a link path that quietly
+    // skipped it would be a tag-write hole, since this PR is what gives that path caller-set tags.
+    dataLakes: dataLakeRepository,
+    // Scoped-override store for the admission contract's enforcement lever (#1680); without it the
+    // lever would resolve platform-only and a per-lake enforcement setting would silently do
+    // nothing on the Slack door.
+    scopedSettings: scopedSettingsRepository,
+  };
+  const storage = {
+    upload: async (
+      filepath: string,
+      content: string | Buffer,
+      option?: { ContentType?: string; ContentLength?: number }
+    ) => {
+      await getFilesStorage().upload(content, filepath, {
+        ContentType: option?.ContentType || 'text/plain',
+        ContentLength: option?.ContentLength || Buffer.byteLength(content),
+      });
+      return filepath;
+    },
+    // Thread `type` through rather than hardcoding 'put': createFabFile asks for 'get'
+    // when it stores fileUrl, and a PUT URL parked there costs a wasted round-trip on
+    // first read (get.ts test-fetches and regenerates). Mirrors researchEngineQueue.
+    generateSignedUrl: (filepath: string, expireInSeconds: number, type: 'get' | 'put' = 'get') =>
+      getFilesStorage().getSignedUrl(filepath, type, { expiresIn: expireInSeconds }),
+  };
+
   return {
     dataLakes: dataLakeRepository,
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    adminSettings: adminSettingsRepository,
     fabFiles: fabFileRepository,
     downloadFile: args.downloadFile,
     logger: args.logger,
@@ -43,6 +89,7 @@ export function buildSlackLakeIngestDeps(args: {
         email: actor.email,
         emailVerified: actor.emailVerified,
       }),
+    resolveMembershipOrgIds: userId => organizationRepository.findMembershipOrgIds(userId),
     createLakeFile: (userId, params) =>
       withTransaction(async () =>
         fabFilesService.createFabFile(
@@ -58,30 +105,44 @@ export function buildSlackLakeIngestDeps(args: {
             tags: params.tags,
           },
           {
-            db: {
-              adminSettings: adminSettingsRepository,
-              fabFiles: FabFile,
-              users: User,
-            },
-            storage: {
-              upload: async (filepath, content, option) => {
-                await getFilesStorage().upload(content, filepath, {
-                  ContentType: option?.ContentType || 'text/plain',
-                  ContentLength: option?.ContentLength || Buffer.byteLength(content),
-                });
-                return filepath;
-              },
-              // Thread `type` through rather than hardcoding 'put': createFabFile asks for 'get'
-              // when it stores fileUrl, and a PUT URL parked there costs a wasted round-trip on
-              // first read (get.ts test-fetches and regenerates). Mirrors researchEngineQueue.
-              generateSignedUrl: (filepath: string, expireInSeconds: number, type = 'get') =>
-                getFilesStorage().getSignedUrl(filepath, type, { expiresIn: expireInSeconds }),
-            },
+            db,
+            storage,
             // Server-supplied: the request body can never reach this, so a Slack origin stamp
             // cannot be forged by a caller who merely uploaded a file.
             provenance: params.provenance,
           }
         )
+      ),
+    // LINK ingest. `tags` and `provenance` are adapters on this service too, for the same reason:
+    // both are server-only facts, and a lake meta-tag is permission-bearing.
+    //
+    // NOT wrapped in `withTransaction`, unlike `createLakeFile` above, and the asymmetry is
+    // deliberate: `createFabFileByUrl` performs the outbound HTTP fetch ITSELF, so a transaction
+    // here would hold a Mongo session open across a network round trip. Two concrete failures come
+    // with that - `withTransaction` retries transient errors up to two extra attempts, so an
+    // attacker-chosen URL would be fetched up to three times; and a slow or redirecting URL can
+    // approach MongoDB's default 60s transactionLifetimeLimitSeconds and abort AFTER the bytes were
+    // already transferred. The file path keeps its transaction because the download happens outside
+    // it, so only DB work is inside. (`pages/api/files/createFabFileURL.ts` still has the wrapped
+    // shape; it predates this and is a single hop, so it is left alone rather than widening this
+    // change into the web door.)
+    //
+    // Losing the transaction does cost something, and `deleteCreatedFile` is what pays for it: the
+    // service creates the row and THEN uploads the object, so without a rollback an upload failure
+    // would strand a FabFile whose S3 object never arrives - and since chunk/vectorize is driven by
+    // the ObjectCreated event, that row would be listed but never indexable. This is the
+    // compensating action that a transaction would otherwise have given us for free.
+    createLakeFileFromUrl: (userId, params) =>
+      fabFilesService.createFabFileByUrl(
+        userId,
+        { url: params.url },
+        {
+          db,
+          storage,
+          tags: params.tags,
+          provenance: params.provenance,
+          deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
+        }
       ),
   };
 }

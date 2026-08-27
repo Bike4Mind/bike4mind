@@ -21,6 +21,7 @@ import {
 } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { getCachingAdapter } from '../caching/adapters';
+import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
 
@@ -661,17 +662,28 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       })
       .filter(m => m.content !== '' && (Array.isArray(m.content) ? m.content.length > 0 : true));
 
-    let systemMessage = messages
+    // Kept as discrete blocks, not joined immediately, because a mid-stack cache breakpoint
+    // needs a block boundary to attach to. The joined string below is still what the
+    // non-caching path sends.
+    const systemBlocks = messages
       .filter(m => m.role === 'system' && m.content)
-      .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
-      .join('\n');
+      .map(m => ({ text: systemContentToText(m.content), cache: m.cache === true }))
+      // A block array carrying no text flattens to '', which would otherwise
+      // contribute a blank line to the joined prompt. Trim-checked because
+      // Bedrock rejects a text block with no non-whitespace content (see the
+      // user/assistant sanitizer above, which system messages never reach).
+      .filter(block => block.text.trim() !== '');
 
     // Append model identity so the model correctly identifies itself when asked.
     // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
     // with the same flag in anthropicBackend.
-    if (!options.omitIdentityReminder) {
-      const modelIdentity = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-      systemMessage = systemMessage ? `${systemMessage}\n${modelIdentity}` : modelIdentity;
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+
+    let systemMessage = systemBlocks.map(block => block.text).join('\n');
+    if (identityReminder) {
+      systemMessage = systemMessage ? `${systemMessage}\n${identityReminder}` : identityReminder;
     }
 
     // Check if model ID needs to be transformed
@@ -688,8 +700,40 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       messages: filteredMessages,
     };
 
-    // Only add system message if it's not empty
-    if (systemMessage) {
+    // A `cache: true` system message declares a breakpoint part-way down the stack (the
+    // deployment-wide shareable prefix - see markShareablePrefixBoundary in @bike4mind/services).
+    // Bedrock takes the native Anthropic body, so the array-of-blocks `system` form carries
+    // cache_control here exactly as it does on the direct API; the joined string above collapses
+    // the whole stack into one block, which leaves nowhere to put a breakpoint except the end and
+    // makes the flag a silent no-op. Gated on the same two checks as applyCaching below so a model
+    // that rejects cache_control never sees one. Must stay in sync with anthropicBackend, which
+    // makes the same string-vs-blocks choice.
+    const cacheStrategy = options.cacheStrategy;
+    const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
+    const emitSystemCacheBreakpoint =
+      Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching && systemBlocks.some(block => block.cache);
+
+    if (emitSystemCacheBreakpoint) {
+      // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
+      // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
+      const cacheControl = {
+        type: 'ephemeral' as const,
+        ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
+      };
+      const blocks: Array<Record<string, unknown>> = systemBlocks.map(block =>
+        block.cache
+          ? { type: 'text', text: block.text, cache_control: cacheControl }
+          : { type: 'text', text: block.text }
+      );
+      // Identity reminder stays last and carries no breakpoint of ours: it holds the model id, so
+      // anchoring the shared head on it would bust that prefix on every model change. applyCaching
+      // still marks the final block as the end-of-system breakpoint, exactly as it did when this
+      // was one joined string.
+      if (identityReminder) {
+        blocks.push({ type: 'text', text: identityReminder });
+      }
+      body.system = blocks;
+    } else if (systemMessage) {
       body.system = systemMessage;
     }
 
@@ -772,8 +816,6 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Skip models known to reject `cache_control` (e.g. the OG Claude 3 Haiku / Claude 3.5
     // Sonnet v1 on Bedrock) - sending it causes a Bedrock deserialization error and the
     // assistant turn never resolves.
-    const cacheStrategy = options.cacheStrategy;
-    const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
     if (cacheStrategy?.enableCaching && modelSupportsCaching) {
       const adapter = getCachingAdapter(ModelBackend.Bedrock);
       const cachedBody = adapter.applyCaching(body as Record<string, unknown>, cacheStrategy);
@@ -814,11 +856,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 
-      // Check if the previous message has the same role as the current message
-      if (previousMessage && value.role === previousMessage.role) {
+      // A message carrying a cache breakpoint ENDS its run: merging the next one into it would
+      // drag content past the boundary and the breakpoint would no longer describe the shared
+      // prefix. getPayload emits each surviving system message as its own `system` block, so the
+      // split here is what gives the breakpoint somewhere to land.
+      if (previousMessage && value.role === previousMessage.role && previousMessage.cache !== true) {
         // if the previous message is the same
         // then skip the current message
         if (previousMessage.content === value.content) {
+          if (value.cache === true) previousMessage.cache = true;
           return cur;
 
           // if the previous message content is a text
@@ -847,6 +893,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
               cur[lastIndex].content = contentArray;
             }
           }
+          if (value.cache === true) cur[lastIndex].cache = true;
 
           // if not
           // then add the current message to the previous message content
@@ -872,6 +919,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           if (textContent) {
             previousMessage.content = [...content, { type: 'text', text: textContent }];
           }
+          if (value.cache === true) previousMessage.cache = true;
         }
 
         return cur;

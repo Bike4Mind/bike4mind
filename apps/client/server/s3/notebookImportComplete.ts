@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import { InboxType, isImageServeable } from '@bike4mind/common';
 import { notebookImportService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
@@ -33,11 +34,14 @@ const { NotebookImportService } = notebookImportService;
  * the next caller to read it fails with "Use of expired sessions".
  */
 export const createSessionWrites = () => ({
-  create: async (data: any) => sessionRepository.create(data),
-  find: async (query: any) => sessionRepository.find(query),
+  // The service hands over a plain literal; the repository wants a session document. Casting here
+  // keeps that boundary in one visible place instead of widening either side.
+  create: async (data: Record<string, unknown>) =>
+    sessionRepository.create(data as Parameters<typeof sessionRepository.create>[0]),
+  find: async (query: Record<string, unknown>) => sessionRepository.find(query),
   // `update` identifies the row by `id` and throws without it - `_id` here silently made every
   // overwrite and merge import fail.
-  updateById: async (id: string, data: any) => sessionRepository.update({ id, ...data }),
+  updateById: async (id: string, data: Record<string, unknown>) => sessionRepository.update({ id, ...data }),
 });
 
 /**
@@ -101,35 +105,30 @@ const processNotebookImport = async (
 
       // Create service adapters (matching the export service pattern)
       const adapters = {
-        // No `ctx` here: transactionAsyncLocalStorage already carries the session into these
-        // queries, and assigning it would strand a finished session on the shared repository
-        // instance - the next caller to read it fails with "Use of expired sessions".
         sessionRepository: createSessionWrites(),
         chatHistoryRepository: createChatHistoryWrites(session),
         knowledgeRepository: {
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             // Use model directly with session for transaction support
             const [created] = await FabFile.create([data], { session });
             return created;
           },
         },
         artifactRepository: {
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             // Use model directly with session for transaction support
             const [created] = await Artifact.create([data], { session });
             return created;
           },
         },
         toolRepository: {
-          find: async (query: any) => Tool.find(query).session(session),
-          findById: async (id: string) => Tool.findById(id).session(session),
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             const [created] = await Tool.create([data], { session });
             return created;
           },
         },
         agentRepository: {
-          create: async (data: any) => {
+          create: async (data: Record<string, unknown>) => {
             // Use model directly with session for transaction support
             const [created] = await Agent.create([data], { session });
             return created;
@@ -205,12 +204,29 @@ const processNotebookImport = async (
         skippedItems: result.skippedNotebooks,
       });
 
+      // Attachment failures are warnings, not errors, so they do not abort the import - but the
+      // user still has to hear about them, or a notebook silently arrives without its files.
+      const warnings = result.warnings ?? [];
+      const shown = warnings.slice(0, 5);
+      // Assembled from parts and joined, so an absent clause cannot leave a double space behind.
+      const parts = [
+        `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages.`,
+      ];
+      if (result.skippedNotebooks > 0) {
+        parts.push(`Skipped ${result.skippedNotebooks} duplicate(s).`);
+      }
+      if (warnings.length) {
+        // Neutral wording on purpose: not every entry is a failure. A file that imported with its
+        // type degraded says so itself, and calling that "could not be imported" contradicts the
+        // record. Each message states its own outcome.
+        const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
+        parts.push(`${warnings.length} attachment issue(s): ${shown.join('; ')}${more}.`);
+      }
+
       await inboxRepository.createInboxMessage({
         type: InboxType.COMMON,
-        title: '✅ Notebook Import Successful',
-        message: `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages. ${
-          result.skippedNotebooks > 0 ? `Skipped ${result.skippedNotebooks} duplicate(s).` : ''
-        }`,
+        title: warnings.length ? '⚠️ Notebook Import Completed With Issues' : '✅ Notebook Import Successful',
+        message: parts.join(' '),
         receiverId: userId,
         userId,
       });
@@ -277,8 +293,12 @@ export const dispatch = withContext(async (event, context, logger) => {
       try {
         const metadata = await s3.getMetadata(key);
         fileSize = metadata.size ?? 0;
-      } catch (err: any) {
-        if (err.name === 'NoSuchKey' || err.name === 'NotFound') {
+      } catch (err: unknown) {
+        // Read the name off the value rather than gating on `instanceof Error`: a plain-object or
+        // cross-realm rejection would otherwise turn a duplicate S3 event into a failed import.
+        // Same form as pages/api/app-files/serve/[...key].ts.
+        const name = (err as { name?: string })?.name;
+        if (name === 'NoSuchKey' || name === 'NotFound') {
           logger.info(`File ${key} already processed (doesn't exist), skipping duplicate event`);
           continue;
         }

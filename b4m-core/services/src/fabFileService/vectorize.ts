@@ -1,4 +1,4 @@
-import { IFabFileChunkDocument, IFabFileRepository, IUserDocument } from '@bike4mind/common';
+import { IFabFileChunkRepository, IFabFileRepository, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -13,10 +13,7 @@ type VectorizeFabFileChunkParameters = z.infer<typeof vectorizeFabFileChunkSchem
 interface VectorizeFabFileChunkAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'shareable' | 'update'>;
-    fabFileChunks: {
-      findById: (id: string) => Promise<IFabFileChunkDocument | null>;
-      update: (chunk: IFabFileChunkDocument) => Promise<unknown>;
-    };
+    fabFileChunks: Pick<IFabFileChunkRepository, 'findById' | 'update'>;
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };
@@ -39,25 +36,30 @@ export const vectorizeFabFileChunk = async (
 
   logger.updateMetadata({ mimeType: fabFile.mimeType });
 
-  fabFile.vectorized = true;
-  fabFile.vectorizedChunkCount ||= 0;
-  fabFile.vectorizedChunkCount += 1;
+  const vectorizedChunkCount = (fabFile.vectorizedChunkCount ?? 0) + 1;
+  const justCompleted = vectorizedChunkCount === fabFile.chunkCount;
 
-  if (fabFile.vectorizedChunkCount === fabFile.chunkCount) {
-    fabFile.isVectorizing = false;
-  }
+  // In-memory mutations kept for the return value's sake (see below) - the actual write payload
+  // is built explicitly from locals just below, naming only the fields this function owns. A
+  // whole-object `update(fabFile)` (as this used to do) $sets every key including isChunking/
+  // chunkClaimedAt, the exact clobber #1802 fixed in chunk.ts - see that file's comment for why.
+  fabFile.vectorized = true;
+  fabFile.vectorizedChunkCount = vectorizedChunkCount;
+  if (justCompleted) fabFile.isVectorizing = false;
 
   const fabFileChunk = await db.fabFileChunks.findById(chunkId);
-
   if (!fabFileChunk) throw new NotFoundError(`FabFileChunk ${chunkId} for FabFile ${fabFileId} not found`);
 
-  await db.fabFiles.update(fabFile);
+  await db.fabFiles.update({
+    id: fabFile.id,
+    vectorized: true,
+    vectorizedChunkCount,
+    ...(justCompleted ? { isVectorizing: false } : {}),
+  });
 
   const vector = await llm.createVector(fabFileChunk.text);
 
-  fabFileChunk.vector = vector;
-
-  await db.fabFileChunks.update(fabFileChunk);
+  await db.fabFileChunks.update({ id: fabFileChunk.id, vector });
 
   return fabFile;
 };

@@ -1,10 +1,18 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  fabFileRepository,
+  lakeAccessEventRepository,
+} from '@bike4mind/database';
 import { ComputeSyncDeltaRequestInput } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 const HASH_QUERY_CHUNK = 500;
 
@@ -23,7 +31,7 @@ const handler = baseApi()
 
     // Shared access gate (resolves by slug; not-found-style denial).
     const dataLake = await dataLakeService.assertLakeAccess(data.dataLakeSlug, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     // Find existing files with matching hashes across all data lake files (cross-user
@@ -65,6 +73,27 @@ const handler = baseApi()
       } else {
         skip.push(file.relativePath);
       }
+    }
+
+    // Best-effort audit write - a hash match reveals a file's existence (id + name)
+    // regardless of which policy branch then classifies it, so every matched hash counts here,
+    // not only the skip/update arms. Skipped entirely when nothing matched: a manifest full of
+    // new files touches no existing lake content, so there is nothing to attribute a read to.
+    // Awaited (never rethrows): a per-request serverless route must not race a post-response
+    // environment freeze.
+    if (existingHashMap.size > 0) {
+      await dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+          organizationId: normalizeId(req.user.organizationId),
+          resolvedLakeIds: [dataLake.id],
+          fileIds: [...existingHashMap.values()].map(f => f.fileId),
+          surface: 'data-lake-sync-delta',
+        },
+        req.logger,
+        adminSettingsRepository
+      );
     }
 
     return res.json({
