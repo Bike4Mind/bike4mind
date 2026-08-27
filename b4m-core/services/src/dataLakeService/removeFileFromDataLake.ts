@@ -1,12 +1,19 @@
-import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import { removeFileFromLake } from './lakeMembership';
+import { removeFileFromLake, type MembershipActor } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
-interface RemoveFileFromDataLakeAdapters {
-  db: {
+interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
+  // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
+  // rather than merely spread at the route because the type is the only place the requirement is
+  // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
+  // at the call site is never checked against this shape and dropping it still compiles. The route
+  // test is what actually catches that; this keeps the contract honest for a reader.
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -77,10 +84,10 @@ interface RemoveFileFromDataLakeAdapters {
  * it.
  */
 export const removeFileFromDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: MembershipActor,
   dataLakeId: string,
   fabFileId: string,
-  { db }: RemoveFileFromDataLakeAdapters
+  { db, logger }: RemoveFileFromDataLakeAdapters
 ): Promise<{ success: true; fileCount: number; totalSizeBytes: number }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -89,6 +96,8 @@ export const removeFileFromDataLake = async (
 
   await removeFileFromLake(actor, lake, fabFileId, { db });
 
-  const stats = await recomputeLakeStats(lake, { db });
+  // `actor` threaded so the draft -> active flip a removal can trigger names the person who
+  // removed the file rather than `system`. The rung stays `system` - nothing authorized the flip.
+  const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
   return { success: true, ...stats };
 };

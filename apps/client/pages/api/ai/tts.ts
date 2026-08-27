@@ -1,10 +1,11 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
-  ttsRequestSchema,
+  synthesizeSpeechContract,
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
   VoiceGenerationVendor,
+  type ApiErrorCode,
 } from '@bike4mind/common';
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
@@ -32,10 +33,14 @@ const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
  * Mirrors the multi-vendor image API (aiImageService). The legacy
  * /api/ai/text-to-speech and /api/elabs/text-to-speech routes remain as thin
  * adapters over the same aiVoiceService abstraction.
+ *
+ * Auth mode and request validation come from synthesizeSpeechContract (the same
+ * source of truth that drives the OpenAPI spec), so `req.validated` is the parsed,
+ * typed body.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
   const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
-    ttsRequestSchema.parse(req.body);
+    req.validated;
 
   const vendor = provider ?? DEFAULT_PROVIDER;
 
@@ -66,7 +71,15 @@ const handler = baseApi().post(async (req, res) => {
       await assertTtsCreditsAvailable(userId);
     } catch (error) {
       if (error instanceof InsufficientTtsCreditsError) {
-        return res.status(402).json({ error: error.message, provider: vendor });
+        // 422 + the `insufficient_credits` classifier, same as every other
+        // credit-metered endpoint: one handler covers "out of credits" across the
+        // surface. The classifier is what separates this from a validation 422,
+        // which shares the status but carries no errorCode.
+        return res.status(422).json({
+          error: error.message,
+          provider: vendor,
+          errorCode: 'insufficient_credits' satisfies ApiErrorCode,
+        });
       }
       throw error;
     }
@@ -170,7 +183,9 @@ const handler = baseApi().post(async (req, res) => {
     // errorCode lets the client separate this from a configured-but-rejected
     // key, which needs different advice.
     if (error instanceof TtsProviderNotConfiguredError) {
-      return res.status(401).json({ error: error.message, errorCode: 'provider_not_configured' });
+      return res
+        .status(401)
+        .json({ error: error.message, errorCode: 'provider_not_configured' satisfies ApiErrorCode });
     }
 
     // Pass through client-actionable upstream errors (bad voice/param, invalid
@@ -184,7 +199,7 @@ const handler = baseApi().post(async (req, res) => {
         // Reaching here on a credential rejection means no alternate could
         // cover for it either, so the actionable next step is a different
         // provider (or a fixed key), not a different request.
-        ...(isCredentialRejection(error) ? { errorCode: 'provider_rejected' } : {}),
+        ...(isCredentialRejection(error) ? { errorCode: 'provider_rejected' satisfies ApiErrorCode } : {}),
       });
     }
     req.logger.error('TTS synthesis failed', { error, provider: vendor });

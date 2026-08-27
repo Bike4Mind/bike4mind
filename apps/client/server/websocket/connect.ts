@@ -2,7 +2,7 @@ import { Connection, User } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { isTokenVersionCurrent } from '@bike4mind/services';
+import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
 import { UnauthorizedError } from '@server/utils/errors';
 import { withWebSocketContext } from '@server/websocket/utils';
@@ -61,6 +61,12 @@ async function resolveIdentity(
   let jwtErr: unknown;
   try {
     const decoded = authTokenGenerator.verifyToken(token) as jwt.JwtPayload;
+    // Reject a token minted for a different path (e.g. a refresh token opening a socket).
+    // Missing typ = legacy pre-claim token, accepted (self-expiring grace). Thrown rather
+    // than returned so the API-key fallback below still gets its chance.
+    if (!isTokenTypeAcceptable(decoded?.typ, 'access')) {
+      throw new UnauthorizedError('Invalid token type');
+    }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
     // REST path (auth.ts) so the kill switch still fires for it once the user's

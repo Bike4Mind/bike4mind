@@ -4,6 +4,7 @@ import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
   fabFileRepository,
   fabFileChunkRepository,
 } from '@bike4mind/database';
@@ -12,6 +13,8 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 
@@ -47,14 +50,34 @@ const handler = baseApi()
 
     // Resolve + access-gate the lake first (not-found-style denial). Writes are then
     // further restricted to owner/admin inside each service.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
-    const actor = { userId: ctx.userId, isAdmin: ctx.isAdmin };
+    // Minimal ManageActor: carries administeredOrgIds for the org-manageable rung, and is small
+    // enough to ride in the cleanup queue payload below.
+    const actor = {
+      userId: ctx.userId,
+      isAdmin: ctx.isAdmin,
+      administeredOrgIds: ctx.administeredOrgIds,
+      // Attribute a key-driven lifecycle change to the KEY, with its owner kept findable.
+      // NOT carried into the cleanup queue: `CleanupPayload` (dataLakeCleanup.ts) is a non-strict
+      // z.object, so this field is silently stripped on the way through. Harmless today because
+      // `cleanupDeletedDataLake` records no config event - but anything there that starts recording
+      // one must re-resolve the principal rather than expect it in the payload.
+      auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+    };
 
     switch (action) {
       case 'archive': {
         const result = await dataLakeService.archiveDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            batches: dataLakeBatchRepository,
+            fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
+          },
           retrievalIndex: retrievalIndex(),
           logger: req.logger,
         });
@@ -62,20 +85,38 @@ const handler = baseApi()
       }
       case 'unarchive': {
         const result = await dataLakeService.unarchiveDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
         });
         return res.json(result);
       }
       case 'restore': {
         // Recover a soft-deleted (phase-1) lake back to active.
         const result = await dataLakeService.restoreDeletedDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
         });
         return res.json(result);
       }
       case 'delete': {
         const result = await dataLakeService.deleteDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            batches: dataLakeBatchRepository,
+            fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
+          },
           retrievalIndex: retrievalIndex(),
           // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
           logger: req.logger,
@@ -85,16 +126,53 @@ const handler = baseApi()
       case 'cleanup': {
         // Phase-2 hard delete can fan out over every file/chunk in the lake, which blows the
         // request Lambda's timeout on a large lake. Offload to the background consumer instead.
-        // Mirror the service's owner/admin + soft-deleted guards synchronously so a non-owner or
+        // Mirror the service's manage + soft-deleted guards synchronously so a non-manager or
         // a not-deleted request gets an immediate 4xx rather than a 202 for a message the consumer
         // would just drop (the consumer re-checks the same guards, so a stale message is still safe).
-        if (!actor.isAdmin && lake.createdByUserId !== actor.userId) {
-          return res.status(403).json({ error: 'Only the creator can clean up this data lake' });
+        const grants = await dataLakeService.loadActiveLakeGrants(lake, {
+          db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        });
+        if (!dataLakeService.canManageLake(lake, actor, grants)) {
+          return res.status(403).json({ error: 'You do not have permission to clean up this data lake' });
+        }
+        // 'purging' gets its own refusal ahead of the generic one, for the same reason restore does:
+        // the generic message reads as a transient state problem when this one is permanent - the
+        // purge is already accepted and its sweep is irreversible (#1744).
+        if (lake.status === 'purging') {
+          return res.status(400).json({ error: 'This data lake is already being permanently deleted' });
         }
         if (lake.status !== 'deleted') {
           return res.status(400).json({ error: 'Data lake must be soft-deleted before cleanup' });
         }
-        await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
+        // Claim 'deleted' -> 'purging' BEFORE enqueueing, never after: the transition is what takes
+        // the lake out of the deleted-lakes list and refuses Restore on it, so enqueueing first
+        // would leave the accept window this fixes wide open (#1744) - the sweep can finish before
+        // the status ever moves. Throws on a lost claim, which is the correct refusal: the checks
+        // above ran against a document read moments earlier, and a restore or a second purge can
+        // land in that gap.
+        await dataLakeService.acceptDataLakePurge(actor, lake.id, {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        });
+        try {
+          await sendToQueue(getSourceQueueUrl('dataLakeCleanupQueue'), { dataLakeId: lake.id, actor });
+        } catch (err) {
+          // A claim that lands with no message behind it is the one unrecoverable outcome here: no
+          // list shows a 'purging' lake, restore and delete both refuse it, and there is no queued
+          // message to alarm on or replay - so without this release it would need a manual DB edit.
+          // Releasing puts it back in the deleted list for the owner to retry, and the 5xx tells
+          // them the purge did not take.
+          //
+          // Safe even if the message DID land and only the ack was lost: the sweep's guard accepts
+          // 'deleted' as well as 'purging', so a delivery that survives still completes the purge
+          // the user asked for.
+          await dataLakeRepository.releasePurgingToDeleted(lake.id);
+          throw err;
+        }
         return res.status(202).json({ success: true, queued: true });
       }
     }

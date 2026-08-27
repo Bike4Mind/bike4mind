@@ -13,8 +13,7 @@ import { useCopySessionMarkdown } from './useCopySessionMarkdown';
 interface ChatPanelControlsProps {
   /** data-testid prefix, e.g. 'docked-chat' or 'floating-chat' */
   testIdPrefix: string;
-  /** Current docked layout; highlights the matching dock button and is recorded
-   *  as previousLayout when switching to float. Omit in the floating window. */
+  /** Current docked layout; highlights the matching dock button. Omit in the floating window. */
   activeLayout?: 'dockRight' | 'dockBottom';
   /** Render the "Float" button (docked panels only). */
   showFloat?: boolean;
@@ -48,7 +47,7 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({ testIdPrefix, act
             size="sm"
             variant="plain"
             color="neutral"
-            onClick={() => setSessionLayout({ layout: 'floatingChat', previousLayout: activeLayout })}
+            onClick={() => setSessionLayout({ layout: 'floatingChat' })}
             data-testid={`${testIdPrefix}-float`}
             sx={{ '--IconButton-size': '28px' }}
           >

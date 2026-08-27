@@ -8,12 +8,15 @@ vi.mock('@server/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   cleanup: vi.fn(),
+  releasePurgingToDeleted: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   dataLakeBatchRepository: {},
+  dataLakeAccessGrantRepository: {},
+  dataLakeProposalRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -32,14 +35,20 @@ const payload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } }
 describe('dataLakeCleanup consumer', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('parses the message and runs the cleanup service with the four repos + logger', async () => {
+  it('parses the message and runs the cleanup service with the lake repos + logger', async () => {
     h.cleanup.mockResolvedValue(undefined);
     await dispatch(makeEvent(payload), {} as never, logger);
     expect(h.cleanup).toHaveBeenCalledWith(
       { userId: 'u1', isAdmin: false },
       'lake1',
       expect.objectContaining({
-        db: expect.objectContaining({ dataLakes: expect.anything(), fabFileChunks: expect.anything() }),
+        db: expect.objectContaining({
+          dataLakes: expect.anything(),
+          fabFileChunks: expect.anything(),
+          // The acquisition queue is swept alongside the grants (#1671) - a proposal outliving its
+          // lake is unreviewable, so an unwired repo here would leave orphans behind every purge.
+          dataLakeProposals: expect.anything(),
+        }),
         logger,
       })
     );
@@ -71,10 +80,26 @@ describe('dataLakeCleanup consumer', () => {
     );
   });
 
-  it('swallows a BadRequestError (permanently-invalid message) instead of retrying to the DLQ', async () => {
+  it('releases an accepted purge its own guard refused, and says so at ERROR (#1744)', async () => {
+    // Was a silent WARN, which is precisely how an accepted, irreversible purge could vanish with no
+    // user-visible trace. The release puts the lake back in the deleted list where its owner can
+    // see it and retry, so the purge either completes or comes back - never neither.
     h.cleanup.mockRejectedValue(new BadRequestError('must be soft-deleted'));
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('releasing the accepted purge'),
+      expect.objectContaining({ dataLakeId: 'lake1' })
+    );
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+  });
+
+  it('does NOT release on an unexpected error, since that sweep may be half-done', async () => {
+    // The release advertises the lake as restorable. Only a guard failure is known to have
+    // destroyed nothing; a DB/network failure can land mid-sweep, so that path retries to the DLQ
+    // and is recovered by admin replay instead.
+    h.cleanup.mockRejectedValue(new Error('mongo down'));
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('mongo down');
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
   });
 
   it('rethrows an unexpected error so SQS retries then DLQs', async () => {
@@ -87,5 +112,7 @@ describe('dataLakeCleanup consumer', () => {
     await expect(dispatch(makeEvent({ actor: { userId: 'u1' } }), {} as never, logger)).resolves.toBeUndefined();
     expect(h.cleanup).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
+    // Parsing the lake id is what failed, so there is no purge to release.
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
   });
 });

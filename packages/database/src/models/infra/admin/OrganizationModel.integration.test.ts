@@ -47,6 +47,29 @@ describe('OrganizationModel - org-groups fields', () => {
   });
 });
 
+describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data lakes)', () => {
+  it('returns orgs where the user is billing owner, manager, OR an appointed admin', async () => {
+    const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
+    const managed = await Organization.create({ name: 'Managed', userId: 'other', managerId: 'u1', personal: false });
+    const appointed = await Organization.create({
+      name: 'Appointed',
+      userId: 'other',
+      adminUserIds: ['u1'],
+      personal: false,
+    });
+    // A plain member (only on the users ACL, no admin role) is NOT administered.
+    await Organization.create({ name: 'MemberOnly', userId: 'other', users: [{ userId: 'u1' }], personal: false });
+
+    const ids = (await organizationRepository.findIdsWithAdminRights('u1')).sort();
+    expect(ids).toEqual([owned.id, managed.id, appointed.id].sort());
+  });
+
+  it('returns an empty list for a user who administers nothing', async () => {
+    await Organization.create({ name: 'Someone else', userId: 'other', personal: false });
+    expect(await organizationRepository.findIdsWithAdminRights('nobody')).toEqual([]);
+  });
+});
+
 describe('OrganizationModel - ensureUserDetails (#1460)', () => {
   it('seeds a zero-usage row for a member that has none', async () => {
     const org = await Organization.create({ name: 'Acme', userId: 'owner-1', personal: false, userDetails: [] });

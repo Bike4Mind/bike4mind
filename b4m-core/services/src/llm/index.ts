@@ -20,8 +20,9 @@ export {
   type IntentPromptContext,
 } from './intentClassifier.prompt';
 export * from './sharedToolBuilder';
+export * from './systemPromptDisclosure';
 export * from './toolAvailability';
-export { ServerAgentStore } from './agents/ServerAgentStore';
+export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
 export {
   ServerSubagentOrchestrator,

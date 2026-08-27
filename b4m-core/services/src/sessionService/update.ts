@@ -8,36 +8,20 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  SessionUpdateRequestSchema,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 import { secureParameters } from '@bike4mind/utils';
 import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
 import uniq from 'lodash/uniq.js';
 import isEqual from 'lodash/isEqual.js';
 import { z } from 'zod';
 
-const updateSessionParamtersSchema = z.object({
+// `id` is service-internal addressing, not a field the public PUT request body carries
+// (it comes from the URL path there) - extend rather than fold it into the shared schema.
+const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
   id: z.string(),
-  name: z.string().optional(),
-  knowledgeIds: z.array(z.string()).optional(),
-  artifactIds: z.array(z.string()).optional(),
-  tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
-  lastUsedModel: z.string().optional(),
-  // Data Lake mode toggles this on an existing session. surface is intentionally left out
-  // (and unchanged) so the chat stays in the main sidebar list. See datalake-in-chat-mode design.
-  forceKnowledgeRetrieval: z.boolean().optional(),
-  /**
-   * Whether newly-added knowledgeIds should also be appended to every project that
-   * contains this session (and shared with that project's members).
-   *
-   * Defaults to true, which is what every deliberate "add this file" gesture wants and
-   * what all callers did before this flag existed. Pass false when the session gained a
-   * file WITHOUT the user asking for it to travel - an upload that lands in notebook
-   * context by default has consented to this notebook, not to the whole project. The
-   * propagation is append-only (nothing ever removes a fileId from a project), so a
-   * wrong `true` is not recoverable through the UI.
-   */
-  propagateToProjects: z.boolean().optional(),
 });
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
@@ -50,6 +34,10 @@ interface UpdateSessionAdapters {
     caches: ICacheRepository;
   };
   storage: BaseStorage;
+  /** Optional so existing callers compile; without it a failed derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
 }
 
 export const updateSession = async (
@@ -82,6 +70,20 @@ export const updateSession = async (
   }
 
   session.name = name || session.name;
+  // Re-derive the lake scope whenever the attached set changes. Deriving only at CREATE left the
+  // most ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
+  // already-open notebook goes through here, and an empty `retrievalTags` is not a narrow scope -
+  // the search's tag clause is skipped entirely and retrieval falls through to every lake the
+  // caller can reach. Only ever ADDS a derived scope; an explicitly-set one is left alone.
+  if (knowledgeIds && !isEqual(session.knowledgeIds, knowledgeIds) && !session.retrievalTags?.length) {
+    const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
+      db: { fabFiles: db.fabFiles },
+      logger: adapters.logger,
+      resolveLakeAccess: adapters.resolveLakeAccess,
+    });
+    if (derived.length > 0) session.retrievalTags = derived;
+  }
+
   session.knowledgeIds = knowledgeIds || session.knowledgeIds;
   session.artifactIds = artifactIds || session.artifactIds;
   session.tags = tags || session.tags;

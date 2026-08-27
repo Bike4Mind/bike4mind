@@ -6,7 +6,6 @@ import {
   OpenAIImageGenerationInput,
   IUserDocument,
   LLMEvents,
-  ImageModels,
   BFL_SAFETY_TOLERANCE,
   IChatHistoryItemRepository,
   IUserRepository,
@@ -21,8 +20,15 @@ import {
   IOrganizationRepository,
   IOrganizationDocument,
   ImageModerationIncident as ImageModerationIncidentInput,
+  insufficientCreditsError,
 } from '@bike4mind/common';
-import { BFL_IMAGE_MODELS, isImageServeable } from '@bike4mind/common';
+import {
+  isImageServeable,
+  isBflImageModel,
+  isGeminiImageModel,
+  supportsImageEdit,
+  EDIT_SUPPORTED_IMAGE_MODELS,
+} from '@bike4mind/common';
 import {
   aiImageService,
   BadRequestError,
@@ -37,6 +43,9 @@ import {
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
+  BFLImageService,
+  GeminiImageService,
+  OpenAIImageService,
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
@@ -48,7 +57,7 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
-import { deductCreditsWithOrgSupport } from '../creditService';
+import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
@@ -243,7 +252,18 @@ export class ImageEditService {
 
     // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart),
     // so both paths bill identically. Returns { requiredCredits, usdCost } n-scaled.
-    return validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
+    const result = await validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
+
+    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
+    // shared pool. This is the only enforcement point - the settlement write
+    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
+    if (organization && isMemberCreditCapExceeded(organization, user.id, result.requiredCredits)) {
+      throw insufficientCreditsError(
+        `Your organization member credit limit has been reached for image editing. Contact your organization administrator.`
+      );
+    }
+
+    return result;
   }
 
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {
@@ -307,7 +327,19 @@ export class ImageEditService {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
-      if (!apiKeyTable.openai && !apiKeyTable.bfl) throw new NotFoundError('API Key not found');
+
+      // Editing is a narrower capability than generation, and this handler bills the
+      // selected model - so reject an unsupported selection here rather than silently
+      // running (and charging for) some other model. Mirrors the chat edit_image tool.
+      if (!supportsImageEdit(model)) {
+        throw new BadRequestError(
+          `Model "${model}" does not support image editing. Supported models: ${EDIT_SUPPORTED_IMAGE_MODELS.join(', ')}`
+        );
+      }
+
+      const provider = isBflImageModel(model) ? 'bfl' : isGeminiImageModel(model) ? 'gemini' : 'openai';
+      const providerApiKey = apiKeyTable[provider];
+      if (!providerApiKey) throw new NotFoundError(`API Key not found for ${provider}`);
 
       // Validate credits before proceeding
       let usageCostUsd = 0;
@@ -342,8 +374,7 @@ export class ImageEditService {
           statusMessage: 'Checking prompt...',
         });
         // Only moderate if using OpenAI (BFL models have their own safety_tolerance)
-        const isBFLModelForModeration = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-        if (!isBFLModelForModeration && apiKeyTable.openai) {
+        if (provider !== 'bfl' && apiKeyTable.openai) {
           await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(prompt);
         }
       }
@@ -379,73 +410,64 @@ export class ImageEditService {
         throw new BadRequestError('The uploaded image is not available (moderation pending or blocked)');
       }
 
-      // Choose the appropriate service based on the model
-      const isBFLModel = Object.values(BFL_IMAGE_MODELS).includes(model as any);
-      const service = isBFLModel
-        ? aiImageService('bfl', apiKeyTable.bfl!, logger, this.imageProcessorLambdaName)
-        : aiImageService('openai', apiKeyTable.openai!, logger, this.imageProcessorLambdaName);
+      let service: BFLImageService | GeminiImageService | OpenAIImageService;
+      if (provider === 'bfl') {
+        service = aiImageService('bfl', providerApiKey, logger, this.imageProcessorLambdaName);
+      } else if (provider === 'gemini') {
+        service = aiImageService('gemini', providerApiKey, logger, this.imageProcessorLambdaName);
+      } else {
+        service = aiImageService('openai', providerApiKey, logger, this.imageProcessorLambdaName);
+      }
 
-      let result: string | null = null;
-      if (BFL_IMAGE_MODELS.includes(model as any)) {
-        // BFL specific options
-        const bflModel = ImageModels.FLUX_PRO_FILL;
+      const sourceBase64Image = await imageUrlToBase64(sourceImageUrl);
+      if (!sourceBase64Image) throw new NotFoundError('Source image not found');
 
-        Logger.globalInstance.debug(`[DEBUG] Processing BFL image edit:`, {
-          model: bflModel,
-          aspect_ratio,
-        });
+      const signedUrl = fileImage?.filePath ? await this.fabFileStorage.getSignedUrl(fileImage.filePath) : undefined;
+      const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl) : undefined;
 
-        const sourceBase64Image = await imageUrlToBase64(sourceImageUrl);
-        const signedUrl = fileImage?.filePath ? await this.fabFileStorage.getSignedUrl(fileImage.filePath) : undefined;
-        const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl) : undefined;
+      Logger.globalInstance.debug(`[DEBUG] Processing ${provider} image edit:`, {
+        model,
+        aspect_ratio,
+        hasMask: !!maskBase64Image,
+      });
 
+      let editResponse: ImageEditResponse;
+      if (provider === 'bfl') {
+        // Fill is inpainting-only: without a mask there is nothing for it to fill.
         if (!maskBase64Image) throw new NotFoundError('Mask image not found');
-        if (!sourceBase64Image) throw new NotFoundError('Source image not found');
 
-        // For Pro models, use width and height
-        const editResponse: ImageEditResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
+        editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
           mask: maskBase64Image,
-          model: bflModel,
+          model,
           safety_tolerance,
           prompt_upsampling,
           seed,
           output_format,
         });
-        // BFL always returns success (no clarifications)
-        if (editResponse.type === 'success') {
-          result = editResponse.dataUrl;
-        } else {
-          throw new InternalServerError('Unexpected response type from BFL image service');
-        }
-      } else {
-        // OpenAI specific options
-        Logger.globalInstance.debug(`[DEBUG] Processing OpenAI image edit:`, {
+      } else if (provider === 'gemini') {
+        // Gemini edits via natural language and takes no mask; it needs a data URL.
+        editResponse = await service.edit(`data:image/png;base64,${sourceBase64Image}`, truncatedPrompt, {
           model,
           aspect_ratio,
+          output_format,
+          safety_tolerance,
         });
-        const gptImage1 = ImageModels.GPT_IMAGE_1;
-
-        const sourceBase64Image = await imageUrlToBase64(sourceImageUrl);
-        const signedUrl = fileImage?.filePath ? await this.fabFileStorage.getSignedUrl(fileImage.filePath) : undefined;
-        const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl) : undefined;
-
-        if (!sourceBase64Image) throw new NotFoundError('Source image not found');
-
-        const editResponse: ImageEditResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
+      } else {
+        editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
           mask: maskBase64Image || null,
-          model: gptImage1,
+          model,
           n: 1,
           size: size as OpenAIImageSize | undefined,
           response_format: 'url',
           user: userId,
         });
-        // OpenAI always returns success (no clarifications)
-        if (editResponse.type === 'success') {
-          result = editResponse.dataUrl;
-        } else {
-          throw new InternalServerError('Unexpected response type from OpenAI image service');
-        }
       }
+
+      // No provider's edit path returns clarifications today.
+      if (editResponse.type !== 'success') {
+        throw new InternalServerError(`Unexpected response type from ${provider} image service`);
+      }
+      const result: string = editResponse.dataUrl;
 
       if (!result) throw new InternalServerError('Image edit failed');
 
@@ -486,7 +508,7 @@ export class ImageEditService {
           userId,
           sessionId: quest.sessionId,
           questId,
-          provider: isBFLModel ? 'bfl' : 'openai',
+          provider,
           model,
         },
         logger,
@@ -563,7 +585,7 @@ export class ImageEditService {
             ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
             sessionId,
             feature: 'image_edit',
-            provider: isBFLModel ? 'bfl' : 'openai',
+            provider,
             model,
             inputTokens: 0,
             outputTokens: 0,

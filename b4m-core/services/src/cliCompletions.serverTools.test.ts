@@ -7,8 +7,17 @@ let capturedOptions: Record<string, any> | undefined;
 let completeImpl: (onChunk: (text: string[], info?: Record<string, unknown>) => Promise<void>) => Promise<void>;
 
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
-vi.mock('./creditService', () => ({ subtractCredits: vi.fn().mockResolvedValue(undefined) }));
+// Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
+vi.mock('./creditService', async importOriginal => ({
+  ...(await importOriginal<typeof import('./creditService')>()),
+  subtractCredits: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  // Honor-explicit-else-fallback is all these suites need; the model-aware sizing this
+  // stands in for is covered against the real implementation in cliCompletions.maxTokens.test.ts.
+  resolveOutputMaxTokens: vi.fn(
+    ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
+  ),
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',

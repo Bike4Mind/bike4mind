@@ -113,6 +113,13 @@ const FULL_PROMPT_META = {
       removedMessages: [{ role: 'user', tokens: 10, priority: 1 }],
     },
   },
+  // Top-level, not nested under context - see the field's own comment in QuestModel.ts (#1867).
+  retrieval: {
+    attempted: true,
+    outcome: 'ok',
+    surfaces: ['knowledgeBaseSearch', 'lake-memory'],
+    dataLakeTags: ['datalake:x'],
+  },
   functionCalls: [
     {
       name: 'web_search',

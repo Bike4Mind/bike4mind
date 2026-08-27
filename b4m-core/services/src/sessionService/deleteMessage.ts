@@ -1,4 +1,4 @@
-import { IChatHistoryItemDocument, ISessionDocument } from '@bike4mind/common';
+import { IChatHistoryItemRepository, ISessionRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -11,13 +11,8 @@ type DeleteSessionMessageParams = z.infer<typeof deleteSessionMessageSchema>;
 
 interface DeleteSessionMessageAdapters {
   db: {
-    sessions: {
-      findByIdAndUserId: (id: string, userId: string) => Promise<ISessionDocument | null>;
-    };
-    chatHistories: {
-      findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
-      update: (value: IChatHistoryItemDocument) => Promise<unknown>;
-    };
+    sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
+    chatHistories: Pick<IChatHistoryItemRepository, 'findBySessionIdAndId' | 'update'>;
   };
 }
 
@@ -36,7 +31,12 @@ export const deleteSessionMessage = async (
 
   message.deletedAt = new Date();
 
-  await db.chatHistories.update(message);
+  // update() matches by _id alone and can return null if nothing matched. Quest documents are
+  // normally only soft-deleted, but notebookImportComplete.ts's session-replace flow does hard
+  // delete matching rows, so this guards a narrow real race rather than dead code - report it as
+  // a real failure rather than success on a write that touched nothing.
+  const updated = await db.chatHistories.update(message);
+  if (!updated) throw new NotFoundError('Message not found');
 
-  return message;
+  return updated;
 };

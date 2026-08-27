@@ -25,7 +25,7 @@ env:
 
 jobs:
   zap-website-scan:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       # Optional overrides passed from workflow_dispatch
@@ -87,10 +87,7 @@ jobs:
           ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
         with:
           target: ${{ env.ZAP_TARGET_URL || env.DEFAULT_ZAP_TARGET_URL }}
-          # -H injects the bypass header into every ZAP request so the WAF allow
-          # rule (Allow-ZAP-Scanner, priority 1) lets the scanner through the IP
-          # reputation list and ZAP tests the actual app, not WAF error pages.
-          cmd_options: '-a -T 180 -H "X-ZAP-Scanner:${{ env.ZAP_BYPASS_TOKEN }}"'
+          cmd_options: '-a -T 180'
           artifact_name: 'zap-scan'
           allow_issue_writing: false
           fail_action: false

@@ -40,6 +40,7 @@ import { cloneDeep } from 'lodash';
 import { toast } from 'sonner';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 
 // Helper to show bulk operation feedback with success/partial/failure states
 const showBulkFeedback = (
@@ -63,6 +64,23 @@ const showBulkFeedback = (
     toast.error(`Failed to ${action.replace(/ed$/, '')} any ${itemType}s`);
     return 'failure';
   }
+};
+
+// The server now resolves recipients case-insensitively (UserModel.findAllByEmailsOrUsernames),
+// so a case-varied self-share (e.g. "Me@Test.com") must be caught here too, or it silently
+// creates a real self-invite instead of erroring. Shared by both the Autocomplete's onChange
+// filter and the submit-time backstop check below so they cannot drift out of sync again.
+const isSelfShareRecipient = (
+  recipient: string,
+  currentUser: { id: string; email?: string | null; username?: string | null } | null
+): boolean => {
+  if (!currentUser) return false;
+  const lower = recipient.toLowerCase();
+  return (
+    lower === currentUser.email?.toLowerCase() ||
+    lower === currentUser.username?.toLowerCase() ||
+    lower === currentUser.id.toLowerCase()
+  );
 };
 
 interface IProps {
@@ -123,6 +141,12 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       // Don't close the modal here; handleShareSubmit closes it after the toast is visible.
       // Bulk completion is handled in the loop; link generation in the useEffect below.
     },
+    onError: error => {
+      // Bulk sharing aggregates its own per-item failures into one showBulkFeedback toast
+      // below; showing this hook's toast too would double up per failed item.
+      if (isBulkSharing) return;
+      toast.error(getErrorMessage(error));
+    },
     onSettled: () => {
       if (!isBulkSharing) {
         setLoading(false);
@@ -150,19 +174,15 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       }
 
       if (recipientValue.length === 0) {
-        setRecipients({ ...recipients, error: 'Recipients is required' });
+        const message = 'Recipients is required';
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
         isInvalid = true;
-      } else if (
-        tabIndex === 0 &&
-        currentUser &&
-        recipientValue.some(
-          recipient =>
-            // Check if user is trying to share to themselves via email, username, or ID
-            recipient === currentUser.email || recipient === currentUser.username || recipient === currentUser.id
-        )
-      ) {
+      } else if (tabIndex === 0 && recipientValue.some(recipient => isSelfShareRecipient(recipient, currentUser))) {
         // Prevent self-sharing and show error message (only for "By Users" tab)
-        setRecipients({ ...recipients, error: 'You cannot share files to yourself' });
+        const message = 'You cannot share files to yourself';
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
         isInvalid = true;
       } else {
         setRecipients({ ...recipients, error: null });
@@ -343,7 +363,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
           return;
         }
 
-        await shareDocument.mutateAsync({
+        const result = await shareDocument.mutateAsync({
           description,
           recipients: recipientValue,
           id: id,
@@ -352,10 +372,10 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         });
 
         if (tabIndex === 0) {
-          // Sharing by users
-          toast.success(
-            `Successfully shared ${displayName} to ${recipientValue.length} recipient${recipientValue.length > 1 ? 's' : ''}`
-          );
+          // Sharing by users. Report the server-resolved, deduped recipient count (e.g. an
+          // email and that same person's username collapse to one), not the raw typed count.
+          const sharedCount = result?.recipients?.pending?.length ?? recipientValue.length;
+          toast.success(`Successfully shared ${displayName} to ${sharedCount} recipient${sharedCount > 1 ? 's' : ''}`);
 
           // Clear input and close modal after showing toast
           setCurrentInputValue('');
@@ -368,11 +388,10 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         }
       }
     } catch (error) {
-      // This catch handles single-item sharing failures only
-      // Bulk sharing errors are handled within the loops above
+      // Single-item failures are toasted by useShareDocument's onError above; bulk failures
+      // are aggregated within the loops above. Just log here to avoid a duplicate toast.
       if (!isBulkSharing) {
         console.error('Error in sharing:', error);
-        toast.error('Failed to share file');
       }
     } finally {
       if (isBulkSharing) {
@@ -546,15 +565,20 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
                             alignItems: 'flex-start',
                           },
                         },
+                        input: {
+                          'data-testid': 'share-modal-recipients-input',
+                        },
                       }}
                       sx={{ width: '100%', '--Input-minHeight': '100px' }}
                       value={recipients.value}
                       onChange={(_, value) => {
-                        // Filter out current user's email/username (only for "By Users" tab)
+                        // Filter out current user's email/username/id (only for "By Users" tab).
+                        // isSelfShareRecipient itself treats a not-yet-loaded currentUser as
+                        // "nothing to compare against" (returns false), so this never drops
+                        // every recipient just because currentUser hasn't loaded yet.
                         if (tabIndex === 0) {
                           const filteredValue = value.filter(
-                            recipient =>
-                              currentUser && recipient !== currentUser.email && recipient !== currentUser.username
+                            recipient => !isSelfShareRecipient(recipient, currentUser)
                           );
                           if (filteredValue.length !== value.length) {
                             setRecipients({ value: filteredValue, error: 'You cannot share files to yourself' });

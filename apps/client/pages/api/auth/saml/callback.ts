@@ -10,6 +10,7 @@ import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -152,9 +153,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       // Derive base URL from request so the redirect goes back to the same port
       const host = req.headers.host || 'localhost:3000';
       const protocol = req.headers['x-forwarded-proto'] || 'http';
-      const baseUrl = process.env.APP_URL?.includes('localhost')
-        ? `${protocol}://${host}`
-        : process.env.APP_URL || `${protocol}://${host}`;
+      const baseUrl = isLocalAppUrl() ? `${protocol}://${host}` : process.env.APP_URL || `${protocol}://${host}`;
       // Resume the originally requested path (round-tripped via RelayState);
       // /auth/success sanitizes it before navigating.
       const successQuery = authSuccessRedirectQuery(redirectTo);

@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import dayjs from 'dayjs';
 
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useModelMetrics } from './hooks/useModelMetrics';
+import { useSpend } from './hooks/useSpend';
 import { useModelMetricsState, ModelMetricsTabValue } from './hooks/useModelMetricsState';
 import { exportToCSV } from './utils/csvExport';
 import { processChartData } from './utils/chartDataProcessor';
@@ -58,8 +59,34 @@ const ModelMetricsTab: React.FC = () => {
     setDateRange,
   } = useModelMetricsState(metrics);
 
+  // Narrowed to the fields the spend query keys on (statusFilter is not applied to
+  // spend), so its react-query key stays stable across unrelated filter changes.
+  const spendFilters = useMemo(
+    () => ({
+      dateFrom: appliedFilters.dateFrom,
+      dateTo: appliedFilters.dateTo,
+      userFilter: appliedFilters.userFilter,
+      modelFilter: appliedFilters.modelFilter,
+    }),
+    [appliedFilters]
+  );
+
+  // Owned here (not inside SpendTab) so the shared Refresh button can bust the
+  // spend cache too; gated on the active tab to keep the query lazy.
+  const {
+    data: spendData,
+    isLoading: isSpendLoading,
+    isError: isSpendError,
+    recache: recacheSpend,
+  } = useSpend(spendFilters, { enabled: activeTab === 'spend' });
+
   const handleRefresh = () => {
-    recache();
+    // Refresh busts the cache for whichever tab's data is on screen.
+    if (activeTab === 'spend') {
+      recacheSpend();
+    } else {
+      recache();
+    }
   };
 
   const handleExportCSV = () => {
@@ -193,9 +220,9 @@ const ModelMetricsTab: React.FC = () => {
           />
         </TabPanel>
 
-        {/* Spend Tab (mock data, issue No. 1507) */}
+        {/* Spend Tab */}
         <TabPanel value="spend" sx={{ p: 1 }}>
-          <SpendTab />
+          <SpendTab data={spendData} isLoading={isSpendLoading} isError={isSpendError} />
         </TabPanel>
       </Tabs>
 

@@ -3,6 +3,7 @@ import type {
   IFabFileRepository,
   IAdminSettingsRepository,
   IIngestedEmailRepository,
+  IDataLakeRepository,
 } from '@bike4mind/common';
 import { z } from 'zod';
 
@@ -106,6 +107,7 @@ export interface EmailIngestionAdapters {
     ingestedEmails: IIngestedEmailRepository;
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
   };
   storage: IStorageAdapter;
   /**
