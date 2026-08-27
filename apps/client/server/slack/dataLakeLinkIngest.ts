@@ -35,6 +35,13 @@ export interface CreateLakeLinkParams {
   url: string;
   tags: Array<{ name: string; strength: number }>;
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
+  /**
+   * Forwarded to `createFabFile`'s own tag gate, which `createFabFileByUrl` relays
+   * (`createByUrl.ts:108`). Same requirement and same reason as the FILE path's field - see
+   * `CreateLakeFileParams.administeredOrgIds`. Declared here too rather than on one path only,
+   * because FILE and LINK must not diverge on who is allowed to write.
+   */
+  administeredOrgIds: string[];
 }
 
 export interface SlackLinkIngestDeps extends LakeAuthzDeps {
@@ -110,7 +117,7 @@ export async function ingestSlackLinkIntoLake(
   // Authorization first: resolve + write-gate the lake before anything is fetched.
   const authorized = await authorizeLakeForWrite(actor, lakeSlug, deps);
   if (!authorized.ok) return authorized;
-  const { lake, datalakeTag } = authorized;
+  const { lake, datalakeTag, ctx } = authorized;
 
   const tags = await resolveLakeTags(datalakeTag, deps);
   const recordedUrl = sanitizeUrlForRecord(link);
@@ -125,6 +132,7 @@ export async function ingestSlackLinkIntoLake(
         // and the URL is where the content actually came from, and an auditor needs both.
         sourceMetadata: { channel, messageTs, sourceUrl: recordedUrl },
       },
+      administeredOrgIds: ctx.administeredOrgIds ?? [],
     });
 
     return { ok: true, lakeName: lake.name, fileName: fabFile.fileName, sourceUrl: recordedUrl };
