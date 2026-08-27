@@ -95,6 +95,24 @@ describe('truncateImagePrompt', () => {
     expect(result.prompt).toBe('a partial emoji ');
   });
 
+  it('treats a blank decode as a failure rather than sending the provider an empty prompt', async () => {
+    const logger = { warn: vi.fn() };
+    const result = await truncateImagePrompt({
+      prompt: 'b'.repeat(4_000),
+      promptTokens: tokens(2_000),
+      maxTokens: undefined,
+      // A decode that yields only the replacement character strips to '' - which would otherwise
+      // be returned verbatim and come back from the provider as an opaque 400.
+      tokenizer: { decodeTokens: async () => '\uFFFD' },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      logger: logger as any,
+    });
+
+    expect(result.prompt).toBe('b'.repeat(1_960));
+    expect(result.truncated).toBe(true);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
   it('degrades to a proportional character slice of the original text when decoding throws', async () => {
     const logger = { warn: vi.fn() };
     const result = await truncateImagePrompt({

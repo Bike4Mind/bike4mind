@@ -1,15 +1,16 @@
 import type { ILogger } from '@bike4mind/observability';
 import type { ITokenizer } from '@bike4mind/utils';
 
-// TODO make these adminSettings
-
 /**
+ * TODO make this an adminSetting.
+ *
  * Prompt budget used when the catalog reports no usable cap for the model. Not a provider limit -
  * a self-imposed guard so a runaway prompt is never forwarded whole.
  */
 export const IMAGE_PROMPT_TOKEN_THRESHOLD = 1000;
 
-/** Tokens kept when the guard fires. The headroom absorbs provider-side tokenizer differences. */
+/** TODO make this an adminSetting. Tokens kept when the guard fires; the headroom absorbs
+ * provider-side tokenizer differences. */
 export const IMAGE_PROMPT_TRUNCATE_TO = 980;
 
 /**
@@ -25,7 +26,11 @@ export function resolveImagePromptTokenCap(maxTokens: number | undefined): numbe
 export type TruncatedImagePrompt = {
   /** The text to send to the provider. Always prose, never stringified token ids. */
   prompt: string;
-  /** Tokens actually sent. The usage-event input count is derived from this. */
+  /**
+   * Tokens sent, which the usage-event input count is derived from. Exact when the slice was
+   * decoded; an estimate on the character-slice fallback below, which cannot land on a token
+   * boundary.
+   */
   tokenCount: number;
   truncated: boolean;
 };
@@ -65,13 +70,18 @@ export async function truncateImagePrompt({
   try {
     const decoded = await tokenizer.decodeTokens(kept, modelId);
     // A slice can end mid-character, which decodes to a trailing U+FFFD.
-    return { prompt: decoded.replace(/\uFFFD+$/, ''), tokenCount: kept.length, truncated: true };
+    const text = decoded.replace(/\uFFFD+$/, '');
+    if (text.trim()) return { prompt: text, tokenCount: kept.length, truncated: true };
+    // Blank text would reach the provider as an empty prompt and come back an opaque 400, so
+    // treat "decoded to nothing" as a failed decode rather than a valid answer.
+    logger?.warn('Image prompt decoded to blank text; falling back to a character slice');
   } catch (error) {
-    // Degrade to a proportional slice of the original text, never to token ids. The character
-    // budget is approximate, so the result can sit slightly over the cap - still preferable to
-    // sending gibberish. Logged so a silent decode failure is distinguishable from no truncation.
     logger?.warn('Image prompt decode failed; falling back to a character slice', error);
-    const charBudget = Math.max(1, Math.floor(prompt.length * (kept.length / promptTokens.length)));
-    return { prompt: prompt.slice(0, charBudget), tokenCount: kept.length, truncated: true };
   }
+
+  // Degrade to a proportional slice of the original text, never to token ids. The character budget
+  // is approximate, so the result can sit slightly over the cap - still preferable to sending
+  // gibberish. Both paths above log, so a swallowed decode stays distinguishable from no truncation.
+  const charBudget = Math.max(1, Math.floor(prompt.length * (kept.length / promptTokens.length)));
+  return { prompt: prompt.slice(0, charBudget), tokenCount: kept.length, truncated: true };
 }
