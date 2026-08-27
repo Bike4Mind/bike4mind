@@ -111,6 +111,11 @@ export function buildSlackLakeIngestDeps(args: {
             // Server-supplied: the request body can never reach this, so a Slack origin stamp
             // cannot be forged by a caller who merely uploaded a file.
             provenance: params.provenance,
+            // createFabFile runs its OWN tag gate and cannot derive this from the user document, so
+            // omitting it zeroes canManageLake's org rungs and refuses the write the prologue just
+            // authorized. Resolved once by the prologue and carried on the params - never
+            // re-resolved here, so the create re-checks against the value that granted the write.
+            administeredOrgIds: params.administeredOrgIds,
           }
         )
       ),
@@ -142,6 +147,9 @@ export function buildSlackLakeIngestDeps(args: {
           storage,
           tags: params.tags,
           provenance: params.provenance,
+          // Relayed to createFabFile's tag gate (createByUrl.ts:108) for the same reason as the
+          // file adapter above; FILE and LINK must not diverge on who is allowed to write.
+          administeredOrgIds: params.administeredOrgIds,
           deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
         }
       ),
