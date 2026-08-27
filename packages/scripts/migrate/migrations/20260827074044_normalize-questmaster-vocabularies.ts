@@ -64,7 +64,12 @@ interface RawPlan {
 }
 
 const migration: MigrationFile = {
-  id: 20260827000000,
+  // A REAL timestamp, not the truncated `YYYYMMDD000000` the convention keeps collapsing to.
+  // Five open PRs were fighting over two ids because everyone zeroes the time component; this one
+  // was itself bumped off `20260826000000` (three siblings) onto `20260827000000` (one more).
+  // Ordering is numeric on this field (migrationManager.ts `a.id - b.id`) and ids are declared
+  // rather than derived from the filename, so seconds-precision sorts correctly and ends the race.
+  id: 20260827074044,
   name: 'normalize questmaster status and complexity vocabularies',
 
   up: async () => {

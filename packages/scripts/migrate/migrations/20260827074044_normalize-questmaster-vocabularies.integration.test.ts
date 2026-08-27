@@ -5,7 +5,7 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260827000000_normalize-questmaster-vocabularies';
+import migration from './20260827074044_normalize-questmaster-vocabularies';
 
 const COLLECTION = 'questmasterplans';
 
