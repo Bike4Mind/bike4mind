@@ -1017,15 +1017,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     }>
   >;
   /**
-   * One page of a lake's live members for the lake-memory extraction producer, ascending by `_id`.
-   * Projects ONLY the three fields that producer reads - it replaced a
-   * `findIdsByDataLakeTag` + `findAllByIds` pair that hydrated every member's `content`, `chunks` and
-   * `vector` before the producer's per-run cap applied, which OOMed the extraction Lambda on any large
-   * lake and re-OOMed on every SQS redelivery.
+   * One page of a lake's LIVE members for the lake-memory extraction producer, ascending by `_id`,
+   * projecting only the three fields that producer reads. Live-only and bounded in the database, unlike
+   * `findIdsByDataLakeTag` above, which reports every member the lake ever had.
    *
-   * `after` is a keyset boundary (ObjectId order is creation order, so a mid-scan upload sorts after it
-   * and waits for a later run); an unparseable value is ignored rather than throwing. Ask for one row
-   * past the cap to tell "the lake continues" from "the slice filled exactly" without a count query.
+   * `after` is a keyset boundary, and an unparseable one is ignored rather than throwing. Ask for one
+   * row past the cap to tell "the lake continues" from "the slice filled exactly" without a count
+   * query. See the implementation for why each of those is load-bearing.
    */
   findLakeMemoryExtractionMembers(
     scope: DataLakeMembershipScope,

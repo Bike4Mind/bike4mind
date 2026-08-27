@@ -176,21 +176,16 @@ export async function extractLakeMemoryForBatch(
     const claimedLake = await dataLakeRepository.findById(lake.id).catch(() => null);
     const cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
 
-    // ONE read for the slice this run will actually work on: live members only, ordered by id, bounded
-    // to the cap, and projected down to the three fields used below. Live-only matters beyond the byte
-    // count: its lifecycle sibling `findIdsByDataLakeTag` reports tombstones too (it must - the chunk
-    // sweep needs them), and a tombstone that reaches this loop consumes a cap slot, so a lake of 40
-    // tombstones and 10 live docs would fold nothing. This used to enumerate every id the
-    // lake had ever held and then hydrate all of them UNPROJECTED - `content`, `chunks` and `vector`
-    // included - before slicing to the cap, so a lake of a few thousand ~1MB documents pulled GBs into
-    // the Lambda and was killed before the deadline guard below ever got to yield. Every SQS redelivery
-    // was killed the same way, so the run never progressed and never stopped costing, which is the exact
-    // outcome that guard exists to prevent. Filtering and bounding in the database is what keeps the
-    // guard reachable.
+    // One bounded, projected, keyset-paged read of the slice this run will work on. LIVE-only because a
+    // tombstone reaching the loop below would consume a cap slot (its lifecycle sibling
+    // `findIdsByDataLakeTag` reports tombstones on purpose), and the cap has to bound real work.
     //
-    // The extra row past the cap is a PROBE: it distinguishes "the lake continues past this slice" from
-    // "the slice happened to fill exactly", which is what the continuation bookkeeping below needs, and
-    // is cheaper than a second count query. It is dropped from `docs` and never processed.
+    // The extra row past the cap is a PROBE: it separates "the lake continues past this slice" from "the
+    // slice happened to fill exactly", which is what the continuation bookkeeping below needs and is
+    // cheaper than a count query. It is dropped from `docs` and never processed.
+    //
+    // See `findLakeMemoryExtractionMembers` for why the filter, the ordering and the bound must all stay
+    // in the database - that is where the constraint has to be honoured.
     const page = await fabFileRepository.findLakeMemoryExtractionMembers(dataLakeService.lakeMembershipScope(lake), {
       after: cursor,
       limit: MAX_DOCS_PER_RUN + 1,
@@ -272,6 +267,10 @@ export async function extractLakeMemoryForBatch(
     // non-empty, since the read is bounded rather than counted - hence "at least" in the logs.
     const unattemptedInSlice = docs.length - docsAttempted;
     const hasUncovered = unattemptedInSlice > 0 || moreBeyondThisSlice;
+    // Lower bound, not a count: the probe row proves at least one more doc exists without saying how
+    // many. Both warns below report the same quantity, so it lives here rather than being spelled out
+    // at each of them.
+    const atLeastUncovered = unattemptedInSlice + (moreBeyondThisSlice ? 1 : 0);
     let hasMore = false;
     if (docsAttempted > 0 && hasUncovered && lastAttemptedId) {
       try {
@@ -285,7 +284,7 @@ export async function extractLakeMemoryForBatch(
         // from the top; failing loudly here rather than papering over it.
         logger.warn(
           `[lakeMemory] lake ${datalakeTag} could not persist the continuation cursor; the remaining ` +
-            `doc(s) (at least ${unattemptedInSlice + (moreBeyondThisSlice ? 1 : 0)}) will be picked up on ` +
+            `doc(s) (at least ${atLeastUncovered}) will be picked up on ` +
             `the next finalize: ${err instanceof Error ? err.message : String(err)}`
         );
       }
@@ -310,8 +309,7 @@ export async function extractLakeMemoryForBatch(
       // or re-enqueuing here would be a no-progress loop, so do neither - the next finalize retries.
       logger.warn(
         `[lakeMemory] lake ${datalakeTag} made no progress before the deadline; at least ` +
-          `${unattemptedInSlice + (moreBeyondThisSlice ? 1 : 0)} doc(s) still uncovered, not enqueuing a ` +
-          `continuation (would loop)`
+          `${atLeastUncovered} doc(s) still uncovered, not enqueuing a continuation (would loop)`
       );
     }
 
