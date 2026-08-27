@@ -429,6 +429,9 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   embeddedChunkCount: null,
   embeddedCharCount: null,
   serverTextHash: null,
+  // Content-derived like the rest: the stamp asserts "no text in this file" about bytes the rewrite
+  // replaced. Leaving it would keep the rescue sweep's terminal guard closed against the new content.
+  noExtractableTextAt: null,
 } as const;
 
 export interface IFabFileListItem {

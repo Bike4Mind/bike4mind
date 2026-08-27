@@ -106,7 +106,8 @@ describe('split-chunk-stall-markers-off-notes migration (real DB)', () => {
       notes: `${VECTORIZE_PAUSED_NOTE}\n\nre-upload Monday`,
     });
     const appendedToZeroChunk = await insertLegacyFile({
-      notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).\n\nsigned copy, clause 4',
+      notes:
+        'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).\n\nsigned copy, clause 4',
     });
 
     await migration.up();
@@ -132,6 +133,26 @@ describe('split-chunk-stall-markers-off-notes migration (real DB)', () => {
     const second = await rawFabFiles().findOne({ _id: appended._id });
 
     expect(second).toEqual(first);
+  });
+
+  // The zero-chunk prefix arm is the one whose idempotency rests on the `noExtractableTextAt: null`
+  // cursor guard rather than on the prose already being gone, and the only one that can re-stamp
+  // with a drifted timestamp when `updatedAt` is missing and it falls back to `new Date()`.
+  it('is idempotent over an appended zero-chunk note with no updatedAt', async () => {
+    const appended = await insertLegacyFile({
+      notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).\n\nmine',
+    });
+    await rawFabFiles().updateOne({ _id: appended._id }, { $unset: { updatedAt: '' } });
+
+    await migration.up();
+    const first = await rawFabFiles().findOne({ _id: appended._id });
+    await migration.up();
+    const second = await rawFabFiles().findOne({ _id: appended._id });
+
+    expect(second).toEqual(first);
+    expect(first?.notes).toBe(
+      'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).\n\nmine'
+    );
   });
 
   it('is idempotent - a second run changes nothing', async () => {

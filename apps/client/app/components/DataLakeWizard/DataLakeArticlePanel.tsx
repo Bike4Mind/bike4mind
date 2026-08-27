@@ -60,6 +60,7 @@ export default function DataLakeArticlePanel({
   const reprocess = useReprocessFabFile(dataLakeId);
   const removeFile = useRemoveFileFromDataLake(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const stallNotice = file ? describePipelineStall(file) : null;
 
   if (!file) {
     return (
@@ -138,13 +139,13 @@ export default function DataLakeArticlePanel({
         </Box>
         {/* Pipeline state (no extractable text, a halted rebuild) is derived from its own fields;
             `notes` is the owner's own text and is shown alongside, not in place of it. */}
-        {describePipelineStall(file) && (
+        {stallNotice && (
           <Typography level="body-xs" sx={{ color: 'warning.500', mb: 1 }}>
-            {'\u26a0\ufe0f'} {describePipelineStall(file)}
+            {'\u26a0\ufe0f'} {stallNotice}
           </Typography>
         )}
         {file.notes && (
-          <Typography level="body-xs" sx={{ color: 'text.tertiary', mb: 1 }}>
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
             {file.notes}
           </Typography>
         )}

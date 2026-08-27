@@ -97,7 +97,7 @@ export type ConvergenceMemberInput = {
   vectorizedChunkCount?: number | null;
   error?: string | null;
   /** Set when the convergence kill switch stalled the file - see `isMemberIndexingInFlight`. */
-  chunkStallReason?: ChunkStallReason | string | null;
+  chunkStallReason?: ChunkStallReason | null;
   /** Set while a passage rebuild is outstanding (#1939) - see `isMemberIndexingInFlight`. */
   chunkRebuildRequestedAt?: Date | string | null;
   /** Largest chunk's `charLength`; `null` until the #1665 backfill reaches the file. */
@@ -185,7 +185,7 @@ export function isMemberIndexingInFlight(member: {
   chunkCount: number;
   vectorizedChunkCount?: number | null;
   error?: string | null;
-  chunkStallReason?: ChunkStallReason | string | null;
+  chunkStallReason?: ChunkStallReason | null;
   chunkRebuildRequestedAt?: Date | string | null;
 }): boolean {
   const settledByFailure = typeof member.error === 'string' && member.error.length > 0;

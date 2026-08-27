@@ -120,7 +120,7 @@ export type LakeHealthMemberInput = {
    * reached by a different route. The handler's own log states these do not auto-resume, so this is
    * durable, not a window.
    */
-  chunkStallReason?: ChunkStallReason | string | null;
+  chunkStallReason?: ChunkStallReason | null;
   /**
    * `FabFile.chunkRebuildRequestedAt` (#1939): a passage rebuild was requested and has not committed.
    * The THIRD not-a-plain-zero signal, and the only one that fires on a member with no marker of any

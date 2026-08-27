@@ -7,6 +7,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   SupportedEmbeddingModel,
+  type ChunkStallReason,
 } from '@bike4mind/common';
 import {
   computeCosineSimilarity,
@@ -279,7 +280,7 @@ interface RankableFile {
    */
   chunkCount?: number;
   error?: string | null;
-  chunkStallReason?: string | null;
+  chunkStallReason?: ChunkStallReason | null;
   /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
    *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
   chunkRebuildRequestedAt?: Date | string | null;

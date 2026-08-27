@@ -1,4 +1,9 @@
-import { isChunkRebuildPending, isChunkStalled, isMemberIndexingInFlight } from '@bike4mind/common';
+import {
+  isChunkRebuildPending,
+  isChunkStalled,
+  isMemberIndexingInFlight,
+  type ChunkStallReason,
+} from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
 
 /**
@@ -67,7 +72,7 @@ export type IndexStateFile = {
   vectorizedChunkCount?: number | null;
   error?: string | null;
   /** Set when the convergence kill switch stalled the file (`FabFile.chunkStallReason`). */
-  chunkStallReason?: string | null;
+  chunkStallReason?: ChunkStallReason | null;
   /** A requested-but-uncommitted passage rebuild (#1939) - see the partition below. */
   chunkRebuildRequestedAt?: Date | string | null;
 };
