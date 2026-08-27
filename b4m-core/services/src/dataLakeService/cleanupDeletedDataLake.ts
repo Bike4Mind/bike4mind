@@ -36,6 +36,15 @@ interface CleanupDeletedDataLakeAdapters {
    * deleted lake.
    */
   shredMemory?: (args: { datalakeTag: string; ownerUserId: string }) => Promise<void>;
+  /**
+   * Release the Drive connection feeding this lake (revoke the org credential at Google, hard-delete
+   * the row) so the folder claim does not outlive the lake. Injected because the revoke needs crypto
+   * helpers the app layer owns; see releaseDriveConnectionForLake. Optional so a host without the
+   * integration is unaffected. A failure aborts (and a DLQ retry re-runs it) rather than leaving a
+   * folder no org can ever re-claim - the row's driveFolderId is globally unique and, once the lake
+   * is gone, no product surface can reach the connection to release it.
+   */
+  releaseDriveConnection?: (args: { dataLakeId: string }) => Promise<void>;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file/per-batch deletes (background consumer sets this). */
   chunkSize?: number;
@@ -65,7 +74,14 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
 export const cleanupDeletedDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, retrievalIndex, shredMemory, logger, chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE }: CleanupDeletedDataLakeAdapters
+  {
+    db,
+    retrievalIndex,
+    shredMemory,
+    releaseDriveConnection,
+    logger,
+    chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE,
+  }: CleanupDeletedDataLakeAdapters
 ): Promise<void> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -102,6 +118,15 @@ export const cleanupDeletedDataLake = async (
   // here aborts the sweep so a DLQ retry re-runs it (shred is idempotent: destroyDek then markShredded).
   if (shredMemory && existing.datalakeTag && existing.createdByUserId) {
     await shredMemory({ datalakeTag: existing.datalakeTag, ownerUserId: existing.createdByUserId });
+  }
+
+  // 1c. Release the lake's Drive connection BEFORE the file sweep, so the re-sync poll cannot claim
+  // it mid-purge and start re-creating the very files being deleted. It also has to happen here at
+  // all: the row's Drive folder id is globally unique, and the only surface that can release a
+  // connection resolves it through its lake - so a row that survives step 5 makes that folder
+  // permanently unconnectable, credential included.
+  if (releaseDriveConnection) {
+    await releaseDriveConnection({ dataLakeId });
   }
 
   // 2. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large

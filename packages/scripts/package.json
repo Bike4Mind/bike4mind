@@ -21,6 +21,7 @@
     "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
     "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
+    "datalake:check-stranded-drive-connections": "tsx datalake/check-stranded-drive-connections.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
     "db:setup-email-user": "tsx setupTestEmailUser.ts",

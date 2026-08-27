@@ -2458,6 +2458,49 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
 
+  it('releases the lake Drive connection, and does it BEFORE the file sweep', async () => {
+    // The row is what holds the GLOBAL driveFolderId claim, and the only surface that can release a
+    // connection resolves it through its lake - so a row surviving the purge makes that Drive folder
+    // permanently unconnectable by any org, with the encrypted credential still in it. Ordering
+    // matters too: the re-sync poll can claim a still-live connection mid-purge and start recreating
+    // the very files being deleted.
+    const adapters = makeAdapters('purging');
+    const order: string[] = [];
+    const releaseDriveConnection = vi.fn(async () => {
+      order.push('release-drive');
+    });
+    adapters.db.fabFiles.hardDeleteByIds = vi.fn(async () => {
+      order.push('hard-delete');
+      return [];
+    });
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      releaseDriveConnection,
+    });
+    expect(releaseDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+    expect(order).toEqual(['release-drive', 'hard-delete']);
+  });
+
+  it('aborts the sweep when the Drive release fails, rather than purging the lake around it', async () => {
+    // A retry can re-run the release (it is a no-op once the row is gone); deleting the lake record
+    // with the row still there is the one outcome nothing can recover from.
+    const adapters = makeAdapters('purging');
+    const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      releaseDriveConnection: vi.fn().mockRejectedValue(new Error('mongo went away')),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    // Must not be a BadRequestError, or the consumer would release the half-done purge as restorable.
+    expect(err).not.toBeInstanceOf(BadRequestError);
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('sweeps normally when no Drive release port is wired', async () => {
+    const adapters = makeAdapters('purging');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
   it('is idempotent: already-gone lake is a no-op success', async () => {
     const adapters = makeAdapters('deleted');
     adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(null);
