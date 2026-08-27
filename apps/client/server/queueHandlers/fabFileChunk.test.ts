@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+  userFindById: vi.fn(async () => ({ id: 'u1' })),
+  fabFileFindById: vi.fn(() => ({ select: () => ({ lean: async () => ({ batchId: 'batch-1' }) }) })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
 
@@ -39,8 +41,8 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
   },
-  FabFile: { updateOne: h.fabFileUpdateOne },
-  User: { findById: vi.fn(async () => ({ id: 'u1' })) },
+  FabFile: { updateOne: h.fabFileUpdateOne, findById: h.fabFileFindById },
+  User: { findById: h.userFindById },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
@@ -309,5 +311,73 @@ describe('fabFileChunk handler - self-host OpenSearch searchIndex adapter', () =
       expect.anything(),
       expect.objectContaining({ searchIndex: undefined })
     );
+  });
+});
+
+describe('fabFileChunk handler - pre-flight failures are accounted', () => {
+  // A pre-flight throw (deleted user, missing embedding-model setting) used to escape all
+  // failure accounting, leaving `error` unset. `error` is the terminal-exclusion clause of
+  // buildFabFileChunkScanFilter, so the daily un-chunked rescue sweep re-enqueued the same
+  // orphan every day and refilled the DLQ forever.
+  const MISSING_USER_ERR = 'User not found for userId: u1';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.incrementCounters.mockResolvedValue({
+      failedFiles: 1,
+      processingFailedFiles: 1,
+      vectorizedFiles: 0,
+      totalFiles: 3,
+    });
+    h.isBatchComplete.mockReturnValue(false);
+  });
+
+  it('marks the file errored (terminal for the rescue sweep) when the user is gone, and re-throws', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', MISSING_USER_ERR);
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+  });
+
+  it('accounts the missing-user failure into its batch so the batch still reaches a terminal state', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', MISSING_USER_ERR);
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+  });
+
+  it('routes the missing-user failure through the same retry gate as a chunk failure', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(expect.anything(), FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+      fabFileId: 'ff1',
+      batchId: 'batch-1',
+      action: 'Chunking',
+      errorMessage: MISSING_USER_ERR,
+      logger: mockLogger,
+    });
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+
+  it('accounts a missing embedding-model setting the same way', async () => {
+    h.getSettingsValue.mockResolvedValue(undefined);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'Default embedding model not found');
+  });
+
+  it('still marks the file errored when the batch-id lookup itself fails', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    h.fabFileFindById.mockReturnValueOnce({
+      select: () => ({ lean: async () => Promise.reject(new Error('db down')) }),
+    } as never);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', MISSING_USER_ERR);
+    expect(h.incrementCounters).not.toHaveBeenCalled();
   });
 });

@@ -24,6 +24,8 @@ import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDeliv
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
+import type { Logger } from '@bike4mind/observability';
+import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
 const ChunkFabFilePayload = z.object({
@@ -38,12 +40,68 @@ const ChunkFabFilePayload = z.object({
   chunkSize: z.coerce.number().int().positive().optional().catch(undefined),
 });
 
+/**
+ * Failure accounting for a chunk message, shared by every throwing path in the handler.
+ *
+ * Persisting `error` is what makes the file terminal for the daily un-chunked rescue sweep
+ * (see buildFabFileChunkScanFilter in chunkScan.ts); a path that throws without it leaves the
+ * file permanently sweep-eligible, so it is re-enqueued and re-DLQ'd every day forever.
+ * Callers always rethrow so SQS still retries and then routes to the DLQ. Mirrors
+ * fabFileVectorize.ts's own failure handling - keep the two in sync.
+ */
+async function accountChunkFailure(params: {
+  event: SQSEvent;
+  fabFileId: string;
+  userId: string;
+  batchId: string | undefined;
+  errorMessage: string;
+  logger: Logger;
+}): Promise<void> {
+  const { event, fabFileId, userId, batchId, errorMessage, logger } = params;
+
+  // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
+  // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
+  // 'failed' status untouched.
+  if (
+    await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+      fabFileId,
+      batchId,
+      action: 'Chunking',
+      errorMessage,
+      logger,
+    })
+  ) {
+    return;
+  }
+
+  const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
+  if (!batchId || !isFirstFailure) return;
+
+  try {
+    await dataLakeBatchRepository.updateFileStatus(batchId, fabFileId, 'failed', errorMessage);
+    // One atomic $inc for both counters - two sequential incrementCounter calls could
+    // leave failedFiles bumped without processingFailedFiles on a crash between them,
+    // misclassifying this as an upload failure with no automatic recovery (#1412).
+    const batch = await dataLakeBatchRepository.incrementCounters(batchId, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    await finalizeBatchIfComplete(batch, logger);
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'data_lake_batch_progress',
+      batchId,
+      failedFiles: batch?.failedFiles ?? 1,
+      processingFailedFiles: batch?.processingFailedFiles ?? 1,
+      status: isBatchComplete(batch) ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+    });
+  } catch (innerErr) {
+    logger.error(`Error reporting batch chunk failure: ${innerErr}`);
+  }
+}
+
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
   const { fabFileId, userId, chunkSize } = ChunkFabFilePayload.parse(JSON.parse(body));
-
-  const user = await User.findById(userId);
-  if (!user) throw new Error(`User not found for userId: ${userId}`);
 
   logger.updateMetadata({
     fabFileId,
@@ -54,12 +112,41 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
   logger.log('====================================');
 
-  const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-    throw new BadRequestError('Default embedding model not found');
-  }
+  // Pre-flight runs inside its own accounting catch: these throws are permanent for this file
+  // (a deleted user can never come back), and without accounting they leave `error` unset, which
+  // keeps the file eligible for the daily rescue sweep forever - one orphan then re-DLQs daily.
+  const { user, defaultEmbeddingModel, fabFile } = await (async () => {
+    const user = await User.findById(userId);
+    if (!user) throw new Error(`User not found for userId: ${userId}`);
 
-  const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
+    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
+      throw new BadRequestError('Default embedding model not found');
+    }
+
+    const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
+    return { user, defaultEmbeddingModel, fabFile };
+  })().catch(async (err: unknown) => {
+    // The FabFile hasn't been loaded yet, so read just the batch id to keep batch counters
+    // correct; a file that can't be read at all is simply accounted without a batch.
+    const orphan = await FabFile.findById(fabFileId)
+      .select('batchId')
+      .lean()
+      .catch((readErr: unknown) => {
+        logger.error(`Failed to read batchId for ${fabFileId} while accounting a pre-flight failure: ${readErr}`);
+        return null;
+      });
+    await accountChunkFailure({
+      event,
+      fabFileId,
+      userId,
+      batchId: orphan?.batchId,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      logger,
+    });
+    throw err;
+  });
+
   if (!fabFile) {
     logger.log(`FabFile not found: ${fabFileId}, skipping chunking`);
     return;
@@ -110,55 +197,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
       )
     ).catch(async (err: unknown) => {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-
-      // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
-      // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
-      // 'failed' status untouched.
-      if (
-        await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
-          fabFileId,
-          batchId: fabFile.batchId,
-          action: 'Chunking',
-          errorMessage,
-          logger,
-        })
-      ) {
-        throw err;
-      }
-
-      // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without this,
-      // the file would sit at chunkCount:0 with no error - visually identical to a
-      // silently-dropped record. Persist a per-file error and account it as failed in its
-      // batch (so the batch still reaches a terminal state), mirroring fabFileVectorize's
-      // failure handling, then re-throw so SQS retries then routes to the DLQ.
-      const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
-      if (fabFile.batchId && isFirstFailure) {
-        try {
-          await dataLakeBatchRepository.updateFileStatus(fabFile.batchId, fabFileId, 'failed', errorMessage);
-          // One atomic $inc for both counters - two sequential incrementCounter calls could
-          // leave failedFiles bumped without processingFailedFiles on a crash between them,
-          // misclassifying this as an upload failure with no automatic recovery (#1412).
-          const batch = await dataLakeBatchRepository.incrementCounters(fabFile.batchId, {
-            failedFiles: 1,
-            processingFailedFiles: 1,
-          });
-          await finalizeBatchIfComplete(batch, logger);
-          await sendToClient(userId, Resource.websocket.managementEndpoint, {
-            action: 'data_lake_batch_progress',
-            batchId: fabFile.batchId,
-            failedFiles: batch?.failedFiles ?? 1,
-            processingFailedFiles: batch?.processingFailedFiles ?? 1,
-            status: isBatchComplete(batch)
-              ? batch!.failedFiles > 0
-                ? 'completed_with_errors'
-                : 'completed'
-              : undefined,
-          });
-        } catch (innerErr) {
-          logger.error(`Error reporting batch chunk failure: ${innerErr}`);
-        }
-      }
+      await accountChunkFailure({
+        event,
+        fabFileId,
+        userId,
+        batchId: fabFile.batchId,
+        errorMessage: err instanceof Error ? err.message : String(err),
+        logger,
+      });
       throw err;
     });
 
