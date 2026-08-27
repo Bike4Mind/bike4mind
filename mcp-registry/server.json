@@ -36,7 +36,7 @@
         },
         {
           "name": "B4M_API_URL",
-          "description": "API endpoint. Defaults to the CLI's configured backend; set this for a self-hosted deployment.",
+          "description": "API endpoint. Optional for the official build, which bakes in a default at release time; required if that default is empty (a fork) or to point at a self-hosted deployment. Without any endpoint, `mcp serve` exits at startup.",
           "isRequired": false
         }
       ]
