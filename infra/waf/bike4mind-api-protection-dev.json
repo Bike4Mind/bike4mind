@@ -20,15 +20,7 @@
                 "TextTransformations": [
                   {
                     "Priority": 0,
-                    "Type": "URL_DECODE"
-                  },
-                  {
-                    "Priority": 1,
-                    "Type": "NORMALIZE_PATH"
-                  },
-                  {
-                    "Priority": 2,
-                    "Type": "LOWERCASE"
+                    "Type": "NONE"
                   }
                 ],
                 "PositionalConstraint": "EXACTLY"
@@ -43,15 +35,7 @@
                 "TextTransformations": [
                   {
                     "Priority": 0,
-                    "Type": "URL_DECODE"
-                  },
-                  {
-                    "Priority": 1,
-                    "Type": "NORMALIZE_PATH"
-                  },
-                  {
-                    "Priority": 2,
-                    "Type": "LOWERCASE"
+                    "Type": "NONE"
                   }
                 ],
                 "PositionalConstraint": "EXACTLY"

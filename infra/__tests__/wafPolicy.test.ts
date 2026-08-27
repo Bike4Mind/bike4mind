@@ -53,6 +53,26 @@ function uriPathMatches(scopeDown: any): UriPathMatch[] {
         textTransformations: (byteMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
       });
     }
+    // A regex exemption has the same effect on traffic as a byte match and was invisible here, so
+    // the same bypass spelled as a RegexMatchStatement passed every assertion in this file.
+    const regexMatch = node.RegexMatchStatement;
+    if (regexMatch?.FieldToMatch?.UriPath && typeof regexMatch.RegexString === 'string') {
+      found.push({
+        searchString: regexMatch.RegexString,
+        positionalConstraint: 'REGEX',
+        textTransformations: (regexMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
+      });
+    }
+    // A pattern set keeps its patterns in a separate AWS resource, so nothing in this repo can
+    // read them. Returning silently would read as a pass, which is the failure mode this whole
+    // walker exists to prevent - so refuse to answer instead.
+    if (node.RegexPatternSetReferenceStatement) {
+      throw new Error(
+        'RegexPatternSetReferenceStatement: patterns live in a separate AWS resource and cannot be ' +
+          'inspected from this repo, so path assertions here cannot cover it. Assert on the pattern ' +
+          'set directly, or do not use one in a policy these tests are meant to guard.'
+      );
+    }
     Object.values(node).forEach(walk);
   };
   walk(scopeDown);
@@ -483,10 +503,14 @@ describe('wafPolicy', () => {
 
       expect(rules.find(r => r.Name === 'allow-admin-endpoints')).toBeUndefined();
 
+      // Matched with includes rather than startsWith on purpose: a regex spelling carries an
+      // anchor, so '^/api/admin/' does not start with '/api/admin' and the obvious check reads as
+      // a pass. Any Allow rule mentioning the admin prefix at all is what needs flagging here.
       const exemptedPaths = rules
         .filter(r => r.Action && 'Allow' in r.Action)
         .flatMap(r => uriPathMatches(r.Statement).map(m => m.searchString));
-      expect(exemptedPaths.some(p => p.startsWith('/api/admin'))).toBe(false);
+      const adminExemptions = exemptedPaths.filter(p => p.includes('/api/admin'));
+      expect(adminExemptions, 'no Allow rule may reference the admin prefix').toEqual([]);
     });
 
     // The security-dashboard ingest endpoints post scanner output, which CommonRuleSet reads as an
