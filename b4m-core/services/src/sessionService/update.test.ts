@@ -24,8 +24,8 @@ import { IUserDocument } from '@bike4mind/common';
 const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
 const PERSONAL_FILE_ID = '507f1f77bcf86cd799439002';
 
-// knowledgeIds address the ObjectId-keyed FabFile._id, and updateSession now rejects anything
-// that is not 24-hex, so these fixtures carry real ObjectId-shaped ids. The names are what the
+// knowledgeIds address the ObjectId-keyed FabFile._id, and updateSession now drops anything that
+// is not 24-hex, so these fixtures carry real ObjectId-shaped ids. The names are what the
 // assertions read; the digits themselves are arbitrary.
 const F_CLEAN = '000000000000000000000001';
 const F_PENDING = '000000000000000000000002';
@@ -425,6 +425,41 @@ describe('updateSession - lake-scope derivation on attach', () => {
     await updateSession(user, { id: 'session-1', knowledgeIds: [PERSONAL_FILE_ID] } as never, adapters as never);
 
     expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+  });
+
+  /**
+   * A rename PUTs the whole stored session back (RenameInput sends `{ ...session, name }`), and the
+   * stored list can hold a legacy id that updateSession drops. The incoming list therefore differs
+   * from the stored one on every such write, so a changed-list guard would derive a scope here and
+   * narrow the notebook's retrieval as a side effect of a rename. Keyed on additions instead.
+   */
+  it('derives nothing when a write only resubmits the stored list minus an unusable id', async () => {
+    const { update, adapters } = makeAdapters({ knowledgeIds: ['legacy-uuid-not-an-objectid', LAKE_FILE_ID] }, [
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+
+    await updateSession(
+      user,
+      { id: 'session-1', name: 'Renamed', knowledgeIds: ['legacy-uuid-not-an-objectid', LAKE_FILE_ID] } as never,
+      adapters as never
+    );
+
+    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+    expect(update.mock.calls[0][0].knowledgeIds).toEqual([LAKE_FILE_ID]);
+  });
+
+  it('still derives when a lake file is attached beside an unusable id', async () => {
+    const { update, adapters } = makeAdapters({ knowledgeIds: ['legacy-uuid-not-an-objectid'] }, [
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+
+    await updateSession(
+      user,
+      { id: 'session-1', knowledgeIds: ['legacy-uuid-not-an-objectid', LAKE_FILE_ID] } as never,
+      adapters as never
+    );
+
+    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
   });
 
   it('never overwrites a scope the session already has', async () => {

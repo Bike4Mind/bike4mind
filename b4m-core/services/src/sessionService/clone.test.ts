@@ -239,10 +239,10 @@ describe('cloneSession - redaction at the copy boundary', () => {
   });
 
   /**
-   * createSession rejects a knowledge id that is not ObjectId-shaped. Sessions written before that
-   * validation can hold one, and cloning re-submits the source list - so without the filter at the
-   * copy boundary, a legacy notebook becomes impossible to clone rather than merely awkward to
-   * export. Asserts the real path, not just the helper.
+   * createSession DROPS a knowledge id that is not ObjectId-shaped rather than rejecting it, and
+   * cloning re-submits the source list. Without the filter at the copy boundary the query throws,
+   * so a legacy notebook becomes impossible to clone rather than merely awkward to export.
+   * Asserts the real path, not just the helper.
    */
   it('clones a notebook holding a legacy unresolvable knowledgeId, keeping only the usable ids', async () => {
     const GOOD = '507f1f77bcf86cd799439011';
