@@ -127,7 +127,8 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@bike4mind/common', () => {
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
   class ChunkClaimLostError extends Error {
     constructor(public fabFileId: string) {
       super(`Chunk claim for FabFile ${fabFileId} was lost to a successor mid-run`);
@@ -143,6 +144,15 @@ vi.mock('@bike4mind/common', () => {
     // the real bug would hide behind.
     isChunkClaimLostError: (err: unknown): boolean =>
       Boolean(err && (err instanceof ChunkClaimLostError || (err as Error).name === 'ChunkClaimLostError')),
+    // Real, for the same reason as the note above: convergenceProvenance.ts re-exports this
+    // vocabulary from common (so producers outside apps/client can stamp a haltable message), and
+    // the payload schema's fail-soft `origin` plus the halt rule are what the kill-switch tests
+    // below exercise - a stub would make them assert against themselves.
+    WORK_ORIGINS: actual.WORK_ORIGINS,
+    WorkOriginSchema: actual.WorkOriginSchema,
+    CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
+    provenancePayloadShape: actual.provenancePayloadShape,
+    shouldHaltConvergence: actual.shouldHaltConvergence,
   };
 });
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));

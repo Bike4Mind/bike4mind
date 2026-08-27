@@ -102,10 +102,22 @@ vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifie
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
-vi.mock('@bike4mind/common', async () => ({
-  SupportedEmbeddingModelSchema: z.string(),
-  getEmbeddingModelCost: vi.fn(() => 0.0001),
-}));
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    SupportedEmbeddingModelSchema: z.string(),
+    getEmbeddingModelCost: vi.fn(() => 0.0001),
+    // Pulled from the real module rather than retyped, for the provenance vocabulary
+    // convergenceProvenance.ts re-exports from common:
+    // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
+    // tests below exercise, so a stub here would make them assert against themselves.
+    WORK_ORIGINS: actual.WORK_ORIGINS,
+    WorkOriginSchema: actual.WorkOriginSchema,
+    CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
+    provenancePayloadShape: actual.provenancePayloadShape,
+    shouldHaltConvergence: actual.shouldHaltConvergence,
+  };
+});
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
   EmbeddingFactory: class {

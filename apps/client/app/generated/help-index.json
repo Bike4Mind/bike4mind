@@ -1612,6 +1612,11 @@
           "anchor": "deleting-mappings"
         },
         {
+          "level": 4,
+          "text": "When a mapped model becomes unavailable",
+          "anchor": "when-a-mapped-model-becomes-unavailable"
+        },
+        {
           "level": 2,
           "text": "Metrics Tab",
           "anchor": "metrics-tab"
@@ -8741,6 +8746,11 @@
         },
         {
           "level": 2,
+          "text": "Troubleshooting",
+          "anchor": "troubleshooting"
+        },
+        {
+          "level": 2,
           "text": "Related Features",
           "anchor": "related-features"
         }
@@ -11192,6 +11202,11 @@
               "level": 4,
               "text": "Deleting Mappings",
               "anchor": "deleting-mappings"
+            },
+            {
+              "level": 4,
+              "text": "When a mapped model becomes unavailable",
+              "anchor": "when-a-mapped-model-becomes-unavailable"
             },
             {
               "level": 2,
@@ -18332,6 +18347,11 @@
             },
             {
               "level": 2,
+              "text": "Troubleshooting",
+              "anchor": "troubleshooting"
+            },
+            {
+              "level": 2,
               "text": "Related Features",
               "anchor": "related-features"
             }
@@ -19173,5 +19193,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-08-22T06:02:59.984Z"
+  "version": "2026-08-26T15:51:16.296Z"
 }
