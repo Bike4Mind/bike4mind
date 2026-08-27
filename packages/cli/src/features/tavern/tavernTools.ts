@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { REVIEW_GATE_STATUS_VALUES, SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
+import { REVIEW_GATE_STATUS_VALUES, SUBQUEST_STATUS_VALUES, type SubQuestStatus } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ITavernService } from './ITavernService.js';
 import { CreateAgentRequestSchema, CreateQuestRequestSchema, UpdateAgentRequestSchema } from './types.js';
@@ -649,7 +649,7 @@ function createUpdateReviewGateTool(service: ITavernService): ICompletionOptionT
           review_status: {
             type: 'string',
             description: 'The review decision',
-            enum: ['pending', 'approved', 'rejected'],
+            enum: [...REVIEW_GATE_STATUS_VALUES],
           },
           review_note: {
             type: 'string',
@@ -711,7 +711,7 @@ function createUpdateQuestProgressTool(service: ITavernService): ICompletionOpti
     toolFn: async (params: unknown) => {
       const { plan_id, quest_id, sub_quest_id, status, evidence, time_spent } =
         UpdateQuestProgressParamsSchema.parse(params);
-      const updates: { status?: string; evidence?: string; timeSpent?: number } = {};
+      const updates: { status?: SubQuestStatus; evidence?: string; timeSpent?: number } = {};
       if (status !== undefined) updates.status = status;
       if (evidence !== undefined) updates.evidence = evidence;
       if (time_spent !== undefined) updates.timeSpent = time_spent;

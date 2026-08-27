@@ -64,7 +64,7 @@ interface RawPlan {
 }
 
 const migration: MigrationFile = {
-  id: 20260826000000,
+  id: 20260827000000,
   name: 'normalize questmaster status and complexity vocabularies',
 
   up: async () => {
@@ -97,6 +97,11 @@ const migration: MigrationFile = {
     let statusesRewritten = 0;
     let complexitiesRewritten = 0;
     let skipped = 0;
+    // An absent field is not an undocumented value. `$nin` matches documents where the path is
+    // missing, so a quest predating `complexity` lands in the same branch as a genuinely
+    // unreadable token - and would be re-reported on every future run. Counted apart so the audit
+    // line stays trustworthy: it is the only output an operator has.
+    let absent = 0;
     const skippedSamples: string[] = [];
     const rewriteTally = new Map<string, number>();
 
@@ -124,11 +129,15 @@ const migration: MigrationFile = {
               (rewriteTally.get(`complexity:${String(quest.complexity)}`) ?? 0) + 1
             );
           } else if (canonicalComplexity === null) {
-            skipped++;
-            if (skippedSamples.length < MAX_SKIPPED_SAMPLES) {
-              skippedSamples.push(
-                `${plan._id.toString()} quest[${questIndex}] complexity=${JSON.stringify(quest.complexity)}`
-              );
+            if (quest.complexity === undefined) {
+              absent++;
+            } else {
+              skipped++;
+              if (skippedSamples.length < MAX_SKIPPED_SAMPLES) {
+                skippedSamples.push(
+                  `${plan._id.toString()} quest[${questIndex}] complexity=${JSON.stringify(quest.complexity)}`
+                );
+              }
             }
           }
 
@@ -142,6 +151,10 @@ const migration: MigrationFile = {
                 (rewriteTally.get(`status:${String(subQuest.status)}`) ?? 0) + 1
               );
             } else if (canonicalStatus === null) {
+              if (subQuest.status === undefined) {
+                absent++;
+                return;
+              }
               skipped++;
               if (skippedSamples.length < MAX_SKIPPED_SAMPLES) {
                 skippedSamples.push(
@@ -182,6 +195,13 @@ const migration: MigrationFile = {
         `${complexitiesRewritten} complexity value(s) across ${plansRewritten} plan(s)` +
         (tally ? ` - ${tally}` : '')
     );
+
+    if (absent > 0) {
+      console.log(
+        `[normalize-questmaster-vocabularies] ${absent} value(s) were absent rather than ` +
+          'non-canonical (documents predating the field) - nothing to repair on those'
+      );
+    }
 
     if (skipped > 0) {
       // Not a failure: an undocumented token is a question for a human, not a value to invent.

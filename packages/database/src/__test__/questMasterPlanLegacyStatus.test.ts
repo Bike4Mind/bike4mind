@@ -7,11 +7,13 @@ import { setupMongoTest } from './utils';
 /**
  * Characterization of what a NON-CANONICAL sub-quest status on disk actually does.
  *
- * This is reachable because the mongoose `enum` on the status path is only enforced on the
- * create path: there is no `runValidators` anywhere in QuestMasterPlanModel and every status
- * write is `findOneAndUpdate` + `$set` (same write-path asymmetry pinned for Quest.promptMeta in
+ * This was reachable because the mongoose `enum` on the status path was only enforced on the
+ * create path: no call site passed `runValidators` and every status write is `findOneAndUpdate` +
+ * `$set` (same write-path asymmetry pinned for Quest.promptMeta in
  * questPromptMetaSessionPersistence.test.ts). Anything that reached the collection before the
- * vocabulary was unified therefore survives untouched, and no read path validates.
+ * vocabulary was unified therefore survives untouched, and no read path validates. The write half
+ * is now closed - `runValidators` is on for all four status/review-gate writers, asserted below -
+ * so these cases pin the READ behaviour plus the fact that new bad writes are refused.
  *
  * The legacy tokens below are the retired vocabularies, not invented ones: `pending` /
  * `in-progress` came from the V2 artifact zod schema, and `blocked` from the deleted V1
@@ -136,6 +138,10 @@ describe('QuestMasterPlan legacy sub-quest status on disk', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forcing past the compile-time type is the point
       questMasterPlanRepository.updateReviewGate(planId, 'q1', 'sq1', 'not-a-review-status' as any)
     ).rejects.toThrow(/not a valid enum value/);
+
+    // Rejected AND not half-applied - the same second half its status sibling above asserts.
+    const raw = await rawCollection().findOne({ _id: new mongoose.Types.ObjectId(planId) });
+    expect((raw!.quests as { subQuests: { reviewStatus?: string }[] }[])[0].subQuests[0].reviewStatus).toBeUndefined();
   });
 
   it('still accepts a valid review-gate status', async () => {

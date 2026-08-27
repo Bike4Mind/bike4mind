@@ -27,9 +27,11 @@ const STATUS_COLORS: Record<SubQuestStatus, SubQuestStatusColor> = {
  * mongoose enum did not gate the update path for the collection's whole history - so a retired
  * token can still arrive here. Retired tokens are resolved through the shared normalizer rather
  * than a local alias list: the previous switch carried its own guesses (`done`, `started`,
- * `failed`, `error`) that appear in no schema, type or writer at any commit, while missing the
- * one alias that was real - hyphenated `in-progress` fell through to neutral instead of the
- * warning colour its underscore twin gets.
+ * `failed`, `error`), none of which was ever a SUB-QUEST status, while missing the one alias that
+ * was real - hyphenated `in-progress` fell through to neutral instead of the warning colour its
+ * underscore twin gets. Note `failed` is not invented in general: it is a live member of
+ * NODE_STATUS_VALUES (b4m-core/common/src/types/entities/QuestNodeTypes.ts), a separate
+ * vocabulary that never reaches a sub-quest.
  */
 export const getSubQuestStatusColor = (status: string): SubQuestStatusColor => {
   const canonical = normalizeSubQuestStatus(status);

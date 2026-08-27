@@ -5,7 +5,7 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260826000000_normalize-questmaster-vocabularies';
+import migration from './20260827000000_normalize-questmaster-vocabularies';
 
 const COLLECTION = 'questmasterplans';
 
@@ -226,6 +226,58 @@ describe('normalize-questmaster-vocabularies migration (real DB)', () => {
 
     expect((await plans().findOne({ _id: empty }))!.quests).toEqual([]);
     expect(await complexitiesOf(noSubs)).toEqual(['Easy']);
+  });
+
+  it('reports an absent field as absent, not as an undocumented value', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // $nin matches a MISSING path too, so a quest predating `complexity` gets selected. It must
+    // not be reported as a value nobody can interpret - that warning is the migration's whole
+    // deliverable, and a false entry would re-appear on every future run.
+    await plans().insertOne({
+      notebookId: 's',
+      goal: 'Pre-dates the complexity field',
+      state: 'active',
+      quests: [{ id: 'q1', title: 'Q', description: 'd', subQuests: [{ id: 'sq1', title: 'a', status: 'completed' }] }],
+    });
+
+    await migration.up();
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('absent rather than'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('SKIPPED'));
+    log.mockRestore();
+    warn.mockRestore();
+  });
+
+  it('repairs across more plans than fit in one page', async () => {
+    // BATCH_SIZE is 200, so every other case in this file lives inside a single page and the
+    // _id-cursor paging is never actually exercised. 250 forces two pages plus a partial.
+    const docs = Array.from({ length: 250 }, (_, i) => ({
+      notebookId: 's',
+      goal: `Paged plan ${i}`,
+      state: 'active',
+      quests: [
+        {
+          id: 'q1',
+          title: 'Q',
+          description: 'd',
+          complexity: 'low',
+          subQuests: [{ id: 'sq1', title: 'a', status: 'in-progress' }],
+        },
+      ],
+    }));
+    await plans().insertMany(docs);
+
+    await migration.up();
+
+    const leftover = await plans()
+      .find({
+        quests: { $elemMatch: { subQuests: { $elemMatch: { status: { $nin: [...SUBQUEST_STATUS_VALUES] } } } } },
+      })
+      .toArray();
+    expect(leftover).toEqual([]);
+    expect(await plans().countDocuments({ 'quests.0.complexity': 'Easy' })).toBe(250);
+    expect(await plans().countDocuments({ 'quests.0.subQuests.0.status': 'in_progress' })).toBe(250);
   });
 
   it('leaves every value canonical after the run, by the same predicate the app uses', async () => {

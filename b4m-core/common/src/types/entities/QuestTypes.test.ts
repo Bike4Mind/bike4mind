@@ -39,6 +39,18 @@ describe('normalizeSubQuestStatus', () => {
     expect(normalizeSubQuestStatus('totally-made-up')).toBeNull();
   });
 
+  it('returns null for a token naming an Object.prototype member', () => {
+    // The alias tables are plain object literals, so `ALIASES[value] ?? null` returned the
+    // INHERITED member for these - a function, typed as a SubQuestStatus. The migration writes
+    // whatever this returns straight to the database through the raw driver, so `constructor`
+    // on disk would have been rewritten to a function and `__proto__` to `{}`, onto a
+    // `required: true` String path.
+    for (const hostile of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', '__proto__']) {
+      expect(normalizeSubQuestStatus(hostile)).toBeNull();
+      expect(normalizeQuestComplexity(hostile)).toBeNull();
+    }
+  });
+
   it('returns null for every non-string shape a mongo document can hold', () => {
     for (const value of [undefined, null, 42, true, {}, [], new Date()]) {
       expect(normalizeSubQuestStatus(value)).toBeNull();

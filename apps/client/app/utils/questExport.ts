@@ -15,30 +15,7 @@ import {
   AlignmentType,
 } from 'docx';
 import { DocxColors, DocxFontSizes, DocxSpacing, DocxBorderSizes } from './docxStyles';
-
-const STATUS_ICONS: Record<SubQuestStatus, string> = {
-  completed: ' ✓',
-  in_progress: ' 🔄',
-  not_started: ' ⏳',
-  skipped: ' ⏭',
-  deleted: ' ❌',
-};
-
-function getStatusIcon(status: SubQuestStatus): string {
-  return STATUS_ICONS[status] ?? '';
-}
-
-const STATUS_LABELS: Record<SubQuestStatus, string> = {
-  completed: 'Completed',
-  in_progress: 'In Progress',
-  not_started: 'Not Started',
-  skipped: 'Skipped',
-  deleted: 'Deleted',
-};
-
-function getStatusLabel(status: SubQuestStatus): string {
-  return STATUS_LABELS[status] ?? status;
-}
+import { getSubQuestStatusIcon, getSubQuestStatusLabel } from './subQuestStatusPresentation';
 
 function slugifyGoal(goal: string): string {
   return goal
@@ -78,7 +55,7 @@ export function questPlanToMarkdown(plan: IQuestMasterPlanDocument): string {
   plan.quests.forEach((quest, i) => {
     md += `${i + 1}. **${quest.title}** (${quest.complexity})\n`;
     quest.subQuests.forEach((sq, j) => {
-      md += `   ${i + 1}.${j + 1}. ${sq.title}${getStatusIcon(sq.status)}\n`;
+      md += `   ${i + 1}.${j + 1}. ${sq.title}${getSubQuestStatusIcon(sq.status)}\n`;
     });
   });
   md += `\n---\n\n`;
@@ -90,9 +67,9 @@ export function questPlanToMarkdown(plan: IQuestMasterPlanDocument): string {
     md += `${quest.description}\n\n`;
 
     quest.subQuests.forEach((sq, j) => {
-      const icon = getStatusIcon(sq.status);
+      const icon = getSubQuestStatusIcon(sq.status);
       md += `### ${i + 1}.${j + 1}. ${sq.title}${icon}\n\n`;
-      md += `- **Status:** ${getStatusLabel(sq.status)}\n`;
+      md += `- **Status:** ${getSubQuestStatusLabel(sq.status)}\n`;
       if (sq.startedAt) {
         md += `- **Started:** ${new Date(sq.startedAt).toLocaleString()}\n`;
       }
@@ -156,7 +133,7 @@ export function questPlanToCSV(plan: IQuestMasterPlanDocument): string {
       Complexity: quest.complexity,
       'Sub-Quest #': j + 1,
       'Sub-Quest Title': sq.title,
-      Status: getStatusLabel(sq.status),
+      Status: getSubQuestStatusLabel(sq.status),
       'Started At': sq.startedAt ? new Date(sq.startedAt).toISOString() : '',
     }))
   );
@@ -254,7 +231,7 @@ export async function questPlanToPdf(plan: IQuestMasterPlanDocument, filename: s
   plan.quests.forEach((quest, i) => {
     addWrappedText(doc, cursor, `${i + 1}. ${quest.title} (${quest.complexity})`, 10, { bold: true });
     quest.subQuests.forEach((sq, j) => {
-      const statusLabel = getStatusLabel(sq.status);
+      const statusLabel = getSubQuestStatusLabel(sq.status);
       addWrappedText(doc, cursor, `    ${i + 1}.${j + 1}. ${sq.title} — ${statusLabel}`, 9);
     });
     cursor.y += 1;
@@ -282,7 +259,7 @@ export async function questPlanToPdf(plan: IQuestMasterPlanDocument, filename: s
     quest.subQuests.forEach((sq, j) => {
       ensureSpace(doc, cursor, 12);
       addWrappedText(doc, cursor, `${i + 1}.${j + 1}. ${sq.title}`, 11, { bold: true });
-      addWrappedText(doc, cursor, `Status: ${getStatusLabel(sq.status)}`, 9, { color: [100, 100, 100] });
+      addWrappedText(doc, cursor, `Status: ${getSubQuestStatusLabel(sq.status)}`, 9, { color: [100, 100, 100] });
       if (sq.startedAt) {
         addWrappedText(doc, cursor, `Started: ${new Date(sq.startedAt).toLocaleString()}`, 9, {
           color: [100, 100, 100],
@@ -327,7 +304,7 @@ export async function questPlanToExcel(plan: IQuestMasterPlanDocument, filename:
       Complexity: quest.complexity,
       'SubQuest #': j + 1,
       'SubQuest Title': sq.title,
-      Status: getStatusLabel(sq.status),
+      Status: getSubQuestStatusLabel(sq.status),
       'Started At': sq.startedAt ? new Date(sq.startedAt).toISOString() : '',
     }))
   );
@@ -352,17 +329,22 @@ export async function questPlanToExcel(plan: IQuestMasterPlanDocument, filename:
 /**
  * Get background color for status-based cell shading.
  */
+// The four status lookups in this file are unreachable per the type but not at runtime: a legacy
+// plan on disk can carry a status predating the mongoose enum. Each uses Object.hasOwn rather than
+// `??` or `in`, both of which walk the prototype chain - so a status named 'constructor' would
+// resolve to the inherited member instead of falling back.
 function getStatusCellShading(status: SubQuestStatus): { fill: string } {
-  // The `??` arms here and below are unreachable per the type but not at runtime:
-  // a legacy plan on disk can carry a status predating the mongoose enum.
-  return { fill: DocxColors.statusBackground[status] ?? DocxColors.statusBackground.not_started };
+  const fill = Object.hasOwn(DocxColors.statusBackground, status)
+    ? DocxColors.statusBackground[status]
+    : DocxColors.statusBackground.not_started;
+  return { fill };
 }
 
 /**
  * Get text color for status-based text styling.
  */
 function getStatusTextColor(status: SubQuestStatus): string {
-  return DocxColors.status[status] ?? DocxColors.status.not_started;
+  return Object.hasOwn(DocxColors.status, status) ? DocxColors.status[status] : DocxColors.status.not_started;
 }
 
 export async function questPlanToDocx(plan: IQuestMasterPlanDocument, filename: string): Promise<void> {
@@ -445,7 +427,7 @@ export async function questPlanToDocx(plan: IQuestMasterPlanDocument, filename: 
       })
     );
     quest.subQuests.forEach((sq, j) => {
-      const statusIcon = STATUS_ICONS[sq.status] || '';
+      const statusIcon = getSubQuestStatusIcon(sq.status);
       const statusColor = getStatusTextColor(sq.status);
       children.push(
         new Paragraph({
@@ -557,7 +539,7 @@ export async function questPlanToDocx(plan: IQuestMasterPlanDocument, filename: 
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: getStatusLabel(sq.status),
+                        text: getSubQuestStatusLabel(sq.status),
                         size: DocxFontSizes.small,
                         color: getStatusTextColor(sq.status),
                         bold: true,

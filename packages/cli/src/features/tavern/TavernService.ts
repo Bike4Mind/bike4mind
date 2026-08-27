@@ -1,4 +1,4 @@
-import type { ReviewGateStatus } from '@bike4mind/common';
+import type { ReviewGateStatus, SubQuestStatus } from '@bike4mind/common';
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { ITavernService } from './ITavernService.js';
 import type {
@@ -118,7 +118,7 @@ export class TavernService implements ITavernService {
     planId: string,
     questId: string,
     subQuestId: string,
-    updates: { status?: string; evidence?: string; timeSpent?: number }
+    updates: { status?: SubQuestStatus; evidence?: string; timeSpent?: number }
   ): Promise<QuestWorkflowResponse> {
     return this.apiClient.post<QuestWorkflowResponse>(
       `/api/quest-master-plans/${encodeURIComponent(planId)}/subquest-progress`,

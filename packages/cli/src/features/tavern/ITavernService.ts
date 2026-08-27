@@ -1,4 +1,4 @@
-import type { ReviewGateStatus } from '@bike4mind/common';
+import type { ReviewGateStatus, SubQuestStatus } from '@bike4mind/common';
 import type {
   AgentListResponse,
   CreateAgentRequest,
@@ -87,7 +87,7 @@ export interface ITavernService {
     planId: string,
     questId: string,
     subQuestId: string,
-    updates: { status?: string; evidence?: string; timeSpent?: number }
+    updates: { status?: SubQuestStatus; evidence?: string; timeSpent?: number }
   ): Promise<QuestWorkflowResponse>;
 
   /** Write or update the handoff state for session continuity */

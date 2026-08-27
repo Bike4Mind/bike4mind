@@ -7,7 +7,8 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels, isImageServeable, type SubQuestStatus } from '@bike4mind/common';
+import { ChatModels, isImageServeable } from '@bike4mind/common';
+import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
@@ -126,25 +127,6 @@ function slugify(text: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 50);
-}
-
-/**
- * Kept exhaustive over SubQuestStatus so a new status fails the build here rather
- * than silently exporting without an icon. Must stay in sync with the client-side
- * docx export's STATUS_ICONS (apps/client/app/utils/questExport.ts).
- */
-const STATUS_ICONS: Record<SubQuestStatus, string> = {
-  completed: ' ✓',
-  in_progress: ' 🔄',
-  not_started: ' ⏳',
-  skipped: ' ⏭',
-  deleted: ' ❌',
-};
-
-function getStatusIcon(status: SubQuestStatus): string {
-  // The `??` is unreachable per the type: a legacy plan on disk can still carry
-  // a status predating the mongoose enum.
-  return STATUS_ICONS[status] ?? '';
 }
 
 /**
@@ -359,7 +341,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let subQuestNum = 0;
       for (const subQuest of quest.subQuests) {
         subQuestNum++;
-        const statusIcon = getStatusIcon(subQuest.status);
+        const statusIcon = getSubQuestStatusIcon(subQuest.status);
         markdown += `  - ${questNum}.${subQuestNum}: ${subQuest.title}${statusIcon}\n`;
       }
     }
@@ -375,7 +357,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let subQuestNum = 0;
       for (const subQuest of quest.subQuests) {
         subQuestNum++;
-        const statusIcon = getStatusIcon(subQuest.status);
+        const statusIcon = getSubQuestStatusIcon(subQuest.status);
         markdown += `### ${questNum}.${subQuestNum}: ${subQuest.title}${statusIcon}\n\n`;
 
         if (subQuest.status === 'not_started') {

@@ -286,6 +286,11 @@ export const QuestDataSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
+  // Deliberately NOT z.enum(QUEST_COMPLEXITY_VALUES), unlike the request schemas above. This
+  // shape parses a SERVER RESPONSE, and a stored plan can still hold a retired rating until the
+  // normalize-questmaster-vocabularies migration has run against that environment - narrowing it
+  // turns legacy data into a client-side parse failure instead of something the CLI can display.
+  // The existing round-trip test encodes exactly that case with `complexity: 'low'`.
   complexity: z.string(),
   subQuests: z.array(SubQuestSchema),
 });
