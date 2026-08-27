@@ -264,6 +264,12 @@ describe('ingest', () => {
       sourceType: FabFileSourceType.SLACK,
       sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001' },
     });
+    // Carried from the AUTHORIZED context. `createFabFile` runs a THIRD manage gate that cannot
+    // derive this from the user document (`create.ts:132-137`), so an omitted value zeroes
+    // canManageLake's org rungs and refuses an org admin the prologue already authorized - the live
+    // failure was "You do not have permission to change this data lake's files" AFTER both prologue
+    // gates passed.
+    expect(params.administeredOrgIds).toEqual(['org-2']);
   });
 
   it('skips a file whose content is already in THIS lake, without replacing it', async () => {
