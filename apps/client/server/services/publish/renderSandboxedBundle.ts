@@ -7,7 +7,7 @@ import { buildFragmentNavScriptTag } from './fragmentNav';
  * Publish - sandboxed-bundle serializer.
  *
  * Re-enables author inline JS by preparing a bundle's `index.html` to be hosted
- * inside a `<iframe sandbox="allow-scripts">` (NO `allow-same-origin`) on the
+ * inside a `<iframe sandbox={VIEWER_SANDBOX}>` (NO `allow-same-origin`) on the
  * `/p/...` viewer page. The sandbox gives the bundle an opaque (`null`) origin:
  * its inline scripts run, but they cannot read the app origin's `localStorage`/
  * cookies, and any `fetch('/api/*')` goes out with no credentials. Author JS is
@@ -36,6 +36,9 @@ import { buildFragmentNavScriptTag } from './fragmentNav';
  * rewritten to absolute `{origin}{path}` URLs - a root-relative path would not
  * resolve against the opaque `about:srcdoc` document, and they load fine
  * cross-origin from the app host without credentials.
+ *
+ * Off-origin `<a href>`s are retargeted to a new tab (see `retargetOffOriginLinks`),
+ * which is the only outbound navigation the viewer sandbox permits.
  */
 
 export interface SandboxAsset {
@@ -145,6 +148,8 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
     }
   }
 
+  retargetOffOriginLinks($, origin);
+
   if (input.pagePaths?.length) {
     // After author content so author click handlers run first (the helper skips
     // defaultPrevented events); the pin bridge appends after this, order-independent.
@@ -158,6 +163,33 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
   }
 
   return { srcdoc: $.html(), droppedAssets };
+}
+
+/**
+ * Force off-origin links into a new tab. Framing another origin is refused by the viewer's
+ * `frame-src`, which replaces the whole artifact with the browser's "content is blocked"
+ * page; a popup is what `VIEWER_SANDBOX` permits instead. `noopener` is added, but NOT
+ * `noreferrer`: outbound referral attribution is deliberately kept (share links suppress
+ * the Referer separately via the wrapper's referrer policy, which the framed document
+ * inherits). Author JS that assigns `location` off-origin is still blocked - only the
+ * link forms are covered.
+ */
+function retargetOffOriginLinks($: cheerio.CheerioAPI, origin: string): void {
+  const sameOrigin = new Set([origin, PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''].filter(Boolean));
+  $('a[href]').each((_i, el) => {
+    let url: URL;
+    try {
+      // Resolved against the doc origin so relative and protocol-relative hrefs classify too.
+      url = new URL($(el).attr('href') ?? '', origin);
+    } catch {
+      return;
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || sameOrigin.has(url.origin)) return;
+    $(el).attr('target', '_blank');
+    const rel = new Set(($(el).attr('rel') ?? '').split(/\s+/).filter(Boolean));
+    rel.add('noopener');
+    $(el).attr('rel', [...rel].join(' '));
+  });
 }
 
 /** Insert (or update) a single `<base href>` as the first child of `<head>`. */

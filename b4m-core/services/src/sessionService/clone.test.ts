@@ -28,7 +28,13 @@ describe('cloneSession - redaction at the copy boundary', () => {
           create: vi.fn().mockResolvedValue({ id: 'cloned-session-1' }),
         },
         projects: {},
-        fabFiles: {},
+        // A real reader: with `fabFiles: {}` the ownership arm threw a TypeError that the derivation
+        // swallows, so anything asserting DERIVED scope passed for the wrong reason. Defaults to
+        // "sees nothing"; individual tests override to model a readable shared lake file.
+        fabFiles: {
+          shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) },
+          search: vi.fn().mockResolvedValue({ data: [] }),
+        },
         chatHistories: {
           findAllBySessionId: vi.fn().mockResolvedValue([
             {
@@ -57,6 +63,119 @@ describe('cloneSession - redaction at the copy boundary', () => {
       created,
     };
   };
+
+  /**
+   * Same reason as the fork case: a clone is a NEW session holding the source's lake files, so it must
+   * carry the source's scope rather than re-derive it through the ownership arm alone (which cannot
+   * see a teammate-authored organization-lake file, derives [], and an empty list reads downstream as
+   * NO tag filter). Asserts the PERSISTED payload, so it also pins that secureParameters keeps the
+   * field and that createSession's explicit-wins arm does not re-derive over it.
+   */
+  it('carries the source session retrievalTags onto the clone', async () => {
+    const { db } = makeAdapters();
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
+
+  /**
+   * Same boundary as this file's docblock, one field further along: a share grant lets you READ the
+   * source, not inherit its lake scope. The cloner may not reach that lake, and the explicit-wins arm
+   * in createSession skips the derivation, so nothing on this path would check. Inheriting it would
+   * narrow the clone to a lake it cannot read and switch off its personal-corpus fallback (a
+   * non-empty retrievalTags reads as "already lake-scoped"), which the user cannot undo from the UI.
+   */
+  it('does NOT inherit the lake scope when the caller only holds a share', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    // Exact: `not.objectContaining` would also pass if some OTHER tag had been written, which is a
+    // different (and worse) outcome than the absence this asserts.
+    expect(db.sessions.create.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+  });
+
+  /**
+   * The two halves together. The ownership gate routes a non-owner into the derivation rather than
+   * letting them inherit the owner's tags; forwarding `resolveLakeAccess` is what gives that
+   * derivation a reachability check.
+   *
+   * Only the FIRST case below pins both halves - it fails if either the gate or the forwarding is
+   * removed. The second passes at the parent commit too (with no resolver the derivation returns its
+   * tags unintersected, which is the same result); it earns its place by pinning the intersection's
+   * POLARITY, so an inverted predicate cannot pass the pair. Both assert the PERSISTED payload.
+   */
+  it('drops an inherited-looking lake tag when the share-holder cannot reach that lake', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    // The shared file IS readable by the cloner, so the ownership arm scrapes its lake tag...
+    db.fabFiles.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
+      { id: 'f1', tags: [{ name: 'datalake:acme' }] },
+    ]);
+    // ...but the cloner reaches a different lake, so the intersection must discard it.
+    const resolveLakeAccess = vi.fn().mockResolvedValue({
+      dataLakeTags: ['datalake:other'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakeViewComplete: true,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveLakeAccess } as never);
+
+    expect(resolveLakeAccess).toHaveBeenCalled();
+    // Exact: `not.objectContaining` would also pass if some OTHER tag had been written, which is a
+    // different (and worse) outcome than the absence this asserts.
+    expect(db.sessions.create.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+  });
+
+  it('keeps the derived lake tag when the share-holder CAN reach that lake', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1',
+      name: 'Original',
+      knowledgeIds: ['f1'],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    db.fabFiles.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
+      { id: 'f1', tags: [{ name: 'datalake:acme' }] },
+    ]);
+    const resolveLakeAccess = vi.fn().mockResolvedValue({
+      dataLakeTags: ['datalake:acme'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakeViewComplete: true,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveLakeAccess } as never);
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
+  });
 
   it('strips returnValue/error when the caller only holds a share, not ownership', async () => {
     const { db, created } = makeAdapters('owner-1');

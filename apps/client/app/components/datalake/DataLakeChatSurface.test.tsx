@@ -9,6 +9,18 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: { id: 's1', forceKnowledgeRetrieval: false } }),
 }));
+// The surface reads `?article=` off the route so deep links forwarded from the retired
+// /data-lakes route land in the viewer (#1943).
+const routerMocks = vi.hoisted(() => ({ search: {} as { article?: string } }));
+vi.mock('@tanstack/react-router', () => ({ useSearch: () => routerMocks.search }));
+// The surface re-checks EnableDataLakes itself before rendering the tree, since the mode store
+// has writers that never saw the flag (the /data-lakes redirect, seedFromSession).
+const settingsMocks = vi.hoisted(() => ({ dataLakesEnabled: true }));
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({
+    isFeatureEnabled: (name: string) => (name === 'EnableDataLakes' ? settingsMocks.dataLakesEnabled : false),
+  }),
+}));
 // The shared manage-knowledge gate reads the admin settings cache and the user store.
 const isAdminFeatureEnabled = vi.fn(() => true);
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -27,14 +39,27 @@ vi.mock('@client/app/hooks/useCreateDataLakeSession', () => ({
 // contract (View may own the layout only when the chat is inside), and the create-session wiring.
 vi.mock('./DataLakeExplorer', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-  default: ({ chatSlot, chatEmbedded, createSessionForFile, onManage }: any) => (
+  default: ({ chatSlot, chatEmbedded, createSessionForFile, onManage, onDiscover, articleId }: any) => (
     <div
       data-testid="explorer"
       data-chat-embedded={String(!!chatEmbedded)}
       data-can-create-session={String(typeof createSessionForFile === 'function')}
       data-can-manage={String(typeof onManage === 'function')}
+      data-can-discover={String(typeof onDiscover === 'function')}
+      data-article-id={String(articleId)}
       onClick={onManage}
     >
+      {/* stopPropagation: the stub's outer div carries onManage, which would otherwise
+          re-open the manager on its default tab right after Discover set one. */}
+      {onDiscover && (
+        <button
+          data-testid="explorer-discover"
+          onClick={e => {
+            e.stopPropagation();
+            onDiscover();
+          }}
+        />
+      )}
       {chatSlot}
     </div>
   ),
@@ -45,6 +70,21 @@ describe('DataLakeChatSurface', () => {
     useDataLakeMode.setState({ enabled: false, seededSessionId: 's1' });
     useDataLakeWizardStore.setState({ isManagerOpen: false, managerTab: 'mine' });
     isAdminFeatureEnabled.mockReturnValue(true);
+    settingsMocks.dataLakesEnabled = true;
+    routerMocks.search = {};
+  });
+
+  it('keeps the tree off for an unentitled user even with the mode flag set', () => {
+    // The /data-lakes redirect flips the flag from beforeLoad, which cannot read the settings
+    // context, and a session's forceKnowledgeRetrieval can outlive the flag being turned off.
+    // Either way the surface, not the store, is what decides whether the tree renders.
+    settingsMocks.dataLakesEnabled = false;
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+
+    render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+
+    expect(screen.getByTestId('chat')).toBeInTheDocument();
+    expect(screen.queryByTestId('explorer')).not.toBeInTheDocument();
   });
 
   it('renders the bare chat when mode is off', () => {
@@ -84,5 +124,35 @@ describe('DataLakeChatSurface', () => {
 
     // Undefined rather than a no-op: the tree hides its Manage button when unset.
     expect(screen.getByTestId('explorer')).toHaveAttribute('data-can-manage', 'false');
+  });
+
+  it('forwards a ?article= deep link to the explorer, so a shared /data-lakes link still opens', () => {
+    routerMocks.search = { article: 'file-42' };
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+    render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+
+    expect(screen.getByTestId('explorer')).toHaveAttribute('data-article-id', 'file-42');
+  });
+
+  it('offers Discover behind the manage gate, as a shortcut to the manager tab', () => {
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+    const { unmount } = render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+    expect(screen.getByTestId('explorer')).toHaveAttribute('data-can-discover', 'true');
+    unmount();
+
+    // Same gate as Manage: without EnableDataLakes the manager panel it opens renders nothing.
+    isAdminFeatureEnabled.mockReturnValue(false);
+    render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+    expect(screen.getByTestId('explorer')).toHaveAttribute('data-can-discover', 'false');
+  });
+
+  it("points Discover at the manager's discover tab, not the default one", () => {
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+    render(<DataLakeChatSurface chat={<div data-testid="chat" />} />);
+
+    fireEvent.click(screen.getByTestId('explorer-discover'));
+
+    expect(useDataLakeWizardStore.getState().isManagerOpen).toBe(true);
+    expect(useDataLakeWizardStore.getState().managerTab).toBe('discover');
   });
 });

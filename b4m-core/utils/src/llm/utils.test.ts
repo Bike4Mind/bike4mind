@@ -1537,6 +1537,60 @@ describe('Context Management Tests', () => {
       expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
     });
 
+    describe('excludeCurrentPrompt', () => {
+      // The turn being processed is already persisted when history is fetched, so the newest quest
+      // is it. Every other window pops it; a session's FIRST turn was exempt, which put the caller's
+      // message in history and again as the current user prompt.
+      const inFlight = () => makeItem(1, { reply: undefined, replies: [] });
+
+      it('keeps a sole current prompt in history by default', async () => {
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([inFlight()]) } };
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(count).toBe(1);
+        expect(messages).toEqual([{ role: 'user', content: 'prompt 1' }]);
+      });
+
+      it('drops it when the caller needs history free of the current turn', async () => {
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([inFlight()]) } };
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          excludeCurrentPrompt: true,
+        });
+
+        expect(count).toBe(0);
+        expect(messages).toEqual([]);
+      });
+
+      // Pins the array a bare completion actually receives on a fresh session: the caller's message
+      // once, and nothing else. Runs the real builder so the fetch and the assembly are checked
+      // together - the duplicate only became visible where the two met.
+      it('assembles the caller message exactly once for a bare completion', async () => {
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([inFlight()]) } };
+
+        const [previousMessages] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          excludeCurrentPrompt: true,
+        });
+
+        const { messages } = await buildAndSortMessages(
+          previousMessages,
+          [],
+          [{ role: 'user', content: 'prompt 1' }],
+          100000,
+          {},
+          10,
+          mockLogger as any,
+          createMockTokenizer(),
+          { verbose: false, skipAdminPromptTemplates: true }
+        );
+
+        expect(messages).toEqual([{ role: 'user', content: 'prompt 1' }]);
+      });
+    });
+
     describe('history window resolution', () => {
       it('pages unlimited history at the default limit instead of reading it as "no history"', async () => {
         const items = [makeItem(3), makeItem(2), makeItem(1)];

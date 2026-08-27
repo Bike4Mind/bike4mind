@@ -17,6 +17,7 @@ import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { agentExecutionRepository, sessionRepository } from '@bike4mind/database';
 import type { IAgentStep } from '@bike4mind/common';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
+import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 
 const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
   const { id } = req.query as { id: string };
@@ -39,7 +40,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
     if (!session) {
       throw new NotFoundError('Execution not found');
     }
-    const userHasAccess = session.userId === userId || session.users?.some(share => share.userId === userId);
+    const userHasAccess = isSessionOwnedByUser(session, userId);
     if (!userHasAccess) {
       throw new NotFoundError('Execution not found');
     }
@@ -53,9 +54,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
   // `{ answer, steps, totalTokens, totalIterations, reachedMaxIterations }`.
   // We only surface the fields the client needs to render the trace.
   const result = execution.result as
-    | { answer?: string; steps?: IAgentStep[]; totalIterations?: number }
-    | null
-    | undefined;
+    { answer?: string; steps?: IAgentStep[]; totalIterations?: number } | null | undefined;
 
   // Fall back to the live checkpoint for non-terminal executions: `result` is
   // only populated on `markComplete`, so an in-flight run reconnect reads empty

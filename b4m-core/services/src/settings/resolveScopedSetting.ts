@@ -308,3 +308,20 @@ export function scopeForFileOwner(file: { userId: string; organizationId?: strin
       : { id: file.userId, type: CreditHolderType.User },
   };
 }
+
+/**
+ * Derive the scope for a retrieval CALLER (#1955): the org/owner altitude of whoever is searching.
+ * `lakeId` is deliberately omitted - a knowledge-base search spans a mixed multi-lake corpus (plus
+ * the caller's own and shared files), so there is no single lake for a narrower rung to key on.
+ * Owner derivation matches `scopeForLake`/`scopeForFileOwner`: an org member resolves at
+ * `owner:<orgId>`, otherwise at `owner:<userId>`.
+ */
+export function scopeForCaller(caller: { userId: string; organizationId?: string | null }): SettingScope {
+  const orgId = caller.organizationId || undefined;
+  return {
+    organizationId: orgId,
+    owner: orgId
+      ? { id: orgId, type: CreditHolderType.Organization }
+      : { id: caller.userId, type: CreditHolderType.User },
+  };
+}

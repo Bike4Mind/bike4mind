@@ -49,6 +49,13 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
+      // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
+      // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
+      // threaded to this path), which cannot see a teammate-authored organization-lake file. That
+      // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
+      // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
+      // takes createSession's "explicit wins" arm, so it costs no DB read.
+      retrievalTags: session.retrievalTags,
     },
     adapters
   );

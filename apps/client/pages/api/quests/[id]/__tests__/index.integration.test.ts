@@ -200,6 +200,69 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
 
+  describe('toolPayloads (structured tool output for programmatic callers)', () => {
+    const PROBLEM = { name: 'shop', jobs: [], machines: [] };
+
+    it('returns the structured payload ALONGSIDE the unchanged prose reply', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: 'Scheduled 3 jobs across 2 machines.',
+        replies: ['Scheduled 3 jobs across 2 machines.'],
+        promptMeta: {},
+        uiSideEffects: [{ type: 'populateProblem', payload: PROBLEM }],
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.reply).toBe('Scheduled 3 jobs across 2 machines.');
+      expect(body.toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+
+    it('returns an empty array when the turn fired no structured tool', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getJSONData().toolPayloads).toEqual([]);
+    });
+
+    it('publishes only type and payload, so a Mongoose subdocument _id never leaks', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        uiSideEffects: [{ _id: '507f1f77bcf86cd799439011', type: 'populateProblem', payload: PROBLEM }],
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(Object.keys(res._getJSONData().toolPayloads[0])).toEqual(['type', 'payload']);
+    });
+
+    it('serves them to a sharee too - the client already dispatches them off loaded quests', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'completed',
+        reply: {},
+        replies: [],
+        promptMeta: {},
+        uiSideEffects: [{ type: 'populateProblem', payload: PROBLEM }],
+      });
+      // jwt-user is in session.users but is not session.userId, i.e. a share holder.
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+  });
+
   describe('functionCalls redaction for non-owner viewers', () => {
     const questWithFunctionCalls = () => ({
       id: 'quest-1',
