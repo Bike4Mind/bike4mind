@@ -450,6 +450,80 @@ describe('wafPolicy', () => {
     });
   });
 
+  // A terminating Allow evaluated before emergency-ip-block exempts its paths from the
+  // break-glass control and from every managed rule group, not just from a rate limit. Production
+  // used to carry two of them; /api/admin/ has been removed in favour of the pattern staging has
+  // run since July, and the surviving one is deliberate and documented below.
+  describe('terminating Allow rules', () => {
+    it('leaves only the completions endpoint exempted ahead of the emergency IP block', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const emergency = rules.find(r => r.Name === 'emergency-ip-block');
+      const allowsBefore = rules
+        .filter(r => r.Action && 'Allow' in r.Action && r.Priority < emergency!.Priority)
+        .map(r => r.Name);
+
+      // The completions path is a long-lived SSE POST carrying user prompt text, which the SQLi
+      // and XSS signatures false-positive on, so this exemption stays until there is evidence for
+      // removing it - and staging cannot supply that, since it runs the same rule.
+      expect(allowsBefore).toEqual(['Allow-LLM-API']);
+    });
+
+    // /api/admin/ was exempted from everything by a terminating Allow at priority 1. Staging has
+    // never had that rule and handles the same traffic surgically instead: the specific ingest
+    // paths are excluded from CommonRuleSet and AdminProtection_URIPATH is set to Count. Measured
+    // before porting it: 10,981 /api/admin/ requests over 14 days on staging, every one ALLOW via
+    // Default_Action, none blocked by any rule.
+    it('subjects /api/admin/ to the managed rules rather than exempting it', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      expect(rules.find(r => r.Name === 'allow-admin-endpoints')).toBeUndefined();
+
+      const exemptedPaths = rules
+        .filter(r => r.Action && 'Allow' in r.Action)
+        .flatMap(r => uriPathMatches(r.Statement).map(m => m.searchString));
+      expect(exemptedPaths.some(p => p.startsWith('/api/admin'))).toBe(false);
+    });
+
+    // The security-dashboard ingest endpoints post scanner output, which CommonRuleSet reads as an
+    // attack payload. They are the reason the blunt Allow existed, so they need naming explicitly
+    // or removing it just moves the breakage.
+    it('exempts the scanner ingest paths from CommonRuleSet, which is what the blunt Allow covered', () => {
+      const excluded = uriPathMatches(commonRuleSetScopeDown('production')).map(m => m.searchString);
+
+      for (const path of [
+        '/api/admin/security-dashboard/web-owasp-ingest',
+        '/api/admin/security-dashboard/code-semgrep-ingest',
+        '/api/admin/security-dashboard/packages-ingest',
+        '/api/admin/security-dashboard/secrets-ingest',
+        '/api/admin/security-dashboard/cloud-prowler-ingest',
+        '/api/admin/security-dashboard/attack-simulation-ingest',
+      ]) {
+        expect(excluded, `${path} must stay exempt from CommonRuleSet`).toContain(path);
+      }
+    });
+
+    // STARTS_WITH also exempted /api/ai/v1/completions-extra, which probing shows serves the SPA
+    // shell rather than the endpoint. Both forms that do route - bare and trailing slash, each
+    // confirmed answering text/event-stream - are matched exactly instead.
+    it('matches the completions endpoint exactly, not by prefix', () => {
+      for (const stage of ['dev', 'production']) {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const allow = rules.find(r => r.Name === 'Allow-LLM-API');
+        const matches = uriPathMatches(allow!.Statement);
+
+        expect(matches.map(m => m.searchString).sort()).toEqual(['/api/ai/v1/completions', '/api/ai/v1/completions/']);
+        for (const m of matches) {
+          expect(m.positionalConstraint, `${stage} completions allow must not be a prefix`).toBe('EXACTLY');
+        }
+      }
+    });
+  });
+
   describe('buildDevWafRuleJson — production stage', () => {
     it('pins Allow-LLM-API at Priority 0 so completions endpoint is not counted by ai-route-rate-limit', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });

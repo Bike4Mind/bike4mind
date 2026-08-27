@@ -9,18 +9,55 @@
       "Name": "Allow-LLM-API",
       "Priority": 0,
       "Statement": {
-        "ByteMatchStatement": {
-          "SearchString": "/api/ai/v1/completions",
-          "FieldToMatch": {
-            "UriPath": {}
-          },
-          "TextTransformations": [
+        "OrStatement": {
+          "Statements": [
             {
-              "Priority": 0,
-              "Type": "NONE"
+              "ByteMatchStatement": {
+                "SearchString": "/api/ai/v1/completions",
+                "FieldToMatch": {
+                  "UriPath": {}
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "URL_DECODE"
+                  },
+                  {
+                    "Priority": 1,
+                    "Type": "NORMALIZE_PATH"
+                  },
+                  {
+                    "Priority": 2,
+                    "Type": "LOWERCASE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            },
+            {
+              "ByteMatchStatement": {
+                "SearchString": "/api/ai/v1/completions/",
+                "FieldToMatch": {
+                  "UriPath": {}
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "URL_DECODE"
+                  },
+                  {
+                    "Priority": 1,
+                    "Type": "NORMALIZE_PATH"
+                  },
+                  {
+                    "Priority": 2,
+                    "Type": "LOWERCASE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
             }
-          ],
-          "PositionalConstraint": "STARTS_WITH"
+          ]
         }
       },
       "Action": {
