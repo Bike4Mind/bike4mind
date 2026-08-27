@@ -145,11 +145,8 @@ export function isUserInitiatedAbort(error: Error, userSignal?: AbortSignal): bo
 }
 
 /**
- * Extract retry delay from error response (e.g., Retry-After header)
- */
-/**
  * A Retry-After hint is only useful if it asks us to wait. `Retry-After: 0`, a negative value, or an
- * HTTP date that has already passed all carry no timing information - and the callers below treat any
+ * HTTP date that has already passed all carry no timing information - and `withRetry` treats any
  * non-null return as authoritative *over* the exponential backoff, so returning 0 does not mean "wait
  * a moment", it means "abandon the backoff entirely and retry immediately".
  *
@@ -161,6 +158,10 @@ function positiveDelayOrNull(ms: number): number | null {
   return ms > 0 ? ms : null;
 }
 
+/**
+ * Extract retry delay from error response (e.g., Retry-After header). Returns null when the header is
+ * absent, unparseable, or does not ask us to wait - see positiveDelayOrNull.
+ */
 export function getRetryAfterMs(error: Error): number | null {
   if (!isAxiosError(error)) {
     return null;

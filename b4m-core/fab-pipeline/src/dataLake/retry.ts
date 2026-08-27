@@ -23,8 +23,14 @@ export interface RetryOptions {
   isRetryable: (error: Error) => boolean;
   /**
    * Optional: extract a server-requested delay (e.g. a `Retry-After` header) from the error,
-   * in milliseconds. When it returns a value, that delay (capped at `maxDelayMs`) is used for
-   * the next wait instead of the calculated backoff - so we honor what the cluster asked for.
+   * in milliseconds. When it returns a POSITIVE value, that delay (capped at `maxDelayMs`) is used
+   * for the next wait instead of the calculated backoff - so we honor what the cluster asked for.
+   *
+   * A zero or negative return is treated as no hint at all, and the calculated backoff is used
+   * instead. A delay that does not ask us to wait carries no timing information, and honoring it
+   * would mean discarding the backoff for every remaining attempt at exactly the moment the server
+   * is signalling distress. Guarded here rather than trusted from the extractor, since this option
+   * is caller-injected.
    */
   getRetryAfterMs?: (error: Error) => number | null;
   /** Optional signal to cancel retries - checked before each attempt and during the backoff sleep. */
