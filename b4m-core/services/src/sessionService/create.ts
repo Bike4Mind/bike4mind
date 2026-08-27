@@ -86,8 +86,9 @@ export const createSession = async (
   // Both arrays reference ObjectId-keyed collections; artifactIds does not. See usableObjectIds.
   // NOTE: notebookImportService writes sessions through sessionRepository.create directly, so it
   // does NOT pass through here - the read-side guards still carry rows it produces.
-  const knowledgeIds = usableObjectIds(rawKnowledgeIds, 'knowledge', Logger.globalInstance);
-  const agentIds = usableObjectIds(rawAgentIds, 'agent', Logger.globalInstance);
+  const dropLogger = adapters.logger ?? Logger.globalInstance;
+  const knowledgeIds = usableObjectIds(rawKnowledgeIds, 'knowledge', dropLogger);
+  const agentIds = usableObjectIds(rawAgentIds, 'agent', dropLogger);
 
   // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
   // tags is authoritative, so derivation runs only for a file-seeded session that named neither.

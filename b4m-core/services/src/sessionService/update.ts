@@ -58,7 +58,7 @@ export const updateSession = async (
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
   // Dropped, not rejected - a rename PUTs the whole session, so see usableObjectIds.
-  const knowledgeIds = rawIds && usableObjectIds(rawIds, 'knowledge', Logger.globalInstance);
+  const knowledgeIds = rawIds && usableObjectIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
 
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
