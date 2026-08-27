@@ -1023,7 +1023,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Search files the user has access to (owned + shared + org-shared + data lake)
             // Same treatment as the semantic arm above - a fallback that re-widened to owner-wide
             // lake access would undo the scope on exactly the turns semantic search found nothing.
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } =
+              await resolveSessionLakeAccess(context);
             keywordArmLakes = lakes;
             searchResults = await context.db.fabfiles.search(
               context.userId,

@@ -116,6 +116,10 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
   const content = (
     <Box
       className="tool-container"
+      // Every gated tool row is addressable by its own id. Hand-added per-tool testids drifted
+      // (image/music/audio had one, deep_research did not), which is exactly the tool an e2e run
+      // for a cancellation change needs to reach.
+      data-testid={toolId ? `tool-row-${toolId}` : undefined}
       sx={theme => {
         const baseStyles = {
           // The row needs its own frame colour, distinct from the surface behind it. Dark mode

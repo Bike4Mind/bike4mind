@@ -33,9 +33,12 @@ export interface IAuthSessionDevice {
  *
  * Replay window: on rotation the prior hash moves to `previousRefreshTokenHash` and stays
  * REPLAYABLE until `graceExpiresAt`. Presenting it there yields an access token ONLY - it does not
- * rotate and issues no refresh token, so the chain cannot fork and a replayer gains nothing
- * durable. A token matching neither the current nor the (in-window) previous hash is treated as
- * theft and revokes the session. See rotateSession in @bike4mind/services for the full rule set.
+ * rotate and issues no refresh token, so the chain cannot fork during a concurrent-sibling burst.
+ * Presenting it AFTER the window means the successor's response never reached the client (responses
+ * land in seconds or never), so the chain is rotated forward from the previous hash instead
+ * (recovery), capped by `recoveries` because one lost response needs exactly one recovery. Only a
+ * token matching neither the current nor the previous hash is treated as theft and revokes the
+ * session. See rotateSession in @bike4mind/services for the full rule set.
  */
 export interface IAuthSession {
   /** Stable session id, embedded as `sid` in the access + refresh tokens. */
@@ -51,6 +54,13 @@ export interface IAuthSession {
    *  bounds the NUMBER of access tokens a superseded secret can mint, not just their timespan.
    *  Reset to 0 on every rotation. Absent on rows written before this field existed. */
   replayUses?: number;
+  /** Recoveries served since the last true rotation (see recoverRotateHash). A genuine lost
+   *  response needs exactly ONE, so a cap here is what stops a superseded secret from being a
+   *  renewable credential: without it, `previousRefreshTokenHash` stays pinned across recoveries
+   *  and the same secret recovers the chain again every time the grace window lapses. Reset to 0
+   *  by rotateHash - advancing the chain from the CURRENT secret proves the client is live.
+   *  Absent on rows written before this field existed. */
+  recoveries?: number;
   device?: IAuthSessionDevice;
   createdVia: AuthSessionCreatedVia;
   /** Set when this session belongs to an admin impersonating the user (loginAs). */
@@ -101,13 +111,47 @@ export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocu
    * trips reuse detection, revoking a healthy session. The CAS makes at most one rotation win per
    * generation, so exactly one refresh token can exist and there is nothing to strand.
    *
+   * `newExpiresAt` slides the session expiry forward with this use (computed by the caller, which
+   * holds the row's createdAt for the absolute cap; see rotateSession). It is REQUIRED here and
+   * absent from recoverRotateHash on purpose: advancing the chain from the CURRENT secret proves a
+   * live client and earns a slide, whereas a recovery is driven by a superseded secret and must
+   * never extend the session's life. Making that a signature rather than a convention is what
+   * stops a copy-paste from quietly handing an attacker a renewable, self-extending credential.
+   * Also resets `recoveries` - see that field.
+   *
    * Returns the updated doc, or null when the swap did not apply - either the session is
    * revoked/expired, or a concurrent rotation won. Callers must re-read to tell those apart; see
    * rotateSession in @bike4mind/services.
    */
   rotateHash: (
     sid: string,
-    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date }
+    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date; newExpiresAt: Date }
+  ) => Promise<IAuthSessionDocument | null>;
+  /**
+   * Compare-and-swap recovery rotation: advance the chain FROM the previous hash, for a client
+   * whose last rotation response never arrived (it still presents the superseded secret after the
+   * coalesce window closed). Discards the never-delivered current hash.
+   *
+   * The CAS is `previousRefreshTokenHash == expectedPreviousHash AND graceExpiresAt <= now AND
+   * recoveries < maxRecoveries`: the winner re-opens graceExpiresAt, so a concurrent second
+   * recovery fails the `$lte` clause and falls back to a coalesce inside the fresh window.
+   * `previousRefreshTokenHash` is deliberately left pinned to the presented hash for the same
+   * reason rotateHash pins it: siblings still holding it must coalesce, not fork the chain.
+   *
+   * That pinning is exactly why `maxRecoveries` exists. Because the presented hash stays in the
+   * previous slot, the same secret satisfies this filter again every time the grace window lapses
+   * - so without a cap one superseded secret is replayable forever rather than once. One lost
+   * response needs ONE recovery; the counter is reset only by rotateHash, i.e. by proving
+   * possession of the current secret. Note this method takes no `newExpiresAt`: recoveries never
+   * slide the session (see rotateHash).
+   *
+   * Returns the updated doc, or null when the swap did not apply (dead session, hash mismatch,
+   * allowance spent, or a concurrent recovery won). Callers re-read to distinguish; see
+   * rotateSession.
+   */
+  recoverRotateHash: (
+    sid: string,
+    params: { expectedPreviousHash: string; nextHash: string; replayExpiresAt: Date; maxRecoveries: number }
   ) => Promise<IAuthSessionDocument | null>;
   /**
    * Atomically claim one unit of the superseded secret's replay allowance, bumping lastUsedAt with

@@ -29,9 +29,9 @@ import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
-import { Resource } from 'sst';
-import type { SQSEvent } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
+import type { SQSEvent } from 'aws-lambda';
+import { Resource } from 'sst';
 
 const ChunkFabFilePayload = z.object({
   fabFileId: z.string(),
@@ -113,9 +113,13 @@ async function enqueueVectorizeBatches(params: {
  * Account a terminal failure of one step of this handler onto the file and its batch: persist a
  * per-file error and count the file as failed so the batch still reaches a terminal state.
  * Shared by the chunking and the vectorize-enqueue paths - both leave a file that is invisible
- * (no error, no alert) if nothing records the failure. No-op on a non-final SQS delivery: see
+ * (no error, no alert) if nothing records the failure. Persisting `error` is also what makes the
+ * file terminal for the daily un-chunked rescue sweep (see buildFabFileChunkScanFilter in
+ * chunkScan.ts); a path that throws without it leaves the file permanently sweep-eligible, so it
+ * is re-enqueued and re-DLQ'd every day forever. No-op on a non-final SQS delivery: see
  * deferFailureIfRetryable for why an earlier attempt must leave 'failed' untouched. The caller
- * always rethrows afterwards, so SQS retries and eventually routes to the DLQ.
+ * always rethrows afterwards, so SQS retries and eventually routes to the DLQ. Mirrors
+ * fabFileVectorize.ts's own failure handling - keep the two in sync.
  */
 async function accountFileFailure(params: {
   event: SQSEvent;
@@ -412,19 +416,39 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     acquired = true;
     claimedAt = now;
 
-    const user = await User.findById(userId);
-    if (!user) throw new Error(`User not found for userId: ${userId}`);
-
     logger.log('====================================');
     logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
     logger.log('====================================');
 
-    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-      throw new BadRequestError('Default embedding model not found');
-    }
+    // Pre-flight runs inside its own accounting catch: these throws are permanent for this file
+    // (a deleted user can never come back), and without accounting they leave `error` unset, which
+    // keeps the file eligible for the daily rescue sweep forever - one orphan then re-DLQs daily.
+    // The batch id comes from the claim document, which is this file's FabFile, so a pre-flight
+    // failure is still accounted into its batch without a second read.
+    const { user, defaultEmbeddingModel, fabFile } = await (async () => {
+      const user = await User.findById(userId);
+      if (!user) throw new Error(`User not found for userId: ${userId}`);
 
-    const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
+      const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+      if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
+        throw new BadRequestError('Default embedding model not found');
+      }
+
+      const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
+      return { user, defaultEmbeddingModel, fabFile };
+    })().catch(async (err: unknown) => {
+      await accountFileFailure({
+        event,
+        logger,
+        fabFileId,
+        batchId: claimDoc.batchId?.toString(),
+        userId,
+        action: 'Chunking',
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    });
+
     if (!fabFile) {
       logger.log(`FabFile not found: ${fabFileId}, skipping chunking`);
       return;
