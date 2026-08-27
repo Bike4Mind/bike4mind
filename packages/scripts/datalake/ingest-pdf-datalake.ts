@@ -241,9 +241,11 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
     // unconditional write to them here could clear a claim out from under a worker that is still
     // genuinely running (a stale-looking claim on self-host, which has no handler timeout, may
     // still be live). Everything else below is this script's own reprocess mechanism (parity with
-    // POST /api/files/reprocess) and must stay - `notes` in particular is what clears the
-    // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
-    // straggler silently no-op at the worker.
+    // POST /api/files/reprocess) and must stay - the two pipeline markers in particular are what
+    // clear the "no extractable text" and kill-switch guards (fabFileChunk.ts) that would otherwise
+    // make a re-enqueued straggler silently no-op at the worker. `notes` is NOT cleared: it is the
+    // owner's own text (#2016), and the markers moved to their own fields precisely so this reset
+    // does not have to destroy it.
     //
     // Precondition mirrors resetChunkStateByIds's per-document mechanism (FabFileModel.ts):
     // selection (above) and this write are separated by up to requeueLimit round-trips in a
@@ -261,7 +263,8 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
           chunkCount: 0,
           vectorized: false,
           vectorizedChunkCount: 0,
-          notes: '',
+          chunkStallReason: null,
+          noExtractableTextAt: null,
           error: null,
         },
       }

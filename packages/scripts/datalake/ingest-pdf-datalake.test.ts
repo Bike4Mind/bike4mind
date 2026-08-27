@@ -109,9 +109,13 @@ describe('requeueStragglers (#1802 follow-up: narrowed, guarded reset)', () => {
       chunkCount: 0,
       vectorized: false,
       vectorizedChunkCount: 0,
-      notes: '',
+      chunkStallReason: null,
+      noExtractableTextAt: null,
       error: null,
     });
+    // The owner's own note is not the pipeline's to clear (#2016) - clearing the two markers is what
+    // re-opens the chunk handler's guards, and that is all this reset needs.
+    expect(update.$set).not.toHaveProperty('notes');
   });
 
   // Regression guard for the round-2-adjudicated fix: selection and the write are separated by

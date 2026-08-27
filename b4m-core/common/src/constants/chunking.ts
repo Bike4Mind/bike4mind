@@ -168,6 +168,28 @@ export const CHUNK_STALL_NOTICES: Record<ChunkStallReason, string> = {
 };
 
 /**
+ * DEPRECATED, kept for one release. These were `common`'s public surface for the stall markers while
+ * they lived in `FabFile.notes`; the facts now live in `FabFile.chunkStallReason` (#2016) and no
+ * reader in this repo parses prose any more. Deleting an exported symbol from `common` is the shape
+ * that passes public CI and breaks an overlay at deploy time (see MAX_PASSAGE_TOKEN_TARGET above),
+ * so they are aliased onto the new single source of prose rather than dropped.
+ *
+ * @deprecated read `chunkStallReason` via `isChunkStalled`; word it via `CHUNK_STALL_NOTICES`.
+ */
+export const CONVERGENCE_PAUSED_NOTE = CHUNK_STALL_NOTICES.vectorizePaused;
+
+/** @deprecated see CONVERGENCE_PAUSED_NOTE. */
+export const CONVERGENCE_PAUSED_CHUNK_NOTE = CHUNK_STALL_NOTICES.rechunkPaused;
+
+/** @deprecated see CONVERGENCE_PAUSED_NOTE. */
+export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;
+
+/** @deprecated see CONVERGENCE_PAUSED_NOTE - `isChunkStalled(file.chunkStallReason)` is the predicate now. */
+export function isConvergencePausedNote(notes?: string | null): boolean {
+  return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
+}
+
+/**
  * Owner-facing prose for `FabFile.noExtractableTextAt`, the stamp the chunk handler writes when a
  * file produces 0 chunks. Same migration note as CHUNK_STALL_NOTICES: the pre-#2016 rows carry this
  * text (prefixed 'No extractable text') in `notes`.

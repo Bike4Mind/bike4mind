@@ -101,6 +101,39 @@ describe('split-chunk-stall-markers-off-notes migration (real DB)', () => {
     expect(b?.noExtractableTextAt ?? null).toBeNull();
   });
 
+  it('derives but never rewrites a note the owner appended to a marker', async () => {
+    const appendedToStall = await insertLegacyFile({
+      notes: `${VECTORIZE_PAUSED_NOTE}\n\nre-upload Monday`,
+    });
+    const appendedToZeroChunk = await insertLegacyFile({
+      notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).\n\nsigned copy, clause 4',
+    });
+
+    await migration.up();
+
+    // The marker still grades (no reader parses prose any more), and the owner's text survives.
+    const a = await rawFabFiles().findOne({ _id: appendedToStall._id });
+    expect(a?.chunkStallReason).toBe('vectorizePaused');
+    expect(a?.notes).toBe(`${VECTORIZE_PAUSED_NOTE}\n\nre-upload Monday`);
+
+    const b = await rawFabFiles().findOne({ _id: appendedToZeroChunk._id });
+    expect(b?.noExtractableTextAt).toEqual(new Date('2026-06-01T00:00:00Z'));
+    expect(b?.notes).toBe(
+      'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).\n\nsigned copy, clause 4'
+    );
+  });
+
+  it('is idempotent over the arms that keep their prose, too', async () => {
+    const appended = await insertLegacyFile({ notes: `${RECHUNK_PAUSED_NOTE} - and mine` });
+
+    await migration.up();
+    const first = await rawFabFiles().findOne({ _id: appended._id });
+    await migration.up();
+    const second = await rawFabFiles().findOne({ _id: appended._id });
+
+    expect(second).toEqual(first);
+  });
+
   it('is idempotent - a second run changes nothing', async () => {
     const file = await insertLegacyFile({ notes: RECHUNK_PAUSED_NOTE });
 
@@ -110,6 +143,28 @@ describe('split-chunk-stall-markers-off-notes migration (real DB)', () => {
     const second = await rawFabFiles().findOne({ _id: file._id });
 
     expect(second).toEqual(first);
+  });
+
+  it('down puts every marker back verbatim while notes is still free', async () => {
+    const vectorize = await insertLegacyFile({ notes: VECTORIZE_PAUSED_NOTE });
+    const rechunk = await insertLegacyFile({ notes: RECHUNK_PAUSED_NOTE });
+    const zeroChunk = await insertLegacyFile({
+      notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).',
+    });
+
+    await migration.up();
+    await migration.down();
+
+    expect((await rawFabFiles().findOne({ _id: vectorize._id }))?.notes).toBe(VECTORIZE_PAUSED_NOTE);
+    expect((await rawFabFiles().findOne({ _id: rechunk._id }))?.notes).toBe(RECHUNK_PAUSED_NOTE);
+    expect((await rawFabFiles().findOne({ _id: zeroChunk._id }))?.notes).toBe(
+      'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).'
+    );
+    for (const { _id } of [vectorize, rechunk, zeroChunk]) {
+      const row = await rawFabFiles().findOne({ _id });
+      expect('chunkStallReason' in (row ?? {})).toBe(false);
+      expect('noExtractableTextAt' in (row ?? {})).toBe(false);
+    }
   });
 
   it('down restores the prose only where notes is free, and always drops the new fields', async () => {
