@@ -416,6 +416,7 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
         // and it would decouple the collection name from the model. The guard's real subject is
         // production code bypassing `record()` to mutate `expiresAt`; a migration test does not.
         'packages/scripts/migrate/migrations/20260820000000_ensure-lakeaccessevent-questid-index.integration.test.ts',
+        'packages/scripts/migrate/migrations/20260827000000_ensure-lake-audit-tiebreak-indexes.integration.test.ts',
       ]);
       // `git grep` only searches TRACKED files (no explicit node_modules/.git/dist skip-list
       // needed) and is dramatically faster than a synchronous fs walk of the whole monorepo -
