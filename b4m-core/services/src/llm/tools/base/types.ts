@@ -254,6 +254,35 @@ export interface ToolContext {
   allowedDirectories?: string[];
   /** Optional code minifier for `file_read`'s opt-in `minified` mode. See CodeMinifier. */
   codeMinifier?: CodeMinifier;
+  /**
+   * Cancellation signal for the turn that invoked this tool, for tools that run their own
+   * `llm.complete()` (deep_research, blog_draft, edit_file, jupyter_notebook, ...). Pass the
+   * result as `abortSignal` on those sub-calls, or pressing Stop settles the chat turn while
+   * the tool's nested generation keeps billing until the provider finishes on its own.
+   *
+   * A getter, not an `AbortSignal`: tools are built before the turn's AbortController exists
+   * (ChatCompletionProcess builds tools during `tool_setup` and only creates the controller
+   * once it is about to call the model), so a captured value would be a permanent `undefined`.
+   * Hosts supply a closure over a mutable holder they fill in later - the shape the
+   * delegate_to_agent / coordinate_task path already uses.
+   *
+   * IT CAN RETURN UNDEFINED EVEN WHEN THE HOST PASSED A GETTER, so treat a missing signal as
+   * normal rather than as a bug. Three cases, and the third is the surprising one:
+   *   - the host wires no controller at all (see below);
+   *   - the holder is not filled yet (a tool somehow invoked during tool setup);
+   *   - ChatCompletionProcess's Research Mode branch, which returns before it ever assigns
+   *     the holder, yet hands `allTools` - these same tool instances - to ResearchModeService.
+   *     That service takes no signal today and the cancellation watcher starts after the
+   *     branch returns, so Research Mode has no cancellation of any kind; tool sub-calls on
+   *     that path stay uninterruptible across every parallel configuration. Fixing it means
+   *     giving Research Mode a controller and a watcher of its own, not changing this contract.
+   *
+   * Absent entirely on hosts with no per-turn controller to hand over - the top-level
+   * agent-executor loop, which cancels via a polled `AgentExecution` abort flag rather than an
+   * AbortSignal, and the headless deep-agent runner. Those paths get nothing until they grow a
+   * controller of their own; the dispatched-subagent path already has one and passes it.
+   */
+  getAbortSignal?: () => AbortSignal | undefined;
 }
 
 export interface ToolDefinition {

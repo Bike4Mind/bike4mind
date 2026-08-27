@@ -227,7 +227,13 @@ describe('count_knowledge_base narrows lake access to the session lake', () => {
       scopedTagPrefixes: [],
       lakes: [
         { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
-        { id: 'l2', name: 'Unrelated-Product-KB', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:', source: 'registry' },
+        {
+          id: 'l2',
+          name: 'Unrelated-Product-KB',
+          datalakeTag: 'datalake:unrelated',
+          fileTagPrefix: 'unrel:',
+          source: 'registry',
+        },
       ],
     });
     const out = await run(makeContext({ sessionRetrievalTags: ['datalake:mine'] } as never));

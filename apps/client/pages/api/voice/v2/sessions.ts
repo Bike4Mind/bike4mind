@@ -121,9 +121,7 @@ const handler = baseApi().post(async (req, res) => {
         // See resolveRetrievalLakeScopeForUser - request-free so the lake arm of the lake-tag
         // derivation runs here too, not only on the two session routes that have a `req`.
         resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(
-            req.user!
-          ),
+          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
       }
     );
   }
