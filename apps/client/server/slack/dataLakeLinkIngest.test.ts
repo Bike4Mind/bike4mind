@@ -214,6 +214,11 @@ describe('successful ingest', () => {
         sourceType: FabFileSourceType.SLACK,
         sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', sourceUrl: LINK },
       },
+      // Carried from the AUTHORIZED context, and asserted here because `createFabFile` runs a third
+      // manage gate that cannot derive this from the user document: dropping it refuses an org admin
+      // the prologue already authorized. Exact-match assertion, so a future field cannot go
+      // unnoticed either.
+      administeredOrgIds: ['org-2'],
     });
     expect(outcome).toEqual({ ok: true, lakeName: 'Sales', fileName: 'An Article', sourceUrl: LINK });
   });
