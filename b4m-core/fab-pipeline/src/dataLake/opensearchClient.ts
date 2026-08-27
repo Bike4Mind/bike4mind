@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws-v3';
+import { retryAfterHintOrNull } from '@bike4mind/common';
 import { withRetry } from './retry';
 
 /** Per-request timeout (ms) so a stalled OpenSearch call fails fast instead of hanging. */
@@ -79,30 +80,17 @@ export function isIndexNotFoundError(error: Error): boolean {
 }
 
 /**
- * A Retry-After hint is only useful if it asks us to wait. `Retry-After: 0`, a negative value, or an
- * already-elapsed HTTP date carry no timing information - and `withRetry` treats any non-null return
- * as authoritative OVER its exponential backoff, so returning 0 does not mean "wait a moment", it
- * means "abandon the backoff and retry immediately".
- *
- * That inverts the retry budget precisely when it matters: a cluster sends Retry-After when it is
- * already under pressure, and the chunk-removal path fans out at REMOVAL_CHUNK_SIZE, so honouring a
- * zero turns the remaining attempts into an instant burst against a circuit-breaking node. Null
- * instead, so withRetry falls through to its own backoff.
- *
- * The elapsed-date case needs no misbehaving server at all - clock skew, or a few seconds of queueing
- * between the cluster writing the header and this code reading it, is enough.
- *
- * MUST STAY IN SYNC with the same rule in @bike4mind/common's retry.ts, per the note at the top of
- * retry.ts about keeping the backoff semantics of the two copies aligned.
- */
-function positiveDelayOrNull(ms: number): number | null {
-  return ms > 0 ? ms : null;
-}
-
-/**
  * Extract a `Retry-After` delay (ms) from an opensearch-js `ResponseError`, if the cluster
  * sent one. opensearch-js exposes response headers on `error.headers` (and `error.meta.headers`).
  * `Retry-After` is either a number of seconds or an HTTP date. Returns null when absent/unparseable.
+ *
+ * A hint that does not ask us to wait is also null - `retryAfterHintOrNull` owns that rule, imported
+ * from @bike4mind/common rather than restated here so the two `Retry-After` parsers in this repo
+ * cannot drift on it. Read its doc for why a zero is worse than no header at all; the local stake is
+ * that the chunk-removal path fans out at REMOVAL_CHUNK_SIZE, so a zero honoured here is an instant
+ * burst from every worker at once against a node that is already circuit-breaking. The elapsed-date
+ * case needs no misbehaving cluster: clock skew, or seconds of queueing between the header being
+ * written and this code reading it, is enough.
  */
 export function getOpenSearchRetryAfterMs(error: Error): number | null {
   const e = error as { headers?: Record<string, unknown>; meta?: { headers?: Record<string, unknown> } };
@@ -113,12 +101,12 @@ export function getOpenSearchRetryAfterMs(error: Error): number | null {
 
   const seconds = parseInt(String(raw), 10);
   if (!Number.isNaN(seconds)) {
-    return positiveDelayOrNull(seconds * 1000);
+    return retryAfterHintOrNull(seconds * 1000);
   }
 
   const dateMs = Date.parse(String(raw));
   if (!Number.isNaN(dateMs)) {
-    return positiveDelayOrNull(dateMs - Date.now());
+    return retryAfterHintOrNull(dateMs - Date.now());
   }
 
   return null;
