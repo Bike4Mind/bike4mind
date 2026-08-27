@@ -1,5 +1,5 @@
 import AdminSettingsTab from '@client/app/components/admin/AdminSettingsTab';
-import FeedbackTab from '@client/app/components/admin/Feedbacks';
+import FeedbackTab from '@client/app/components/admin/Feedback';
 import AdminFilesTab from '@client/app/components/admin/FilesTab';
 import WorldTimeTab from '@client/app/components/admin/WorldTime';
 import SystemPromptsTab from '@client/app/components/admin/SystemPromptsTab';
@@ -464,7 +464,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
-              <TabPanel value={AdminTab.Feedbacks}>{activeTab === AdminTab.Feedbacks && <FeedbackTab />}</TabPanel>
+              <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
               <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
               <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
                 {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}

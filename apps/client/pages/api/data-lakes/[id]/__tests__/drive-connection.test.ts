@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeId: vi.fn(),
-  connRelease: vi.fn(),
+  releaseDriveConnection: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -22,6 +22,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+// The route's job is the gate + delegation; the revoke-then-delete seam has its own unit test
+// (server/integrations/google/drive/releaseDriveConnection.test.ts).
+vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnection: h.releaseDriveConnection }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -30,7 +33,6 @@ vi.mock('@bike4mind/database', async importOriginal => {
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
       findByDataLakeId: h.connFindByDataLakeId,
-      release: h.connRelease,
     },
   };
 });
@@ -82,12 +84,14 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(json).toHaveBeenCalledWith({ connection: null });
   });
 
-  it('DELETE releases the connection (frees the folder claim) and 204s', async () => {
+  it('DELETE releases the connection through the revoking seam and 204s', async () => {
     h.connFindByDataLakeId.mockResolvedValue({ id: 'conn1' });
-    h.connRelease.mockResolvedValue(true);
+    h.releaseDriveConnection.mockResolvedValue(true);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.connRelease).toHaveBeenCalledWith('conn1', 'orgA');
+    // Not the bare repo delete: going through the seam is what revokes the Google grant, so a
+    // disconnect cannot leave a live grant behind a deleted row.
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
     expect(status).toHaveBeenCalledWith(204);
     // The gate + release are scoped to the LAKE's org, never a caller-supplied one.
     expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
@@ -97,7 +101,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.connFindByDataLakeId.mockResolvedValue(null);
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.connRelease).not.toHaveBeenCalled();
+    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(204);
   });
 
@@ -107,7 +111,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.connFindByDataLakeId.mockResolvedValue({ id: 'conn1', status: 'syncing' });
     const { res, status } = makeRes();
     await run(makeReq('DELETE'), res);
-    expect(h.connRelease).not.toHaveBeenCalled();
+    expect(h.releaseDriveConnection).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(409);
   });
 

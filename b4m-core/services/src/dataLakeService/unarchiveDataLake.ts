@@ -21,10 +21,7 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<
-      IDataLakeRepository,
-      'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimRestoringFromArchived'
-    >;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimUnarchiving'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -69,13 +66,21 @@ export const unarchiveDataLake = async (
   }
 
   // Conditional on the statuses the guard above admitted, NOT a blind $set: the check ran against a
-  // document read several round trips ago (the grant load), so a delete that lands in that gap must
-  // make this LOSE rather than be overwritten. A plain write here revived a lake the teardown had
-  // already settled and left it 'active' with every file soft-deleted and absent from the deleted
-  // list, so neither restore path could recover it - the same defect class claimPurging closes.
-  const entered = await db.dataLakes.claimRestoringFromArchived(dataLakeId);
+  // document read moments ago, and deleteDataLake accepts 'archived' too, so a delete landing in
+  // that gap must make this LOSE rather than be overwritten. Overwriting it would carry the lake on
+  // to the terminal 'active' write below with every member already soft-deleted, and
+  // restoreDeletedDataLake refuses an 'active' lake - the files would have no route back.
+  // Mirrors claimRestoring on the delete axis.
+  const entered = await db.dataLakes.claimUnarchiving(dataLakeId);
   if (!entered) {
-    throw new BadRequestError('This data lake changed status mid-request and can no longer be restored');
+    // Re-read only on the rare loss path, so the refusal names the status that actually won rather
+    // than the stale one the guard saw.
+    const current = await db.dataLakes.findById(dataLakeId);
+    throw new BadRequestError(
+      current
+        ? `Cannot restore a data lake in '${current.status}' status`
+        : 'This data lake is no longer available to restore'
+    );
   }
 
   const scope = lakeMembershipScope(existing);

@@ -440,19 +440,21 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   claimArchiving(id: string): Promise<boolean>;
   /**
    * Enter the transitional `deleting` state - the phase-1 teardown's twin of `claimArchiving`, and
-   * the other half of the delete-vs-unarchive race `claimRestoringFromArchived` closes. What the
+   * the other half of the delete-vs-unarchive race `claimUnarchiving` closes. What the
    * admitted set EXCLUDES is the point: `restoring` (an unarchive or a restore already in flight),
    * `deleted` and `purging`. Must stay in sync with `deleteDataLake`'s entry guard.
    */
   claimDeleting(id: string): Promise<boolean>;
   /**
-   * Enter `restoring` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, which
-   * enters the same state from the deleted axis. Separate methods rather than one union filter
-   * because the admitted set is the guard: an unarchive must not revive a lake a delete has since
-   * torn down, and a restore must not revive one a purge has claimed. Re-entrant from `restoring`
-   * itself so a crashed prior attempt can retry.
+   * Enter `restoring` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
+   * claimed for the same reason: `unarchiveDataLake` pre-checks a document it read moments earlier,
+   * and `deleteDataLake` also accepts `archived`, so a delete landing in that gap must make this
+   * LOSE rather than be overwritten by it. A plain `$set` there leaves the lake `active` with every
+   * member soft-deleted and `restoreDeletedDataLake` refusing it, which strands the files.
+   * Re-entrant from `restoring` itself so a crashed prior attempt can retry. Returns whether this
+   * caller may proceed.
    */
-  claimRestoringFromArchived(id: string): Promise<boolean>;
+  claimUnarchiving(id: string): Promise<boolean>;
   /**
    * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
    * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
@@ -620,7 +622,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * inside its Lambda timeout; the sweep is idempotent so any residue is picked up next run.
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
-  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -667,6 +669,19 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Guarded status transition to ANY status, terminal or not, carrying the client-supplied failure
+   * tallies in the same atomic write. The route variant of the two methods above: the PUT endpoint
+   * accepts any `BatchStatus` plus `failedFiles`/`failedFileNames`, which neither of them can
+   * express, and an unguarded `update` there could resurrect a batch the pipeline already settled.
+   * Returns the post-update doc to the single winner and null to a caller whose batch was already
+   * terminal, so the caller can tell a real transition from a no-op instead of inferring it from a
+   * stale read.
+   */
+  updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
    * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
@@ -696,7 +711,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
    * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
-  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   /**
    * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
    * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -

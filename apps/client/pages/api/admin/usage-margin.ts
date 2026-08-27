@@ -5,6 +5,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 
 const VIEWS = ['model-day', 'user', 'provider-month', 'settlement'] as const;
+// A year of reconciliation history; keeps the dashboard's provider-month list finite.
+const PROVIDER_MONTH_WINDOW = 12;
 type MarginView = (typeof VIEWS)[number];
 
 /**
@@ -53,7 +55,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   }
 
   if (view === 'provider-month') {
-    const rows = await usageEventRepository.monthlyCogsByProvider();
+    const rows = await usageEventRepository.monthlyCogsByProvider(PROVIDER_MONTH_WINDOW);
     return res.json({ targetCreditsPerUsd, rows });
   }
 

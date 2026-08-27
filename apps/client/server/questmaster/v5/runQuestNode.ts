@@ -154,6 +154,11 @@ export async function runQuestNode(args: {
       userId,
       sessionId: graph.sessionId,
       questId: quest.id,
+      // Set at CREATE time, unlike `agentExecute.handleStart` which has to patch it afterwards
+      // (its Quest is written after the execution doc). Carries the real Quest id through a
+      // resumed/checkpointed invocation, where the start payload is absent - without it every
+      // LakeAccessEvent from the second invocation on would be written unlinked (#1867).
+      linkedQuestId: quest.id,
       query,
       model,
       status: 'pending' as AgentExecutionStatus,

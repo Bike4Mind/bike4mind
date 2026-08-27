@@ -41,14 +41,23 @@ export function useConnectGoogleDrive() {
   });
 }
 
+/**
+ * Disconnect the user's personal Google Drive. Resolves with how many ORG Drive folder syncs were
+ * broken by the revoke: the connect flow copies this user's credential, and revoking it at Google
+ * kills the whole grant, so the caller must warn that those folders need reconnecting.
+ */
 export function useDisconnectGoogleDrive() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      await api.delete('/api/google-drive/disconnect');
+      const response = await api.delete<{ affectedOrgConnections?: number }>('/api/google-drive/disconnect');
+      return response.data?.affectedOrgConnections ?? 0;
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['users'] });
+      // The lake wizard/panel read connection status from their own query; the revoke just flipped
+      // those rows to credential_error server-side, so a cached 'connected' badge would be a lie.
+      await queryClient.invalidateQueries({ queryKey: ['lake-drive-connection'] });
     },
   });
 }

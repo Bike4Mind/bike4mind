@@ -12,6 +12,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeAccessViewToCsv, lakeAccessViewCsvFilename } from '@server/dataLakes/lakeAccessViewCsv';
+import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
 
 /**
  * GET /api/data-lakes/:id/access[?format=csv]
@@ -34,11 +35,21 @@ import { lakeAccessViewToCsv, lakeAccessViewCsvFilename } from '@server/dataLake
  * the view, because the view is the exported compliance artifact: a per-viewer capability is not a
  * fact about the lake's access and must not appear in the CSV.
  */
+/** `format` is `string[]` for a repeated query param - see firstQueryValue. */
+interface AccessQuery {
+  id: string;
+  format?: string | string[];
+}
+
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
-  .get(async (req: Request<{ id: string }, unknown, unknown, { id: string; format?: string }>, res) => {
-    // Next merges the [id] route param into req.query alongside the ?format= query string.
-    const { id, format } = req.query;
+  .get(async (req: Request<{ id: string }, unknown, unknown, AccessQuery>, res) => {
+    // Next merges the [id] route param into req.query alongside the ?format= query string, so `id` is
+    // always a string. `format` is a genuine query param and arrives as an array for
+    // `?format=csv&format=csv`, where `(format ?? '').toLowerCase()` threw a TypeError - a 500 raised
+    // AFTER the manage gate and the whole access aggregation had already run.
+    const { id } = req.query;
+    const format = firstQueryValue(req.query.format);
     const ctx = await toAccessContext(req);
 
     const lake = await dataLakeService.assertLakeAccess(id, ctx, {

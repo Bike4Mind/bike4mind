@@ -456,6 +456,81 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
 // systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
 // creator or an admin may read the wording. The list endpoint is where the editor UI gets the
 // value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
+describe('listDataLakes - pending proposal count is the queue discovery surface', () => {
+  const counts = (byLake: Record<string, number>) => ({
+    countPendingByLakes: vi.fn(async () => byLake),
+  });
+
+  it('carries the count for a lake the caller manages', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: counts({ mine: 4 }),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBe(4);
+  });
+
+  // Deciding what enters a lake is a management right, so a reader must not learn a queue exists -
+  // let alone how deep it is. Same gate as systemPrompt.
+  it('withholds the count from a caller who can only read the lake', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakeProposals: counts({ theirs: 9 }),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
+    expect(result.find(l => l.id === 'theirs')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // Absent rather than 0 so the client can treat presence as "there is work here", and so a row with
+  // nothing waiting renders exactly as it did before this field existed.
+  it('omits the field entirely when nothing is pending', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: counts({}),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')).not.toHaveProperty('pendingProposalCount');
+  });
+
+  it('is optional - a caller that wires no proposal repo pays for no read', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // The count is a discovery hint; the list is the page. A failing count read must never take the
+  // lake list down with it.
+  it('still returns the list when the count read throws', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: {
+        countPendingByLakes: vi.fn(async () => {
+          throw new Error('aggregate unavailable');
+        }),
+      },
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+});
+
 describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () => {
   const withPrompt = (overrides: Partial<IDataLakeDocument>) =>
     lake({ systemPrompt: 'Always cite the source file.', ...overrides });
@@ -1517,8 +1592,8 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
       activateIfDraft: vi.fn(),
-      claimRestoringFromArchived: vi.fn().mockResolvedValue(true),
     };
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
@@ -1549,8 +1624,8 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: STAMP })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
       activateIfDraft: vi.fn(),
-      claimRestoringFromArchived: vi.fn().mockResolvedValue(true),
     };
 
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
@@ -1571,18 +1646,55 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: new Date('2026-05-01') })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
       activateIfDraft: vi.fn(),
-      claimRestoringFromArchived: vi.fn().mockResolvedValue(true),
     };
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
 
-    // The transitional 'restoring' hop is a claim, not an update, so `update` must carry the
-    // terminal write and nothing else - the one-stamp-per-operator-action rule stated as a count.
-    expect(dataLakes.claimRestoringFromArchived).toHaveBeenCalledWith('lake1');
-    expect(dataLakes.update).toHaveBeenCalledTimes(1);
+    // The transitional 'restoring' hop is a CLAIM, not an update, so it carries no operator stamp by
+    // construction - which is the one-stamp-per-operator-action rule this block exists to hold.
+    // Asserting `update` never wrote a transitional status keeps that rule pinned: reinstating a
+    // plain $set here (the race in #2086) would fail this.
+    expect(dataLakes.claimUnarchiving).toHaveBeenCalledWith('lake1');
+    expect(dataLakes.update.mock.calls.map(([arg]) => arg.status)).not.toContain('restoring');
 
     const settle = dataLakes.update.mock.calls.at(-1)?.[0];
     expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null, lastUpdatedByUserId: 'owner' });
+  });
+
+  it('refuses the restore when claimUnarchiving LOSES to a delete accepted mid-call (#2086)', async () => {
+    // deleteDataLake accepts 'archived' too, so it can run to completion between this caller's
+    // status read and its transitional write. Before the claim, that write was a blind $set: the
+    // unarchive carried on to settle 'active' over a lake whose members were already soft-deleted,
+    // and restoreDeletedDataLake refuses an 'active' lake - the files had no route back.
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn(),
+      findByContentHashesInDataLake: vi.fn(),
+      unarchiveByDataLakeTag: vi.fn(),
+      deleteManyInIds: vi.fn(),
+      computeDataLakeStats: vi.fn(),
+    };
+    const dataLakes = {
+      // Read as 'archived' (the guard passes), but the delete won the race and it is now 'deleted'.
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'deleted' })),
+      claimUnarchiving: vi.fn().mockResolvedValue(false),
+      update: vi.fn(),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
+    };
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } } as never)
+    ).rejects.toThrow(/Cannot restore a data lake in 'deleted' status/i);
+
+    // Losing the claim must abort before any file work AND before the terminal 'active' write -
+    // settling 'active' is what made the delete's soft-deleted members unreachable.
+    expect(fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(fabFiles.deleteManyInIds).not.toHaveBeenCalled();
+    expect(dataLakes.update).not.toHaveBeenCalled();
   });
 });
 
@@ -2271,7 +2383,7 @@ describe('restore, delete and archive against a purge-accepted lake (#1744)', ()
 describe('the archive-axis lifecycle claims - a raced delete and unarchive', () => {
   const owner = { userId: 'owner', isAdmin: false };
 
-  it('refuses the unarchive when claimRestoringFromArchived LOSES to a delete settled mid-call', async () => {
+  it('refuses the unarchive when claimUnarchiving LOSES to a delete settled mid-call', async () => {
     // The bug this closes: the lake still read as 'archived', so the status guard passed, and the
     // plain 'restoring' write revived a lake the teardown had already settled. It then ran the
     // reversal and wrote its terminal 'active', leaving a lake that reads live but holds only
@@ -2279,7 +2391,7 @@ describe('the archive-axis lifecycle claims - a raced delete and unarchive', () 
     const db = {
       dataLakes: {
         findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
-        claimRestoringFromArchived: vi.fn().mockResolvedValue(false),
+        claimUnarchiving: vi.fn().mockResolvedValue(false),
         update: vi.fn(),
         setStats: vi.fn(),
         activateIfDraft: vi.fn(),
@@ -2288,7 +2400,7 @@ describe('the archive-axis lifecycle claims - a raced delete and unarchive', () 
       fabFiles: { findArchivedByDataLakeTag: vi.fn(), unarchiveByDataLakeTag: vi.fn(), deleteManyInIds: vi.fn() },
     };
     await expect(unarchiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
-      /changed status mid-request and can no longer be restored/i
+      /cannot restore a data lake in 'archived' status/i
     );
     // Losing the claim must abort before any file work: an un-archive that half-ran is what left
     // the two states disagreeing in the first place.

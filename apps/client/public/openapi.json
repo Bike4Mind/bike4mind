@@ -3,7 +3,7 @@
   "info": {
     "title": "Bike4Mind API",
     "version": "5.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -1002,39 +1002,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
-              "provider_not_configured",
-              "provider_rejected"
-            ]
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "synthesizeSpeechResponse402": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "deprecated": true,
-            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
-          },
-          "provider": {
-            "type": "string",
-            "enum": [
-              "openai",
-              "elevenlabs"
-            ]
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1099,6 +1067,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1132,6 +1101,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1165,6 +1135,7 @@
           "errorCode": {
             "type": "string",
             "enum": [
+              "insufficient_credits",
               "provider_not_configured",
               "provider_rejected"
             ]
@@ -1381,7 +1352,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "AI"
         ],
@@ -1405,7 +1376,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
+            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2427,12 +2398,12 @@
               }
             }
           },
-          "402": {
-            "description": "Not enough credits to cover the synthesis.",
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/synthesizeSpeechResponse402"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -2441,42 +2412,6 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
-                }
-              },
-              "X-RateLimit-Limit-Minute": {
-                "description": "Request quota per minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Minute": {
-                "description": "Requests remaining in the current minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Minute": {
-                "description": "Unix epoch (seconds) when the minute window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Limit-Day": {
-                "description": "Request quota per day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Day": {
-                "description": "Requests remaining in the current day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Day": {
-                "description": "Unix epoch (seconds) when the day window resets.",
-                "schema": {
-                  "type": "integer"
                 }
               }
             }
@@ -2536,7 +2471,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation, the text exceeds the provider character limit, or the provider cannot produce the requested `format`.",
+            "description": "Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: \"insufficient_credits\"`, so match on the classifier rather than the status to tell a billing failure from a bad request.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2698,6 +2633,9 @@
             }
           }
         },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
         "x-codeSamples": [
           {
             "lang": "curl",

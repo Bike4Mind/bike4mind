@@ -67,7 +67,6 @@ import type { ManagerLake } from './shared';
 import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
 
-
 // Left sidebar
 
 interface ManagerNavProps {
@@ -158,24 +157,20 @@ export default function ManagerNav({
   const uncategorizedFiles = useMemo(() => {
     if (!activeLake) return [];
     const prefix = normalizePrefix(activeLake.fileTagPrefix);
-    return [...articles]
-      .filter(
-        f =>
-          !satisfiesTagPrefix(
-            (f.tags ?? []).map(t => t.name),
-            prefix
-          )
-      );
+    return [...articles].filter(
+      f =>
+        !satisfiesTagPrefix(
+          (f.tags ?? []).map(t => t.name),
+          prefix
+        )
+    );
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
 
   // TreeView highlights a SET of files (chat mode attaches several); the manager opens one at a
   // time, so this is that one id as a set.
-  const selectedFileIds = useMemo(
-    () => new Set(selectedFileId ? [selectedFileId] : []),
-    [selectedFileId]
-  );
+  const selectedFileIds = useMemo(() => new Set(selectedFileId ? [selectedFileId] : []), [selectedFileId]);
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];
@@ -485,6 +480,28 @@ export default function ManagerNav({
                                   >
                                     <ErrorOutlineIcon sx={{ fontSize: 14 }} />
                                   </IconButton>
+                                </Tooltip>
+                              )}
+                              {/* The acquisition queue's only discovery surface (#1671). Server sends it
+                                  ONLY for lakes this caller can manage, and omits it at zero - so the
+                                  row is unchanged for everyone with nothing to review, and a reviewer
+                                  never has to open a lake to find out whether work is waiting. */}
+                              {!!lake.pendingProposalCount && (
+                                <Tooltip
+                                  title={`${lake.pendingProposalCount} ${
+                                    lake.pendingProposalCount === 1 ? 'source is' : 'sources are'
+                                  } waiting for your review`}
+                                  size="sm"
+                                >
+                                  <Chip
+                                    size="sm"
+                                    variant="soft"
+                                    color="primary"
+                                    sx={COUNT_CHIP_SX}
+                                    data-testid={`datalake-manager-pending-proposals-${lake.id}`}
+                                  >
+                                    {`${lake.pendingProposalCount} to review`}
+                                  </Chip>
                                 </Tooltip>
                               )}
                               {typeof count === 'number' && (

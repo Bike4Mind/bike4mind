@@ -96,6 +96,8 @@ export const removeFileFromDataLake = async (
 
   await removeFileFromLake(actor, lake, fabFileId, { db });
 
-  const stats = await recomputeLakeStats(lake, { db, logger });
+  // `actor` threaded so the draft -> active flip a removal can trigger names the person who
+  // removed the file rather than `system`. The rung stays `system` - nothing authorized the flip.
+  const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
   return { success: true, ...stats };
 };

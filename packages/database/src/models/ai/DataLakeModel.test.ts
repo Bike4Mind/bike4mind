@@ -774,6 +774,47 @@ describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal trans
   });
 });
 
+describe('DataLakeBatchRepository.updateIfActive - guarded multi-field transition (#2089)', () => {
+  setupMongoTest();
+
+  const activeBatch = () => dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+  it('applies status and the failure tallies together on a non-terminal batch', async () => {
+    const batch = await activeBatch();
+    const moved = await dataLakeBatchRepository.updateIfActive(batch.id, {
+      status: 'completed_with_errors',
+      failedFiles: 2,
+      failedFileNames: ['a.pdf', 'b.pdf'],
+    });
+    expect(moved?.status).toBe('completed_with_errors');
+    expect(moved?.failedFiles).toBe(2);
+    expect(moved?.failedFileNames).toEqual(['a.pdf', 'b.pdf']);
+  });
+
+  it('is a no-op on a terminal batch, so a PUT cannot write a settled one back to in-flight', async () => {
+    // The resurrection the PUT route allowed before it was guarded: the batch would reappear in
+    // findActiveByUserId and reconcileStuckBatches would later force-fail a batch that succeeded.
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const moved = await dataLakeBatchRepository.updateIfActive(batch.id, { status: 'uploading' });
+    expect(moved).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.status).toBe('completed');
+  });
+
+  it('refuses the whole write when it loses, not just the status', async () => {
+    // The fields ride one atomic $set, so a lost claim must leave the tallies alone too - a partial
+    // apply would report failures against a batch this caller never actually moved.
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    await dataLakeBatchRepository.updateIfActive(batch.id, { status: 'uploading', failedFiles: 7 });
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.failedFiles).toBe(0);
+  });
+});
+
 describe('DataLakeBatchRepository.claimFileStatus - from-set gating', () => {
   setupMongoTest();
 
@@ -931,6 +972,38 @@ describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', (
     expect((await dataLakeBatchRepository.findStuck(CUTOFF)).map(b => b.id)).toEqual([older.id, newer.id]);
     expect((await dataLakeBatchRepository.findStuck(CUTOFF, 1)).map(b => b.id)).toEqual([older.id]);
   });
+
+  it('excludes the per-file manifest and fileAssignments - the reconciler only reads scalars', async () => {
+    const stale = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: stale.id },
+      { $set: { updatedAt: new Date('2020-01-01T00:00:00Z') } },
+      { timestamps: false }
+    );
+
+    const [stuck] = await dataLakeBatchRepository.findStuck(CUTOFF);
+    // A `.select('-files')` exclusion omits the key entirely (not an empty array) - this
+    // asserts the projection is actually active, not just that the field happens to be empty.
+    expect(stuck.files).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.fileAssignments).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    // The scalars reconcileStuckBatches actually reads must survive the projection.
+    expect(stuck.id).toBe(stale.id);
+    expect(stuck.status).toBe('processing');
+    expect(stuck.dataLakeId).toBe('lake1');
+    expect(stuck.updatedAt).toEqual(new Date('2020-01-01T00:00:00Z'));
+  });
 });
 
 describe('DataLakeBatchRepository.setTaxonomyStatusIfActive - guarded taxonomy-phase transition', () => {
@@ -1040,6 +1113,31 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
 
     const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
     expect(stuck.map(b => b.id)).toEqual([oldest.id, newest.id]);
+  });
+
+  it('excludes the per-file manifest and fileAssignments - the reconciler only reads scalars', async () => {
+    const stale = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      taxonomyStartedAt: STALE,
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [stuck] = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.files).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.fileAssignments).toBeUndefined();
+    expect(stuck.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    // The scalars reconcileStuckTaxonomy actually reads must survive the projection.
+    expect(stuck.id).toBe(stale.id);
+    expect(stuck.taxonomyStatus).toBe('analyzing');
+    expect(stuck.taxonomyStartedAt).toEqual(STALE);
   });
 });
 
@@ -1431,6 +1529,39 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
   });
 
+  it('claimUnarchiving enters restoring from archived', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-claim', status: 'archived' }));
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+  });
+
+  it('claimUnarchiving loses to a delete that got there first (#2086)', async () => {
+    // The race the claim exists for: deleteDataLake also accepts 'archived', so it can settle
+    // 'deleted' between unarchiveDataLake's status read and this write. Losing here is what stops
+    // the unarchive carrying on to settle 'active' over a lake whose members are already
+    // soft-deleted - a state restoreDeletedDataLake refuses, leaving the files unreachable.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-loses', status: 'archived' }));
+    await dataLakeRepository.update({ id: created.id, status: 'deleted' });
+
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleted');
+  });
+
+  it('claimUnarchiving is re-entrant from restoring, so a crashed attempt can retry', async () => {
+    // matchedCount, not modifiedCount, for the same reason as claimRestoring: the second call
+    // changes nothing and must still be allowed, matching the guard in unarchiveDataLake which
+    // admits 'restoring' for exactly this retry.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-reentrant', status: 'archived' }));
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+  });
+
+  it('claimUnarchiving refuses an active lake, so it cannot resurrect a settled transition', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-active', status: 'active' }));
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(false);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('active');
+  });
+
   it('releases purging -> deleted so a refused sweep leaves a visible, retryable lake', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'purge-release', status: 'deleted' }));
     await dataLakeRepository.claimPurging(created.id);
@@ -1466,30 +1597,30 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
 describe('DataLakeRepository archive-axis lifecycle claims', () => {
   setupMongoTest();
 
-  it('claimRestoringFromArchived LOSES to a delete that settled first', async () => {
+  it('claimUnarchiving LOSES to a delete that settled first', async () => {
     // The race the archive axis was missing: the unarchive read 'archived', a teardown settled the
     // lake, and a plain status write revived it - leaving it 'active' with every file soft-deleted
     // and out of the deleted list, so neither restore path could reach it.
     const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-loses', status: 'archived' }));
     expect(await dataLakeRepository.claimDeleting(created.id)).toBe(true);
 
-    expect(await dataLakeRepository.claimRestoringFromArchived(created.id)).toBe(false);
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(false);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleting');
   });
 
   it('claimDeleting LOSES to an unarchive that claimed first', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'delete-loses', status: 'archived' }));
-    expect(await dataLakeRepository.claimRestoringFromArchived(created.id)).toBe(true);
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
 
     expect(await dataLakeRepository.claimDeleting(created.id)).toBe(false);
     expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
   });
 
   it.each(['deleting', 'deleted', 'purging', 'active'] as const)(
-    'claimRestoringFromArchived refuses a lake in %s status',
+    'claimUnarchiving refuses a lake in %s status',
     async status => {
       const created = await dataLakeRepository.create(baseLake({ slug: `unarchive-from-${status}`, status }));
-      expect(await dataLakeRepository.claimRestoringFromArchived(created.id)).toBe(false);
+      expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(false);
       expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
     }
   );
@@ -1520,7 +1651,7 @@ describe('DataLakeRepository archive-axis lifecycle claims', () => {
   it.each([
     ['claimArchiving', 'archiving'],
     ['claimDeleting', 'deleting'],
-    ['claimRestoringFromArchived', 'restoring'],
+    ['claimUnarchiving', 'restoring'],
   ] as const)('%s is re-entrant from its own transitional state', async (method, status) => {
     const created = await dataLakeRepository.create(baseLake({ slug: `reentrant-${status}`, status }));
     expect(await dataLakeRepository[method](created.id)).toBe(true);

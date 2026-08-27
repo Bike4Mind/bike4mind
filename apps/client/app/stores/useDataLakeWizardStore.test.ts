@@ -146,6 +146,30 @@ describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('product-launch-retrospective:');
   });
 
+  // Pairs with the reserved-namespace case above: both are "nothing usable to offer", and both
+  // must leave the field empty rather than seeding a value the user never typed. Without the
+  // empty-stem guard in deriveTagPrefixFromLakeName this seeds a bare ':'.
+  it('seeds nothing for a name with no alphanumerics', () => {
+    setName('!!!');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('');
+  });
+
+  // The same guard must also CLEAR a prefix it previously derived - the rename contract is that
+  // an auto-derived prefix never outlives the name it quotes.
+  it('clears a previously derived prefix when the name loses its alphanumerics', () => {
+    setName('Legal Contracts');
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('legal-contracts:');
+
+    setName('!!!');
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('');
+  });
+
   it('still derives for a name that merely starts with the reserved word', () => {
     setName('Datalake Archive');
 

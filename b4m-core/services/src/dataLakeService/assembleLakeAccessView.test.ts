@@ -264,20 +264,47 @@ describe('assembleLakeAccessView', () => {
 
   it('aggregates history, marks truncation, and carries the window start when the read hits the cap', async () => {
     const older = new Date('2026-08-12T00:00:00Z');
-    const newer = new Date('2026-08-13T00:00:00Z');
-    // Events arrive newest-first (as listByLake returns them), so the oldest fetched is the window start.
-    const events = [event({ principalId: 'u1', createdAt: newer }), event({ principalId: 'u1', createdAt: older })];
+    const middle = new Date('2026-08-13T00:00:00Z');
+    const newer = new Date('2026-08-14T00:00:00Z');
+    // Events arrive newest-first (as listByLake returns them), so the oldest RETURNED event is the
+    // window start. Three come back against a cap of 2: the third is the probe row, which proves
+    // truncation and must NOT reach the aggregates or the window date.
+    const events = [
+      event({ principalId: 'u1', createdAt: newer }),
+      event({ principalId: 'u1', createdAt: middle }),
+      event({ principalId: 'u1', createdAt: older }),
+    ];
     const { adapters, spies } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
     const view = await assembleLakeAccessView(lakeDoc(), {
       ...(adapters as object),
       historyLimit: 2,
       now: NOW,
     } as never);
-    expect(spies.listByLakeEvents).toHaveBeenCalledWith('lake1', { limit: 2 });
+    // limit + 1: the probe. Asking for exactly the cap cannot tell a full window from a complete one.
+    expect(spies.listByLakeEvents).toHaveBeenCalledWith('lake1', { limit: 3 });
     expect(view.history).toHaveLength(1);
+    // 2, not 3: the probe row is sliced off before aggregation, so it cannot inflate readCount.
     expect(view.history[0]).toMatchObject({ principalName: 'Alice', readCount: 2 });
     expect(view.historyTruncated).toBe(true);
-    expect(view.windowStartsAt).toEqual(older);
+    expect(view.windowStartsAt).toEqual(middle);
+  });
+
+  it('reports a complete trail of exactly the cap as untruncated, with no window start (#2092)', async () => {
+    // The boundary the old `events.length >= historyLimit` got wrong. listByLake applies the limit,
+    // so a lake with exactly `historyLimit` reads used to report truncated with a windowStartsAt -
+    // captioning its ENTIRE audit trail as "reads since <date>" and implying older reads were dropped.
+    const older = new Date('2026-08-12T00:00:00Z');
+    const newer = new Date('2026-08-13T00:00:00Z');
+    const events = [event({ principalId: 'u1', createdAt: newer }), event({ principalId: 'u1', createdAt: older })];
+    const { adapters } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
+    const view = await assembleLakeAccessView(lakeDoc(), {
+      ...(adapters as object),
+      historyLimit: 2,
+      now: NOW,
+    } as never);
+    expect(view.history[0]).toMatchObject({ readCount: 2 });
+    expect(view.historyTruncated).toBe(false);
+    expect(view.windowStartsAt).toBeUndefined();
   });
 
   it('does not mark truncation, and omits the window start, when fewer events than the cap come back', async () => {

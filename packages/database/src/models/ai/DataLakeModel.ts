@@ -552,7 +552,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
   }
 
-  async claimRestoringFromArchived(id: string): Promise<boolean> {
+  async claimUnarchiving(id: string): Promise<boolean> {
+    // The archive-axis twin of claimRestoring. What the filter EXCLUDES is the point: deleteDataLake
+    // also accepts 'archived', so a delete accepted between unarchiveDataLake's status read and this
+    // write must win. Losing here yields the same refusal the caller's guard would have given, where
+    // a plain $set would instead leave the lake 'active' with every member soft-deleted and
+    // restoreDeletedDataLake refusing it - unreachable files with no route back.
     return this.claimLifecycleStatus(id, ['archived', 'restoring'], 'restoring');
   }
 
@@ -808,13 +813,16 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
-  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchSummary[]> {
     // status equality prefix + updatedAt range -> served by the { status:1, updatedAt:1 } index.
+    // Projects out the per-file manifest and fileAssignments like the sibling finders:
+    // reconcileStuckBatches only reads scalars, and this scan pulls up to `limit` docs per run.
     const results = await this.batchModel
       .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
       .sort({ updatedAt: 1 })
-      .limit(limit);
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+      .limit(limit)
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   async updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void> {
@@ -933,6 +941,18 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return this.guardedActiveUpdate(batchId, { status });
   }
 
+  async updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    // Same guard as markTerminalIfActive/setStatusIfActive, but carrying the PUT route's whole field
+    // set: that route accepts any BatchStatus plus the client's failure tallies, so neither of the
+    // narrower methods fits, and a plain update there let a client (or a read-then-write race with
+    // the queue finalizer) write a settled batch back to a non-terminal status - resurrecting it into
+    // findActiveByUserId, where reconcileStuckBatches would later force-fail a batch that succeeded.
+    return this.guardedActiveUpdate(batchId, fields as Record<string, unknown>);
+  }
+
   async touchIfActive(batchId: string): Promise<void> {
     await this.guardedActiveUpdate(batchId, { updatedAt: new Date() });
   }
@@ -956,7 +976,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
-  async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+  async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchSummary[]> {
     // taxonomyStatus equality prefix + taxonomyStartedAt range -> served by the
     // { taxonomyStatus:1, taxonomyStartedAt:1 } index, mirroring findStuck. Deliberately NOT
     // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
@@ -972,8 +992,9 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         taxonomyStartedAt: { $not: { $gte: cutoff } },
       })
       .sort({ taxonomyStartedAt: 1 })
-      .limit(limit);
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+      .limit(limit)
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   /**

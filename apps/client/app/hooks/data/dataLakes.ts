@@ -1,6 +1,8 @@
 import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
+  DataLakeProposalStatus,
+  IDataLakeProposalDocument,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeSpendResponse,
@@ -26,6 +28,17 @@ import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+
+/**
+ * True for a 4xx, which on the manage-gated lake reads (spend, proposals) means "you may see this
+ * lake but not this surface". Callers hide the surface on it rather than painting an error, so it
+ * must not widen to 5xx - a server fault is a real error and should read as one.
+ */
+function isPermissionRejection(error: unknown): boolean {
+  if (!isAxiosError(error)) return false;
+  const status = error.response?.status ?? 0;
+  return status >= 400 && status < 500;
+}
 
 /**
  * The active account-switcher org to scope a data-lake write to, or undefined for the
@@ -1180,9 +1193,92 @@ export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?:
     staleTime: 1000 * 60,
     placeholderData: keepPreviousData,
   });
-  const isForbidden =
-    isAxiosError(query.error) &&
-    (query.error.response?.status ?? 0) >= 400 &&
-    (query.error.response?.status ?? 0) < 500;
-  return { ...query, isForbidden };
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+// ── Acquisition proposal queue (#1671) ──────────────────────────────────────
+
+/**
+ * One lake's acquisition review queue. Manage-gated server-side, so a mere reader gets a 4xx -
+ * surfaced as `isForbidden` and never retried, matching `useDataLakeSpend`. Callers gate the whole
+ * surface on that flag rather than painting an error.
+ *
+ * No polling: proposals arrive from a background producer, but a reviewer who has the panel open is
+ * mid-decision, and a list that reshuffles under them is worse than one that is a few minutes stale.
+ */
+export function useDataLakeProposals(
+  dataLakeId: string | null,
+  status?: DataLakeProposalStatus,
+  opts?: { enabled?: boolean }
+) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.proposals(dataLakeId, status),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeProposalDocument[] }>(`/api/data-lakes/${dataLakeId}/proposals`, {
+        params: status ? { status } : undefined,
+      });
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    // Refetch on focus, unlike the rest of this file: a reviewer keeps this panel open while opening
+    // sources in other tabs, and coming back to a queue that silently no longer matches the database
+    // is how you decline something a colleague already ruled on. Cheap - one small read of one lake's
+    // pending rows, and only while a manager has the modal open.
+    refetchOnWindowFocus: true,
+    // Short enough that returning to the tab shows the real queue, long enough that tab-flipping
+    // within a single review pass does not refetch on every switch.
+    staleTime: 1000 * 15,
+  });
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
+
+/**
+ * The server's own refusal text for a failed review decision, or a fallback.
+ *
+ * Shared by the toast and the card's inline alert so the two can never disagree about what went
+ * wrong. The body key is `error`, per server/middlewares/errorHandler.ts - reading `message` (as
+ * this once did) matched nothing, so the fallback always won and the messages that matter most
+ * ("already been reviewed", "the source returned HTTP 404") never reached the reviewer.
+ */
+export function reviewProposalFailureMessage(error: unknown): string {
+  const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+  return refusal || 'Could not record that decision. Try again shortly.';
+}
+
+/**
+ * Approve or decline one proposal. An approval admits the source into the lake through the ordinary
+ * ingestion door, so it invalidates the lake's file list and health alongside the queue - the file
+ * appears immediately, and its health badge stops reflecting a corpus that just changed.
+ */
+export function useReviewDataLakeProposal(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      proposalId,
+      decision,
+      reason,
+    }: {
+      proposalId: string;
+      decision: 'approve' | 'decline';
+      reason?: string;
+    }) => {
+      const { data } = await api.post<{ data: IDataLakeProposalDocument }>(
+        `/api/data-lakes/${dataLakeId}/proposals/${proposalId}`,
+        { decision, reason }
+      );
+      return data.data;
+    },
+    onSuccess: (proposal, { decision }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.proposalsOf(dataLakeId) });
+      if (decision === 'approve') {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
+      toast.success(decision === 'approve' ? `Added "${proposal.title}" to the lake` : 'Proposal declined');
+    },
+    onError: (error: unknown) => {
+      toast.error(reviewProposalFailureMessage(error));
+    },
+  });
 }

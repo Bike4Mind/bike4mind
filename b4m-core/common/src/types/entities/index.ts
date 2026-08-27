@@ -96,6 +96,7 @@ export * from './LakeConfigChangeEventTypes';
 export * from './LakeConfigHistoryTypes';
 export * from './DataLakeSpendNotificationTypes';
 export * from './LakeAccessViewTypes';
+export * from './DataLakeProposalTypes';
 export * from './SreTypes';
 export * from './SecopsTriageTypes';
 export * from './MarketingReportTypes';

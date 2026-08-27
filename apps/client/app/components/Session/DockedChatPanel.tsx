@@ -42,7 +42,9 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          height: '48px',
+          // Matches the sidenav header and the /opti mission-deck header so the
+          // three top bars line up across the app chrome.
+          height: '56px',
           padding: '0 16px',
           backgroundColor: theme.palette.background.level1,
           borderBottom: '1px solid',

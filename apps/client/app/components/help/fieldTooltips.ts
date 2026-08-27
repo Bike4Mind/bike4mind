@@ -34,6 +34,9 @@ export const FIELD_TOOLTIPS = {
     'How permissive content moderation is (Flux only). Lower is stricter, higher is more permissive (hard-capped).',
   promptEnhancement:
     'The provider rewrites and expands your prompt before generating, often adding detail. Turn off to use your prompt exactly as written.',
+  // Appended to the tooltip of a control the selected model ignores, rather than hiding the control:
+  // see `inertImageSettings.ts`.
+  unsupportedByGeminiImage: 'Gemini image models do not accept this setting, so it has no effect on the result.',
 } as const;
 
 export type FieldTooltipKey = keyof typeof FIELD_TOOLTIPS;

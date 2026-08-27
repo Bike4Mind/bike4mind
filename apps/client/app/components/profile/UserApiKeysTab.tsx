@@ -88,6 +88,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   projects: 'Projects',
   ai: 'AI',
   'marketing-reports': 'Marketing Reports',
+  optihashi: 'OptiHashi',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -95,6 +96,7 @@ const ACTION_LABELS: Record<string, string> = {
   write: 'Write',
   generate: 'Generate',
   chat: 'Chat',
+  compute: 'Compute',
 };
 
 const humanize = (s: string) =>

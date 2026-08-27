@@ -416,8 +416,13 @@ jobs:
 
   # Tests run as a matrix of shards so wall time is the slowest shard, not the
   # serial sum. The heavy suites are isolated onto their own runners:
-  #   - client: the large apps/client suite (thousands of fast unit files) - alone
-  #     so it keeps the whole box for file parallelism.
+  #   - client 1/3, 2/3, 3/3: the large apps/client unit suite (over a thousand files), split
+  #     across three runners by vitest's own `--shard`. Each leg owns its whole box
+  #     for file parallelism. Splitting by `--shard` rather than by directory is the
+  #     point: vitest slices a hash-sorted list of the resolved file paths, so the
+  #     legs tile the file set EXACTLY for any count - no hand-maintained bucket
+  #     lists, and a newly added test file cannot land in two legs or in none. The
+  #     leg count is pinned by checkClientTestShards.test.ts.
   #   - client-integration: the SAME package and filter as `client`, selected onto
   #     its real-Mongo `*.e2e.test.ts` files by a different script. apps/client is
   #     therefore the one package that appears in two legs; the two lanes are
@@ -446,18 +451,52 @@ jobs:
     # drag the test-shard fan-out onto the larger, pricier runner.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
-    timeout-minutes: 20
+    # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
+    # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
+    # into - the job was cancelled during cleanup AFTER every test had passed, so a green
+    # suite reported red on a coin flip decided by runner speed (#2015). 30 buys headroom over
+    # that drift; SHARD_SOFT_BUDGET_SECONDS below is what actually watches for it.
+    timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # Soft budget: crossing it annotates the run instead of killing it, so the next slow creep
+      # surfaces as a warning on a passing build rather than as someone's PR failing for no
+      # reason - which was the only signal this had that the client shard had gone from 15
+      # minutes to 20.
+      #
+      # 600, retuned down from the 1200 that matched the client shard's old pre-split runtime.
+      # With the client suite split three ways, no leg in this matrix is expected to approach 10
+      # minutes - the heaviest non-client leg was 4m51s on the pre-split run - so 1200 could no
+      # longer fire for anything and had stopped being an early warning. At 600 it also catches
+      # the specific way this split can silently break: if a leg stops sharding it runs the WHOLE
+      # suite (~942s in CI) and trips this, rather than just quietly costing 3x for no speedup.
+      SHARD_SOFT_BUDGET_SECONDS: '600'
 
     strategy:
       fail-fast: false
       matrix:
         shard:
           # Single-package shards own the whole runner, so no worker cap.
-          - name: client
+          #
+          # `args` is appended to the test command WITHOUT a `--` separator, and that matters:
+          # `pnpm ... test -- --shard=1/3` forwards the literal `--` on to vitest, which then
+          # reads everything after it as positional path filters. The shard flag is silently
+          # IGNORED and the leg runs the whole suite - measured, it is not a theory. Nothing
+          # errors, so all three legs would quietly do the full suite at 3x the cost. Keep the
+          # args bare. SHARD_SOFT_BUDGET_SECONDS above is the backstop if this regresses.
+          - name: client 1/3
             filter: '--filter @bike4mind/client'
             workers: ''
+            args: '--shard=1/3'
+          - name: client 2/3
+            filter: '--filter @bike4mind/client'
+            workers: ''
+            args: '--shard=2/3'
+          - name: client 3/3
+            filter: '--filter @bike4mind/client'
+            workers: ''
+            args: '--shard=3/3'
           # The client package's ~20 real-Mongo suites (`*.e2e.test.ts`), split off
           # the shard above. Each boots a mongod, and inline they pushed that job
           # past `timeout-minutes` even on runs where the suite itself passed - the
@@ -568,11 +607,19 @@ jobs:
           pnpm --filter @bike4mind/database exec node -e
           "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
+      # Paired with "Report shard duration" at the end of this job. Set before the test steps
+      # rather than derived from the job's own start so the number is test runtime, not
+      # test runtime plus install and core-build restore.
+      - name: Mark shard start
+        run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
+
       # `matrix.shard.script` is unset on every shard but client-integration, and an
       # unset matrix value is the empty string here, so `||` falls back to the unit
-      # `test` script.
+      # `test` script. `matrix.shard.args` is likewise empty on every leg but the three
+      # client ones, where it carries `--shard=i/3` - deliberately with no `--` separator
+      # before it, see the matrix entries above for why that is load-bearing.
       - name: Run Tests (${{ matrix.shard.name }})
-        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} ${{ matrix.shard.script || 'test' }}
+        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} ${{ matrix.shard.script || 'test' }} ${{ matrix.shard.args }}
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
@@ -607,9 +654,28 @@ jobs:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
 
+      # Reports, never fails. Before this, the only signal that a shard's runtime had crept was
+      # a PR going red for no reason once the creep crossed `timeout-minutes` (#2015) - by which
+      # point the information arrives as a broken build rather than as a trend. A duration on
+      # every run, plus a warning annotation once a shard passes its soft budget, makes the
+      # slide visible while the build is still green.
+      #
+      # `always()` so a FAILING shard still reports: a shard that failed because it was slow is
+      # the exact run where the number is worth having. Guarded on SHARD_START_SECONDS being set
+      # so an early failure (before the mark step) reports nothing instead of nonsense.
+      - name: Report shard duration
+        if: always() && env.SHARD_START_SECONDS != ''
+        run: |
+          elapsed=$(( $(date +%s) - SHARD_START_SECONDS ))
+          summary=$(printf '%s: %dm%02ds' '${{ matrix.shard.name }}' "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
+          echo "- Run Tests (${summary})" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt "$SHARD_SOFT_BUDGET_SECONDS" ]; then
+            echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
+          fi
+
   # Aggregate gate for the sharded test matrix. Branch protection requires a
   # status check literally named "Run Tests"; the matrix above reports per-shard
-  # names ("Run Tests (client)", …), so this job re-exposes the exact required
+  # names ("Run Tests (client 1/3)", …), so this job re-exposes the exact required
   # context and passes only when every shard succeeded.
   test:
     name: Run Tests
