@@ -84,8 +84,11 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
 
 LakeAccessEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 LakeAccessEventSchema.index({ principalKind: 1, principalId: 1, createdAt: -1 });
-// Multikey: "who read this lake?" - the core audit query.
-LakeAccessEventSchema.index({ resolvedLakeIds: 1, createdAt: -1 });
+// Multikey: "who read this lake?" - the core audit query. The `_id: -1` suffix is load-bearing,
+// not decoration: listByLake sorts { createdAt: -1, _id: -1 } for a stable page window, and an
+// index without `_id` cannot supply that order - the planner would drop the indexed sort and
+// blocking-SORT the lake's whole 450-day retention window on every read.
+LakeAccessEventSchema.index({ resolvedLakeIds: 1, createdAt: -1, _id: -1 });
 LakeAccessEventSchema.index({ organizationId: 1, createdAt: -1 });
 // Single-field, no createdAt companion (unlike the three above): rows per questId are bounded by
 // the turn, at one row per content-returning tool call. That is single-digit in classic chat, but
@@ -233,7 +236,7 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     principalId: string,
     opts?: { limit?: number }
   ): Promise<ILakeAccessEventDocument[]> {
-    const query = this.eventModel.find({ principalKind, principalId }).sort({ createdAt: -1, _id: -1 });
+    const query = this.eventModel.find({ principalKind, principalId }).sort({ createdAt: -1 });
     if (opts?.limit) query.limit(opts.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as ILakeAccessEventDocument);

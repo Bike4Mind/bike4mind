@@ -134,7 +134,10 @@ LakeConfigChangeEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 // If a by-principal index is ever wanted, lead it with `dataLakeId`: batch-completion writes a
 // `system`/`system` pair, so `principalKind + principalId` alone would pile a large share of all
 // rows into one low-selectivity slot.
-LakeConfigChangeEventSchema.index({ dataLakeId: 1, createdAt: -1 });
+// `_id: -1` is part of the key, not decoration: listByLake sorts { createdAt: -1, _id: -1 } for a
+// stable page window, and an index without `_id` cannot supply that order - the planner would drop
+// the indexed sort and blocking-SORT the lake's whole three-year retention window on every read.
+LakeConfigChangeEventSchema.index({ dataLakeId: 1, createdAt: -1, _id: -1 });
 
 export const LakeConfigChangeEventModel: ILakeConfigChangeEventModel =
   (mongoose.models[ModelName] as ILakeConfigChangeEventModel) ||
@@ -177,8 +180,8 @@ class LakeConfigChangeEventRepository
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeConfigChangeEventDocument[]> {
     // `_id` breaks createdAt ties: two events written in the same millisecond would otherwise come
     // back in an arbitrary order, so a paged reader (assembleLakeConfigHistory) could report a
-    // different window boundary on each load of the same page. Free given the
-    // { dataLakeId: 1, createdAt: -1 } index, whose prefix this sort still matches.
+    // different window boundary on each load of the same page. The `_id: -1` suffix on the
+    // { dataLakeId: 1, createdAt: -1, _id: -1 } index is what keeps this sort index-supported.
     const query = this.eventModel.find({ dataLakeId: lakeId }).sort({ createdAt: -1, _id: -1 });
     if (opts?.limit) query.limit(opts.limit);
     const docs = await query;

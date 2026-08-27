@@ -217,9 +217,18 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       expect(ttl?.expireAfterSeconds).toBe(0);
     });
 
-    it('indexes the owner-facing history query it exists to serve', async () => {
-      const indexes = await LakeConfigChangeEventModel.collection.indexes();
-      expect(indexes.some(i => i.key?.dataLakeId === 1 && i.key?.createdAt === -1)).toBe(true);
+    it('serves the owner-facing history read from the index, sort included - no blocking SORT', async () => {
+      // Asserts the PLAN, not the key shape: a key-presence check stays green when the index stops
+      // at `createdAt` (it cannot supply `_id` order, so the planner drops the indexed sort and
+      // SORTs the lake's whole three-year retention window above FETCH) and green again when the
+      // superseded two-key index lingers beside the new one.
+      const plan = await LakeConfigChangeEventModel.find({ dataLakeId: 'lake-1' })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(3)
+        .explain('queryPlanner');
+      const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
+      expect(winning).toContain('IXSCAN');
+      expect(winning).not.toContain('"stage":"SORT"');
     });
 
     it('stamps createdAt but never updatedAt - an event has no later version', async () => {
