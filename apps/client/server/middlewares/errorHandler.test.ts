@@ -90,3 +90,44 @@ describe('errorHandler - the body carries no keys the envelope does not document
     }
   });
 });
+
+describe('errorHandler - CastError only means 404 when the cast was on `_id`', () => {
+  // Mongoose sets `path` to the field it failed to cast. Only `_id` implies the caller
+  // handed a route a junk resource id; anything else was thrown by our own code and a
+  // 404 would report an expected client error where there is really a server bug.
+  const castError = (path?: string) => ({
+    name: 'CastError',
+    message: `Cast to ObjectId failed for value "junk" at path "${path ?? 'unknown'}"`,
+    ...(path === undefined ? {} : { path }),
+  });
+
+  it('maps a cast on `_id` to 404 and logs it as an expected client error', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError('_id'), req, res);
+    expect(status).toHaveBeenCalledWith(404);
+    expect(req.logger.warn).toHaveBeenCalled();
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('leaves a cast on any other field a 500 and logs it as a server error', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError('userId'), req, res);
+    expect(status).toHaveBeenCalledWith(500);
+    expect(req.logger.error).toHaveBeenCalled();
+    expect(req.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a CastError with no path as a missing resource', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError(), req, res);
+    expect(status).toHaveBeenCalledWith(500);
+  });
+
+  it('adds nothing beyond the envelope for a non-`_id` CastError', () => {
+    const { req, res, json } = makeReqRes();
+    errorHandler(castError('userId'), req, res);
+    for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
+      expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
+    }
+  });
+});

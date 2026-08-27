@@ -9,7 +9,10 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
   if (typeof error === 'object' && error !== null && 'name' in error) {
     let errorObj = error as { name: string; message?: string };
 
-    if (errorObj.name === 'CastError') {
+    // Only a cast on `_id` means the caller handed us a junk resource id, which is a
+    // genuine 404. A CastError raised anywhere else (a side effect, a non-lookup field)
+    // is a server-side bug and must stay a 5xx so it is logged at `error` and alarms.
+    if (errorObj.name === 'CastError' && (errorObj as { path?: string }).path === '_id') {
       errorObj = new NotFoundError('Resource not found');
     }
 

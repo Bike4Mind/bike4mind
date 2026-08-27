@@ -161,10 +161,11 @@ const handler = baseApi()
 
     // Use the same resolved id already computed for the saved document, not the raw request-body
     // userId: an untrusted body value that isn't a valid ObjectId threw a Mongoose CastError deep
-    // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already
-    // succeeded. The resolved id removes that specific trigger, but logEvent is still a post-save
-    // side-effect that can fail for other reasons (e.g. a transient write failure inside
-    // incrementUserCounter) -- same containment as the Slack/email side-effects below.
+    // in the analytics side-effect, failing a save that had already succeeded. errorHandler now
+    // only maps a cast on `_id` to a 404, so that cast would surface as a 500 rather than a
+    // masked 404 - still the wrong answer for a durable save, hence the resolved id. logEvent is
+    // a post-save side-effect that can fail for other reasons (e.g. a transient write failure
+    // inside incrementUserCounter) -- same containment as the Slack/email side-effects below.
     if (authenticated) {
       try {
         await logEvent(
