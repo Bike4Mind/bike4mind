@@ -10,19 +10,45 @@
 import { agentExecutionRepository, sessionRepository, type AgentExecutionStatus } from '@bike4mind/database';
 import type { IAgentStep } from '@bike4mind/common';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
+import { toUserFacingFailureMessage } from '@server/queueHandlers/agentExecutor.failureMessage';
 
 export type AgentExecutionTrace = {
   id: string;
   status: AgentExecutionStatus;
   sessionId: string | null;
   answer: string | null;
-  /** Failure reason from `markFailed`; null unless the run failed. */
+  /**
+   * Failure reason, already safe to hand an external caller; null unless the run
+   * failed. See `toCallerSafeError` for what that guarantee rests on.
+   */
   error: string | null;
   steps: IAgentStep[];
   totalIterations: number | null;
   createdAt: Date;
   updatedAt: Date;
 };
+
+/**
+ * Reduce a stored failure to something publishable.
+ *
+ * `markFailed` stores whatever the executor threw, and most call sites hand it a raw
+ * exception message. Those routinely carry infrastructure identifiers - a Bedrock
+ * denial names the assumed role ARN, i.e. the AWS account id, the role and the stage -
+ * and this trace feeds a public, API-key-reachable route. The WebSocket transport
+ * sanitizes at send time (`toUserFacingFailureMessage` in the executor's catch-all);
+ * nothing sanitized this path.
+ *
+ * Only a message a writer explicitly flagged `callerSafe` is published verbatim. That
+ * flag exists because a blanket sanitize is not sufficient either: the two
+ * permission-gate messages the contract promises will name the gated tool match none
+ * of the recognized categories and would collapse to "Agent execution failed",
+ * breaking the documented `tools` pre-approval remedy. Unflagged is the default, so a
+ * new failure path leaks nothing until someone deliberately opts it in.
+ */
+function toCallerSafeError(error: { message?: string; callerSafe?: boolean } | null | undefined): string | null {
+  if (!error?.message) return null;
+  return error.callerSafe ? error.message : toUserFacingFailureMessage(error.message);
+}
 
 /**
  * Returns null for "not found OR not yours" - the caller turns that into a 404 either
@@ -59,7 +85,7 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     status: execution.status,
     sessionId: execution.sessionId ?? null,
     answer: result?.answer ?? null,
-    error: execution.error?.message ?? null,
+    error: toCallerSafeError(execution.error),
     steps: result?.steps ?? checkpoint?.steps ?? [],
     totalIterations: result?.totalIterations ?? checkpoint?.iteration ?? null,
     createdAt: execution.createdAt,

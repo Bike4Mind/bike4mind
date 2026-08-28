@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { AGENT_EXECUTION_STATUSES } from '../constants/agentExecutionStatus';
 
 /**
  * Public wire schemas for the agent-executor (ReAct) endpoints:
@@ -120,6 +119,34 @@ export const AgentExecutionStepSchema = z.object({
 export type AgentExecutionStep = z.infer<typeof AgentExecutionStepSchema>;
 
 /**
+ * Statuses a published poll response can report.
+ *
+ * Deliberately a separate literal from `AGENT_EXECUTION_STATUSES`. That tuple is the
+ * DATABASE's value space, shared with `AgentExecutionModel` and
+ * `useAgentExecutionStore`, and it grows whenever the executor gains an internal state
+ * (it already gained `awaiting_dag_children`). Publishing it directly would put the
+ * next such state into `openapi.json` and every generated client without anyone
+ * deciding it should be public. Unlike `PUBLIC_AGENT_STEP_TYPES` above, the internal
+ * tuple here IS importable - the copy buys decoupling, not import reachability.
+ *
+ * Equal to the internal tuple today - the current set is all reasonable to publish -
+ * and `agentExecution.statuses.test.ts` pins the two in lockstep, so a new internal
+ * status fails the build here and forces the publish-or-not call to be made explicitly.
+ */
+export const PUBLIC_AGENT_EXECUTION_STATUSES = [
+  'pending',
+  'running',
+  'continuing',
+  'awaiting_permission',
+  'awaiting_subagent',
+  'awaiting_dag_children',
+  'paused',
+  'completed',
+  'failed',
+  'aborted',
+] as const;
+
+/**
  * Poll response for `GET /api/v1/agent-executions/{id}`.
  *
  * `steps` is the live trace: it grows while the run is in flight (read from the
@@ -129,13 +156,18 @@ export type AgentExecutionStep = z.infer<typeof AgentExecutionStepSchema>;
  */
 export const AgentExecutionStatusResponseSchema = z.object({
   id: z.string(),
-  status: z.enum(AGENT_EXECUTION_STATUSES),
+  status: z.enum(PUBLIC_AGENT_EXECUTION_STATUSES),
   session_id: z.string().nullable(),
   answer: z.string().nullable(),
   /**
    * Why the run ended without an answer. Set only on `failed`; null otherwise.
    * Without this a caller polling a terminal run sees `failed` + a null answer and
    * cannot tell an approval-gated tool from a model error from a timeout.
+   *
+   * Approval-gate failures name the offending tool, since that is what the caller acts
+   * on. Everything else is reduced to a coarse category (billing, rate limit, timeout,
+   * auth) or a generic message: the stored reason is a raw internal exception, and
+   * those carry infrastructure identifiers. Full detail stays in the server logs.
    */
   error: z.string().nullable(),
   steps: z.array(AgentExecutionStepSchema),

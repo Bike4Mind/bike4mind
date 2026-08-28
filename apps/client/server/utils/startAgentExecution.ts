@@ -34,9 +34,31 @@ const lambdaClient = new LambdaClient({});
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
  * `updateMany` on every start; a user firing several in quick succession would
  * otherwise pay that write each time. Module scope so it survives warm invocations.
+ *
+ * Pruned rather than left to grow: an entry past the TTL can no longer suppress a
+ * sweep, so keeping it buys nothing. It matters now that this runs in the frontend
+ * server as well as the WebSocket Lambda - the longer-lived and higher-cardinality of
+ * the two, where the map would otherwise hold one entry per distinct caller for the
+ * life of the container.
  */
 const SWEEP_MEMO_TTL_MS = 60 * 1000;
 const lastSweptAtByUser = new Map<string, number>();
+
+/** Drops entries that are already past the TTL. O(size), on the sweep path only. */
+function pruneSweepMemo(now: number): void {
+  for (const [userId, sweptAt] of lastSweptAtByUser) {
+    if (now - sweptAt > SWEEP_MEMO_TTL_MS) lastSweptAtByUser.delete(userId);
+  }
+}
+
+/**
+ * Exported for `startAgentExecution.test.ts`. Unbounded growth is invisible from the
+ * function's return value - an expired entry no longer suppresses a sweep either way -
+ * so the map's size is the only thing a test can assert on.
+ */
+export function sweepMemoSize(): number {
+  return lastSweptAtByUser.size;
+}
 
 /**
  * Provenance of the routing decision, persisted on the dispatch-time Quest. Derived
@@ -150,6 +172,9 @@ export async function startAgentExecution(
   const lastSweptAt = lastSweptAtByUser.get(userId) ?? 0;
   if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {
     const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
+    // Prune before the insert, so a container that only ever sees one-shot callers
+    // still converges instead of accumulating an entry per caller.
+    pruneSweepMemo(now);
     lastSweptAtByUser.set(userId, now);
     if (swept.length > 0) {
       logger.info('[Start] Swept stale active executions before count', { userId, swept: swept.length });
@@ -167,27 +192,35 @@ export async function startAgentExecution(
   if (activeCount >= MAX_CONCURRENT_EXECUTIONS_PER_USER) {
     logger.info('[Start] Concurrent execution cap reached', { userId, activeCount });
     const message = `${MAX_CONCURRENT_EXECUTIONS_PER_USER} agents already running. Wait for one to finish before starting another.`;
-    // Also write the rejection into chat history so the session isn't left looking
-    // empty after a refresh - the live UI showed the prompt bubble + toast, but
-    // without a Quest the next page load shows an empty notebook with no
-    // explanation. The marker prefix keeps it visually distinct from a real reply.
+    // Write the rejection into chat history ONLY for a transport that has a gap to
+    // fill: the live UI showed a prompt bubble + toast, and without a Quest the next
+    // page load shows an empty notebook with no explanation. The marker prefix keeps it
+    // visually distinct from a real reply.
+    //
+    // A headless caller has no such gap - it gets this same text back in the 409 body -
+    // so writing one would let a rejected API call permanently mutate chat history,
+    // leaving a `done` Quest with a `System:` reply no model produced. A client
+    // retrying against a full cap would leave one per attempt.
+    //
     // Best-effort: a Quest write failure must not turn this rejection into an error.
-    const replyText = `⚠️ **System:** ${message}`;
-    try {
-      await Quest.create({
-        sessionId: input.sessionId,
-        type: 'message',
-        prompt: input.query,
-        replies: [replyText],
-        timestamp: new Date(),
-        status: 'done',
-      });
-    } catch (err) {
-      logger.warn('[Start] Failed to write concurrent-limit Quest - chat history will not reflect this rejection', {
-        userId,
-        sessionId: input.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    if (!isHeadlessConnection(input.connectionId)) {
+      const replyText = `⚠️ **System:** ${message}`;
+      try {
+        await Quest.create({
+          sessionId: input.sessionId,
+          type: 'message',
+          prompt: input.query,
+          replies: [replyText],
+          timestamp: new Date(),
+          status: 'done',
+        });
+      } catch (err) {
+        logger.warn('[Start] Failed to write concurrent-limit Quest - chat history will not reflect this rejection', {
+          userId,
+          sessionId: input.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     return { ok: false, reason: 'concurrent_limit', message };
   }

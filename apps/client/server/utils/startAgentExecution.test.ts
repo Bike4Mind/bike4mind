@@ -58,7 +58,7 @@ vi.mock('@server/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
-import { startAgentExecution } from './startAgentExecution';
+import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from './headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
 
@@ -167,7 +167,7 @@ describe('startAgentExecution', () => {
     expect(dispatchedPayload()).toMatchObject({ organizationId: 'org1' });
   });
 
-  it('refuses to start past the concurrency cap and records the rejection in chat history', async () => {
+  it('refuses to start past the concurrency cap without creating or dispatching anything', async () => {
     mockCountActive.mockResolvedValue(MAX_CONCURRENT_EXECUTIONS_PER_USER);
 
     const result = await startAgentExecution(input({ userId: 'at-cap' }), logger);
@@ -175,7 +175,15 @@ describe('startAgentExecution', () => {
     expect(result).toMatchObject({ ok: false, reason: 'concurrent_limit' });
     expect(mockCreateExecution).not.toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
-    // The refusal is written into the session so a reload does not show an empty notebook.
+  });
+
+  it('records a cap refusal in chat history for an interactive run, which has a bubble to explain', async () => {
+    mockCountActive.mockResolvedValue(MAX_CONCURRENT_EXECUTIONS_PER_USER);
+
+    await startAgentExecution(input({ userId: 'at-cap-interactive', connectionId: 'real-ws-conn' }), logger);
+
+    // The live UI showed a prompt bubble + toast; without this a reload shows an empty
+    // notebook with no explanation.
     expect(mockQuestCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 's1',
@@ -183,6 +191,17 @@ describe('startAgentExecution', () => {
         replies: [expect.stringContaining('already running')],
       })
     );
+  });
+
+  it('does NOT touch chat history on a headless cap refusal - a rejected API call must not mutate it', async () => {
+    // The REST caller gets the same text back in the 409 body, so there is no gap to
+    // fill; writing one would leave a `done` Quest with a `System:` reply no model
+    // produced, once per retry against a full cap.
+    mockCountActive.mockResolvedValue(MAX_CONCURRENT_EXECUTIONS_PER_USER);
+
+    await startAgentExecution(input({ userId: 'at-cap-headless' }), logger);
+
+    expect(mockQuestCreate).not.toHaveBeenCalled();
   });
 
   it('sweeps stale executions and settles their stranded quests before counting', async () => {
@@ -199,6 +218,31 @@ describe('startAgentExecution', () => {
     await startAgentExecution(input({ userId: 'repeat-caller' }), logger);
 
     expect(mockCleanupStaleActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('evicts memo entries past the TTL, so the map does not grow for the container lifetime', async () => {
+    // The memo lives in module scope and now runs in the long-lived, higher-cardinality
+    // frontend server as well as the WebSocket Lambda. An expired entry can no longer
+    // suppress a sweep, so holding it buys nothing - and holding one per distinct caller
+    // for the life of the container is the leak. Asserted on size because behaviour is
+    // identical either way.
+    vi.useFakeTimers();
+    try {
+      await startAgentExecution(input({ userId: 'memo-a' }), logger);
+      await startAgentExecution(input({ userId: 'memo-b' }), logger);
+      await startAgentExecution(input({ userId: 'memo-c' }), logger);
+      expect(sweepMemoSize()).toBeGreaterThanOrEqual(3);
+
+      // Past SWEEP_MEMO_TTL_MS (60s), so every entry above is prunable by the next write.
+      vi.advanceTimersByTime(61_000);
+      await startAgentExecution(input({ userId: 'memo-d' }), logger);
+
+      // Only the newest survives. Without pruning this would be the running total of
+      // every caller the container has ever served.
+      expect(sweepMemoSize()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('pre-approves the caller-named tools on a headless run, so the first gated tool does not kill it', async () => {

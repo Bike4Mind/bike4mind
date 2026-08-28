@@ -88,7 +88,7 @@ import {
   resolveAgentArtifactGate,
 } from '../utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
-import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
+import { selectGatedAction, resolveGateDisposition } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
@@ -258,7 +258,12 @@ const sqsClient = new SQSClient({});
 // WebSocket streaming helpers
 // ---------------------------------------------------------------------------
 
-function createWsSender(connectionId: string, logger: Logger) {
+/**
+ * Exported for `agentExecutor.headless.test.ts`: the headless short-circuit below is
+ * the only thing standing between a REST-started run and a failed `PostToConnection`
+ * on every single step - which this sender swallows, so the failure would be invisible.
+ */
+export function createWsSender(connectionId: string, logger: Logger) {
   // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail
   // on every single step - and this sender swallows send errors, so those failures
   // would be invisible noise rather than a signal. Short-circuit instead, with one log
@@ -2389,15 +2394,19 @@ async function processExecution(
       const gated = selectGatedAction(iterationResult.allSteps, approvedTools, deniedTools);
       if (gated) {
         const { toolName, toolInput, verdict } = gated;
+        const disposition = resolveGateDisposition(verdict, connectionId);
 
-        if (verdict === 'denied') {
+        if (disposition === 'denied') {
           // Fail the execution - the tool already executed (Phase 1 limitation),
           // but continuing would let the agent act on the denied tool's result
           // and potentially retry it indefinitely. Checkpoint persistence and
           // iteration billing already happened above the branch.
           logger.warn(`[Permission] Tool "${toolName}" is denied — failing execution`);
           const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
-          await agentExecutionRepository.markFailed(executionId, { message: deniedMessage });
+          // `callerSafe`: this string names only a tool the caller already knows about, and
+          // the public poll response is documented to name the gated tool - so it is
+          // published verbatim rather than collapsed by the sanitizer.
+          await agentExecutionRepository.markFailed(executionId, { message: deniedMessage, callerSafe: true });
           await sendWs('failed', {
             executionId,
             reason: 'tool_denied',
@@ -2411,15 +2420,9 @@ async function processExecution(
           return;
         }
 
-        // A headless run (REST dispatch) has nobody to ask: there is no client to
-        // render a permission card, and `permission_response` is a WebSocket-only
-        // command. Pausing would wedge the run in `awaiting_permission` until the
-        // 20-minute stale sweep, holding one of the caller's concurrency slots the
-        // whole time - and the caller cannot avoid it, because the AGENT chooses to
-        // call a gated tool. Treat "no approver" as denial, the same fail-safe
-        // reading the `denied` branch above takes, so the run terminates with a
-        // message naming the tool instead of hanging.
-        if (isHeadlessConnection(connectionId)) {
+        // A headless run (REST dispatch) has nobody to ask - see `resolveGateDisposition`
+        // for why that is treated as denial rather than a pause.
+        if (disposition === 'no_approver') {
           logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
             executionId,
             toolName,
@@ -2428,14 +2431,16 @@ async function processExecution(
             `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
             'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
             'excludes approval-gated tools, or start the run over the WebSocket route.';
-          await agentExecutionRepository.markFailed(executionId, { message: headlessMessage });
+          // `callerSafe`: written for the REST caller specifically - it names the gated tool
+          // and the remedy, which is exactly what the contract promises in `error`.
+          await agentExecutionRepository.markFailed(executionId, { message: headlessMessage, callerSafe: true });
           // Settle the dispatch-time Quest so chat history shows the reason instead of a
           // permanently `pending` empty bubble - same reasoning as the denied branch above.
           await persistRunAsQuest(executionId, `${headlessMessage}`, logger);
           return;
         }
 
-        // verdict === 'needs_approval' - pause and ask the user. Note: the tool
+        // disposition === 'ask' - pause and ask the user. Note: the tool
         // has already executed (Phase 1 limitation) - approval gates future
         // iterations, not this one. Checkpoint persistence and iteration
         // billing already happened above the branch.
