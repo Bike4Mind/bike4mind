@@ -86,11 +86,12 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
    * (projectService add/remove files|sessions|systemPrompts, fabFileService list|toggleTags,
    * sessionService update), since /api/files/byIds turns the CastError into a 404 on the
    * notebook file list. Every `shareable` repository shares this method - Session, FabFile,
-   * Project, Agent, Skill, Tool, Organization - and all of them are ObjectId-keyed.
+   * Project, Agent, Skill, Tool, Organization - and all of them are ObjectId-keyed. The label
+   * carries `modelName` so a drop warn says which collection lost ids, not just this method.
    */
   async findAllAccessibleByIds(user: IUserDocument, ids: string[]): Promise<T[]> {
     return this.model.where({
-      _id: { $in: usableObjectIds(ids, 'ShareableDocumentRepository.findAllAccessibleByIds') },
+      _id: { $in: usableObjectIds(ids, `${this.model.modelName}.findAllAccessibleByIds`) },
       $or: [
         { userId: user.id },
         { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
