@@ -1,5 +1,10 @@
 import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { CreateDataLakeRequestInput, DATA_LAKES, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  CreateDataLakeRequestInput,
+  DATA_LAKES,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  normalizeEntitlementKey,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
 import type { z } from 'zod';
@@ -62,7 +67,20 @@ async function disambiguateSlug(
   const scope = organizationId ? { organizationId } : { organizationId: { $in: [null, ''] } };
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
-    const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt}`;
+    // The suffix has to fit INSIDE the same bound the request schema enforced on `baseSlug`, not be
+    // appended past it. Disambiguation runs after validation, so an unbounded append persists a slug
+    // no other surface treats as legal - notably the `datalake:<slug>` entitlement key, which
+    // registry.ts re-checks against MAX_DATA_LAKE_SLUG_LENGTH and therefore reports as unknown,
+    // failing an admin's grant closed on a key that is in fact correct.
+    //
+    // Trailing hyphens are stripped after truncation so a cut landing mid-hyphen cannot produce
+    // `...a--1`. That still matches DATA_LAKE_SLUG_REGEX (which permits interior runs) but reads as
+    // a typo. The base is regex-guaranteed to start alphanumeric, so the trim can never empty it,
+    // and the shortest reachable result is a 1-char base plus a 2-char suffix - still over the
+    // 2-char minimum.
+    const suffix = `-${attempt}`;
+    const trimmedBase = baseSlug.slice(0, MAX_DATA_LAKE_SLUG_LENGTH - suffix.length).replace(/-+$/, '');
+    const slug = attempt === 0 ? baseSlug : `${trimmedBase}${suffix}`;
     if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
     if (existing.length === 0) return slug;
