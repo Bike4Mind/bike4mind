@@ -854,6 +854,57 @@ describe('DataLakeBatchRepository.claimFileStatus - from-set gating', () => {
   });
 });
 
+// The pessimistic half of the failure-attribution pair: the status write is unguarded while the
+// $inc that follows is guarded, so "not charged" has to land in the same document write.
+describe('DataLakeBatchRepository.updateFileStatus - the failureCounted stamp', () => {
+  setupMongoTest();
+
+  const batchWithEntry = async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 1 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId: 'ff1', fileName: 'a.pdf', status: 'chunking' }]);
+    return batch;
+  };
+
+  it('stamps a failure as uncounted in the same write as the status', async () => {
+    const batch = await batchWithEntry();
+    await dataLakeBatchRepository.updateFileStatus(batch.id, 'ff1', 'failed', 'boom');
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].status).toBe('failed');
+    expect(fresh?.files[0].failureCounted).toBe(false);
+  });
+
+  it('leaves the marker alone for a non-failure status', async () => {
+    const batch = await batchWithEntry();
+    await dataLakeBatchRepository.updateFileStatus(batch.id, 'ff1', 'complete');
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].failureCounted).toBeUndefined();
+  });
+
+  // The false stamp is what keeps the residual false-DIRTY (a failure left counted) rather than
+  // false-CLEAN (a batch reporting clean over a genuinely failed file) when the raise is lost.
+  it('refuses to hand counters back for an entry whose raise never landed', async () => {
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      totalFiles: 2,
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId: 'ff1', fileName: 'a.pdf', status: 'chunking' }]);
+    await dataLakeBatchRepository.updateFileStatus(
+      batch.id,
+      'ff1',
+      'failed',
+      'Could not hand off for vector indexing: SQS throttled'
+    );
+    const updated = await dataLakeBatchRepository.revertFileFailure(batch.id, 'ff1', 'chunking', {
+      errorPrefix: 'Could not hand off for vector indexing',
+    });
+    expect(updated?.files[0].status).toBe('chunking');
+    expect(updated?.failedFiles).toBe(1);
+  });
+});
+
 // The exit from the state the describe above pins: 'failed' is in no success path's from-set, so a
 // file that recovers needs an explicit revoke or it is counted failed forever.
 describe('DataLakeBatchRepository.revertFileFailure - the exit from failed', () => {
@@ -1038,15 +1089,22 @@ describe('DataLakeBatchRepository.revertFileFailure - the exit from failed', () 
 describe('DataLakeBatchRepository.reopenFinalizedWithErrors', () => {
   setupMongoTest();
 
-  const settled = async (status: 'completed_with_errors' | 'completed' | 'cancelled' | 'failed') => {
+  const PREFIX = 'Could not hand off for vector indexing';
+  const owner = { fabFileId: 'ff1', errorPrefix: PREFIX };
+
+  const settled = async (
+    status: 'completed_with_errors' | 'completed' | 'cancelled' | 'failed',
+    entry: Record<string, unknown> = { fabFileId: 'ff1', fileName: 'x.pdf', status: 'failed', error: `${PREFIX}: x` }
+  ) => {
     const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 1 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [entry as never]);
     await dataLakeBatchRepository.markTerminalIfActive(batch.id, status);
     return batch;
   };
 
   it('reopens an errors verdict a recovery can legitimately overturn, and clears its completion stamp', async () => {
     const batch = await settled('completed_with_errors');
-    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id);
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, owner);
     expect(reopened?.status).toBe('processing');
     expect(reopened?.completedAt).toBeFalsy();
     // The whole point: counter writes are guarded on a non-terminal batch.
@@ -1056,8 +1114,42 @@ describe('DataLakeBatchRepository.reopenFinalizedWithErrors', () => {
 
   it.each(['completed', 'cancelled', 'failed'] as const)('leaves a %s batch settled', async status => {
     const batch = await settled(status);
-    expect(await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id)).toBeNull();
+    expect(await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, owner)).toBeNull();
     expect((await dataLakeBatchRepository.findById(batch.id))?.status).toBe(status);
+  });
+
+  // The predicate is revertFileFailure's own, so a resume with nothing of ours to revoke never
+  // flips the verdict out and straight back - that round trip re-runs the whole post-finalize
+  // block, which costs a recordBatchCompletion and a capped lake-memory extraction slot.
+  it('leaves the verdict alone when this file carries no failure of ours to revoke', async () => {
+    const batch = await settled('completed_with_errors', {
+      fabFileId: 'ff1',
+      fileName: 'x.pdf',
+      status: 'failed',
+      error: 'Chunking failed: bad pdf',
+    });
+    expect(await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, owner)).toBeNull();
+    expect((await dataLakeBatchRepository.findById(batch.id))?.status).toBe('completed_with_errors');
+  });
+
+  it('leaves the verdict alone when the file is not failed at all', async () => {
+    const batch = await settled('completed_with_errors', {
+      fabFileId: 'ff1',
+      fileName: 'x.pdf',
+      status: 'complete',
+    });
+    expect(await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, owner)).toBeNull();
+  });
+
+  it("leaves the verdict alone when another file owns the batch's failure", async () => {
+    const batch = await settled('completed_with_errors', {
+      fabFileId: 'ffOther',
+      fileName: 'other.pdf',
+      status: 'failed',
+      error: `${PREFIX}: SQS throttled`,
+    });
+    expect(await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, owner)).toBeNull();
+    expect((await dataLakeBatchRepository.findById(batch.id))?.status).toBe('completed_with_errors');
   });
 });
 

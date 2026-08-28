@@ -613,6 +613,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
   findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
+  /**
+   * Set one manifest entry's status (and error text, when given). A 'failed' status also stamps
+   * failureCounted: false in the same write - see markFailureCounted for why the pessimistic
+   * default is the safe one.
+   */
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -631,27 +636,37 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * `to`, drop its error text and give back the failedFiles/processingFailedFiles it took, in a
    * single write. `alsoIncrement` carries what the new status itself owes (landing straight on
    * 'complete' owes a vectorizedFiles). `errorPrefix` is the ownership guard - only the caller
-   * whose own failure text is on the entry may revoke it, and the entry's own `failureCounted`
-   * decides whether the counters are actually given back, so one file's recovery can never spend
-   * another file's failure counters. Needed because claimFileStatus can never move an entry back
-   * OUT of 'failed', so a file that recovers stays counted failed forever without this. Refuses a
+   * whose own failure text is on the entry may revoke it - and the entry's own `failureCounted`
+   * decides whether the counters are actually given back: `false` (written with the 'failed'
+   * status) hands nothing back, `true` does, and an absent flag pre-dates the flag entirely and is
+   * trusted as counted. Needed because claimFileStatus can never move an entry back OUT of
+   * 'failed', so a file that recovers stays counted failed forever without this. Refuses a
    * 'cancelled'/'failed' batch. Returns the post-update batch, or null if nothing matched.
    */
   revertFileFailure(
     batchId: string,
     fabFileId: string,
-    to: BatchFileStatus,
-    opts: { errorPrefix: string; alsoIncrement?: Partial<Record<BatchCounterField, number>> }
+    to: Extract<BatchFileStatus, 'complete' | 'chunking'>,
+    opts: {
+      errorPrefix: string;
+      alsoIncrement?: Partial<Record<Exclude<BatchCounterField, 'failedFiles' | 'processingFailedFiles'>, number>>;
+    }
   ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Reopen a batch settled as 'completed_with_errors' back to 'processing', so a recovered file
    * can still be counted (every counter write is guarded on a non-terminal batch). Narrow by
-   * design: 'cancelled'/'failed' are decisions rather than tallies and stay settled.
+   * design: 'cancelled'/'failed' are decisions rather than tallies and stay settled. `owner` is
+   * revertFileFailure's eligibility predicate, so the reopen never fires for a resume that has no
+   * failure of its own to revoke.
    */
-  reopenFinalizedWithErrors(batchId: string): Promise<IDataLakeBatchDocument | null>;
-  /** Record on the manifest entry whether the failure counters were actually charged for it - the
-   * per-entry fact revertFileFailure needs to attribute a decrement. Pair with the guarded
-   * incrementCounters call that records the failure. */
+  reopenFinalizedWithErrors(
+    batchId: string,
+    owner: { fabFileId: string; errorPrefix: string }
+  ): Promise<IDataLakeBatchDocument | null>;
+  /** Raise the manifest entry's failureCounted flag once the failure counters have actually been
+   * charged for it - the per-entry fact revertFileFailure needs to attribute a decrement.
+   * Advisory: updateFileStatus already stamped `false` with the status, so a lost write here only
+   * leaves the entry uncounted. Call after a guarded incrementCounters that returned a batch. */
   markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,

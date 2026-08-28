@@ -158,8 +158,14 @@ async function accountFileFailure(params: {
     });
     // The $inc above is guarded on a non-terminal batch while updateFileStatus is not, so whether
     // this entry was actually charged has to be recorded ON the entry - revertFileFailure gives
-    // counters back per-entry and must not spend another file's failure (see markFailureCounted).
-    await dataLakeBatchRepository.markFailureCounted(batchId, fabFileId, !!batch);
+    // counters back per-entry and must not spend another file's failure. updateFileStatus already
+    // stamped failureCounted: false, so this raise is advisory and must not take the finalize and
+    // the progress push down with it: losing it only leaves the entry uncounted.
+    if (batch) {
+      await dataLakeBatchRepository
+        .markFailureCounted(batchId, fabFileId, true)
+        .catch(markErr => logger.error(`Failed to record the charged failure counters on ${fabFileId}: ${markErr}`));
+    }
     await finalizeBatchIfComplete(batch, logger);
     await sendToClient(userId, Resource.websocket.managementEndpoint, {
       action: 'data_lake_batch_progress',
@@ -236,7 +242,10 @@ async function clearStrandedMarkers(fabFileId: string, ownsError: boolean, logge
  * there was nothing of ours to revoke - the verdict is put straight back rather than left for the
  * reconciler: nothing else re-finalizes a reopened batch (finalizeBatchIfComplete only runs off
  * counter increments, and the still-'failed' entry loses the resumed fan-out's claim too), and the
- * reopen's own updatedAt bump pushes the reconciler's next look out by hours.
+ * reopen's own updatedAt bump pushes the reconciler's next look out by hours. The reopen carries
+ * the revert's own eligibility predicate so that round trip stays rare: a resume with no failure of
+ * ours on the entry - a non-final attempt stamps the stranded marker before any accounting is
+ * written - never reopens at all.
  *
  * Best-effort, like the marker write it accompanies: a reporting correction must never fail a
  * delivery whose actual work (the file's vectors) succeeded.
@@ -250,7 +259,10 @@ async function revertStrandBatchAccounting(params: {
 }): Promise<void> {
   const { batchId, fabFileId, userId, to, logger } = params;
   try {
-    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batchId);
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batchId, {
+      fabFileId,
+      errorPrefix: VECTORIZE_ENQUEUE_ERROR_PREFIX,
+    });
     const batch = await dataLakeBatchRepository.revertFileFailure(batchId, fabFileId, to, {
       errorPrefix: VECTORIZE_ENQUEUE_ERROR_PREFIX,
       ...(to === 'complete' ? { alsoIncrement: { vectorizedFiles: 1 } } : {}),

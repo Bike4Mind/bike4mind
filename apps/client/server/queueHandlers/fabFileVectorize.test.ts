@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
   incrementCounters: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
+  markFailureCounted: vi.fn(async () => undefined),
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('@bike4mind/database', () => ({
     incrementCounter: h.incrementCounter,
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
+    markFailureCounted: h.markFailureCounted,
     findById: h.batchFindById,
     releaseEmbeddingSpend: h.batchReleaseSpend,
   },
@@ -623,6 +625,19 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     // One atomic call for both counters, so a crash between two sequential $inc writes can
     // never misclassify a processing failure as an upload one (#1412).
     expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    // Raised only once the guarded $inc has landed - updateFileStatus already stamped it false, so
+    // revertFileFailure can attribute a decrement to this entry rather than another file's.
+    expect(h.markFailureCounted).toHaveBeenCalledWith('batch-1', 'ff1', true);
+  });
+
+  it('leaves the entry uncounted when the guarded failure $inc was swallowed', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.incrementCounters.mockResolvedValue(null); // batch already terminal
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
+    expect(h.markFailureCounted).not.toHaveBeenCalled();
   });
 
   it('a deferred failure followed by a successful retry never touches failedFiles', async () => {

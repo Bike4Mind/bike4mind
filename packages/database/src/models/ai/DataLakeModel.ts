@@ -815,6 +815,11 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   async updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void> {
     const update: Record<string, unknown> = { 'files.$.status': status };
     if (error) update['files.$.error'] = error;
+    // Pessimistic pairing with the failure $inc that follows this write: that $inc is guarded on a
+    // non-terminal batch while this write is not, so stamping "not charged" in the SAME document
+    // write as the status means every crash point classifies safely - a lost markFailureCounted
+    // leaves the entry conservatively uncounted rather than falsely counted (see revertFileFailure).
+    if (status === 'failed') update['files.$.failureCounted'] = false;
 
     await this.batchModel.updateOne({ _id: batchId, 'files.fabFileId': fabFileId }, { $set: update });
   }
@@ -875,8 +880,13 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   async revertFileFailure(
     batchId: string,
     fabFileId: string,
-    to: BatchFileStatus,
-    opts: { errorPrefix: string; alsoIncrement?: Partial<Record<BatchCounterField, number>> }
+    to: Extract<BatchFileStatus, 'complete' | 'chunking'>,
+    opts: {
+      errorPrefix: string;
+      // The failure counters are excluded because alsoIncrement is spread into the same $inc
+      // literal as the -1s below, where a later key would silently cancel the revoke.
+      alsoIncrement?: Partial<Record<Exclude<BatchCounterField, 'failedFiles' | 'processingFailedFiles'>, number>>;
+    }
   ): Promise<IDataLakeBatchDocument | null> {
     const entry = { fabFileId, status: 'failed', error: { $regex: `^${escapeRegex(opts.errorPrefix)}` } };
     const match = { _id: batchId, status: { $nin: ['cancelled', 'failed'] } };
@@ -889,8 +899,9 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // sit at 'failed' with only one of them charged (accountFileFailure's manifest write is
     // unguarded while its $inc is guarded on a non-terminal batch), and a global failedFiles >= 1
     // would happily spend the other file's counters - dropping the tally to 0 while that file is
-    // still genuinely failed. `failureCounted` records the $inc that actually landed
-    // (markFailureCounted); absent means pre-dates the flag, so trust the counters as before.
+    // still genuinely failed. `failureCounted` is written false by updateFileStatus alongside the
+    // 'failed' status and raised to true once the $inc lands (markFailureCounted); absent can only
+    // mean an entry that pre-dates the flag, so trust the counters as before.
     const counted = { ...match, files: { $elemMatch: { ...entry, failureCounted: { $ne: false } } } };
 
     // $inc has no clamp, so the counters must still be there to give back.
@@ -931,10 +942,28 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
    * Narrow on purpose. 'cancelled' and 'failed' are decisions, not tallies, and 'completed' cannot
    * be reached with a failed file in the first place - only the errors variant is a verdict that a
    * recovery can legitimately overturn. Everything else stays settled (#2102).
+   *
+   * `owner` is the same eligibility predicate revertFileFailure applies, so the reopen never fires
+   * blind: without it a resume with no failure of ours to revoke (a non-final attempt stamps the
+   * stranded marker before any accounting is written) would flip a batch out of and straight back
+   * into its verdict, paying a second recordBatchCompletion and a lake-memory extraction slot.
    */
-  async reopenFinalizedWithErrors(batchId: string): Promise<IDataLakeBatchDocument | null> {
+  async reopenFinalizedWithErrors(
+    batchId: string,
+    owner: { fabFileId: string; errorPrefix: string }
+  ): Promise<IDataLakeBatchDocument | null> {
     const doc = await this.batchModel.findOneAndUpdate(
-      { _id: batchId, status: 'completed_with_errors' },
+      {
+        _id: batchId,
+        status: 'completed_with_errors',
+        files: {
+          $elemMatch: {
+            fabFileId: owner.fabFileId,
+            status: 'failed',
+            error: { $regex: `^${escapeRegex(owner.errorPrefix)}` },
+          },
+        },
+      },
       { $set: { status: 'processing' }, $unset: { completedAt: 1, completionReason: 1 } },
       { new: true }
     );

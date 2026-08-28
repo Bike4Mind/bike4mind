@@ -49,7 +49,7 @@ const h = vi.hoisted(() => {
     claimFileStatus: vi.fn(),
     revertFileFailure: vi.fn(),
     reopenFinalizedWithErrors: vi.fn(),
-    markFailureCounted: vi.fn(),
+    markFailureCounted: vi.fn(async () => undefined),
     getSettingsValue: vi.fn(),
     sendToClient: vi.fn(async () => undefined),
     finalizeBatchIfComplete: vi.fn(),
@@ -881,11 +881,25 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     expect(h.markFailureCounted).toHaveBeenCalledWith('batch-1', 'ff1', true);
   });
 
-  it('records the failure as uncounted when the guarded counter write was swallowed', async () => {
+  it('leaves the entry uncounted when the guarded counter write was swallowed', async () => {
     h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
     h.incrementCounters.mockResolvedValue(null); // batch already terminal - the $inc is guarded
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
-    expect(h.markFailureCounted).toHaveBeenCalledWith('batch-1', 'ff1', false);
+    // updateFileStatus already stamped failureCounted: false with the status, so the raise to
+    // true must NOT fire for an $inc that never landed.
+    expect(h.markFailureCounted).not.toHaveBeenCalled();
+  });
+
+  it('still finalizes and pushes progress when the advisory failureCounted raise throws', async () => {
+    h.sendToQueue.mockRejectedValue(new Error(ENQUEUE_ERR));
+    h.markFailureCounted.mockRejectedValue(new Error('write lost'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ action: 'data_lake_batch_progress' })
+    );
   });
 
   it('leaves file and batch state untouched on a non-final attempt, but still stamps it', async () => {
@@ -1029,7 +1043,11 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
       h.findAccessibleById.mockResolvedValue(stranded);
       h.findVectorlessChunkIds.mockResolvedValue(['c0']);
       await dispatch(makeEvent(payload), {} as never, mockLogger);
-      expect(h.reopenFinalizedWithErrors).toHaveBeenCalledWith('batch-1');
+      // The reopen carries the revert's own eligibility predicate so it never fires blind.
+      expect(h.reopenFinalizedWithErrors).toHaveBeenCalledWith('batch-1', {
+        fabFileId: 'ff1',
+        errorPrefix: 'Could not hand off for vector indexing',
+      });
       expect(h.reopenFinalizedWithErrors.mock.invocationCallOrder[0]).toBeLessThan(
         h.revertFileFailure.mock.invocationCallOrder[0]
       );

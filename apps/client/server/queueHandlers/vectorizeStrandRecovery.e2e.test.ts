@@ -98,6 +98,7 @@ import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const EMBEDDING_MODEL = 'text-embedding-3-small';
+const TERMINAL_STATUSES = ['completed', 'completed_with_errors', 'failed', 'cancelled'];
 const ENQUEUE_ERR = 'SQS throttled';
 
 let replSet: MongoMemoryReplSet;
@@ -122,7 +123,12 @@ const makeEvent = (body: Record<string, unknown>, receiveCount = 1) =>
     Records: [{ body: JSON.stringify(body), attributes: { ApproximateReceiveCount: String(receiveCount) } }],
   }) as never;
 
-async function seed() {
+/**
+ * `otherUnfinishedFile` adds a second manifest entry still in flight, so the strand is NOT the
+ * last outstanding file: the batch stays 'processing' and the resume's revert has to land without
+ * a reopen preceding it, which every other case in this file has in front of it.
+ */
+async function seed(opts: { otherUnfinishedFile?: boolean } = {}) {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await AdminSettings.create({ settingName: 'defaultEmbeddingModel', settingValue: EMBEDDING_MODEL });
 
@@ -138,7 +144,11 @@ async function seed() {
     status: 'active',
   } as never);
 
-  const batch = await dataLakeBatchRepository.create({ dataLakeId: lake.id, userId, totalFiles: 1 } as never);
+  const batch = await dataLakeBatchRepository.create({
+    dataLakeId: lake.id,
+    userId,
+    totalFiles: opts.otherUnfinishedFile ? 2 : 1,
+  } as never);
 
   // Already chunked with a vectorless chunk: the exact committed-chunks-but-no-vectors state a
   // failed fan-out leaves behind, and the one the chunk handler resumes rather than re-chunks.
@@ -161,6 +171,11 @@ async function seed() {
 
   await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId, fileName: 'x.pdf', status: 'chunking' }]);
   await dataLakeBatchRepository.incrementCounter(batch.id, 'chunkedFiles');
+  if (opts.otherUnfinishedFile) {
+    await dataLakeBatchRepository.appendFiles(batch.id, [
+      { fabFileId: new mongoose.Types.ObjectId().toString(), fileName: 'y.pdf', status: 'uploaded' },
+    ]);
+  }
 
   const [chunk] = await fabFileChunkRepository.bulkInsert([
     { text: 'hello world', fabFileId, tokenCount: 5, createdAt: new Date(), updatedAt: new Date() },
@@ -258,6 +273,42 @@ describe('stranded vectorize recovery - batch accounting (real repos + real Mong
     expect(batch?.vectorizedFiles).toBe(1);
     expect(batch?.failedFiles).toBe(0);
     expect(batch?.status).toBe('completed');
+  });
+
+  // Every case above strands the LAST outstanding file, so the batch is always terminal by the
+  // time the resume runs and reopenFinalizedWithErrors always matches. This is the other branch:
+  // a batch still 'processing', where the revert must land with no reopen in front of it.
+  it('reverts on a batch that is still processing, with a second file yet to finish', async () => {
+    const { userId, batchId, fabFileId, chunkId } = await seed({ otherUnfinishedFile: true });
+    await strand(userId, fabFileId);
+
+    const stranded = await dataLakeBatchRepository.findById(batchId);
+    // Not the last outstanding file, so nothing finalized the batch - it is still where the seed
+    // left it, which is what makes reopenFinalizedWithErrors a no-op below.
+    expect(TERMINAL_STATUSES).not.toContain(stranded?.status);
+    expect(stranded?.completedAt).toBeFalsy();
+    expect(stranded?.failedFiles).toBe(1);
+
+    await chunkDispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
+
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    await vectorizeDispatch(
+      makeEvent({ userId, fabFileId, embeddingModel: EMBEDDING_MODEL, chunkIds: [chunkId] }),
+      {} as never,
+      mockLogger
+    );
+
+    const batch = await dataLakeBatchRepository.findById(batchId);
+    expect(batch?.failedFiles).toBe(0);
+    expect(batch?.processingFailedFiles).toBe(0);
+    expect(batch?.vectorizedFiles).toBe(1);
+    expect(batch?.files[0].status).toBe('complete');
+    expect(batch?.files[0].error).toBeFalsy();
+    // Still one file outstanding, so the batch must NOT have been settled by the recovery.
+    expect(TERMINAL_STATUSES).not.toContain(batch?.status);
+    expect(batch?.completedAt).toBeFalsy();
+    expect(batch?.files[1].status).toBe('uploaded');
   });
 
   it('a resume that fails again re-records the failure on both the file and the batch', async () => {
