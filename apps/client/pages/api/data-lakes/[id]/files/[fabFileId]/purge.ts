@@ -18,6 +18,7 @@ import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 
 /**
@@ -69,13 +70,15 @@ const handler = baseApi()
         // throw in that bookkeeping cannot cost an irreversible destruction its only audit row.
         // The CloudWatch line the service emits is per-invocation and ages out; this is the one an
         // owner or an auditor can still query months later, and it carries `verified` so an
-        // incomplete sweep is not filed as a successful one.
+        // incomplete sweep is not filed as a successful one. `baseApi()` admits a `b4m_live_` key
+        // here as well as a session, so the principal is resolved rather than assumed: a
+        // key-driven destruction must not be filed as though the key's owner did it by hand.
         onReceipt: async receipt => {
           await logAuditEvent(
             {
               userId: ctx.userId,
               action: DataLakeAuditEvents.LAKE_DOCUMENT_PURGED,
-              metadata: { ...receipt },
+              metadata: { ...receipt, ...resolveAuditPrincipal(req.user!, req.apiKeyInfo) },
             },
             req.logger
           );
@@ -134,6 +137,7 @@ const handler = baseApi()
             fabFileId,
             verified: false,
             error: error instanceof Error ? error.message : 'Unknown error',
+            ...resolveAuditPrincipal(req.user!, req.apiKeyInfo),
           },
         },
         req.logger

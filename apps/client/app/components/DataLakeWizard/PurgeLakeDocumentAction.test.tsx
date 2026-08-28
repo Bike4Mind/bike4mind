@@ -34,13 +34,14 @@ const RECEIPT: DataLakeDocumentPurgeReceipt = {
   totalSizeBytes: 900,
 };
 
-const renderAction = (onPurged?: () => void) =>
+const renderAction = (onPurged?: () => void, onPurgeComplete?: () => void) =>
   render(
     <TestWrapper>
       <PurgeLakeDocumentAction
         file={{ id: 'f1', fileName: 'q3.pdf' }}
         title="Q3"
         dataLakeId="lake-1"
+        onPurgeComplete={onPurgeComplete}
         onPurged={onPurged}
       />
     </TestWrapper>
@@ -131,5 +132,22 @@ describe('PurgeLakeDocumentAction', () => {
 
     await user.click(screen.getByTestId('datalake-purgefile-receipt-close'));
     await waitFor(() => expect(onPurged).toHaveBeenCalled());
+  });
+
+  it('tells the host the file is unreadable as soon as the receipt arrives, not on dismissal', async () => {
+    // The two hooks fire at different moments on purpose: the content is gone the instant the
+    // server confirms it, but the dialog reporting that is still on screen. A host that waits for
+    // dismissal keeps re-fetching a signed URL for an object that no longer exists.
+    const user = userEvent.setup();
+    const onPurgeComplete = vi.fn();
+    h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
+      opts.onSuccess(RECEIPT)
+    );
+    renderAction(undefined, onPurgeComplete);
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
+
+    await screen.findByTestId('datalake-purgefile-receipt');
+    expect(onPurgeComplete).toHaveBeenCalledTimes(1);
   });
 });

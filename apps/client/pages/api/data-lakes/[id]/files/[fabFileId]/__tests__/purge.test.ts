@@ -79,8 +79,14 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
-const req = (query: Record<string, string>) =>
-  ({ method: 'POST', query, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }) as never;
+const req = (query: Record<string, string>, auth?: { user?: { id: string }; apiKeyInfo?: { keyId: string } }) =>
+  ({
+    method: 'POST',
+    query,
+    user: auth?.user ?? { id: 'u1' },
+    apiKeyInfo: auth?.apiKeyInfo,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  }) as never;
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
 describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
@@ -182,6 +188,37 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     );
   });
 
+  it('names the KEY, not its owner, when a b4m_live_ key drives the destruction', async () => {
+    // `baseApi()` sets no requiredScopes here, so any valid key reaches the most destructive door
+    // in the lake surface. The row is immutable and floor-retained for 450 days: attributing a
+    // key-driven destroy to the human as though they did it by hand cannot be corrected later.
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+
+    expect(h.logAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+          onBehalfOfUserId: 'u1',
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('names the human on a session-driven destruction', async () => {
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+
+    expect(h.logAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ principalKind: 'user', principalId: 'u1' }),
+      }),
+      expect.anything()
+    );
+  });
+
   it('records an unverified sweep as unverified rather than as a success', async () => {
     const unverified = { ...RECEIPT, chunksRemaining: 2, verified: false };
     h.purgeDataLakeDocument.mockImplementation(async (...args: unknown[]) => {
@@ -233,11 +270,21 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     h.purgeDataLakeDocument.mockRejectedValue(new Error('mongo down'));
     const { res } = makeRes();
 
-    await expect(call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res)).rejects.toThrow('mongo down');
+    await expect(
+      call(req({ id: 'lake-oid-1', fabFileId: 'f1' }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res)
+    ).rejects.toThrow('mongo down');
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'LAKE_DOCUMENT_PURGED',
-        metadata: expect.objectContaining({ fabFileId: 'f1', verified: false, error: 'mongo down' }),
+        // The throw path needs the principal as much as the success path - more, since this is the
+        // row for a destruction whose extent nobody knows.
+        metadata: expect.objectContaining({
+          fabFileId: 'f1',
+          verified: false,
+          error: 'mongo down',
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+        }),
       }),
       expect.anything()
     );

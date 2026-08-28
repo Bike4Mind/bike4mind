@@ -65,7 +65,12 @@ export default function DataLakeArticlePanel({
   onAskAbout,
   onRemoved,
 }: DataLakeArticlePanelProps) {
-  const { data: content, isLoading } = useGetFabFileContent(file);
+  // A purged file is unreadable the instant the receipt comes back, but the selection only clears
+  // when the owner dismisses it. Without this the pane re-fetches the signed URL of an object that
+  // no longer exists and logs a 404 behind the dialog.
+  const [purgedFileId, setPurgedFileId] = useState<string | null>(null);
+  const readableFile = file && file.id === purgedFileId ? null : file;
+  const { data: content, isLoading } = useGetFabFileContent(readableFile);
   const reprocess = useReprocessFabFile(dataLakeId);
   const removeFile = useRemoveFileFromDataLake(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -144,7 +149,13 @@ export default function DataLakeArticlePanel({
                 </Button>
               </Tooltip>
               {canPurge && (
-                <PurgeLakeDocumentAction file={file} title={title} dataLakeId={dataLakeId} onPurged={onRemoved} />
+                <PurgeLakeDocumentAction
+                  file={file}
+                  title={title}
+                  dataLakeId={dataLakeId}
+                  onPurgeComplete={() => setPurgedFileId(file.id)}
+                  onPurged={onRemoved}
+                />
               )}
             </>
           )}
@@ -167,7 +178,11 @@ export default function DataLakeArticlePanel({
       </Box>
 
       <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 2 }}>
-        {isLoading ? (
+        {readableFile === null ? (
+          <Typography level="body-sm" data-testid="datalake-article-purged" sx={{ color: 'text.tertiary' }}>
+            This document has been permanently deleted.
+          </Typography>
+        ) : isLoading ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             <Skeleton variant="text" level="h4" sx={{ width: '60%' }} />
             <Skeleton variant="text" level="body-md" sx={{ width: '100%' }} />

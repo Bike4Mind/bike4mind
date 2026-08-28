@@ -9,6 +9,12 @@ interface PurgeLakeDocumentActionProps {
   /** Display title, already cleaned by the host panel. */
   title: string;
   dataLakeId: string;
+  /**
+   * Fires the moment the server confirms the destruction, before the receipt is dismissed, so the
+   * host can stop treating the file as readable. Without it the host pane goes on re-fetching the
+   * now-dead signed URL behind the dialog.
+   */
+  onPurgeComplete?: () => void;
   /** Fires once the owner dismisses the receipt, so the host can drop its selection. */
   onPurged?: () => void;
 }
@@ -29,7 +35,13 @@ interface PurgeLakeDocumentActionProps {
  * refuses after the confirmation. `purgeDataLakeDocument` enforces the same two-part rule
  * server-side.
  */
-export default function PurgeLakeDocumentAction({ file, title, dataLakeId, onPurged }: PurgeLakeDocumentActionProps) {
+export default function PurgeLakeDocumentAction({
+  file,
+  title,
+  dataLakeId,
+  onPurgeComplete,
+  onPurged,
+}: PurgeLakeDocumentActionProps) {
   const purgeFile = usePurgeDataLakeDocument(dataLakeId);
   const [confirming, setConfirming] = useState(false);
   const [receipt, setReceipt] = useState<DataLakeDocumentPurgeReceipt | null>(null);
@@ -61,8 +73,8 @@ export default function PurgeLakeDocumentAction({ file, title, dataLakeId, onPur
           <DialogTitle>Delete &ldquo;{title}&rdquo; permanently?</DialogTitle>
           <DialogContent>
             This destroys the document, every chunk of it, and the vectors those chunks carry. It is not limited to this
-            data lake: the file also leaves your Files list, any chat that references it, and any other data lake it
-            belongs to. Nothing restores it. You will get a receipt confirming what was destroyed.
+            data lake: the file also leaves the owner&apos;s Files list, any chat that references it, and any other data lake
+            it belongs to. Nothing restores it. You will get a receipt confirming what was destroyed.
           </DialogContent>
           <DialogActions>
             <Button
@@ -75,6 +87,7 @@ export default function PurgeLakeDocumentAction({ file, title, dataLakeId, onPur
                   onSuccess: result => {
                     setConfirming(false);
                     setReceipt(result);
+                    onPurgeComplete?.();
                   },
                 })
               }
