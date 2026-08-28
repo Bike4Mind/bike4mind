@@ -104,6 +104,7 @@ describe('purgeDataLakeDocument', () => {
 
     const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
       db,
+      storage: makeStorage(),
       retrievalIndex: { removeForDataLake },
     });
 

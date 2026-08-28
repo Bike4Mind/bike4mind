@@ -93,7 +93,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake', datalakeTag: 'datalake:sales' });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
     // The real service files the receipt through `onReceipt` before returning; the mock has to do
@@ -158,12 +158,20 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
   it('rebuilds the stats of every OTHER lake that held the document', async () => {
     // The service recomputes only the lake purged from; without this the others count it forever.
+    // That lake's own tag is dropped here - the service already rebuilt it to build the receipt,
+    // so leaving it in would run a second identical aggregation on every purge.
     await runOnPurged({ ownerUserId: 'owner-9', fileSize: 10, tagNames: ['datalake:sales', 'datalake:archive'] });
 
     expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
-      ['datalake:sales', 'datalake:archive'],
+      ['datalake:archive'],
       expect.objectContaining({ actor: { userId: 'u1', isAdmin: false } })
     );
+  });
+
+  it('drops the purged lake from the rebuild whatever the case of its tag', async () => {
+    await runOnPurged({ ownerUserId: 'owner-9', fileSize: 10, tagNames: ['DataLake:Sales'] });
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith([], expect.anything());
   });
 
   it('still rebuilds the other lakes when the quota write fails', async () => {

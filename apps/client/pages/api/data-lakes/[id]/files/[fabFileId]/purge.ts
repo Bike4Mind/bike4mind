@@ -109,8 +109,12 @@ const handler = baseApi()
 
           // The service recomputes the lake it was purged FROM. The destruction is global, so
           // every other lake that held the document would otherwise go on counting it forever -
-          // same helper both file-delete routes call, over the file's pre-delete tags.
-          await recomputeStatsForLakeTags(tagNames, {
+          // same helper both file-delete routes call, over the file's pre-delete tags. That lake's
+          // own meta-tag is filtered out: it is in `tagNames`, and leaving it in would run a second
+          // identical aggregation over the lake the service already rebuilt.
+          const purgedLakeTag = lake.datalakeTag?.toLowerCase();
+          const otherLakeTags = tagNames.filter(name => name.toLowerCase() !== purgedLakeTag);
+          await recomputeStatsForLakeTags(otherLakeTags, {
             logger: req.logger,
             actor: { userId: ctx.userId, isAdmin: ctx.isAdmin },
           });
