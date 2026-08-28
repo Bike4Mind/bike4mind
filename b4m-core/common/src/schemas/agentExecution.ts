@@ -68,6 +68,19 @@ export const AgentExecutionStartRequestSchema = z.object({
   session_file_ids: z.array(z.string()).optional(),
   enable_mementos: z.boolean().optional(),
   enable_lattice: z.boolean().optional(),
+  /**
+   * Opt out of the artifact-emission prompt and artifact persistence for this run.
+   *
+   * ANDed with the deployment's admin `EnableArtifacts` setting, so this can only ever
+   * withhold artifacts, never force them on. Omitting it means "no preference" and
+   * leaves the admin setting as the only gate; only an explicit `false` opts out.
+   * Inherited by any subagent this run dispatches, so a delegating agent cannot route
+   * around the opt-out.
+   *
+   * Worth setting on a REST run: the emission prompt costs roughly 2.8k tokens per
+   * iteration, and nothing on this transport renders an artifact back to a human.
+   */
+  enable_artifacts: z.boolean().optional(),
 });
 
 export type AgentExecutionStartRequest = z.infer<typeof AgentExecutionStartRequestSchema>;

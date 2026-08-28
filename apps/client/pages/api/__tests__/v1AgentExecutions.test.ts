@@ -157,6 +157,30 @@ describe('POST /api/v1/agent-executions', () => {
   });
 
   it.each([
+    [false, 'an explicit opt-out'],
+    [true, 'an explicit opt-in'],
+  ] as const)('forwards %s as the caller artifact intent (%s)', async value => {
+    const { req, res } = post({ session_id: 's1', message: 'go', enable_artifacts: value });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: value }), logger);
+  });
+
+  it('leaves the artifact intent absent when the caller omits it, rather than coercing to false', async () => {
+    const { req, res } = post({ session_id: 's1', message: 'go' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    // Absence must stay absence: `false` is a hard opt-out that strips artifacts even
+    // where the deployment wants them, so the admin setting has to remain the only gate.
+    // Asserted on the value because `objectContaining` would accept either shape.
+    expect(mockStart.mock.calls[0][0].enableArtifacts).toBeUndefined();
+  });
+
+  it.each([
     ['session_not_found', 404],
     ['organization_not_found', 404],
     ['concurrent_limit', 409],

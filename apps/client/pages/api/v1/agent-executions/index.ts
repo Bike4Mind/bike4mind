@@ -81,6 +81,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       thinking: body.thinking,
       enableMementos: body.enable_mementos,
       enableLattice: body.enable_lattice,
+      enableArtifacts: body.enable_artifacts,
       // No `routingSource`: that field records which UI signal routed a send to the
       // agent pipeline, and a REST caller chose the pipeline outright. Its enum has no
       // value for "the API asked", and inventing one would be rejected by the Quest
