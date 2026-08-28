@@ -15,6 +15,12 @@ import { COVERAGE_BANNER_TITLE, COVERAGE_BANNER_BODY, COVERAGE_BANNER_DETAILS_LA
  * Stated as a fact, not hedged - unlike elision, this is not a heuristic. The server knows it hit a
  * cap. `reasons` renders behind a disclosure because it is diagnostic prose written for an operator
  * ("the 4000-chunk per-turn scan budget was reached"), and only some of it is actionable.
+ *
+ * Unlike the truncation banners beside it, this one carries no `completed` gate, because it cannot
+ * reach a streaming reply in the first place: StatusManager rebuilds promptMeta down to just
+ * `citables`/`artifacts` for the streaming frame, so `retrievalCoverage` only arrives with the
+ * finished quest. That is transport, not intent - if `retrievalCoverage` is ever added to the
+ * streaming payload, gate this on completion at the call site or it will flash mid-stream.
  */
 export function RetrievalCoverageBanner({ reasons }: { reasons?: string[] }) {
   return (
