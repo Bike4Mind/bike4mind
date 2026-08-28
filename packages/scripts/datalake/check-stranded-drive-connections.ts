@@ -29,18 +29,16 @@ async function main() {
   const stage = Resource.App.stage;
   await connectDB(dbUri.replace('%STAGE%', stage));
 
-  // includeDeleted on the CONNECTIONS: a soft-deleted row still occupies the unique driveFolderId
-  // index, so it blocks re-claim exactly like a live one while being invisible to every accessor.
-  // No writer soft-deletes these today (release() hard-deletes), but a row that got there some other
-  // way is precisely what this scan is for.
+  // Neither model registers softDeletePlugin, so every row is a live row: scan them all, and read
+  // the connection rather than the lake for the org, since the lake document is the thing that may
+  // be gone.
   const connections = await OrgGoogleDriveConnection.find(
     {},
-    'organizationId driveFolderId targetDataLakeId connectedBy folderName deletedAt',
-    { includeDeleted: true }
+    'organizationId driveFolderId targetDataLakeId connectedBy folderName'
   );
-  // LAKES are read with the default soft-delete filter on purpose: a lake the plugin hides is
-  // already unreachable from the drive-connection route (which resolves through findById), so its
-  // connection is stranded whether the document is gone or merely stamped.
+  // A lake in `deleted`/`purging` is NOT stranded: findById returns it regardless of status, so the
+  // drive-connection route can still reach and release its connection. Only a missing lake document
+  // leaves the row unreachable.
   const lakeIds = new Set(
     (await DataLakeModel.find({ _id: { $in: connections.map(c => c.targetDataLakeId) } }, '_id')).map(l =>
       String(l._id)
@@ -58,8 +56,7 @@ async function main() {
   for (const c of stranded) {
     console.log(
       `  id=${c.id} org=${c.organizationId} folder=${c.driveFolderId} (${c.folderName ?? 'unnamed'}) ` +
-        `lake=${c.targetDataLakeId} <missing> connectedBy=${c.connectedBy}` +
-        (c.get('deletedAt') ? ' [row itself soft-deleted, still holding the index]' : '')
+        `lake=${c.targetDataLakeId} <missing> connectedBy=${c.connectedBy}`
     );
   }
 
@@ -69,10 +66,7 @@ async function main() {
     process.exit(1);
   }
 
-  const res = await OrgGoogleDriveConnection.deleteMany(
-    { _id: { $in: stranded.map(c => c._id) } },
-    { hardDelete: true }
-  );
+  const res = await OrgGoogleDriveConnection.deleteMany({ _id: { $in: stranded.map(c => c._id) } });
   console.log(`\nReleased ${res?.deletedCount ?? 0} row(s). Those Drive folders can now be connected again.`);
   console.log('The Google grants are NOT revoked - each connectedBy user must revoke from their own account.');
   process.exit(0);

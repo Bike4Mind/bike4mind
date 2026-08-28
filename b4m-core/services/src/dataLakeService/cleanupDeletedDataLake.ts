@@ -124,7 +124,9 @@ export const cleanupDeletedDataLake = async (
   // it mid-purge and start re-creating the very files being deleted. It also has to happen here at
   // all: the row's Drive folder id is globally unique, and the only surface that can release a
   // connection resolves it through its lake - so a row that survives step 5 makes that folder
-  // permanently unconnectable, credential included.
+  // permanently unconnectable, credential included. Unlike the disconnect route, which refuses
+  // while an ingest holds a `syncing` claim, a purge cannot 409 and wait: a run already in flight
+  // reads the connection once and keeps walking its in-memory copy until it ends.
   if (releaseDriveConnection) {
     await releaseDriveConnection({ dataLakeId });
   }
