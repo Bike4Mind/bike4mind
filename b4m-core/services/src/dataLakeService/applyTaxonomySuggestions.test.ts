@@ -83,7 +83,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(result).toEqual({ success: true, filesUpdated: 1 });
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0 });
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates).toHaveLength(1);
     expect(updates[0].id).toBe('f1');
@@ -105,6 +105,89 @@ describe('applyTaxonomySuggestions', () => {
     );
 
     expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+  });
+
+  it('counts a file that already carries every tag as unchanged, and writes nothing for it (#2093)', async () => {
+    // The idempotent re-apply: reachable through a re-analyze (status returns to 'ready') or the
+    // documented retry in the catch. Mongo does not report a $set to an identical value as modified,
+    // so emitting an op here made filesUpdated 0 and the skip arithmetic read the whole batch as
+    // lost concurrency races - a false warning and a false alarmable metric.
+    const alreadyTagged = file({
+      tags: [
+        { name: 'acme:legal', strength: 1 },
+        { name: 'acme:type:contract', strength: 1 },
+      ],
+    });
+    const adapters = makeAdapters({ files: [alreadyTagged] });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 0, unchanged: 1 });
+    // No op emitted at all - a write that cannot change anything is not worth a round trip.
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+    // And critically: no lost-race warning, no metric. That was the defect.
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+    expect(adapters.metrics.recordTagsApplySkipped).not.toHaveBeenCalled();
+  });
+
+  it('separates unchanged files from genuinely updated ones in the same batch', async () => {
+    // The mixed case a single counter cannot express: one file gains the tag, one already had it.
+    const adapters = makeAdapters({
+      files: [
+        file({ id: 'f1', tags: [{ name: 'acme:legal', strength: 1 }] }),
+        file({
+          id: 'f2',
+          tags: [
+            { name: 'acme:legal', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 1 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates.map((u: { id: string }) => u.id)).toEqual(['f1']);
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still writes a file whose stored tags hold a duplicate name, since the merge dedupes it', async () => {
+    // A legacy row carrying the same name twice collapses in the merge Map, so the arrays differ in
+    // length. That must read as a CHANGE, not as unchanged - otherwise the dedupe never lands.
+    const adapters = makeAdapters({
+      files: [
+        file({
+          tags: [
+            { name: 'acme:legal', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].tags).toHaveLength(2);
   });
 
   it('rejects a non-owner, non-admin caller', async () => {

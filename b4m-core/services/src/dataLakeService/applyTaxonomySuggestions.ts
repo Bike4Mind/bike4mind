@@ -40,6 +40,11 @@ interface ApplyTaxonomySuggestionsAdapters {
  *
  * No lake-stats recompute: tags don't change lake membership/fileCount/totalSizeBytes.
  *
+ * `unchanged` counts files that already carried every tag this apply would give them, so nothing was
+ * written for them. They are reported separately rather than folded into `filesUpdated` because the
+ * two answer different questions - "what did this change" versus "did this succeed" - and a re-apply
+ * that legitimately changes nothing would otherwise be indistinguishable from one that failed.
+ *
  * `filesUpdated` can be less than the number of matched files: bulkUpdateTags applies
  * optimistic concurrency per file, so one mutated by something else between the read below and
  * the write (a direct tag edit, a lake-membership pull, another apply) is silently skipped
@@ -50,7 +55,7 @@ export const applyTaxonomySuggestions = async (
   batchId: string,
   acceptedTags: TaxonomyTag[],
   { db, logger, metrics }: ApplyTaxonomySuggestionsAdapters
-): Promise<{ success: true; filesUpdated: number }> => {
+): Promise<{ success: true; filesUpdated: number; unchanged: number }> => {
   const batch = await db.batches.findById(batchId);
   if (!batch) throw new NotFoundError('Batch not found');
 
@@ -100,6 +105,19 @@ export const applyTaxonomySuggestions = async (
     // bulkWrite round trip instead of one findOneAndUpdate per file - a batch can hold
     // thousands of files, and N sequential writes risked exceeding the caller's request
     // timeout mid-apply, stranding the batch in 'applying' with only some files updated.
+    // Whether the merge produced the file's existing tag set unchanged. The merge seeds a Map from
+    // `existingTags` in order and only sets names, so an unchanged result is element-wise identical -
+    // no sorting needed. A legacy row holding the same name twice collapses in the Map, which makes
+    // the arrays differ in LENGTH and correctly counts as a change (the write dedupes it).
+    const isUnchanged = (merged: { name: string; strength: number }[], existing: typeof merged) =>
+      merged.length === existing.length &&
+      merged.every((t, i) => t.name === existing[i].name && t.strength === existing[i].strength);
+
+    // Files whose merge changes nothing. Counted, not written: Mongo does not report a $set to an
+    // identical value as modified, so emitting these ops would make `filesUpdated` under-report and
+    // the skip arithmetic below read every one of them as a lost CAS race.
+    let unchanged = 0;
+
     const updates = files.flatMap(file => {
       const relativePath = file.relativePath ?? file.fileName;
       const folderTags = folderTagForFile(relativePath, lake.fileTagPrefix);
@@ -117,11 +135,19 @@ export const applyTaxonomySuggestions = async (
         const current = merged.get(t.name);
         if (current === undefined || t.strength > current) merged.set(t.name, t.strength);
       }
+      const mergedTags = Array.from(merged, ([name, strength]) => ({ name, strength }));
+
+      // Already carries every tag this apply would give it - the common case on a re-apply after a
+      // re-analyze, or on the documented retry in the catch below.
+      if (isUnchanged(mergedTags, existingTags)) {
+        unchanged++;
+        return [];
+      }
 
       return [
         {
           id: file.id,
-          tags: Array.from(merged, ([name, strength]) => ({ name, strength })),
+          tags: mergedTags,
           // The exact snapshot this merge was computed from - bulkUpdateTags uses it for
           // optimistic concurrency, so a file mutated by something else since this read is
           // skipped rather than clobbered by a merge that's now stale.
@@ -133,9 +159,12 @@ export const applyTaxonomySuggestions = async (
     const filesUpdated = await db.fabFiles.bulkUpdateTags(updates);
     const skipped = updates.length - filesUpdated;
     if (skipped > 0) {
-      // Every op in `updates` matched a file that needed new tags - a lower filesUpdated means
-      // bulkUpdateTags' optimistic-concurrency check lost the race for `skipped` of them (see
-      // its doc comment). Not an error - the concurrent writer's change legitimately wins - but
+      // Every op in `updates` would genuinely CHANGE its file - the no-op merges were counted into
+      // `unchanged` above and never emitted - so a lower filesUpdated means bulkUpdateTags'
+      // optimistic-concurrency check lost the race for `skipped` of them (see its doc comment).
+      // That equivalence is what makes this warning trustworthy: before the no-ops were split out,
+      // an idempotent re-apply emitted an op per file, modified none of them, and reported the whole
+      // batch as lost races. Not an error - the concurrent writer's change legitimately wins - but
       // otherwise invisible: filesUpdated just reaches the caller as a smaller-than-expected
       // number with no signal why. Log carries batchId for grepping one occurrence; the metric
       // (deliberately dimensionless, matching this file's low-cardinality convention) is the
@@ -156,7 +185,7 @@ export const applyTaxonomySuggestions = async (
       );
     }
 
-    return { success: true, filesUpdated };
+    return { success: true, filesUpdated, unchanged };
   } catch (error) {
     // Revert the claim so the batch isn't stranded in 'applying' (invisible to the fast
     // read-time reconciler path notwithstanding, this keeps the state machine honest without

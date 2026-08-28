@@ -649,15 +649,22 @@ export function useApplyTaxonomySuggestions(batchId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (tags: TaxonomyTag[]) => {
-      const res = await api.post<{ success: true; filesUpdated: number }>(
+      const res = await api.post<{ success: true; filesUpdated: number; unchanged: number }>(
         `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
         { tags }
       );
       return res.data;
     },
     onSuccess: result => {
+      // A re-apply that changes nothing is a success, not a no-show. Reporting only `filesUpdated`
+      // rendered it as "Tags applied to 0 files", which reads like the apply failed.
+      const plural = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
       toast.success(
-        `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
+        result.filesUpdated === 0 && result.unchanged > 0
+          ? `Tags already up to date on ${plural(result.unchanged)}`
+          : result.unchanged > 0
+            ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(result.unchanged)} already up to date`
+            : `Tags applied to ${plural(result.filesUpdated)}`
       );
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
