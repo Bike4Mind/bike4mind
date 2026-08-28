@@ -209,30 +209,18 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
             f.id === file.id ? { ...f, vectorized: false, chunked: false, isChunking: true } : f;
 
           if (isSystemFile) {
-            // For system files, first manually update the cache data
+            // No follow-up invalidation: ['system-prompt-files', allSystemFileIds]
+            // (SessionsContext) is active while this panel is open, so a refetch would replace this
+            // row with server state that already reads isChunking:false - resetChunkStateByIds
+            // writes it - and re-arm the button mid-rebuild, which is exactly what markPending
+            // exists to prevent. It could never observe completion anyway; that needs the deferred
+            // update_file_chunk_vector_status subscriber.
             queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
               if (Array.isArray(oldData)) {
                 return oldData.map(markPending);
               }
               return oldData;
             });
-
-            // Then invalidate after a delay to allow server processing
-            setTimeout(() => {
-              queryClient.invalidateQueries({
-                queryKey: ['system-prompt-files'],
-                exact: false,
-              });
-
-              // Also invalidate any individual file queries
-              queryClient.invalidateQueries({
-                queryKey: ['fab-file', file.id],
-                exact: false,
-              });
-              // Vestigial under these semantics: at t+1.5s the row can only re-confirm the reset
-              // this handler just mirrored, never observe completion. Kept because the refetch is
-              // harmless and picking up the real end state needs the deferred subscriber instead.
-            }, 1500);
           } else if (currentSessionId) {
             setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(markPending));
           }

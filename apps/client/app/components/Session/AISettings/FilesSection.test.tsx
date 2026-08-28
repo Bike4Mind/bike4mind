@@ -12,7 +12,10 @@ const mockChunkMutate = vi.fn();
 const mockReprocessMutate = vi.fn();
 const { mockToastSuccess } = vi.hoisted(() => ({ mockToastSuccess: vi.fn() }));
 const mockSetWorkBenchFiles = vi.fn();
-const { mockSetQueriesData } = vi.hoisted(() => ({ mockSetQueriesData: vi.fn() }));
+const { mockSetQueriesData, mockInvalidateQueries } = vi.hoisted(() => ({
+  mockSetQueriesData: vi.fn(),
+  mockInvalidateQueries: vi.fn(),
+}));
 
 let messageFiles: IFabFileDocument[] = [];
 let workBenchFiles: IFabFileDocument[] = [];
@@ -55,7 +58,7 @@ vi.mock('@client/app/hooks/useEmbeddingMismatchStatus', () => ({
 }));
 vi.mock('@client/app/components/Knowledge/KnowledgeViewer', () => ({ setKnowledgeViewer: vi.fn() }));
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueriesData: mockSetQueriesData }),
+  useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries, setQueriesData: mockSetQueriesData }),
 }));
 vi.mock('@client/app/hooks/useSessionLayout', () => ({
   default: (sel: (s: unknown) => unknown) => sel({ pendingMessageFiles: [], recentArtifacts: [] }),
@@ -77,6 +80,7 @@ const fab = (id: string, name: string, userId = 'me', mimeType = 'application/pd
 
 describe('FilesSection message-scoped files', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     mockIsPending.mockReturnValue(false);
     messageFiles = [];
@@ -211,6 +215,7 @@ describe('FilesSection message-scoped files', () => {
       { ...fab('sys1', 'policy.pdf'), embeddingModel: 'model-a', chunked: true, vectorized: true } as IFabFileDocument,
     ];
 
+    vi.useFakeTimers();
     renderPanel();
     fireEvent.click(screen.getByTestId('files-section-reprocess-btn-system-sys1'));
     mockReprocessMutate.mock.calls[0][1].onSuccess();
@@ -218,9 +223,16 @@ describe('FilesSection message-scoped files', () => {
     // System files go through the react-query cache, not the workbench store.
     expect(mockSetWorkBenchFiles).not.toHaveBeenCalled();
     expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][0]).toMatchObject({ queryKey: ['system-prompt-files'] });
     const updated = mockSetQueriesData.mock.calls[0][1](systemFiles);
     expect(updated[0]).toMatchObject({ chunked: false, vectorized: false, isChunking: true });
     expect(updated[0].embeddingModel).toBe('model-a');
+
+    // No deferred refetch: ['system-prompt-files', ids] is active while the panel is open, so an
+    // invalidation would replace the pending row with server state (resetChunkStateByIds writes
+    // isChunking:false) and re-arm the button mid-rebuild.
+    vi.advanceTimersByTime(5000);
+    expect(mockInvalidateQueries).not.toHaveBeenCalled();
   });
 
   it('renders distinct reprocess testids when the same file id appears in both lists', () => {
