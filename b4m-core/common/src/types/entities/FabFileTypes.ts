@@ -1017,6 +1017,19 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     }>
   >;
   /**
+   * One page of a lake's LIVE members for the lake-memory extraction producer, ascending by `_id`,
+   * projecting only the three fields that producer reads. Live-only and bounded in the database, unlike
+   * `findIdsByDataLakeTag` above, which reports every member the lake ever had.
+   *
+   * `after` is a keyset boundary, and an unparseable one is ignored rather than throwing. Ask for one
+   * row past the cap to tell "the lake continues" from "the slice filled exactly" without a count
+   * query. See the implementation for why each of those is load-bearing.
+   */
+  findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>>;
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */

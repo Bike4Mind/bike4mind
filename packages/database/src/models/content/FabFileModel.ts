@@ -1432,6 +1432,64 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
+   * One page of a lake's live members for the lake-memory extraction producer
+   * (`extractLakeMemoryForBatch`), ascending by `_id`.
+   *
+   * Deliberately NOT `findIdsByDataLakeTag` + `findAllByIds`, which is what this replaced. That pair
+   * returned every id the lake had ever held (tombstones included, by design - lifecycle sweeps need
+   * them) and then hydrated all of them UNPROJECTED, so `content`, `chunks` and `vector` all landed in
+   * the Lambda before the producer's own per-run cap applied. A lake of a few thousand ~1MB documents
+   * pulled GBs into one invocation and was killed before the deadline guard could yield, and every SQS
+   * redelivery was killed the same way until the message reached the DLQ.
+   *
+   * So the liveness filter, the ordering and the bound all run in the DATABASE, and the projection is
+   * an inclusion list of exactly the three fields the producer reads: the id to fetch chunks by and to
+   * persist as its continuation cursor, the file name as the extractor's doc title, and the tag names
+   * that decide the evidence tier. The document text comes separately from `fabFileChunkRepository`, so
+   * none of the heavy fields are wanted here at all.
+   *
+   * `after` is a KEYSET boundary, not an offset: ObjectId order is creation order, so a document
+   * uploaded mid-scan sorts after the cursor and is picked up by a later run rather than shifting the
+   * window under an in-progress one. An `after` that is not a valid ObjectId is ignored (the page
+   * starts from the top) rather than throwing a cast error - the producer's ledger append de-dups, so
+   * an over-broad re-scan is merely wasteful, whereas a throw would fail the run into the DLQ.
+   *
+   * `limit` is the caller's bound verbatim; the producer asks for one row past its cap and uses that
+   * probe row to tell "the lake continues" from "the slice happened to fill exactly", which is cheaper
+   * than a second count query.
+   */
+  async findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>> {
+    const after = options.after && mongoose.Types.ObjectId.isValid(options.after) ? convertId(options.after) : null;
+    return this.fabFileModel.aggregate([
+      {
+        // buildDataLakeMembershipQuery, NOT a spread - see findDataLakeHealthMembers. An aggregate is
+        // outside the soft-delete plugin's query middleware, so `deletedAt` is filtered here
+        // explicitly rather than by default.
+        $match: buildDataLakeMembershipQuery(scope, {
+          deletedAt: null,
+          archivedAt: null,
+          ...(after ? { _id: { $gt: after } } : {}),
+        }),
+      },
+      { $sort: { _id: 1 } },
+      { $limit: options.limit },
+      {
+        $project: {
+          _id: 0,
+          fabFileId: { $toString: '$_id' },
+          fileName: 1,
+          // Only the tag NAME, as in findLakeConvergenceMembers: a lake member can carry many tags and
+          // the tier decision reads nothing else off them.
+          tags: { $map: { input: { $ifNull: ['$tags', []] }, as: 't', in: { name: '$$t.name' } } },
+        },
+      },
+    ]);
+  }
+
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */
