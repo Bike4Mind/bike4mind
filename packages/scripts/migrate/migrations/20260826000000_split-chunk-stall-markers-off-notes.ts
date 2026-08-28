@@ -66,6 +66,16 @@ const NO_EXTRACTABLE_TEXT_NOTES = [
 // docblock's two-arm split.
 const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = /^No extractable text/;
 
+// A row that keeps its prose needs a human to trim the marker off the owner's note; a bare count in
+// a deploy log gives them nothing to find it by. Capped so a pathological run cannot flood the log.
+const TRIM_ID_LOG_CAP = 50;
+const logIdsToTrim = (ids: string[]) => {
+  console.log(`   ids to trim: ${ids.slice(0, TRIM_ID_LOG_CAP).join(', ')}`);
+  if (ids.length > TRIM_ID_LOG_CAP) {
+    console.log(`   ... and ${ids.length - TRIM_ID_LOG_CAP} more (capped at ${TRIM_ID_LOG_CAP})`);
+  }
+};
+
 const migration: MigrationFile = {
   id: 20260826000000,
   name: 'split-chunk-stall-markers-off-notes',
@@ -90,15 +100,18 @@ const migration: MigrationFile = {
 
       // `chunkStallReason: null` (which matches an absent field) is what keeps this arm idempotent:
       // these rows keep the prose, so without it a second pass would match them again.
-      const appended = await fabFiles.updateMany(
-        { notes: { $regex: `^${escapeRegExp(note)}` }, chunkStallReason: null },
-        { $set: { chunkStallReason: reason } }
-      );
+      const appendedFilter = { notes: { $regex: `^${escapeRegExp(note)}` }, chunkStallReason: null };
+      // Collected BEFORE the update - the filter stops matching once the field is set. A kept row
+      // renders the notice line and then the owner note whose first line is that same prose, so the
+      // duplication is visible to the owner long before anyone finds it in a deploy log.
+      const appendedIds = await fabFiles.find(appendedFilter, { projection: { _id: 1 } }).toArray();
+      const appended = await fabFiles.updateMany(appendedFilter, { $set: { chunkStallReason: reason } });
       if (appended.modifiedCount > 0) {
         console.log(
           `   ${appended.modifiedCount} row(s) had owner text appended to the '${reason}' marker - ` +
             'derived, notes left intact for a human to trim'
         );
+        logIdsToTrim(appendedIds.map(doc => String(doc._id)));
       }
     }
 
@@ -111,7 +124,7 @@ const migration: MigrationFile = {
       { projection: { _id: 1, updatedAt: 1, notes: 1 } }
     );
     let freed = 0;
-    let kept = 0;
+    const keptIds: string[] = [];
     while (await zeroChunkCursor.hasNext()) {
       const doc = await zeroChunkCursor.next();
       if (!doc) break;
@@ -124,13 +137,14 @@ const migration: MigrationFile = {
         }
       );
       if (isWholeMarker) freed++;
-      else kept++;
+      else keptIds.push(String(doc._id));
     }
-    console.log(`✅ Derived noExtractableTextAt on ${freed + kept} FabFile rows`);
-    if (kept > 0) {
+    console.log(`✅ Derived noExtractableTextAt on ${freed + keptIds.length} FabFile rows`);
+    if (keptIds.length > 0) {
       console.log(
-        `   ${kept} of those had owner text appended to the marker - derived, notes left intact for a human to trim`
+        `   ${keptIds.length} of those had owner text appended to the marker - derived, notes left intact for a human to trim`
       );
+      logIdsToTrim(keptIds);
     }
   },
 

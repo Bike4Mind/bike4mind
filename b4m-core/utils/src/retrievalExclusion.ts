@@ -1,4 +1,4 @@
-import { isChunkRebuildPending, isChunkStalled } from '@bike4mind/common';
+import { isChunkRebuildPending, isChunkStalled, type ChunkStallReason } from '@bike4mind/common';
 import { escapeRegex } from './escapeRegex';
 
 /**
@@ -84,7 +84,7 @@ export function isRetrievalExcluded(
   file: {
     fileName?: string | null;
     vectorized?: boolean;
-    chunkStallReason?: string | null;
+    chunkStallReason?: ChunkStallReason | null;
     chunkRebuildRequestedAt?: Date | string | null;
   },
   opts: RetrievalExclusionOptions
@@ -128,7 +128,7 @@ export function filterRetrievalExcluded<
   T extends {
     fileName?: string | null;
     vectorized?: boolean;
-    chunkStallReason?: string | null;
+    chunkStallReason?: ChunkStallReason | null;
     chunkRebuildRequestedAt?: Date | string | null;
   },
 >(files: T[], opts: RetrievalExclusionOptions): T[] {
