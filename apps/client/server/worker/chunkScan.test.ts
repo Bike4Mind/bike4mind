@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   buildFabFileChunkScanFilter,
   buildStrandedVectorizeScanFilter,
@@ -299,4 +301,29 @@ describe('buildStrandedVectorizeScanFilter', () => {
     expect(matches(doc, buildFabFileChunkScanFilter(cutoff))).toBe(false);
     expect(matches(doc, filter)).toBe(true);
   });
+});
+
+describe('production call sites pass the stale-claim cutoff', () => {
+  // Source-shape guard, because the regression is silent: staleClaimBefore is optional (the arm is
+  // opt-in), so dropping it type-checks, passes every other test, and just quietly turns the
+  // recovery arm back off. The cron's call is covered behaviourally in dataLakeBatchReconcile.test.ts;
+  // the self-host worker's is inside an unexported main(), so this is what watches it.
+  const sources = {
+    'server/worker/main.ts': 'main.ts',
+    'server/cron/dataLakeBatchReconcile.ts': '../cron/dataLakeBatchReconcile.ts',
+  } as const;
+
+  for (const [label, rel] of Object.entries(sources)) {
+    it(`${label} calls buildStrandedVectorizeScanFilter with both cutoffs`, async () => {
+      const src = await readFile(resolve(__dirname, rel), 'utf8');
+      const call = src.match(/buildStrandedVectorizeScanFilter\(([^)]*)\)/);
+      expect(call, 'call site vanished - move or delete this guard with it').not.toBeNull();
+      expect(
+        call![1]
+          .split(',')
+          .map(a => a.trim())
+          .filter(Boolean)
+      ).toHaveLength(2);
+    });
+  }
 });

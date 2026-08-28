@@ -91,6 +91,20 @@ describe('stranded vectorize hand-off recovery', () => {
         { userId: 'u1', fileName: 'healthy.pdf', type: 'FILE', chunked: true },
       ]);
       await FabFile.createIndexes();
+      // Load-bearing, not padding: on a two-document collection every index costs the same and the
+      // planner picks arbitrarily - a real mongod answers this very query from
+      // deletedAt_1_filePath_1 at that size. These unstamped files sit outside the partial index,
+      // which is what makes choosing it the only cheap plan and the assertion below able to fail.
+      await FabFile.collection.insertMany(
+        Array.from({ length: 2000 }, (_, i) => ({
+          userId: 'u1',
+          fileName: `decoy-${i}.pdf`,
+          type: 'FILE',
+          chunked: true,
+          deletedAt: null,
+          vectorizeEnqueueFailedAt: null,
+        }))
+      );
 
       const plan = await FabFile.collection
         .find({
@@ -106,8 +120,9 @@ describe('stranded vectorize hand-off recovery', () => {
         .explain('queryPlanner');
 
       const winning = JSON.stringify(plan.queryPlanner.winningPlan);
-      expect(winning).toContain('IXSCAN');
-      expect(winning).toContain('vectorizeEnqueueFailedAt');
+      // The index NAME, not the field name: the field appears in the residual FETCH filter of any
+      // plan, so a bare substring check on it passes even when another index won.
+      expect(winning).toContain('"indexName":"vectorizeEnqueueFailedAt_1"');
       expect(winning).not.toContain('"stage":"COLLSCAN"');
     });
 
