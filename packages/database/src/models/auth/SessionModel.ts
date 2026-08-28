@@ -398,8 +398,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     if (!session) {
       throw new NotFoundError('Session not found');
     }
-    // Callers resolve these by `_id` one at a time, so a single legacy entry that cannot address
-    // a row made findById throw and took the whole attached-agent list down with it.
+    // Callers resolve each entry with agentRepository.findById, so one legacy entry that cannot
+    // address a row took the whole attached-agent list down with it.
     return usableObjectIds(session.agentIds, 'SessionModel.getAttachedAgents');
   }
 

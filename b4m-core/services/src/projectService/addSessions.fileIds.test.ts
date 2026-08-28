@@ -109,8 +109,8 @@ describe('addSessions - which ids reach the project', () => {
 
   it('rejects a request whose session ids only partly resolved, persisting nothing', async () => {
     // findAllAccessibleByIds skips an uncastable id instead of throwing, so a partial resolve is
-    // now reachable. Answering 200 with only the reachable notebook attached gives the caller no
-    // signal that half its request was ignored - 400, like addFiles/removeFiles/removeSessions.
+    // now reachable. Answering 200 with only the reachable notebook attached would give the
+    // caller no signal that half its request was ignored.
     await expect(
       addSessions(user, { projectId: PROJECT_ID, sessionIds: [JUNK_ID, SESSION_ID] }, {
         db: { projects, sessions, fabFiles },

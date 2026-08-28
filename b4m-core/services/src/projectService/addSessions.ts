@@ -42,12 +42,8 @@ export const addSessions = async (
   if (sessions.length === 0) {
     throw new NotFoundError('Sessions not found');
   }
-  // BadRequestError on a PARTIAL resolve, matching addFiles/removeFiles/removeSessions: the
-  // repository now skips ids it cannot reach instead of throwing, so without this the endpoint
-  // answers 200 having attached only some of the requested notebooks.
-  if (sessions.length !== sessionIds.length) {
-    throw new BadRequestError('Some sessions are not accessible');
-  }
+  // Partial resolve is a 400; all-missing keeps the 404 above. See addFiles.
+  if (sessions.length !== sessionIds.length) throw new BadRequestError('Some sessions are not accessible');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
   if (!project) {
@@ -55,9 +51,6 @@ export const addSessions = async (
   }
 
   // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
-  // Equivalent to `sessionIds` given the equality check above, and stays correct if that check
-  // ever loosens: findAllAccessibleByIds skips entries that cannot address a row, so the raw
-  // list could otherwise persist a junk sessionId that the read-side guard then hides.
   project.sessionIds = uniq([...project.sessionIds, ...sessions.map(session => session.id)]);
   project.updatedAt = new Date();
 

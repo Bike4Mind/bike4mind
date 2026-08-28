@@ -225,9 +225,9 @@ ArtifactSchema.virtual('isDeleted').get(function () {
 
 // Virtual for checking if artifact is public
 ArtifactSchema.virtual('isPublic').get(function () {
-  // `permissions` has no default, so a stored row can lack it entirely. Virtuals run on every
-  // toObject()/toJSON(), so dereferencing it unguarded turned one such row into a 500 for the
-  // whole notebook export rather than a missing field on one artifact.
+  // Why `permissions` can be undefined: see isPublicArtifact in b4m-core/common artifactHelpers.
+  // Virtuals run on every toObject()/toJSON(), so dereferencing it unguarded turned one such row
+  // into a 500 for the whole notebook export rather than a missing field on one artifact.
   // `=== true`, not a bare `?.`: the virtual has always returned a boolean, and `undefined`
   // would serialize as a MISSING key rather than `false` for a row with no permissions.
   return this.visibility === 'public' || this.permissions?.isPublic === true;

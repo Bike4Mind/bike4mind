@@ -8,7 +8,8 @@ export function isArtifact(obj: unknown): obj is BaseArtifact {
 }
 
 export function isPublicArtifact(artifact: BaseArtifact): boolean {
-  // `permissions` has no schema default, so a stored artifact can lack it entirely. These run on
+  // `permissions` is `required: true` in the schema, so the gap is not new writes: a legacy row
+  // and a field projection both hand this an artifact with `permissions` undefined. These run on
   // the ACCESS-CHECK path, so an unguarded dereference throws where the answer should be "no".
   // Must stay in sync with the isPublic virtual in packages/database ArtifactModel.
   return artifact.visibility === 'public' || artifact.permissions?.isPublic === true;
