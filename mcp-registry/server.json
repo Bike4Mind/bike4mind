@@ -3,7 +3,7 @@
   "name": "io.github.bike4mind/bike4mind",
   "title": "Bike4Mind",
   "description": "Notebooks, agents, files and RAG from your Bike4Mind workspace, as MCP tools.",
-  "version": "0.20.1",
+  "version": "0.20.2",
   "websiteUrl": "https://github.com/Bike4Mind/bike4mind",
   "repository": {
     "url": "https://github.com/Bike4Mind/bike4mind",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@bike4mind/cli",
-      "version": "0.20.1",
+      "version": "0.20.2",
       "transport": {
         "type": "stdio"
       },
@@ -30,14 +30,14 @@
       "environmentVariables": [
         {
           "name": "B4M_API_KEY",
-          "description": "Bike4Mind API key. Alternatively sign in once with `b4m` and the stored OAuth token is used.",
+          "description": "Bike4Mind API key, created under Settings in the web app.",
           "isRequired": false,
           "isSecret": true
         },
         {
           "name": "B4M_API_URL",
-          "description": "API endpoint. Optional for the official build, which bakes in a default at release time; required if that default is empty (a fork) or to point at a self-hosted deployment. Without any endpoint, `mcp serve` exits at startup.",
-          "isRequired": false
+          "description": "Bike4Mind API endpoint, e.g. https://app.bike4mind.com. Required: `mcp serve` exits at startup without one.",
+          "isRequired": true
         }
       ]
     }
