@@ -152,7 +152,10 @@ const PromptMetaInspector = () => {
 - **Total Response Time**: ${promptMeta.performance?.totalResponseTime ?? 'N/A'} ms
 - **Context Retrieval**: ${promptMeta.performance?.contextRetrievalTime ?? 'N/A'} ms
 - **Model Inference**: ${promptMeta.performance?.modelInferenceTime ?? 'N/A'} ms
-- **First Token**: ${promptMeta.performance?.firstTokenTime ?? 'N/A'} ms
+- **First Visible Token (TTFVT)**: ${
+      promptMeta.performance?.firstTokenTime != null ? `${promptMeta.performance.firstTokenTime} ms` : 'never rendered'
+    }
+- **First Chunk (any kind, thinking included)**: ${promptMeta.performance?.firstChunkTime ?? 'N/A'} ms
 
 ## Context
 - **Prompt**: ${promptMeta.prompt?.substring(0, 200) ?? 'N/A'}${(promptMeta.prompt?.length || 0) > 200 ? '...' : ''}

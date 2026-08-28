@@ -43,6 +43,28 @@ Click the **Export CSV** button in the control panel to download the current fil
 
 The Raw Data tab includes an info modal that documents performance metrics fields, including streaming performance data (chunk count, total stream time) when available in the dataset.
 
+#### Time to First Visible Token (TTFVT)
+
+TTFVT measures how long a user waited before the transcript showed them anything. It counts only
+text that actually renders: an extended-thinking model's hidden reasoning does not stop the clock,
+and neither do the tool-call arguments a model writes before answering.
+
+A turn that streamed but never rendered visible text -- reasoning-only, or one that errored before
+answering -- has **no** TTFVT rather than a fast-looking one. The Raw Data tab shows those as
+`never rendered`, alongside the time the first chunk of any kind arrived, which tells you the model
+did respond while the user saw nothing.
+
+#### Troubleshooting: TTFVT looks better than users report
+
+- **`never rendered` rows in Raw Data.** These are frozen turns, and they are the ones users
+  complain about. They are excluded from the First Token trend chart rather than averaged into it,
+  so the chart cannot show them -- filter the Raw Data tab instead. A rising count here is the
+  signal, even while the chart looks flat.
+- **TTFVT far below Client First Token Time.** TTFVT stops at the server; the gap is network and
+  client render time. Compare the two before attributing slowness to the model.
+- **Turns with no TTFVT and no first-chunk time.** The response was not streamed at all. Check the
+  model's streaming support rather than reading it as a latency problem.
+
 ### Record Count
 
 A counter displays "Showing X of Y records" to indicate how many records match the current filters out of the total dataset.

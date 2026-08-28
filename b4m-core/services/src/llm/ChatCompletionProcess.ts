@@ -32,6 +32,7 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  hasVisibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -93,6 +94,7 @@ import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { appendStreamedChunk, modelVisibleSlots } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
@@ -3880,13 +3882,14 @@ export class ChatCompletionProcess {
                     });
                   }
                 );
-                // Clear the interval on first response and calculate TTFVT
+                // First chunk of ANY kind, hidden reasoning included, so this is explicitly
+                // not the user-visible latency - a thinking-first turn stamps this while the
+                // transcript is still empty. TTFVT is stamped further down, off the
+                // accumulated reply.
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
-                  // Capture TTFVT on first non-empty chunk (regardless of chunk number)
-                  if (!quest.promptMeta!.performance!.firstTokenTime) {
+                  if (!quest.promptMeta!.performance!.firstChunkTime) {
                     const timeToFirstChunk = Date.now() - streamStartTime;
-                    const ttfvt = Date.now() - processStartTime; // Time to First Visible Token
-                    quest.promptMeta!.performance!.firstTokenTime = ttfvt;
+                    quest.promptMeta!.performance!.firstChunkTime = Date.now() - processStartTime;
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
@@ -3959,30 +3962,38 @@ export class ChatCompletionProcess {
                   // Note: 'enhance' mode would be more complex and could be implemented later
                 }
 
-                await Promise.all(
-                  streamedTexts.map(async (text, index) => {
-                    if (!text) return;
+                streamedTexts.forEach((text, index) => {
+                  if (!text) return;
+                  appendStreamedChunk(replies, text, index, transitionMode);
+                  quest.replies = Object.values(replies);
+                  // Send message to the client for each received streamed message
+                  smartSend();
+                });
 
-                    // In append mode, always append to replies[0] regardless of stream index
-                    if (transitionMode === 'append') {
-                      replies[0] ??= '';
-                      replies[0] += text;
-                    } else {
-                      replies[index] ??= '';
-                      // If the last character is </think> which indicates the end of a thinking reply, append the text to the next reply
-                      // This happens when thinking models use other tools which causes the index to reset.
-                      if (replies[index].endsWith('</think>')) {
-                        replies[index + 1] ??= '';
-                        replies[index + 1] += text;
-                      } else {
-                        replies[index] += text;
-                      }
-                    }
-                    quest.replies = Object.values(replies);
-                    // Send message to the client for each received streamed message
-                    smartSend();
-                  })
-                );
+                // Time To First Visible Token: stamped off the ACCUMULATED reply, not the raw
+                // chunk, for two reasons. Hidden reasoning and the answer that follows it can
+                // land in a single chunk (kimiBackend.ts:515 prepends the close marker to real
+                // text), so only the accumulated slots say what the transcript now shows. And
+                // `replies` is already cleared on every fallback/overload/timeout retry path,
+                // where a running "am I inside a thinking block" flag would need resetting at
+                // each of the five - drift this derivation cannot have.
+                // Deliberately left unset when nothing visible ever streams: absent reads as
+                // "never rendered", where a number would read as fast.
+                // modelVisibleSlots drops the rapid reply pre-seeded in 'append' mode, which the
+                // user saw before this model started and which must not count as its first token.
+                if (
+                  !quest.promptMeta!.performance!.firstTokenTime &&
+                  hasVisibleReplyText(modelVisibleSlots(replies, transitionMode, rapidReplyContent))
+                ) {
+                  quest.promptMeta!.performance!.firstTokenTime = Date.now() - processStartTime;
+                  logger.info(
+                    `⏱️ [TTFVT] First visible token at ${
+                      quest.promptMeta!.performance!.firstTokenTime
+                    }ms (first chunk of any kind: ${
+                      quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+                    }ms, model: ${currentModel.id})`
+                  );
+                }
                 // Field-wise assign-not-clobber (mirrors cliCompletions.ts:211-214). Some
                 // adapters fire intermediate callbacks carrying only {toolsUsed} or with
                 // inputTokens: 0 (see anthropicBackend.ts:1598-1604) before the terminal
@@ -4299,8 +4310,14 @@ export class ChatCompletionProcess {
             }
           }
         } else if (chunkCount > 0) {
+          // The frozen-turn signature: chunks arrived (hidden reasoning; tool-call argument
+          // deltas are consumed without being forwarded, so they never show up here at all)
+          // while the user saw nothing. Deliberately left unstamped, which makes this log the
+          // only place such a turn surfaces - keep it a warning.
           logger.warn(
-            `⚠️ [TTFVT] Failed to capture first token time for ${currentModel.id} despite ${chunkCount} chunks - all chunks were empty`
+            `⚠️ [TTFVT] Never rendered for ${currentModel.id}: ${chunkCount} chunks streamed but no visible text (first chunk of any kind: ${
+              quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+            }ms)`
           );
         } else {
           logger.warn(

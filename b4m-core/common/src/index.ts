@@ -77,6 +77,7 @@ export * from './utils/countCodePoints';
 export * from './utils/modelHelpers';
 export * from './utils/activity';
 export * from './utils/sseEvents';
+export * from './utils/streamVisibility';
 export * from './utils/stopReasons';
 export * from './utils/retrievalRate';
 export * from './utils/requestId';

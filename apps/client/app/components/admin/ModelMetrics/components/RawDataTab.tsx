@@ -5,7 +5,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import dayjs from 'dayjs';
 import { ModelMetric, SortField, SortDirection } from '../types';
-import { formatDuration, getDisplayName } from '../utils/formatters';
+import { formatDuration, formatTtfvt, getDisplayName } from '../utils/formatters';
 import UsernameText from '@client/app/components/common/UsernameText';
 import StatusTimeline from '@client/app/components/Session/StatusTimeline';
 
@@ -133,8 +133,7 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                   </Typography>
                   <Typography level="body-xs">
                     {formatDuration(metric.performance?.totalResponseTime)}
-                    {metric.performance?.firstTokenTime &&
-                      ` · ${formatDuration(metric.performance.firstTokenTime)} ttfvt`}
+                    {` · ${formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)} ttfvt`}
                   </Typography>
                 </Stack>
 
@@ -325,11 +324,12 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                           <Typography level="body-sm" fontWeight="bold">
                             {formatDuration(metric.performance?.totalResponseTime)}
                           </Typography>
-                          {metric.performance?.firstTokenTime && (
-                            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                              TTFVT: {formatDuration(metric.performance.firstTokenTime)}
-                            </Typography>
-                          )}
+                          <Typography
+                            level="body-xs"
+                            sx={{ color: metric.performance?.firstTokenTime ? 'text.secondary' : 'danger.plainColor' }}
+                          >
+                            TTFVT: {formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)}
+                          </Typography>
                         </Stack>
                       </td>
                       <td>
@@ -391,14 +391,19 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                                       {formatDuration(metric.performance?.modelInferenceTime)}
                                     </Typography>
                                   </Stack>
-                                  {metric.performance?.firstTokenTime && (
-                                    <Stack direction="row" justifyContent="space-between">
-                                      <Typography level="body-sm">Time to First Token (TTFVT):</Typography>
-                                      <Typography level="body-sm" fontWeight="bold" color="success">
-                                        {formatDuration(metric.performance.firstTokenTime)}
-                                      </Typography>
-                                    </Stack>
-                                  )}
+                                  <Stack direction="row" justifyContent="space-between">
+                                    <Typography level="body-sm">Time to First Token (TTFVT):</Typography>
+                                    <Typography
+                                      level="body-sm"
+                                      fontWeight="bold"
+                                      color={metric.performance?.firstTokenTime ? 'success' : 'danger'}
+                                    >
+                                      {formatTtfvt(
+                                        metric.performance?.firstTokenTime,
+                                        metric.performance?.firstChunkTime
+                                      )}
+                                    </Typography>
+                                  </Stack>
                                   {metric.performance?.clientFirstTokenTime && (
                                     <Stack direction="row" justifyContent="space-between">
                                       <Typography level="body-sm">Client First Token Time:</Typography>
