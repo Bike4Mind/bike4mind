@@ -12,7 +12,7 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
+import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
 import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
@@ -121,9 +121,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // the wave's chunk state, so the file sits at chunkCount 0 with no error. The reset stamps
   // `chunkRebuildRequestedAt` (#1939), so that state is not invisible - but it reads as "rebuilding,
   // returns on its own", which is now false: nothing will rebuild this file until an administrator
-  // lifts the switch. So upgrade the stamp to `CONVERGENCE_PAUSED_CHUNK_NOTE`, the marker every
-  // reader keys on to say "halted, needs intervention". Mirrors what the vectorize handler already
-  // does for its half of the same switch.
+  // lifts the switch. So upgrade the stamp to a paused marker, the thing every reader keys on to say
+  // "halted, needs intervention". Mirrors what the vectorize handler already does for its half of
+  // the same switch.
   if (
     await isConvergenceHalted(
       { origin, lakeId },
@@ -163,13 +163,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // present: this file is paused, not pending. Clearing it here rather than leaving it also stops
     // the "Rebuild passages" door's stale-pending arm from double-counting a file its paused arm
     // already selects.
+    //
+    // Which marker gets written is decided inside that one statement, because it turns on the very
+    // stamp the statement clears: a file a producer reset really did lose its passages, while one
+    // the rescue sweep selected never had any. Same grade either way - only the sentence the owner
+    // reads differs. See markConvergencePaused (FabFileModel).
     for (let attempt = 1; attempt <= MARK_PAUSED_MAX_ATTEMPTS; attempt++) {
       try {
-        await fabFileRepository.update({
-          id: fabFileId,
-          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
-          chunkRebuildRequestedAt: null,
-        });
+        await fabFileRepository.markConvergencePaused(fabFileId);
         break;
       } catch (err) {
         if (attempt === MARK_PAUSED_MAX_ATTEMPTS) {
@@ -187,7 +188,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       `[convergenceKillSwitch] Paused background chunk work for fabFileId ${fabFileId}` +
         (lakeId ? ` (lake ${lakeId})` : '') +
         ' - kill switch on; message dropped and the file marked as having no passages. Convergence' +
-        ' re-selects it (and health reports it) until it is rebuilt.'
+        ' re-selects it (and health reports it) until it is chunked.'
     );
     return;
   }

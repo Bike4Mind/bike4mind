@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTES } from '@bike4mind/common';
 import { provenancePayloadShape, shouldHaltConvergence } from '@server/queueHandlers/convergenceProvenance';
 import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
 
@@ -93,19 +93,35 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(doc, filter)).toBe(true);
   });
 
-  it('still selects a file the kill switch paused - re-selection is the only way it ever resumes', () => {
-    // The paused note is deliberately NOT excluded here: nothing else re-drives a paused file, so
-    // adding it to the notes exclusion (tempting, to stop the re-sweep churn) strands every paused
-    // file permanently. Any change that does exclude it has to bring a resume path with it.
-    const doc = {
-      status: 'complete',
-      chunkCount: 0,
-      isChunking: false,
-      createdAt: old,
-      deletedAt: null,
-      notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
-    };
-    expect(matches(doc, filter)).toBe(true);
+  // The exact document the halt branch leaves behind: markConvergencePaused writes the marker and
+  // nulls chunkRebuildRequestedAt in one statement, and nothing else about the file changes.
+  const halted = (notes: string, mimeType = 'application/pdf') => ({
+    status: 'complete',
+    chunkCount: 0,
+    isChunking: false,
+    createdAt: old,
+    deletedAt: null,
+    error: null,
+    mimeType,
+    chunkRebuildRequestedAt: null,
+    notes,
+  });
+
+  it.each(CONVERGENCE_PAUSED_CHUNK_NOTES)(
+    'still selects a file the kill switch paused - re-selection is the only way it ever resumes (%s)',
+    note => {
+      // Neither paused marker is excluded here, deliberately: nothing else re-drives a paused file,
+      // so adding them to the notes exclusion (tempting, to stop the re-sweep churn) strands every
+      // paused file permanently. Any change that does exclude them has to bring a resume path.
+      expect(matches(halted(note), filter)).toBe(true);
+    }
+  );
+
+  it('does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
+    // Known one-way door, documented on buildChunkScanQueuePayload: a media file reaches this filter
+    // only through chunkRebuildRequestedAt, and the halt write nulls it in the same statement as the
+    // marker. Asserted rather than left implicit so the strand is visible to whoever closes it.
+    expect(matches(halted(CONVERGENCE_PAUSED_CHUNK_NOTE, 'audio/mpeg'), filter)).toBe(false);
   });
 
   it('skips a file whose chunking already failed (error persisted by the chunk handler)', () => {
@@ -206,7 +222,7 @@ describe('buildChunkScanQueuePayload', () => {
   it('stamps convergence origin even when the file has no batch, so the kill switch can halt it', () => {
     // A paused file carries no batchId, and an un-stamped message reads as `user` work
     // (isConvergenceHalted fails soft) - which is how a paused file used to get re-chunked.
-    expect(buildChunkScanQueuePayload('ff1', 'u1')).toEqual({
+    expect(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' })).toEqual({
       fabFileId: 'ff1',
       userId: 'u1',
       origin: 'convergence',
@@ -214,15 +230,17 @@ describe('buildChunkScanQueuePayload', () => {
   });
 
   it('sends no lakeId: a global sweep is halted by the platform switch, not a per-lake pause', () => {
-    expect(buildChunkScanQueuePayload('ff1', 'u1')).not.toHaveProperty('lakeId');
+    expect(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' })).not.toHaveProperty('lakeId');
   });
 
   it('is halted by the shape the chunk handler actually parses, not just by carrying an origin key', () => {
-    // Binds producer to consumer: fabFileChunk.ts parses the body with provenancePayloadShape and
-    // defaults a missing origin to 'user'. Renaming the key here (or stamping a value outside
-    // WORK_ORIGINS) would leave the payload assertions above passing while the kill switch went
-    // dead, which is exactly how the batchId-gated stamp this fix replaced went unnoticed.
-    const parsed = z.object(provenancePayloadShape).parse(buildChunkScanQueuePayload('ff1', 'u1'));
+    // Binds the stamp to the vocabulary the switch actually decides on, rather than to the string
+    // 'convergence': a value outside WORK_ORIGINS parses to undefined, defaults to 'user' and stops
+    // being haltable. The consumer's own suite (fabFileChunk.test.ts) covers the handler's half of
+    // the contract; this covers the producer's.
+    const parsed = z
+      .object(provenancePayloadShape)
+      .parse(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' }));
     expect(shouldHaltConvergence(parsed.origin ?? 'user', true)).toBe(true);
   });
 });

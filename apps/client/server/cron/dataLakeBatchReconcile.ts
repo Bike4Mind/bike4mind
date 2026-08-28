@@ -79,6 +79,7 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
   // file is not re-sent every pass.
   const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
+
   // Bounded-concurrency fan-out with a PER-FILE catch. A throttled or unroutable send used to reject
   // out of a sequential loop and abandon every candidate behind it, and because the caller turns a
   // throw into 0 it also reported a sweep that had already rescued files as having rescued none.
@@ -92,7 +93,7 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   let failed = 0;
   const enqueueOne = async (id: string) => {
     try {
-      await sendToQueue(queueUrl, buildChunkScanQueuePayload(id, userById.get(id)!));
+      await sendToQueue(queueUrl, buildChunkScanQueuePayload({ fabFileId: id, userId: userById.get(id)! }));
       enqueued++;
     } catch (e) {
       failed++;

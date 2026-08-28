@@ -1,5 +1,7 @@
 import {
   CONVERGENCE_PAUSED_CHUNK_NOTE,
+  CONVERGENCE_PAUSED_CHUNK_NOTES,
+  CONVERGENCE_PAUSED_UNCHUNKED_NOTE,
   CONVERGENCE_PAUSED_NOTES,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
@@ -1225,7 +1227,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never enqueued. It grades as in-flight, not as a failure; see evaluateMemberHealth.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { notes: { $in: [...CONVERGENCE_PAUSED_CHUNK_NOTES] } },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
         }),
@@ -1305,7 +1307,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never-enqueued rebuild disappear from the plan that would have re-driven it.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { notes: { $in: [...CONVERGENCE_PAUSED_CHUNK_NOTES] } },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
           // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
@@ -1484,6 +1486,43 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       )
       .lean();
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
+  async markConvergencePaused(id: string): Promise<void> {
+    // One pipeline update rather than read-then-write, because the note to write DEPENDS on a field
+    // the same statement clears. A separate read could be overtaken by a concurrent
+    // `resetChunkStateByIds`, and the file would then be labelled as having lost passages a wave was
+    // in the middle of removing, or vice versa.
+    //
+    // `chunkRebuildRequestedAt` is the discriminator: `resetChunkStateByIds` stamps it in the write
+    // that deletes the passages, so non-null means a producer really did remove them and null means
+    // the file reached the handler already empty (the rescue sweep selects on `chunkCount: 0` and
+    // never resets). Getting this wrong is user-visible - `notes` is shown to the file's owner and
+    // drives search's partial-results banner.
+    //
+    // Idempotent by the outer `$cond`: a redelivery after a successful mark finds the stamp already
+    // nulled and would otherwise downgrade the accurate "passages removed" note to the never-chunked
+    // one. An existing paused marker is kept as-is.
+    await this.fabFileModel.updateOne({ _id: id }, [
+      {
+        $set: {
+          notes: {
+            $cond: [
+              { $in: ['$notes', [...CONVERGENCE_PAUSED_CHUNK_NOTES]] },
+              '$notes',
+              {
+                $cond: [
+                  { $ifNull: ['$chunkRebuildRequestedAt', false] },
+                  CONVERGENCE_PAUSED_CHUNK_NOTE,
+                  CONVERGENCE_PAUSED_UNCHUNKED_NOTE,
+                ],
+              },
+            ],
+          },
+          chunkRebuildRequestedAt: null,
+        },
+      },
+    ]);
   }
 
   async resetChunkStateByIds(ids: string[]): Promise<string[]> {

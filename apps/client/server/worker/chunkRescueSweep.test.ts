@@ -20,9 +20,6 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 vi.mock('./chunkScan', async importActual => ({
   ...(await importActual<typeof import('./chunkScan')>()),
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
-  CHUNK_SCAN_BATCH: 50,
-  CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
-  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
 }));
 
 import { runChunkRescueSweep } from './chunkRescueSweep';
@@ -79,7 +76,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
 
     await runSweep();
 
-    expect(selectSpy).toHaveBeenCalledWith(expect.stringContaining('userId'));
+    expect(selectSpy).toHaveBeenCalledWith('_id userId');
   });
 
   it('selects with both cutoffs and the per-pass cap', async () => {

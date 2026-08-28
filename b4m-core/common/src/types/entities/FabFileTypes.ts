@@ -1074,6 +1074,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
   /**
+   * Park a file the convergence kill switch halted mid-chunk: writes the paused marker and clears
+   * any pending-rebuild stamp in ONE statement.
+   *
+   * Which of the two chunk-arm markers it writes depends on `chunkRebuildRequestedAt`, which this
+   * same statement nulls - hence one pipeline update rather than a read followed by a write. See
+   * CONVERGENCE_PAUSED_UNCHUNKED_NOTE for why the distinction is load-bearing rather than cosmetic.
+   * Idempotent: a redelivery leaves an existing paused marker alone.
+   */
+  markConvergencePaused(id: string): Promise<void>;
+  /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
    * "rebuild done" from "some files gave up".

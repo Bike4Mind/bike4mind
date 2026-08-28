@@ -189,19 +189,20 @@ describe('dataLakeBatchReconcile cron handler', () => {
       h.reconcile.mockResolvedValue([]);
     });
 
-    it('CLAIMS then re-enqueues only the ids it won, tagging each with its claim token', async () => {
+    it('re-enqueues what the filter selected, with both scan cutoffs and a convergence stamp', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       h.fabFileFind.mockReturnValue({
         select: () => ({
           limit: () => ({
             lean: async () => [
-              { _id: 'ff1', userId: 'u1' }, // plain upload, no lake batch
-              { _id: 'ff2', userId: 'u2', batchId: 'batch-9' }, // data-lake file
+              { _id: 'ff1', userId: 'u1' },
+              { _id: 'ff2', userId: 'u2' },
             ],
           }),
         }),
       });
-      // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
+      // No producer-side claim and no batchId: the projection reads only _id and userId now, so a
+      // batch is invisible here - which is the point, both files are stamped the same way.
 
       const res = await handler();
 
@@ -214,8 +215,6 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(staleClaimBefore).toBeInstanceOf(Date);
       expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
 
-      // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
-      // the worker can reject a duplicate/superseded delivery.
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
       // EVERY message is stamped convergence, with or without a batch: a scheduled sweep is
       // background work, so it must stay haltable by the kill switch. An un-stamped re-enqueue
@@ -249,7 +248,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       // Every fixture here supplies userId whatever is projected, so a trim back to '_id' alone
       // stays green while production enqueues `userId: 'undefined'`. This is the only assertion
       // that fails on that.
-      expect(selectSpy).toHaveBeenCalledWith(expect.stringContaining('userId'));
+      expect(selectSpy).toHaveBeenCalledWith('_id userId');
     });
 
     it('enqueues every id the filter selected - duplicates are the worker CAS to resolve', async () => {

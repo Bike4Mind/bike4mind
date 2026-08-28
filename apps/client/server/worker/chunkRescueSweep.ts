@@ -68,7 +68,7 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
   let failed = 0;
   const enqueueOne = async (id: string) => {
     try {
-      await sendToQueue(queueUrl, buildChunkScanQueuePayload(id, userById.get(id)!));
+      await sendToQueue(queueUrl, buildChunkScanQueuePayload({ fabFileId: id, userId: userById.get(id)! }));
       enqueued++;
     } catch (e) {
       failed++;

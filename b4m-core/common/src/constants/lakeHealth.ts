@@ -18,7 +18,7 @@
  */
 import {
   CHARS_PER_TOKEN_SERVE_BOUND,
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  isConvergenceChunkPausedNote,
   deriveServeCharBudget,
   isChunkRebuildPending,
   isConvergencePausedNote,
@@ -203,7 +203,11 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset, and nothing on
   // the success path clears `notes`), so keying on the note alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
-  const passagesRemoved = member.chunkCount === 0 && member.notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
+  //
+  // Both chunk-arm markers, not just the reset one: a sweep-originated halt parks a file that never
+  // had passages, which grades the same (no passages is no passages) and differs only in wording.
+  // The local name is the common case, not the whole set.
+  const passagesRemoved = member.chunkCount === 0 && isConvergenceChunkPausedNote(member.notes);
   // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
   // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
   // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
@@ -340,8 +344,7 @@ export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: La
   // report while a rebuild is running - and it is also what keeps a rebuild that was never enqueued
   // visible instead of silently reducing the lake to the members it still has.
   const withChunks = members.filter(
-    m =>
-      m.chunkCount > 0 || m.notes === CONVERGENCE_PAUSED_CHUNK_NOTE || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+    m => m.chunkCount > 0 || isConvergenceChunkPausedNote(m.notes) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
   const results = withChunks.map(m => evaluateMemberHealth(m, policy));
 

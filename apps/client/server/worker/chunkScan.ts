@@ -8,7 +8,7 @@
  * drivers share one producer, and so both are unit-testable without importing either boot graph.
  */
 
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -88,6 +88,14 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
+/**
+ * ORDERING WARNING for anyone adding a `notes` exclusion here: a file the convergence kill switch
+ * parked stays selectable by this filter ON PURPOSE, and that re-selection is the only thing that
+ * ever rebuilds it - nothing else re-drives a paused file once the switch clears. Excluding the
+ * paused markers (tempting, since a paused file is re-swept every pass while the switch is on)
+ * strands every one of them permanently unless a resume path lands in the same change.
+ * `chunkScan.test.ts` pins this; see buildChunkScanQueuePayload below for the other half.
+ */
 export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
   status: 'complete' as const,
   chunkCount: 0,
@@ -142,16 +150,20 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
  * including a genuinely stranded non-lake file. What brings such a file back is RE-SELECTION, not a
  * resume path: the paused note is not excluded by the filter above, so the first sweep after the
  * switch clears rebuilds it (pinned in chunkScan.test.ts, because it is the only thing making this
- * tradeoff acceptable). Two limits on that, both pre-existing and neither owned here: the halt write
- * nulls `chunkRebuildRequestedAt`, so a MEDIA file admitted only through the rebuild-marker arm
- * above drops out of this filter permanently and needs a manual reprocess; and a future change that
- * excludes paused files from selection would end the re-selection this relies on, so the two have to
- * land together.
+ * tradeoff acceptable).
+ *
+ * One shape does NOT come back, and stamping unconditionally is what routes it there: a MEDIA file
+ * is admitted by the filter above only through `chunkRebuildRequestedAt`, and the halt write nulls
+ * that field, so once halted it leaves this filter for good and needs a manual reprocess. The
+ * mechanism predates this stamp, but a `batchId`-less media file never reached the halt branch
+ * before it did - so the one-way door is reachable here because of this function, and calling it
+ * pre-existing would be wrong. Closing it means readmitting a paused media file to the filter,
+ * which has to be reconciled with any change that excludes paused files from selection.
  *
  * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
  * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).
  */
-export const buildChunkScanQueuePayload = (fabFileId: string, userId: string) => ({
+export const buildChunkScanQueuePayload = ({ fabFileId, userId }: { fabFileId: string; userId: string }) => ({
   fabFileId,
   userId,
   origin: CONVERGENCE_ORIGIN,

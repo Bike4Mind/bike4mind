@@ -62,6 +62,7 @@ const h = vi.hoisted(() => {
     resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
     sendToQueue: vi.fn(),
     fabFileUpdate: vi.fn(async () => null),
+    markConvergencePaused: vi.fn(async () => undefined),
   };
 });
 
@@ -78,6 +79,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
+    markConvergencePaused: h.markConvergencePaused,
   },
   // Deps for the convergence kill switch (#1676), built eagerly on every message. Never exercised
   // by these user-origin payloads (origin absent -> user work short-circuits before any read), but
@@ -139,11 +141,6 @@ vi.mock('@bike4mind/common', async () => {
   return {
     isSupportedEmbeddingModel: vi.fn(() => true),
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
-    // Real value, not a placeholder: the halt path writes it and the assertion below is what keeps
-    // the handler's marker and the evaluators' predicate reading the same string.
-    CONVERGENCE_PAUSED_CHUNK_NOTE:
-      'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
-      'rebuilt when convergence resumes.',
     ChunkClaimLostError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
     // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
@@ -758,9 +755,6 @@ describe('fabFileChunk handler - chunk computation runs outside the transaction 
 // the case that reaches here: the switch was flipped WHILE a wave was in flight, which is the
 // switch's whole purpose. By now the producer has already deleted these files' passages.
 describe('fabFileChunk handler - convergence kill switch', () => {
-  const PAUSED_CHUNK_NOTE =
-    'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
-    'rebuilt when convergence resumes.';
   const convergencePayload = { fabFileId: 'ff1', userId: 'u1', origin: 'convergence', lakeId: undefined };
 
   beforeEach(() => {
@@ -788,20 +782,20 @@ describe('fabFileChunk handler - convergence kill switch', () => {
   it('upgrades the pending-rebuild stamp to the paused marker in a single write', async () => {
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).toHaveBeenCalledWith({
-      id: 'ff1',
-      notes: PAUSED_CHUNK_NOTE,
-      chunkRebuildRequestedAt: null,
-    });
+    // One repository call, not a read plus a write: WHICH marker is written turns on the stamp the
+    // same statement clears, so the choice cannot be made out here without a race. The choice itself
+    // is covered against a real server in FabFileModel.markConvergencePaused.test.ts.
+    expect(h.markConvergencePaused).toHaveBeenCalledWith('ff1');
+    expect(h.fabFileUpdate).not.toHaveBeenCalled();
   });
 
   // A transient failure must not cost the marker, so the write is retried in-process before the
   // delivery is failed. This pins that the retry is what handles the realistic case.
   it('retries the marker write and acks once it succeeds', async () => {
-    h.fabFileUpdate.mockRejectedValueOnce(new Error('pool timeout')).mockResolvedValueOnce(undefined);
+    h.markConvergencePaused.mockRejectedValueOnce(new Error('pool timeout')).mockResolvedValueOnce(undefined);
 
     await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).resolves.toBeUndefined();
-    expect(h.fabFileUpdate).toHaveBeenCalledTimes(2);
+    expect(h.markConvergencePaused).toHaveBeenCalledTimes(2);
     expect(mockLogger.error).not.toHaveBeenCalled();
   });
 
@@ -813,7 +807,7 @@ describe('fabFileChunk handler - convergence kill switch', () => {
   // worse. A redelivery is also idempotent here: this branch has done nothing destructive, and if the
   // switch has since gone off the redelivery rebuilds the file for real.
   it('fails the delivery when the marker write keeps failing, so SQS retries instead of stranding it', async () => {
-    h.fabFileUpdate.mockRejectedValue(new Error('mongo down'));
+    h.markConvergencePaused.mockRejectedValue(new Error('mongo down'));
 
     await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).rejects.toThrow('mongo down');
     expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('could not mark ff1'));
@@ -828,7 +822,7 @@ describe('fabFileChunk handler - convergence kill switch', () => {
 
     await dispatch(makeEvent({ fabFileId: 'ff1', userId: 'u1' }), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: PAUSED_CHUNK_NOTE }));
+    expect(h.markConvergencePaused).not.toHaveBeenCalled();
   });
 });
 

@@ -154,6 +154,25 @@ export const CONVERGENCE_PAUSED_CHUNK_NOTE =
   'rebuilt when convergence resumes.';
 
 /**
+ * Same halt, but for a file that had NO passages to lose: the rescue sweep selects on
+ * `chunkCount: 0` and never resets, so nothing was removed and the note above would state a
+ * destruction that did not happen. The distinction is user-visible, not pedantry - `notes` is
+ * surfaced to the file's owner, and the marker also drives the retrieval withhold's "partial
+ * results" banner, which would otherwise name a file whose passages were never there.
+ *
+ * Discriminated by `chunkRebuildRequestedAt`, which `resetChunkStateByIds` stamps in the same write
+ * that clears the rollups: non-null means a producer really did remove the passages, null means the
+ * file arrived here already empty. `markConvergencePaused` (FabFileModel) picks between the two.
+ *
+ * In CONVERGENCE_PAUSED_NOTES with its sibling, so health, convergence and retrieval grade the two
+ * identically - only the wording differs. That is the whole point of routing every reader through
+ * `isConvergencePausedNote`.
+ */
+export const CONVERGENCE_PAUSED_UNCHUNKED_NOTE =
+  'Chunking paused by the data-lake convergence kill switch - this file has no passages yet; they ' +
+  'are built when convergence resumes.';
+
+/**
  * `FabFile.chunkRebuildRequestedAt`: stamped by `resetChunkStateByIds` in the SAME write that
  * clears a file's chunk rollups, so "this file's passages are being rebuilt" can never be lost the
  * way the pair of steps that creates the state can be. The reset and the queue send are two
@@ -213,4 +232,26 @@ export function isConvergencePausedNote(notes?: string | null): boolean {
  * query and the in-memory predicate cannot drift: adding a third stall marker to this array reaches
  * both. Declared after the two constants it names so the function above can close over it.
  */
-export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;
+/**
+ * The CHUNK arm's markers, as distinct from the vectorize arm's. A reader that means "this file has
+ * no passages because the kill switch stopped the work that would have built them" keys on THIS,
+ * not on CONVERGENCE_PAUSED_NOTES: a vectorize-paused file still has its passages, so folding the
+ * two together would grade it as chunkless. That distinction is why the sites below were written
+ * against the bare `CONVERGENCE_PAUSED_CHUNK_NOTE` in the first place; this is the same predicate
+ * widened to the second chunk-arm marker rather than a new one.
+ */
+export const CONVERGENCE_PAUSED_CHUNK_NOTES = [
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  CONVERGENCE_PAUSED_UNCHUNKED_NOTE,
+] as const;
+
+/** Whether a file's `notes` marks it as chunkless by either arm of the CHUNK half of the switch. */
+export function isConvergenceChunkPausedNote(notes?: string | null): boolean {
+  return CONVERGENCE_PAUSED_CHUNK_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_CHUNK_NOTES)[number]);
+}
+
+export const CONVERGENCE_PAUSED_NOTES = [
+  CONVERGENCE_PAUSED_NOTE,
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  CONVERGENCE_PAUSED_UNCHUNKED_NOTE,
+] as const;
