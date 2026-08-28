@@ -73,18 +73,21 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
 
     expect(scopes()).toEqual([
-      { datalakeTag: 'datalake:lake-0', fileTagPrefix: 'stored0:', creatorUserId: 'creator-0' },
-      { datalakeTag: 'datalake:lake-1', fileTagPrefix: 'stored1:', creatorUserId: 'creator-1' },
+      { kind: 'owned', datalakeTag: 'datalake:lake-0', fileTagPrefix: 'stored0:', creatorUserId: 'creator-0' },
+      { kind: 'owned', datalakeTag: 'datalake:lake-1', fileTagPrefix: 'stored1:', creatorUserId: 'creator-1' },
     ]);
   });
 
-  it('falls back to the config prefix and no creator for a lake with no document', async () => {
-    // A static-registry lake never has one; meta-tag-only matching is the safe direction.
+  it('scopes a lake with no document as a REGISTRY lake, keeping its open prefix arm', async () => {
+    // No document means a hardcoded registry lake. It used to fall through as an owned scope with
+    // no creator, which drops the prefix arm - so its count was meta-tag-only while its own browse
+    // matched the open prefix arm too, and the two disagreed. The registry scope is what keeps
+    // this count and GET /api/data-lakes/:id/articles resolving the same membership.
     h.findByDatalakeTags.mockResolvedValue([]);
 
     await queryDataLakeTagCounts(req, [lake(0)]);
 
-    expect(scopes()).toEqual([{ datalakeTag: 'datalake:lake-0', fileTagPrefix: 'lake0:', creatorUserId: undefined }]);
+    expect(scopes()).toEqual([{ kind: 'registry', datalakeTag: 'datalake:lake-0', fileTagPrefix: 'lake0:' }]);
   });
 
   it('skips the lookup entirely when the caller can reach no lakes', async () => {

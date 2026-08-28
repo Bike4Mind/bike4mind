@@ -45,7 +45,25 @@ const handler = baseApi()
     const grants = await dataLakeService.loadActiveLakeGrants(dataLake, {
       db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
-    return res.json(dataLakeService.redactLakeForActor(dataLake, ctx, grants));
+    const redacted = dataLakeService.redactLakeForActor(dataLake, ctx, grants);
+
+    // A registry lake has no document, so it has no persisted `fileCount`/`totalSizeBytes` to
+    // serialize - the fields were simply absent, while this same lake's /articles reported a real
+    // total. Compute them live off the SAME membership scope /articles resolves, so the two agree.
+    // Only the registry arm needs this: a DB lake carries stats maintained by recomputeLakeStats.
+    //
+    // Degrades to the un-augmented lake rather than failing the read: a stats aggregate is
+    // supporting detail on this endpoint, and a lake that cannot be opened at all is much worse
+    // than one whose counts are briefly missing. Logged so it is not silent.
+    if (dataLakeService.isFallbackLake(dataLake)) {
+      try {
+        const stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
+        return res.json({ ...redacted, fileCount: stats.fileCount, totalSizeBytes: stats.totalSizeBytes });
+      } catch (error) {
+        req.logger?.warn('[dataLakes] registry lake stats unavailable; returning lake without counts', error);
+      }
+    }
+    return res.json(redacted);
   })
   // PUT /api/data-lakes/:id - update a data lake (metadata only; not lifecycle)
   .put(async (req: Request, res) => {

@@ -117,17 +117,30 @@ async function collectFiles(dir: string): Promise<CandidateFile[]> {
 }
 
 /**
- * Every lake-file query here runs on the shared membership predicate (meta-tag OR a
- * fileTagPrefix match on a file the creator owns), so this script agrees with what
- * computeDataLakeStats counts. A static lake carries no creator, so it fails closed
- * to the meta-tag arm - see buildDataLakeMembershipFilter.
+ * Every lake-file query here runs on the shared membership predicate. For a DB lake that is
+ * meta-tag OR a fileTagPrefix match on a file the creator owns, matching computeDataLakeStats
+ * exactly.
+ *
+ * For a STATIC lake this deliberately stays meta-tag-only and so is NARROWER than
+ * computeDataLakeStats, which matches a registry lake's open prefix arm too. The divergence is
+ * intentional: the filters below drive a soft-delete of stale-pending twins, and a registry
+ * prefix arm carries no ownership conjunct - widening here would let this script soft-delete a
+ * pending file another user happened to tag with the lake's prefix. Planning and reconciliation may
+ * therefore under-count a registry lake's prefix-only members; that is the safe direction for a
+ * script that deletes. See buildDataLakeMembershipFilter.
  */
 const membership = (lake: LakeTarget) =>
-  buildDataLakeMembershipFilter({
-    datalakeTag: lake.datalakeTag,
-    fileTagPrefix: lake.fileTagPrefix,
-    creatorUserId: lake.createdByUserId,
-  });
+  buildDataLakeMembershipFilter(
+    lake.createdByUserId
+      ? {
+          kind: 'owned',
+          datalakeTag: lake.datalakeTag,
+          fileTagPrefix: lake.fileTagPrefix,
+          creatorUserId: lake.createdByUserId,
+        }
+      : // No fileTagPrefix on purpose - see the divergence note above.
+        { kind: 'registry', datalakeTag: lake.datalakeTag }
+  );
 
 /** Live lake files: members, not soft-deleted, not archived (parity with computeDataLakeStats). */
 const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null, archivedAt: null });
