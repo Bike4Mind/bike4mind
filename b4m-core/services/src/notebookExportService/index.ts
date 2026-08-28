@@ -22,6 +22,8 @@ import type {
   IToolDocument,
 } from '@bike4mind/common';
 
+import { usableObjectIds } from '../utils/objectIds';
+
 /** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
 type ExportQuery = Record<string, unknown>;
 
@@ -326,10 +328,11 @@ export class NotebookExportService {
     knowledgeIds: string[],
     options: NotebookExportOptions
   ): Promise<ExportedKnowledgeFile[]> {
-    if (knowledgeIds.length === 0) return [];
+    const usableIds = usableObjectIds(knowledgeIds, 'knowledge', this.adapters.logger);
+    if (usableIds.length === 0) return [];
 
     const knowledgeFiles = await this.adapters.knowledgeRepository.find({
-      _id: { $in: knowledgeIds },
+      _id: { $in: usableIds },
     });
 
     return Promise.all(
@@ -430,13 +433,14 @@ export class NotebookExportService {
   }
 
   private async exportTools(toolIds: string[], options: NotebookExportOptions): Promise<ExportedTool[]> {
-    if (toolIds.length === 0) return [];
-
     // `_id` is correct here, unlike artifacts: tools and agents are ObjectId-keyed. Sessions
-    // imported before the id fix can still hold uuids that cast-throw - resilience tracked
-    // separately, not a reason to change the key.
+    // imported before the id fix can still hold uuids, which usableObjectIds drops rather than
+    // letting them cast-throw.
+    const usableIds = usableObjectIds(toolIds, 'tool', this.adapters.logger);
+    if (usableIds.length === 0) return [];
+
     const tools = await this.adapters.toolRepository.find({
-      _id: { $in: toolIds },
+      _id: { $in: usableIds },
     });
 
     return tools.map((tool: ToolRow) => ({
@@ -447,10 +451,11 @@ export class NotebookExportService {
   }
 
   private async exportAgents(agentIds: string[], options: NotebookExportOptions): Promise<ExportedAgent[]> {
-    if (agentIds.length === 0) return [];
+    const usableIds = usableObjectIds(agentIds, 'agent', this.adapters.logger);
+    if (usableIds.length === 0) return [];
 
     const agents = await this.adapters.agentRepository.find({
-      _id: { $in: agentIds },
+      _id: { $in: usableIds },
     });
 
     return agents.map((agent: AgentRow) => ({

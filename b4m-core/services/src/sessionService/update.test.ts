@@ -19,6 +19,26 @@ import { getCachedSignedUrl } from '@bike4mind/utils';
 import { updateShareableFiles } from '../projectService';
 import { IUserDocument } from '@bike4mind/common';
 
+// ObjectId-shaped: updateSession drops knowledgeIds that cannot address a row, and the lake
+// derivation reads them through `_id: { $in: ... }`.
+const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
+const PERSONAL_FILE_ID = '507f1f77bcf86cd799439002';
+
+// knowledgeIds address the ObjectId-keyed FabFile._id, and updateSession now drops anything that
+// is not 24-hex, so these fixtures carry real ObjectId-shaped ids. The names are what the
+// assertions read; the digits themselves are arbitrary.
+const F_CLEAN = '000000000000000000000001';
+const F_PENDING = '000000000000000000000002';
+const F_BLOCKED = '000000000000000000000003';
+const F_UNDEFINED_STATUS = '000000000000000000000004';
+const F_DOC = '000000000000000000000005';
+const F_DOC_UNSET_STATUS = '000000000000000000000006';
+const NEW_FILE = '000000000000000000000007';
+const KEPT_PRIVATE = '000000000000000000000008';
+const FILE_A = '000000000000000000000009';
+const FILE_B = '00000000000000000000000a';
+const OTHERS_FILE = '00000000000000000000000b';
+
 describe('updateSession — signed-URL cache pre-warm gate', () => {
   const user = { id: 'user-1' } as IUserDocument;
 
@@ -58,16 +78,16 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
 
   it('skips pre-warming the cache for pending/blocked/not-yet-cleared files but warms clean images and clean non-images', async () => {
     const files = [
-      { id: 'f-clean', filePath: 'path/clean.png', mimeType: 'image/png', moderationStatus: 'clean' },
-      { id: 'f-pending', filePath: 'path/pending.png', mimeType: 'image/png', moderationStatus: 'pending' },
-      { id: 'f-blocked', filePath: 'path/blocked.png', mimeType: 'image/png', moderationStatus: 'blocked' },
-      { id: 'f-undefined-status', filePath: 'path/mid-scan.png', mimeType: 'image/png' },
-      { id: 'f-doc', filePath: 'path/doc.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
+      { id: F_CLEAN, filePath: 'path/clean.png', mimeType: 'image/png', moderationStatus: 'clean' },
+      { id: F_PENDING, filePath: 'path/pending.png', mimeType: 'image/png', moderationStatus: 'pending' },
+      { id: F_BLOCKED, filePath: 'path/blocked.png', mimeType: 'image/png', moderationStatus: 'blocked' },
+      { id: F_UNDEFINED_STATUS, filePath: 'path/mid-scan.png', mimeType: 'image/png' },
+      { id: F_DOC, filePath: 'path/doc.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
       // isImageServeable gates on moderationStatus alone (no mimeType special-case):
       // a non-image with an unset moderationStatus is held exactly like an image, since
       // the declared mimeType is client-controlled and only corrected by the async
       // S3-event scan.
-      { id: 'f-doc-unset-status', filePath: 'path/mid-scan.pdf', mimeType: 'application/pdf' },
+      { id: F_DOC_UNSET_STATUS, filePath: 'path/mid-scan.pdf', mimeType: 'application/pdf' },
     ];
     const adapters = makeAdapters(files);
 
@@ -75,7 +95,7 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
       user,
       {
         id: 'session-1',
-        knowledgeIds: ['f-clean', 'f-pending', 'f-blocked', 'f-undefined-status', 'f-doc', 'f-doc-unset-status'],
+        knowledgeIds: [F_CLEAN, F_PENDING, F_BLOCKED, F_UNDEFINED_STATUS, F_DOC, F_DOC_UNSET_STATUS],
       },
       adapters
     );
@@ -159,7 +179,7 @@ describe('updateSession - project propagation opt-out', () => {
   const user = { id: 'user-1' } as IUserDocument;
 
   const DEFAULT_FILE = {
-    id: 'new-file',
+    id: NEW_FILE,
     filePath: 'p/new.pdf',
     mimeType: 'application/pdf',
     moderationStatus: 'clean',
@@ -213,9 +233,9 @@ describe('updateSession - project propagation opt-out', () => {
   it('appends the file to containing projects by default, preserving the pre-flag behaviour', async () => {
     const { project, adapters } = makeAdapters();
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['new-file'] }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE] }, adapters);
 
-    expect(project.fileIds).toEqual(['already-there', 'new-file']);
+    expect(project.fileIds).toEqual(['already-there', NEW_FILE]);
     expect(adapters.db.projects.update).toHaveBeenCalledOnce();
     expect(updateShareableFiles).toHaveBeenCalledOnce();
   });
@@ -227,14 +247,14 @@ describe('updateSession - project propagation opt-out', () => {
     // Deleting the `propagateToProjects !== false` check makes this test fail.
     const { project, adapters } = makeAdapters();
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['new-file'], propagateToProjects: false }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE], propagateToProjects: false }, adapters);
 
     expect(project.fileIds).toEqual(['already-there']);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
     expect(updateShareableFiles).not.toHaveBeenCalled();
     // The session itself still records the file - only the project fan-out is skipped.
     expect(adapters.db.sessions.update).toHaveBeenCalledOnce();
-    expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual(['new-file']);
+    expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual([NEW_FILE]);
   });
 
   it('propagates only the newly added file, not the whole list', async () => {
@@ -244,29 +264,29 @@ describe('updateSession - project propagation opt-out', () => {
     const { project, adapters } = makeAdapters();
     adapters.db.sessions.shareable.findUpdateAccessById.mockResolvedValue({
       id: 'session-1',
-      knowledgeIds: ['kept-private'],
+      knowledgeIds: [KEPT_PRIVATE],
       artifactIds: [],
       tags: [],
       name: 'Session',
     });
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['kept-private', 'new-file'] }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [KEPT_PRIVATE, NEW_FILE] }, adapters);
 
-    expect(project.fileIds).toEqual(['already-there', 'new-file']);
-    expect(project.fileIds).not.toContain('kept-private');
+    expect(project.fileIds).toEqual(['already-there', NEW_FILE]);
+    expect(project.fileIds).not.toContain(KEPT_PRIVATE);
   });
 
   it('does not touch projects when a write only REMOVES files', async () => {
     const { project, adapters } = makeAdapters();
     adapters.db.sessions.shareable.findUpdateAccessById.mockResolvedValue({
       id: 'session-1',
-      knowledgeIds: ['a', 'b'],
+      knowledgeIds: [FILE_A, FILE_B],
       artifactIds: [],
       tags: [],
       name: 'Session',
     });
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['a'] }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [FILE_A] }, adapters);
 
     expect(project.fileIds).toEqual(['already-there']);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
@@ -277,7 +297,7 @@ describe('updateSession - project propagation opt-out', () => {
     // handed. Resolving ids without an ACL let a caller PUT someone else's fileId into
     // their own session and hand it to their project. Inaccessible ids are dropped.
     const victimFile = {
-      id: 'someone-elses-file',
+      id: OTHERS_FILE,
       filePath: 'p/victim.pdf',
       mimeType: 'application/pdf',
       moderationStatus: 'clean',
@@ -286,7 +306,7 @@ describe('updateSession - project propagation opt-out', () => {
     // makes the service see the victim file and share it - which is the failure.
     const { project, adapters } = makeAdapters([], [victimFile]);
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['someone-elses-file'] }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [OTHERS_FILE] }, adapters);
 
     expect(project.fileIds).toEqual(['already-there']);
     expect(updateShareableFiles).not.toHaveBeenCalled();
@@ -297,9 +317,9 @@ describe('updateSession - project propagation opt-out', () => {
   it('propagates when propagateToProjects is explicitly true', async () => {
     const { project, adapters } = makeAdapters();
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['new-file'], propagateToProjects: true }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE], propagateToProjects: true }, adapters);
 
-    expect(project.fileIds).toEqual(['already-there', 'new-file']);
+    expect(project.fileIds).toEqual(['already-there', NEW_FILE]);
     expect(adapters.db.projects.update).toHaveBeenCalledOnce();
   });
 
@@ -307,16 +327,44 @@ describe('updateSession - project propagation opt-out', () => {
     const { project, adapters } = makeAdapters();
     adapters.db.sessions.shareable.findUpdateAccessById.mockResolvedValue({
       id: 'session-1',
-      knowledgeIds: ['new-file'],
+      knowledgeIds: [NEW_FILE],
       artifactIds: [],
       tags: [],
       name: 'Session',
     });
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['new-file'] }, adapters);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE] }, adapters);
 
     expect(project.fileIds).toEqual(['already-there']);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
+  });
+
+  describe('unusable knowledge ids', () => {
+    /**
+     * The rename and tag paths PUT the whole session (`{ ...session, name }`), so a legacy entry
+     * rides along on a write that has nothing to do with knowledge. Rejecting it would make such a
+     * notebook impossible to rename; dropping it heals the row instead.
+     */
+    it('drops an unusable knowledgeId and still performs the write', async () => {
+      const { adapters } = makeAdapters();
+      await updateSession(
+        user,
+        { id: 'session-1', name: 'renamed', knowledgeIds: ['legacy-uuid', NEW_FILE] },
+        adapters
+      );
+
+      const written = adapters.db.sessions.update.mock.calls[0][0];
+      expect(written.knowledgeIds).toEqual([NEW_FILE]);
+      expect(written.name).toBe('renamed');
+    });
+
+    it('preserves the stored list when the field is absent, rather than filtering it to empty', async () => {
+      const { adapters } = makeAdapters();
+      await updateSession(user, { id: 'session-1', name: 'renamed' }, adapters);
+
+      // The fixture session carries [], so this pins "unchanged", not "cleared".
+      expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual([]);
+    });
   });
 });
 
@@ -364,27 +412,62 @@ describe('updateSession - lake-scope derivation on attach', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('derives the lake tag when a lake file is attached to an open session', async () => {
-    const { update, adapters } = makeAdapters({}, [{ id: 'f1', tags: [{ name: 'datalake:acme' }] }]);
+    const { update, adapters } = makeAdapters({}, [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['f1'] } as never, adapters as never);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
 
     expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
   });
 
   it('derives nothing from a personal file, leaving the notebook unscoped', async () => {
-    const { update, adapters } = makeAdapters({}, [{ id: 'f2', tags: [{ name: 'notes' }] }]);
+    const { update, adapters } = makeAdapters({}, [{ id: PERSONAL_FILE_ID, tags: [{ name: 'notes' }] }]);
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['f2'] } as never, adapters as never);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [PERSONAL_FILE_ID] } as never, adapters as never);
 
     expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
   });
 
-  it('never overwrites a scope the session already has', async () => {
-    const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:chosen'] }, [
-      { id: 'f1', tags: [{ name: 'datalake:acme' }] },
+  /**
+   * A rename PUTs the whole stored session back (RenameInput sends `{ ...session, name }`), and the
+   * stored list can hold a legacy id that updateSession drops. The incoming list therefore differs
+   * from the stored one on every such write, so a changed-list guard would derive a scope here and
+   * narrow the notebook's retrieval as a side effect of a rename. Keyed on additions instead.
+   */
+  it('derives nothing when a write only resubmits the stored list minus an unusable id', async () => {
+    const { update, adapters } = makeAdapters({ knowledgeIds: ['legacy-uuid-not-an-objectid', LAKE_FILE_ID] }, [
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
     ]);
 
-    await updateSession(user, { id: 'session-1', knowledgeIds: ['f1'] } as never, adapters as never);
+    await updateSession(
+      user,
+      { id: 'session-1', name: 'Renamed', knowledgeIds: ['legacy-uuid-not-an-objectid', LAKE_FILE_ID] } as never,
+      adapters as never
+    );
+
+    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+    expect(update.mock.calls[0][0].knowledgeIds).toEqual([LAKE_FILE_ID]);
+  });
+
+  it('still derives when a lake file is attached beside an unusable id', async () => {
+    const { update, adapters } = makeAdapters({ knowledgeIds: ['legacy-uuid-not-an-objectid'] }, [
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+
+    await updateSession(
+      user,
+      { id: 'session-1', knowledgeIds: ['legacy-uuid-not-an-objectid', LAKE_FILE_ID] } as never,
+      adapters as never
+    );
+
+    expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
+  });
+
+  it('never overwrites a scope the session already has', async () => {
+    const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:chosen'] }, [
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
 
     expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:chosen'] });
   });

@@ -63,10 +63,16 @@ function makeAdapters(over: AdapterOverrides = {}) {
   return { adapters, uploaded };
 }
 
+const GOOD = '507f1f77bcf86cd799439011';
+const UPPER = '507F1F77BCF86CD799439011';
+
 const OPTIONS = {
   format: 'json',
   includeMetadata: true,
   includeArtifacts: true,
+  includeKnowledge: true,
+  includeTools: true,
+  includeAgents: true,
   maxFileSize: 1_000_000,
 } as unknown as Parameters<NotebookExportService['exportNotebooks']>[1];
 
@@ -217,6 +223,74 @@ describe('notebook export', () => {
         ],
       })
     );
+  });
+
+  it('exports the resolvable knowledge files even when a session holds a non-ObjectId knowledgeId', async () => {
+    // FabFile is ObjectId-keyed, but session.knowledgeIds is a plain string array, so a junk
+    // entry makes the real collection throw and (before this) killed the whole export.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      const ids = query._id?.$in ?? [];
+      const bad = ids.find(id => !/^[0-9a-fA-F]{24}$/.test(id));
+      if (bad) {
+        throw new Error(`CastError: Cast to ObjectId failed for value "${bad}" at path "_id"`);
+      }
+      return ids.map(id => ({ id, fileName: 'notes.txt', mimeType: 'text/plain', fileSize: 10 }));
+    });
+
+    // UPPER is here rather than in its own test: uppercase hex is a valid ObjectId rendering,
+    // and the stub's regex is case-insensitive, so one fixture covers both.
+    const payload = await exportOnce({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: ['not-an-objectid', GOOD, UPPER] }]),
+      },
+      knowledgeRepository: { find, findOne: vi.fn().mockResolvedValue(null) },
+    });
+
+    expect(payload.notebooks[0].knowledge.map((k: { id: string }) => k.id)).toEqual([GOOD, UPPER]);
+  });
+
+  it('warns by name about a knowledgeId it had to skip, so the gap is not silent', async () => {
+    const { adapters, uploaded } = makeAdapters({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, knowledgeIds: ['not-an-objectid'] }]) },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(uploaded).toHaveLength(1);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('knowledge ids'), {
+      skipped: ['not-an-objectid'],
+    });
+  });
+
+  it.each(['tool', 'agent'])('drops a non-ObjectId %s id instead of failing the export', async kind => {
+    // Same `_id` hazard as knowledge; these two are reachable via notebooks imported before the
+    // id fix, which recorded uuids.
+    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
+      const ids = query._id?.$in ?? [];
+      if (ids.some(id => !/^[0-9a-fA-F]{24}$/.test(id))) {
+        throw new Error('CastError: Cast to ObjectId failed');
+      }
+      return ids.map(id => ({ id, name: `a ${kind} row` }));
+    });
+
+    const payload = await exportOnce({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, [`${kind}Ids`]: ['not-an-objectid', GOOD] }]),
+      },
+      [`${kind}Repository`]: { find },
+    });
+
+    expect(payload.notebooks[0][`${kind}s`].map((x: { id: string }) => x.id)).toEqual([GOOD]);
+  });
+
+  it('does not warn about a notebook that simply has no attachments', async () => {
+    const { adapters } = makeAdapters({
+      sessionRepository: {
+        find: vi.fn().mockResolvedValue([{ ...SESSION, artifactIds: [], knowledgeIds: [], toolIds: [], agentIds: [] }]),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
+
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
   });
 
   it('names an artifact from its title, which is the field the entity actually has', async () => {
