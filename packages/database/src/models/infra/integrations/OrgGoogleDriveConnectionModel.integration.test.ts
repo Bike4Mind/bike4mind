@@ -342,6 +342,45 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('syncing');
   });
 
+  it('hands the claim from one ingest slice to the next without passing through connected', async () => {
+    // The chain invariant for a folder too large for one run: the connection must stay 'syncing' the
+    // whole way, or the re-sync poll slips in between slices and starts a competing walk.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1')).toBe(true);
+    const held = await OrgGoogleDriveConnection.findById(created.id);
+    expect(held?.status).toBe('syncing');
+    expect(held?.activeIngestBatchId).toBe('batch-1');
+
+    // Only the chain's own next slice - the one presenting the recorded batch - may take it over.
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'other-batch')).toBe(false);
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1')).toBe(true);
+    // A plain claim still loses to the live chain, exactly as it does to any other in-flight run.
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+  });
+
+  it('drops the chain token whenever the claim is taken or released', async () => {
+    // Otherwise a continuation message left over from a dead chain could adopt a claim nobody holds.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.activeIngestBatchId).toBeUndefined();
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1')).toBe(false);
+
+    await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-2'); // no-op: not syncing
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.activeIngestBatchId).toBeUndefined();
+  });
+
+  it('adoptSyncClaim refuses a connection that is not syncing at all', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1')).toBe(false);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('connected');
+  });
+
   it('does not claim OVER an error state (credential_error / needs_reconnect)', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.updateHealth(created.id, { status: 'credential_error' });

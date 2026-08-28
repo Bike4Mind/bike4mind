@@ -141,3 +141,32 @@ describe('findByDriveConnectionIdInDataLake', () => {
     expect(result).toHaveLength(0);
   });
 });
+
+// The resume key for a Drive ingest that spans several runs. Unlike every other accessor above it
+// must NOT filter `pending`: the rows a continuation slice has to recognise as already-done are
+// precisely the ones its earlier slices uploaded and the pipeline has not vectorized yet.
+describe('findDriveFileIdsByBatchId', () => {
+  const batchId = 'batch-resume';
+
+  const makeFile = (over: Record<string, unknown>) => ({
+    userId: 'u-resume',
+    fileName: 'f.txt',
+    mimeType: 'text/plain',
+    type: KnowledgeType.FILE,
+    filePath: 'f.txt',
+    status: 'complete',
+    batchId,
+    sourceType: FabFileSourceType.GOOGLE_DRIVE,
+    ...over,
+  });
+
+  it('includes the still-pending rows an earlier slice uploaded, and ignores other batches', async () => {
+    await FabFile.create(makeFile({ driveFileId: 'd1', status: 'pending' }));
+    await FabFile.create(makeFile({ driveFileId: 'd2' }));
+    await FabFile.create(makeFile({ driveFileId: 'd-other', batchId: 'batch-elsewhere' }));
+    await FabFile.create(makeFile({}));
+
+    const result = await fabFileRepository.findDriveFileIdsByBatchId(batchId);
+    expect(result.sort()).toEqual(['d1', 'd2']);
+  });
+});

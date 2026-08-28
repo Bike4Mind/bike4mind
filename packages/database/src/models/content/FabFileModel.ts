@@ -1242,6 +1242,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d.toJSON());
   }
 
+  async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
+    // No status filter on purpose - the rows a resumed slice must recognise are the `pending` ones
+    // its own earlier slices uploaded (see the interface docs). `distinct` keeps this a projection
+    // over the { batchId: 1 } index rather than loading a whole slice's documents.
+    const ids = await this.fabFileModel.distinct('driveFileId', { batchId, driveFileId: { $ne: null } });
+    return ids.filter((id): id is string => typeof id === 'string');
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.

@@ -672,6 +672,14 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Re-plan a still-active batch's expected file count, guarded like the transitions above. The
+   * multi-run Drive folder ingest is the caller: its batch spans several queue-Lambda invocations, so
+   * the expected total is only known progressively - it is raised whenever a later slice re-walks a
+   * folder that grew, and set exactly when the chain ends, which is what lets the finalize gate
+   * (`vectorized + failed + skipped === totalFiles`) still be reached exactly.
+   */
+  setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null>;
+  /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
    * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which

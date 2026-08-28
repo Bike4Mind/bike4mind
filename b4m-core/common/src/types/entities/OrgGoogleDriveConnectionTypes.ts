@@ -86,6 +86,15 @@ export interface IOrgGoogleDriveConnection {
    */
   syncClaimedAt?: Date;
 
+  /**
+   * The data-lake batch a multi-run ingest chain is currently filling. A folder too large to ingest
+   * inside one queue-Lambda invocation yields mid-loop and re-enqueues itself; this is the token that
+   * lets ONLY that continuation take over the live 'syncing' claim (adoptSyncClaim), so the chain
+   * keeps the connection to itself and no poll starts a competing walk that would duplicate the tail.
+   * Cleared whenever a claim is taken or released. Only meaningful while status === 'syncing'.
+   */
+  activeIngestBatchId?: string;
+
   // === Incremental sync ===
 
   /**
@@ -226,6 +235,22 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * would erase). Returns whether THIS caller won the claim; exactly one concurrent run proceeds.
    */
   claimForSync(id: string): Promise<boolean>;
+
+  /**
+   * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
+   * for THIS `activeIngestBatchId`. A sliced ingest hands the claim from one run to the next without
+   * ever passing through 'connected', so a scheduled poll cannot slip in between slices and start a
+   * competing walk (which would re-create the un-uploaded tail as duplicates, the whole failure this
+   * chain exists to avoid). Returns whether the take-over succeeded.
+   */
+  adoptSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean>;
+
+  /**
+   * Hold the claim across a slice boundary: re-stamps `syncClaimedAt` (so the stale-claim window never
+   * elapses mid-chain) and records the batch the next slice must present to adopt it. Guarded on
+   * 'syncing', so it no-ops rather than resurrecting a claim something else already released.
+   */
+  renewSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean>;
 
   /**
    * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'

@@ -68,6 +68,8 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     lastPolledAt: { type: Date },
     // When the current 'syncing' claim was taken; a stale one is reclaimable (see claimForSync).
     syncClaimedAt: { type: Date },
+    // The batch a sliced ingest chain is filling; the token a continuation presents to adoptSyncClaim.
+    activeIngestBatchId: { type: String },
 
     // Incremental-sync resumption (Drive changes pageToken)
     syncCursor: { type: String },
@@ -238,7 +240,10 @@ class OrgGoogleDriveConnectionRepository
     // Clear the error on a healthy update; redact + truncate otherwise (lastError is client-visible
     // and its predictable caller is a raw provider err.message - see redactLastError).
     set.lastError = update.lastError ? redactLastError(update.lastError) : null;
-    return this.model.findByIdAndUpdate(id, { $set: set }, { new: true });
+    // Every caller here moves the connection OUT of 'syncing' (the success release, a credential
+    // failure, a disconnect), so any ingest-chain token goes with it - see releaseSyncClaim.
+    const unset = update.status === 'syncing' ? undefined : { activeIngestBatchId: '' };
+    return this.model.findByIdAndUpdate(id, { $set: set, ...(unset && { $unset: unset }) }, { new: true });
   }
 
   /** Advance the incremental-sync cursor after a sync batch is durably created. */
@@ -270,9 +275,35 @@ class OrgGoogleDriveConnectionRepository
         _id: id,
         $or: [{ status: 'connected' }, { status: 'syncing', syncClaimedAt: { $lt: staleBefore } }],
       },
-      { $set: { status: 'syncing', syncClaimedAt: new Date() } }
+      // A fresh claim starts no chain, so any continuation token left by a dead one is cleared here -
+      // otherwise a stale message could still present it to adoptSyncClaim and join a chain that is
+      // no longer running.
+      { $set: { status: 'syncing', syncClaimedAt: new Date() }, $unset: { activeIngestBatchId: '' } }
     );
     return claimed !== null;
+  }
+
+  /**
+   * Continuation-only take-over of a live claim (see the type docs): matches on the batch token this
+   * chain's previous slice wrote, so only that chain's own next slice can pick the claim up. The claim
+   * therefore never returns to 'connected' between slices, which is what keeps the re-sync poll from
+   * starting a competing walk mid-chain.
+   */
+  async adoptSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean> {
+    const adopted = await this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing', activeIngestBatchId },
+      { $set: { syncClaimedAt: new Date() } }
+    );
+    return adopted !== null;
+  }
+
+  /** Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one. */
+  async renewSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean> {
+    const renewed = await this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing' },
+      { $set: { syncClaimedAt: new Date(), activeIngestBatchId } }
+    );
+    return renewed !== null;
   }
 
   /**
@@ -298,7 +329,13 @@ class OrgGoogleDriveConnectionRepository
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     const set: Record<string, unknown> = { status: 'connected', lastPolledAt: new Date() };
     if (lastError) set.lastError = redactLastError(lastError);
-    return this.model.findOneAndUpdate({ _id: id, status: 'syncing' }, { $set: set }, { new: true });
+    // The chain (if any) is over once the claim goes; leaving the token would let an in-flight
+    // continuation message adopt a claim nobody holds.
+    return this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing' },
+      { $set: set, $unset: { activeIngestBatchId: '' } },
+      { new: true }
+    );
   }
 
   /**

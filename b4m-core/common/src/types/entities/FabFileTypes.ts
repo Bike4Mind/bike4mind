@@ -956,6 +956,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
    */
   findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * The Drive file ids a given ingest batch has already minted a FabFile for. Deliberately NOT
+   * status-filtered, unlike every other Drive accessor here: this is what a resumed ingest slice
+   * subtracts from its fresh walk, and the rows it must recognise are precisely the `pending` ones
+   * the earlier slices uploaded but the pipeline has not vectorized yet. Without it a continuation
+   * re-ingests its own tail as duplicates - the walk cannot tell an already-uploaded file apart from
+   * a brand-new one once its superseded copy has been retired.
+   */
+  findDriveFileIdsByBatchId(batchId: string): Promise<string[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
