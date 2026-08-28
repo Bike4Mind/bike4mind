@@ -444,7 +444,15 @@ jobs:
           echo "credits_block=,{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*💳 AI Credits*\\n${CREDITS_LINES}\"}}" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: always()
+        # Post on pass or fail, but NOT when the run was cancelled. A staging deploy
+        # that gets superseded (a newer queued deploy skips the in-flight/queued one)
+        # has its deploy-triggered gate run cancelled by the e2e-core-gate concurrency
+        # group (cancel_in_progress). On cancellation `always()` steps still run, so
+        # the results parser emits its empty defaults (total/failed/not_started = 0)
+        # and an `always()` post here announces a misleading ":white_check_mark:
+        # Passed / Total: 0". `!cancelled()` still fires on a genuine early failure
+        # (e.g. an unhealthy deploy), which stays worth a Slack alert.
+        if: ${{ !cancelled() }}
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
