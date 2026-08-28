@@ -45,11 +45,16 @@ const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
  * stay browsable. The colon matters because a bare `acme` would match `acmecorp:` tags - a
  * different lake's content.
  *
+ * Deduplicated: two lakes may legitimately share a `fileTagPrefix` (it is unreserved for dynamic
+ * lakes), and a repeat contributes nothing but a duplicated regex arm - which the counters below
+ * pay for per query. `byPrefix` is keyed by prefix, so a repeat would only overwrite its own key.
+ *
  * NOTE for `countDataLakeUniqueFilesByPrefix`: `byPrefix` is therefore keyed by the NORMALIZED
  * prefix, so a consumer indexing it with a raw stored value must normalize too.
  */
-const usableTagPrefixes = (tagPrefixes: string[]): string[] =>
-  tagPrefixes.map(p => p.trim()).filter(p => p.length > 0 && p.endsWith(':'));
+const usableTagPrefixes = (tagPrefixes: string[]): string[] => [
+  ...new Set(tagPrefixes.map(p => p.trim()).filter(p => p.length > 0 && p.endsWith(':'))),
+];
 
 interface IFabFileChunkModel extends Model<IFabFileChunkDocument> {}
 
@@ -440,6 +445,37 @@ const METADATA_PAGE_CAP = 500;
  *  (maxPoolSize defaults to 2) so a wave cannot monopolize every connection in the process. */
 const RESET_CONCURRENCY = 10;
 
+// Lakes per `$facet` aggregate in countDataLakeFilesByMembership and the ceiling on the
+// per-prefix branch count in countDataLakeUniqueFilesByPrefix. Each branch is an extra in-memory
+// pass over the chunk's matched union, so this trades round trips against the server-side work
+// one query does.
+const LAKE_COUNT_CHUNK = 25;
+
+/** Byte ceiling for one lake-count aggregate's query document, well under the 16MB BSON limit.
+ *  Only countDataLakeUniqueFilesByPrefix needs it: its per-prefix filter carries the caller's
+ *  ownership filter, which is itself O(lakes) - it names every accessible lake - so a FIXED
+ *  branch count makes the document quadratic in the lake count. It crossed the BSON limit at
+ *  ~640 lakes and the endpoint 500d. Branch count is derived from this budget instead, so the
+ *  document stays bounded at any lake count. countDataLakeFilesByMembership needs no such
+ *  derivation: its per-scope filter names one lake, so its documents are O(LAKE_COUNT_CHUNK). */
+const LAKE_COUNT_QUERY_BUDGET_BYTES = 4_000_000;
+
+/** Chunk aggregates in flight per lake-count leg. Same reasoning as RESET_CONCURRENCY: the pool
+ *  defaults to 2, so a handful in flight keeps it busy while the next query is planned, and the
+ *  cap stops one admin request monopolizing every connection - the two legs run concurrently with
+ *  each other, so an unbounded fan-out on either starves the other. */
+const LAKE_COUNT_CONCURRENCY = 4;
+
+/** Runs `task` over `items` in batches of `limit`, awaiting each batch before starting the next.
+ *  A batch barrier, not a sliding window: one slow item holds up its batch's successors. */
+const mapBounded = async <T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> => {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    results.push(...(await Promise.all(items.slice(i, i + limit).map(task))));
+  }
+  return results;
+};
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -800,30 +836,83 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     };
     // archivedAt: null for the same reason as countDataLakeTagsByPrefix above - a colliding
     // sibling lake's files are archived while that lake itself stays active.
-    const baseMatch = { $and: [ownershipFilter, sessionFilter], deletedAt: null, archivedAt: null };
+    const accessMatch = { $and: [ownershipFilter, sessionFilter] };
 
-    // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
-    // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and
-    // counts each file once regardless of how many matching tags it carries.
+    // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and counts
+    // each file once regardless of how many matching tags it carries.
     //
-    const anyPrefixRegex = new RegExp(`^(${usablePrefixes.map(p => escapeRegex(p)).join('|')})`);
-    const [total, ...prefixCounts] = await Promise.all([
-      this.fabFileModel.countDocuments({
-        ...baseMatch,
-        tags: { $elemMatch: { name: { $regex: anyPrefixRegex, ...NOT_META_TAG } } },
-      }),
-      ...usablePrefixes.map(prefix =>
-        this.fabFileModel.countDocuments({
-          ...baseMatch,
-          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`), ...NOT_META_TAG } } },
-        })
-      ),
-    ]);
+    // Deliberately WITHOUT `accessMatch`: this arm is repeated once per prefix in the unions
+    // below, and `accessMatch` is O(lakes) - `buildOwnershipConditions` names every accessible
+    // lake's meta-tag and prefix - so folding it in here squares the query document. Access is
+    // applied once, past a `$facet` barrier; `scopedPrefixMatch` is the conjunction where a
+    // single filter is needed.
+    const prefixMatch = (prefix: string) => ({
+      tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`), ...NOT_META_TAG } } },
+      deletedAt: null,
+      archivedAt: null,
+    });
+    const scopedPrefixMatch = (prefix: string) => ({ $and: [accessMatch, prefixMatch(prefix)] });
+
+    // Every union below is `$or` of the single-prefix arms, NEVER one `^(a|b|c)` alternation:
+    // a regex only yields index bounds when `^` is followed by literal characters, so an
+    // alternation drops `tags.name` entirely and scans every tag of every file in the install.
+    // `$or` lets the planner bound each arm and union the results.
+    //
+    // The `$facet` is a planner barrier as much as a fan-out: consecutive `$match` stages
+    // coalesce into one `$and`, and an `$and` wrapping the union is no longer a ROOTED `$or`,
+    // which is the only form the subplanner bounds per arm. Applying access inside a branch is
+    // what keeps one copy of the O(lakes) filter AND the index bounds - measured at 525 keys
+    // examined either way, against 20,500 for both the coalesced and the alternation shapes.
+    const countTotal = async () => {
+      const [row] = await this.fabFileModel.aggregate<{ total?: { n: number }[] }>([
+        { $match: { $or: usablePrefixes.map(prefixMatch) } },
+        { $facet: { total: [{ $match: accessMatch }, { $count: 'n' }] } },
+      ]);
+      return row?.total?.[0]?.n ?? 0;
+    };
+
+    // The per-prefix breakdown fans out over `$facet` branches for the same reason as
+    // countDataLakeFilesByMembership: `tagPrefixes` is one entry per lake the caller can see,
+    // which on the admin tag-count path is every lake of every tenant. Branches stay independent
+    // because a file carrying two lakes' prefixes must count once for EACH - the reason the
+    // docblock above warns that `byPrefix` can outsum `total`.
+    //
+    // A branch cannot share the outer access match (each needs access AND its own prefix), so the
+    // branch count - unlike countDataLakeFilesByMembership's - is derived from the byte budget
+    // rather than fixed: `accessMatch` grows with the lake set, so a fixed 25 branches is what
+    // put this query over the BSON limit at ~640 lakes. It degrades to one prefix per aggregate
+    // rather than throwing.
+    const accessMatchBytes = mongoose.mongo.BSON.calculateObjectSize(accessMatch);
+    const branchCount = Math.max(
+      1,
+      Math.min(LAKE_COUNT_CHUNK, Math.floor(LAKE_COUNT_QUERY_BUDGET_BYTES / Math.max(accessMatchBytes, 1)))
+    );
 
     const byPrefix: Record<string, number> = {};
-    usablePrefixes.forEach((prefix, i) => {
-      byPrefix[prefix] = prefixCounts[i];
-    });
+    const chunkCounts = async (start: number) => {
+      const chunk = usablePrefixes.slice(start, start + branchCount);
+      // Synthetic branch keys: a facet field name may not contain a '.' or start with a '$',
+      // and a prefix is a user-derived string. Mapped back positionally.
+      const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
+        { $match: { $or: chunk.map(prefixMatch) } },
+        {
+          $facet: Object.fromEntries(
+            chunk.map((prefix, j) => [`p${j}`, [{ $match: scopedPrefixMatch(prefix) }, { $count: 'n' }]])
+          ),
+        },
+      ]);
+      chunk.forEach((prefix, j) => {
+        byPrefix[prefix] = row?.[`p${j}`]?.[0]?.n ?? 0;
+      });
+    };
+
+    const chunkStarts = Array.from(
+      { length: Math.ceil(usablePrefixes.length / branchCount) },
+      (_, i) => i * branchCount
+    );
+    // `total` stays its own count rather than a sum of the branches, per the docblock above.
+    const [total] = await Promise.all([countTotal(), mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, chunkCounts)]);
+
     return { total, byPrefix };
   }
 
@@ -1579,19 +1668,49 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     });
   }
 
+  /**
+   * Per-lake live file counts, keyed by membership tag. A lake with no members counts 0 rather
+   * than dropping out of the map.
+   *
+   * Batched into `$facet` aggregates rather than one `countDocuments` per scope: the tag-count
+   * surface hands this every lake an ADMIN can see - every lake of every tenant - and a fan-out
+   * that wide is thousands of round trips through a pool that defaults to two connections
+   * (b4m-core/db-core/src/utils/mongo.ts), which is what times the request out.
+   *
+   * Each facet branch re-applies its OWN scope filter to the chunk's union, so the counts stay
+   * per-scope INDEPENDENT: a file that belongs to two lakes (co-owned meta-tags, or a colliding
+   * prefix) counts once for each, exactly as the per-scope counts did. A `$group` on a single
+   * matched lake would have undercounted it.
+   *
+   * Chunks run at LAKE_COUNT_CONCURRENCY, the same bound countDataLakeUniqueFilesByPrefix uses:
+   * these two legs are issued concurrently with each other, so neither may fan out freely.
+   */
   async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
     if (scopes.length === 0) return {};
-    const counts = await Promise.all(
-      scopes.map(scope =>
-        this.fabFileModel.countDocuments({
-          ...buildDataLakeMembershipFilter(scope),
-          deletedAt: null,
-          archivedAt: null,
-          status: { $ne: 'pending' },
-        })
-      )
+    const counts: Record<string, number> = {};
+    const chunkStarts = Array.from(
+      { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
+      (_, i) => i * LAKE_COUNT_CHUNK
     );
-    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
+    await mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, async i => {
+      const chunk = scopes.slice(i, i + LAKE_COUNT_CHUNK);
+      const filters = chunk.map(scope => ({
+        ...buildDataLakeMembershipFilter(scope),
+        deletedAt: null,
+        archivedAt: null,
+        status: { $ne: 'pending' },
+      }));
+      // Synthetic branch keys: a facet field name may not contain a '.' or start with a '$',
+      // and `datalakeTag` is a user-derived string. Mapped back positionally.
+      const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
+        { $match: { $or: filters } },
+        { $facet: Object.fromEntries(filters.map((filter, j) => [`s${j}`, [{ $match: filter }, { $count: 'n' }]])) },
+      ]);
+      chunk.forEach((scope, j) => {
+        counts[scope.datalakeTag] = row?.[`s${j}`]?.[0]?.n ?? 0;
+      });
+    });
+    return counts;
   }
 
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
