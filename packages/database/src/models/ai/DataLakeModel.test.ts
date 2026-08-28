@@ -1937,3 +1937,41 @@ describe('releaseEmbeddingSpend / resetEmbeddingSpend (provider-failure compensa
     expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 100)).toBe(true); // unstuck
   });
 });
+
+describe('DataLakeRepository.findByDatalakeTags', () => {
+  setupMongoTest();
+
+  it('returns one lake per matching tag and omits tags with no lake', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'alpha' }));
+    await dataLakeRepository.create(baseLake({ slug: 'beta' }));
+    await dataLakeRepository.create(baseLake({ slug: 'gamma' }));
+
+    // A static-registry lake has no document; the caller must key by datalakeTag rather than
+    // by position, so a missing tag shortens the result instead of shifting it.
+    const found = await dataLakeRepository.findByDatalakeTags([
+      'datalake:alpha',
+      'datalake:not-a-lake',
+      'datalake:gamma',
+    ]);
+
+    expect(found.map(l => l.datalakeTag).sort()).toEqual(['datalake:alpha', 'datalake:gamma']);
+    expect(found.find(l => l.datalakeTag === 'datalake:alpha')?.createdByUserId).toBe('admin');
+  });
+
+  it('agrees with findByDatalakeTag on the same lake', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'solo', createdByUserId: 'owner-9' }));
+
+    const [batched] = await dataLakeRepository.findByDatalakeTags(['datalake:solo']);
+    const single = await dataLakeRepository.findByDatalakeTag('datalake:solo');
+
+    expect(batched.id).toBe(single?.id);
+    expect(batched.createdByUserId).toBe('owner-9');
+    expect(batched.fileTagPrefix).toBe(single?.fileTagPrefix);
+  });
+
+  it('returns an empty array for no tags without querying', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'unqueried' }));
+
+    await expect(dataLakeRepository.findByDatalakeTags([])).resolves.toEqual([]);
+  });
+});

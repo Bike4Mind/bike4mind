@@ -891,6 +891,83 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  /**
+   * The read the lake-memory extraction producer pages the lake with. It exists because the producer
+   * used to resolve every id the lake had ever held and then hydrate all of them UNPROJECTED, so
+   * `content`/`chunks`/`vector` reached the Lambda before the per-run cap applied - GBs on a large
+   * lake, killed before its own deadline guard could yield, and killed again on every redelivery.
+   * These pin the three properties that fix rests on: metadata only, live only, and bounded.
+   */
+  describe('findLakeMemoryExtractionMembers', () => {
+    const page = (options: { after?: string | null; limit: number }) =>
+      fabFileRepository.findLakeMemoryExtractionMembers(scope, options);
+
+    it('returns both membership arms and no stranger-owned prefix match', async () => {
+      const rows = await seedLakeRows();
+
+      const members = await page({ limit: 100 });
+
+      expect(members.map(m => m.fabFileId).sort()).toEqual([...rows.memberIds].sort());
+    });
+
+    it('projects the three fields the producer reads and NONE of the heavy payload', async () => {
+      const rows = await seedLakeRows();
+      // A member carrying every field the old unprojected read would have pulled into the Lambda.
+      //
+      // The RAW DRIVER, not `FabFile.updateOne`: none of `content`, `chunks` or `vector` is a declared
+      // path on FabFileSchema, so mongoose strict mode drops all three from the update silently (the
+      // same footgun the `sourceType` comment at the schema's provenance block records). Seeding through
+      // mongoose leaves the document with no heavy payload at all, which makes the assertion below pass
+      // for the wrong reason - it would still pass with `content: 1` added to the projection. The raw
+      // driver is also how these fields reach production documents in the first place.
+      await FabFile.collection.updateOne(
+        { _id: rows.metaTagged._id },
+        { $set: { content: 'x'.repeat(50_000), chunks: ['a', 'b'], vector: [0.1, 0.2, 0.3] } }
+      );
+
+      const [member] = await page({ limit: 1 });
+
+      expect(Object.keys(member).sort()).toEqual(['fabFileId', 'fileName', 'tags']);
+      expect(member.tags).toEqual([{ name: DATALAKE_TAG }]);
+    });
+
+    it('excludes soft-deleted and archived members in the DATABASE, not after hydration', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { deletedAt: new Date() } });
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: new Date() } });
+
+      // Contrast with its lifecycle sibling, which deliberately reports both (the chunk sweep needs
+      // them). A tombstone must never consume one of the producer's capped run slots.
+      expect(await page({ limit: 100 })).toEqual([]);
+      expect((await fabFileRepository.findIdsByDataLakeTag(scope)).sort()).toEqual([...rows.memberIds].sort());
+    });
+
+    it('pages forward from the keyset cursor in _id order and honors the limit', async () => {
+      const rows = await seedLakeRows();
+      const ascending = [...rows.memberIds].sort();
+
+      const first = await page({ limit: 1 });
+      expect(first.map(m => m.fabFileId)).toEqual([ascending[0]]);
+
+      const second = await page({ after: first[0].fabFileId, limit: 1 });
+      expect(second.map(m => m.fabFileId)).toEqual([ascending[1]]);
+
+      // Past the last member: an exhausted page is empty, which is how the producer learns the scan
+      // is complete and clears its cursor.
+      expect(await page({ after: ascending[1], limit: 1 })).toEqual([]);
+    });
+
+    it('ignores an unparseable cursor instead of throwing the run into the DLQ', async () => {
+      const rows = await seedLakeRows();
+
+      // A re-scan is merely wasteful (the producer's ledger append de-dups); a cast error would fail
+      // the invocation, and SQS would redeliver it to the same cast error.
+      const members = await page({ after: 'not-an-objectid', limit: 100 });
+
+      expect(members.map(m => m.fabFileId).sort()).toEqual([...rows.memberIds].sort());
+    });
+  });
+
   describe('hardDeleteByIds', () => {
     it('destroys exactly the ids given, soft-deleted included, and nothing a re-resolve would add', async () => {
       const rows = await seedLakeRows();

@@ -256,6 +256,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return (doc?.toJSON() as IDataLakeDocument) ?? null;
   }
 
+  async findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]> {
+    if (datalakeTags.length === 0) return [];
+    // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
+    // per tag and a caller can key it by `datalakeTag` without losing a match.
+    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } });
+    return docs.map(doc => doc.toJSON() as IDataLakeDocument);
+  }
+
   /**
    * Legacy tag-only filter, currently UNUSED - prefer findActiveByUserTagsAndEntitlements.
    * It predates entitlements, org scoping, and Private-by-default, so it returns every

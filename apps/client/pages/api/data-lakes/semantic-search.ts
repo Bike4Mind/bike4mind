@@ -14,7 +14,7 @@ import {
   userRepository,
   lakeAccessEventRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
@@ -22,9 +22,18 @@ import {
   ModelBackend,
   OpenAIEmbeddingModel,
   isSupportedEmbeddingModel,
+  insufficientCreditsError,
+  usdToCredits,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
+import {
+  createTokenizer,
+  getSettingsByNames,
+  getSettingsMap,
+  getSettingsValue,
+  normalizeId,
+  type ITokenizer,
+} from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -59,6 +68,11 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * One deliberate difference from chat: admin/developer callers additionally get
  * the whole static registry (see resolveRetrievalLakeScope), preserving the reach
  * this endpoint has always given them.
+ *
+ * Billing: the query embedding is real spend, so a credit pre-flight (per-member cap, then the
+ * pool) runs before the embed whenever operational billing is enabled; settlement is
+ * recordOperationalUsage, which owns the debit itself. A rejected caller gets a 422 tagged
+ * `insufficient_credits` and no ledger row.
  *
  * Unlike the chat tool this route passes no `retrievalFilter` - that filter is
  * session-derived and there is no session here, so a file chat would exclude is
@@ -240,6 +254,18 @@ const handler = baseApi()
       });
       const isAborted = () => clientAborted;
 
+      // The pre-flight needs a token count on the request path, where the old best-effort
+      // recording could just skip one; a length estimate keeps a tokenizer failure from
+      // turning a working search into a 500.
+      const countQueryTokens = async (model: string = embedding_model): Promise<number> => {
+        try {
+          return await getSharedTokenizer(req.logger).countTokens(query, model);
+        } catch (err) {
+          req.logger?.warn('[semantic-search] query token count failed; estimating from query length', err);
+          return Math.ceil(query.length / 4);
+        }
+      };
+
       // --- Resolve accessible data lakes (this IS the access gate) ---
       const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
@@ -263,6 +289,72 @@ const handler = baseApi()
           retrieval_unavailable: toRetrievalUnavailablePayload(dataLakeService.emptyRetrievalUnavailableReport()),
           scan: toScanPayload(dataLakeService.emptyScanAccounting(budgets)),
         });
+      }
+
+      // --- Credit pre-flight: per-member cap, then the pool the charge would land on ---
+      // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
+      // never bills must not start rejecting searches. This is a CHECK, not the reservation
+      // music/sound-effects do: settlement here runs through recordOperationalUsage, which
+      // moves the balance itself, so reserving would charge the same query twice.
+      const queryTokens = await countQueryTokens();
+      const billingSettings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['billOperationalUsage', 'enforceCredits'], logger: req.logger }
+      );
+      const shouldBill =
+        (getSettingsValue('billOperationalUsage', billingSettings) ?? false) &&
+        (getSettingsValue('enforceCredits', billingSettings) ?? false);
+
+      // Resolved once and reused by the settlement below, so the pre-flight and the charge
+      // can never disagree about which holder pays. Best-effort: a billing-store failure leaves
+      // both the check and the charge undone, which is the pre-existing behaviour - it must not
+      // turn a working search into a 500.
+      let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
+      let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
+      try {
+        // Both assigned only after both reads succeed: a half-resolved pair (user set, org
+        // null) would skip the member cap and bill the member personally for org usage.
+        const resolvedUser = await userRepository.findById(req.user.id);
+        const resolvedOrg = resolvedUser?.organizationId
+          ? await organizationRepository.findById(resolvedUser.organizationId)
+          : null;
+        billingUser = resolvedUser;
+        billingOrg = resolvedOrg;
+      } catch (billingErr) {
+        req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
+      }
+
+      // Gate on the USD cost, not on usdToCredits' 1-credit floor: a zero-cost embedder
+      // (Ollama runs on the operator's own hardware) and any model missing from the price
+      // table both settle 0 credits, so there is nothing to be eligible for - flooring first
+      // would turn a free search into a 422. See the pricing-table contract in
+      // b4m-core/common/src/schemas/embedding.ts.
+      const embeddingCostUsd = getEmbeddingModelCost(embedding_model, queryTokens);
+
+      if (shouldBill && billingUser && embeddingCostUsd > 0) {
+        // Deterministic round-up, never the stochastic settlement rounding: eligibility must
+        // not turn on a coin flip. Scoped to the primary model only: the mixed-embeddingModel
+        // ANN cutover can also embed up to MAX_ALTERNATE_ANN_MODELS alternates, which are not
+        // known until the search runs, so settlement below can exceed this by a few credits on
+        // a mixed-embedding-space corpus.
+        const requiredCredits = usdToCredits(embeddingCostUsd);
+
+        // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
+        // rejected even when the org pool is flush.
+        if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, req.user.id, requiredCredits)) {
+          throw insufficientCreditsError(
+            'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
+          );
+        }
+
+        const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
+        if (availableCredits < requiredCredits) {
+          throw insufficientCreditsError(
+            billingOrg
+              ? `Your organization does not have enough credits for semantic search. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+              : `You do not have enough credits for semantic search. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+          );
+        }
       }
 
       // --- Get the embedding-provider API keys, for every provider we have one, not just the
@@ -370,26 +462,26 @@ const handler = baseApi()
       // Record the query-embedding spend for the primary model plus every alternate model the
       // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
       // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
-      // are resolved ONCE, not re-fetched per model, and every recording runs concurrently.
-      // Best-effort as a whole: a recording failure (including resolving user/organization) must
-      // never fail the search response, and one model's recording failure must never skip another's.
+      // are the same documents the credit pre-flight above read, so the check and the charge can
+      // never disagree about which holder pays (they can differ on amount - the pre-flight prices
+      // the primary model only), and every recording runs concurrently.
+      // Best-effort as a whole: a recording failure must never fail the search response, and one
+      // model's recording failure must never skip another's.
       try {
-        const user = await userRepository.findById(req.user.id);
-        if (user) {
-          const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+        if (billingUser) {
           const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
             try {
-              const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, model);
+              const tokens = model === embedding_model ? queryTokens : await countQueryTokens(model);
               await recordOperationalUsage(
                 {
                   requestId: req.user.id,
-                  user,
-                  organization,
+                  user: billingUser,
+                  organization: billingOrg,
                   feature: 'embedding',
                   provider,
                   model,
-                  inputTokens: queryTokens,
-                  costUsd: getEmbeddingModelCost(model, queryTokens),
+                  inputTokens: tokens,
+                  costUsd: getEmbeddingModelCost(model, tokens),
                   source: 'api',
                 },
                 {
@@ -419,10 +511,7 @@ const handler = baseApi()
           ]);
         }
       } catch (recordErr) {
-        req.logger?.warn(
-          '[semantic-search] failed to resolve user/organization for embedding usage recording',
-          recordErr
-        );
+        req.logger?.warn('[semantic-search] embedding usage recording failed', recordErr);
       }
 
       if (isAborted()) return res.end();

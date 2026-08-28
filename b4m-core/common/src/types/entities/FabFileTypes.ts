@@ -73,6 +73,23 @@ export interface IFabFileChunk {
    * an Atlas `$vectorSearch` index lookup keys on - not FabFile.embeddingModel.
    */
   embeddingModel?: string;
+  /**
+   * Which per-model retrieval index this chunk's document was written to, for a retrieval store
+   * that lives OUTSIDE Mongo (self-host OpenSearch; undefined on Atlas, whose vector index is on
+   * this collection itself and so is removed with the row).
+   *
+   * Deliberately NOT `embeddingModel`. That field is a READINESS stamp: fabFileVectorize writes it
+   * only once the whole file finishes, so the Atlas cutover read path can never treat a
+   * still-vectorizing file as ready. But OpenSearch documents are written per vectorize MESSAGE,
+   * long before that - so a file whose vectorize never finishes (spend-gate denial, exhausted SQS
+   * retries, a purge landing mid-flight) has live documents and no stamp, and every removal path
+   * resolves its index from the stamp. Recording index residency separately is what lets a removal
+   * find those documents.
+   *
+   * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
+   * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   */
+  retrievalIndexModel?: string;
 }
 
 /**
@@ -431,19 +448,21 @@ export interface FabFileChunkVector {
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
   deleteManyByFabFileId(fabFileId: string): Promise<void>;
   /**
-   * Every DISTINCT embeddingModel actually used by chunks of the given files - not
-   * FabFile.embeddingModel, which is only the file's current/latest model (see
-   * IFabFileChunk.embeddingModel: chunks can outlive a re-embed). A retrieval index keyed
-   * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
+   * Every DISTINCT per-model retrieval index the given files' chunks can have documents in - the
+   * union of `IFabFileChunk.retrievalIndexModel` (index residency, recorded per vectorize message)
+   * and `IFabFileChunk.embeddingModel` (the file-complete readiness stamp). Both are needed:
+   * residency alone misses chunks indexed before that field existed, and the stamp alone misses
+   * every file whose vectorize never finished. Neither is FabFile.embeddingModel, which is only the
+   * file's current/latest model and misses an index left by an earlier embed.
    */
-  distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
+  distinctRetrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   /**
    * The same fact as above, but resolved PER FILE: `{ [fabFileId]: models }`, omitting any file with
    * no model-bearing chunks. A per-model retrieval index needs the pairing, not the union - pairing
    * every file with every model seen across the batch issues one request per (file, model) cell, so
    * a two-model lake doubles its removal traffic and most of it matches nothing.
    */
-  embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
+  retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -1016,6 +1035,19 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       chunkedPassageTokenTarget: number | null;
     }>
   >;
+  /**
+   * One page of a lake's LIVE members for the lake-memory extraction producer, ascending by `_id`,
+   * projecting only the three fields that producer reads. Live-only and bounded in the database, unlike
+   * `findIdsByDataLakeTag` above, which reports every member the lake ever had.
+   *
+   * `after` is a keyset boundary, and an unparseable one is ignored rather than throwing. Ask for one
+   * row past the cap to tell "the lake continues" from "the slice filled exactly" without a count
+   * query. See the implementation for why each of those is load-bearing.
+   */
+  findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>>;
   /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.

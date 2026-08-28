@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { cloneSession } from './clone';
 
+// ObjectId-shaped: createSession drops knowledgeIds that cannot address a row, and the lake
+// derivation reads them through `_id: { $in: ... }`.
+const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
+
 /**
  * Regression for cgtorniado's 4th review: `findAccessibleById` matches on ownership OR a
  * share grant (users[]/groups[] read/write), so a read-only share holder can clone a session
@@ -10,8 +14,9 @@ import { cloneSession } from './clone';
  * share/subscribe boundary promptMetaRedaction.ts documents is bypassed entirely.
  */
 describe('cloneSession - redaction at the copy boundary', () => {
-  const makeAdapters = (sessionOwnerId: string) => {
+  const makeAdapters = (sessionOwnerId: string, knowledgeIds: string[] = []) => {
     const created: Array<Record<string, unknown>> = [];
+    const createdSessions: Array<Record<string, unknown>> = [];
     return {
       db: {
         users: { findById: vi.fn().mockResolvedValue({ id: 'caller-1' }) },
@@ -21,11 +26,14 @@ describe('cloneSession - redaction at the copy boundary', () => {
               id: 'session-1',
               userId: sessionOwnerId,
               name: 'Original',
-              knowledgeIds: [],
+              knowledgeIds,
               tags: [],
             }),
           },
-          create: vi.fn().mockResolvedValue({ id: 'cloned-session-1' }),
+          create: vi.fn(async (data: Record<string, unknown>) => {
+            createdSessions.push(data);
+            return { id: 'cloned-session-1' };
+          }),
         },
         projects: {},
         // A real reader: with `fabFiles: {}` the ownership arm threw a TypeError that the derivation
@@ -61,6 +69,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
       } as any,
       created,
+      createdSessions,
     };
   };
 
@@ -77,7 +86,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
       id: 'session-1',
       userId: 'caller-1',
       name: 'Original',
-      knowledgeIds: ['f1'],
+      knowledgeIds: [LAKE_FILE_ID],
       tags: [],
       retrievalTags: ['datalake:acme'],
     });
@@ -100,7 +109,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
       id: 'session-1',
       userId: 'owner-1', // caller-1 holds only a share
       name: 'Original',
-      knowledgeIds: ['f1'],
+      knowledgeIds: [LAKE_FILE_ID],
       tags: [],
       retrievalTags: ['datalake:acme'],
     });
@@ -128,13 +137,13 @@ describe('cloneSession - redaction at the copy boundary', () => {
       id: 'session-1',
       userId: 'owner-1', // caller-1 holds only a share
       name: 'Original',
-      knowledgeIds: ['f1'],
+      knowledgeIds: [LAKE_FILE_ID],
       tags: [],
       retrievalTags: ['datalake:acme'],
     });
     // The shared file IS readable by the cloner, so the ownership arm scrapes its lake tag...
     db.fabFiles.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
-      { id: 'f1', tags: [{ name: 'datalake:acme' }] },
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
     ]);
     // ...but the cloner reaches a different lake, so the intersection must discard it.
     const resolveLakeAccess = vi.fn().mockResolvedValue({
@@ -158,12 +167,12 @@ describe('cloneSession - redaction at the copy boundary', () => {
       id: 'session-1',
       userId: 'owner-1',
       name: 'Original',
-      knowledgeIds: ['f1'],
+      knowledgeIds: [LAKE_FILE_ID],
       tags: [],
       retrievalTags: ['datalake:acme'],
     });
     db.fabFiles.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
-      { id: 'f1', tags: [{ name: 'datalake:acme' }] },
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
     ]);
     const resolveLakeAccess = vi.fn().mockResolvedValue({
       dataLakeTags: ['datalake:acme'],
@@ -227,5 +236,20 @@ describe('cloneSession - redaction at the copy boundary', () => {
       returnValue: 'private tool output',
       error: 'boom',
     });
+  });
+
+  /**
+   * createSession DROPS a knowledge id that is not ObjectId-shaped rather than rejecting it, and
+   * cloning re-submits the source list. Without the filter at the copy boundary the query throws,
+   * so a legacy notebook becomes impossible to clone rather than merely awkward to export.
+   * Asserts the real path, not just the helper.
+   */
+  it('clones a notebook holding a legacy unresolvable knowledgeId, keeping only the usable ids', async () => {
+    const GOOD = '507f1f77bcf86cd799439011';
+    const { db, createdSessions } = makeAdapters('caller-1', [GOOD, 'legacy-uuid-not-an-objectid']);
+
+    await expect(cloneSession('caller-1', { id: 'session-1' }, { db })).resolves.toBeDefined();
+
+    expect(createdSessions[0].knowledgeIds).toEqual([GOOD]);
   });
 });
