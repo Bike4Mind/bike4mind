@@ -21,7 +21,7 @@ interface PurgeDataLakeDocumentAdapters {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'hardDeleteByIds' | 'computeDataLakeStats'>;
     fabFileChunks: Pick<
       IFabFileChunkRepository,
-      'countByFabFileId' | 'deleteManyByFabFileId' | 'distinctEmbeddingModelsByFabFileIds'
+      'countByFabFileId' | 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'
     >;
     /** Chats keep the document in `knowledgeIds`; the purge unlinks it there like file deletion does. */
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
@@ -140,7 +140,7 @@ export const purgeDataLakeDocument = async (
   }
 
   const chunksBefore = await db.fabFileChunks.countByFabFileId(file.id);
-  const embeddingModels = await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([file.id]);
+  const embeddingModels = await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([file.id]);
 
   const scope = lakeMembershipScope(lake);
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] });

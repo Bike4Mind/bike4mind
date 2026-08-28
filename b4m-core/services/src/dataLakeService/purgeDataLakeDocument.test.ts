@@ -50,7 +50,7 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
       deleteManyByFabFileId: vi.fn(async () => {
         chunkCount = 0;
       }),
-      distinctEmbeddingModelsByFabFileIds: vi.fn(async () => ['text-embedding-3-small']),
+      distinctRetrievalIndexModelsByFabFileIds: vi.fn(async () => ['text-embedding-3-small']),
     },
   };
 };
