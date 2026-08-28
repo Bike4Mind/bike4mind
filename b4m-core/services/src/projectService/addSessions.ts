@@ -7,8 +7,9 @@ import {
   IUserDocument,
   Permission,
   BadRequestError,
+  NotFoundError,
+  secureParameters,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';

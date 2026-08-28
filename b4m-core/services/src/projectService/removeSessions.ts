@@ -1,5 +1,10 @@
-import { IProjectRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
-import { secureParameters, BadRequestError } from '@bike4mind/utils';
+import {
+  IProjectRepository,
+  ISessionRepository,
+  IUserRepository,
+  secureParameters,
+  BadRequestError,
+} from '@bike4mind/common';
 import { z } from 'zod';
 
 const removeProjectSessionsSchema = z.object({

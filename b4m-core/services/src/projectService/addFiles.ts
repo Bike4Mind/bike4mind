@@ -5,8 +5,9 @@ import {
   IProjectRepository,
   IUserDocument,
   Permission,
+  secureParameters,
+  BadRequestError,
 } from '@bike4mind/common';
-import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';

@@ -4,8 +4,9 @@ import {
   IInviteRepository,
   IProjectRepository,
   IUserRepository,
+  secureParameters,
+  BadRequestError,
 } from '@bike4mind/common';
-import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const removeProjectFilesSchema = z.object({
