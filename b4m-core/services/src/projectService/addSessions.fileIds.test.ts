@@ -14,6 +14,7 @@ import type {
   ISessionRepository,
   IUserDocument,
 } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/common';
 import * as addFilesModule from './addFiles';
 
 /**
@@ -106,15 +107,18 @@ describe('addSessions - which ids reach the project', () => {
     expect(project.fileIds).not.toContain(SOFT_DELETED_ID);
   });
 
-  it('copies only the session ids that resolved into project.sessionIds', async () => {
-    // findAllAccessibleByIds now skips an uncastable id instead of throwing, so the raw request
-    // list must not be persisted: a junk sessionId would survive there and the read-side guard
-    // on findAllByIds would then hide it forever.
-    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [JUNK_ID, SESSION_ID] }, {
-      db: { projects, sessions, fabFiles },
-    } as never);
+  it('rejects a request whose session ids only partly resolved, persisting nothing', async () => {
+    // findAllAccessibleByIds skips an uncastable id instead of throwing, so a partial resolve is
+    // now reachable. Answering 200 with only the reachable notebook attached gives the caller no
+    // signal that half its request was ignored - 400, like addFiles/removeFiles/removeSessions.
+    await expect(
+      addSessions(user, { projectId: PROJECT_ID, sessionIds: [JUNK_ID, SESSION_ID] }, {
+        db: { projects, sessions, fabFiles },
+      } as never)
+    ).rejects.toThrow(BadRequestError);
 
-    expect(project.sessionIds).toEqual([SESSION_ID]);
+    expect(project.sessionIds).toEqual([]);
+    expect(projects.update).not.toHaveBeenCalled();
   });
 
   it('queries the repository with the session raw list, leaving the filtering to the guard', async () => {
