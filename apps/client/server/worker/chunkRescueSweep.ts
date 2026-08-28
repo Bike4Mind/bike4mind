@@ -1,5 +1,6 @@
 /**
- * Self-host driver for the un-chunked rescue sweep.
+ * Self-host drivers for the two chunk-queue rescue sweeps: un-chunked files, and files whose
+ * vectorize hand-off was stranded. Both run from the same `fabFileChunkScan` scheduled task.
  *
  * Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a notification is
  * missed, re-enqueue files that completed upload but were never chunked so they stop being silently
@@ -23,9 +24,11 @@ import { sendToQueue } from '@server/utils/sqs';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   buildFabFileChunkScanFilter,
+  buildStrandedVectorizeScanFilter,
   CHUNK_SCAN_BATCH,
   CHUNK_SCAN_MIN_AGE_MS,
   CHUNK_CLAIM_STALE_MS,
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
 } from './chunkScan';
 
 /**
@@ -98,4 +101,44 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
     runLogger.info(`[fabFileChunkScan] enqueued ${enqueued} un-chunked file(s), ${failed} failed`);
   }
   return { enqueued, failed };
+}
+
+/**
+ * Second pass of the same scheduled task: files whose chunks landed but whose vectorize hand-off
+ * failed. Ungated by enableAutoChunk - these files are already chunked, so the setting has nothing
+ * left to gate - and separately capped, see buildStrandedVectorizeScanFilter. Returns the SENT
+ * count, so a partially-failing tick is distinguishable from a clean one.
+ *
+ * MUST STAY IN SYNC with `rescueStrandedVectorizeFiles` in server/cron/dataLakeBatchReconcile.ts -
+ * the hosted deployment has no self-host worker and drives the same sweep off its daily SST cron.
+ * Their run budgets are meant to differ; nothing else is, so a behavioural change to one belongs in
+ * both. Same split, and same reason, as runChunkRescueSweep and its hosted twin above.
+ */
+export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<number> {
+  const cutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff))
+    .select('_id userId batchId')
+    .limit(CHUNK_SCAN_BATCH)
+    .lean();
+
+  // Per-send catch so one throttled or unroutable send costs only itself: this is the last pass of
+  // a scheduled task, so an escaping rejection would abandon every candidate behind it AND fail the
+  // whole tick.
+  let sent = 0;
+  for (const file of candidates) {
+    try {
+      await sendToQueue(Resource.fabFileChunkQueue.url, {
+        fabFileId: String(file._id),
+        userId: String(file.userId),
+        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
+      });
+      sent += 1;
+    } catch (err) {
+      runLogger.error(`[fabFileChunkScan] stranded-vectorize re-enqueue failed for ${file._id}: ${err}`);
+    }
+  }
+  if (sent > 0) {
+    runLogger.info(`[fabFileChunkScan] re-enqueued ${sent} file(s) with a stranded vectorize hand-off`);
+  }
+  return sent;
 }

@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   // Spied (not a bare stub) so a test can assert the sweep passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
+  buildStrandedFilter: vi.fn((cutoff: Date) => ({ vectorizeEnqueueFailedAt: { $lt: cutoff } })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -17,12 +18,14 @@ vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('./chunkScan', () => ({
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
+  buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date])),
   CHUNK_SCAN_BATCH: 50,
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
   CHUNK_CLAIM_STALE_MS: 30 * 60_000,
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS: 10 * 60_000,
 }));
 
-import { runChunkRescueSweep } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 
 type Candidate = { _id: string; userId: string; batchId?: string };
 
@@ -164,5 +167,83 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+});
+
+describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () => {
+  const runRescue = () => runStrandedVectorizeRescue(logger as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.sendToQueue.mockResolvedValue(undefined);
+    withCandidates([]);
+  });
+
+  it('runs regardless of auto-chunk', async () => {
+    // These files are already chunked, so the setting has nothing left to gate - and no other
+    // sweep can see them, since this one selects on the vectorize failure stamp.
+    h.getSettingsValue.mockResolvedValue(false);
+    withCandidates([{ _id: 'ff9', userId: 'u9' }]);
+
+    await expect(runRescue()).resolves.toBe(1);
+
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff9',
+      userId: 'u9',
+    });
+  });
+
+  it('selects on the stranded cutoff with the per-pass cap', async () => {
+    await runRescue();
+
+    expect(h.buildStrandedFilter).toHaveBeenCalledTimes(1);
+    expect(h.buildStrandedFilter.mock.calls[0][0]).toBeInstanceOf(Date);
+    expect(limitSpy).toHaveBeenCalledWith(50);
+  });
+
+  it('stamps convergence provenance only on files that belong to a batch', async () => {
+    withCandidates([
+      { _id: 'ff1', userId: 'u1', batchId: 'b1' },
+      { _id: 'ff2', userId: 'u2' },
+    ]);
+
+    await expect(runRescue()).resolves.toBe(2);
+
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff1',
+      userId: 'u1',
+      origin: 'convergence',
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+      fabFileId: 'ff2',
+      userId: 'u2',
+    });
+  });
+
+  it('a failed send costs only itself, and the reported count is what was sent', async () => {
+    // This is the last pass of the scheduled task, so a rejection escaping the loop would abandon
+    // every candidate behind it AND fail the whole tick.
+    withCandidates([
+      { _id: 'ff1', userId: 'u1' },
+      { _id: 'ff2', userId: 'u2' },
+      { _id: 'ff3', userId: 'u3' },
+    ]);
+    h.sendToQueue.mockImplementation(async (_url: unknown, msg: { fabFileId: string }) => {
+      if (msg.fabFileId === 'ff2') throw new Error('SQS throttled');
+    });
+
+    await expect(runRescue()).resolves.toBe(2);
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('stranded-vectorize re-enqueue failed for ff2'));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('re-enqueued 2 file(s)'));
+  });
+
+  it('stays quiet when there is nothing to rescue', async () => {
+    await expect(runRescue()).resolves.toBe(0);
+
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

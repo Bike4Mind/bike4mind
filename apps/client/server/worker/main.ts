@@ -1,6 +1,6 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB, FabFile } from '@bike4mind/database';
+import { taskScheduleRepository, connectDB } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -15,9 +15,7 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { buildStrandedVectorizeScanFilter, CHUNK_SCAN_BATCH, VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS } from './chunkScan';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
-import { runChunkRescueSweep } from './chunkRescueSweep';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -134,39 +132,12 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. Selection and enqueue
-  // accounting live in chunkRescueSweep.ts, shared in shape with the hosted daily cron.
+  // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose
+  // vectorize hand-off was stranded. Selection and enqueue accounting for both passes live in
+  // chunkRescueSweep.ts, shared in shape with the hosted daily cron.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
     await runChunkRescueSweep(bootLogger);
-
-    // Second pass, same queue: files whose chunks landed but whose vectorize hand-off failed.
-    // Ungated (these files were already chunked, so enableAutoChunk has nothing left to gate) and
-    // separately capped - see buildStrandedVectorizeScanFilter.
-    const strandedCutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
-    const stranded = await FabFile.find(buildStrandedVectorizeScanFilter(strandedCutoff))
-      .select('_id userId batchId')
-      .limit(CHUNK_SCAN_BATCH)
-      .lean();
-
-    // Per-send catch so one throttled or unroutable send costs only itself: this is the last pass of
-    // a scheduled task, so an escaping rejection would abandon every candidate behind it AND fail the
-    // whole tick. Logged count is what was actually sent.
-    let strandedSent = 0;
-    for (const file of stranded) {
-      try {
-        await sendToQueue(Resource.fabFileChunkQueue.url, {
-          fabFileId: String(file._id),
-          userId: String(file.userId),
-          ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
-        });
-        strandedSent += 1;
-      } catch (err) {
-        bootLogger.error(`[fabFileChunkScan] stranded-vectorize re-enqueue failed for ${file._id}: ${err}`);
-      }
-    }
-    if (strandedSent > 0) {
-      bootLogger.info(`[fabFileChunkScan] re-enqueued ${strandedSent} file(s) with a stranded vectorize hand-off`);
-    }
+    await runStrandedVectorizeRescue(bootLogger);
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
