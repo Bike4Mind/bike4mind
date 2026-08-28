@@ -128,6 +128,11 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // the same context-window optimization quest_processor offers. Persisted on
   // the AgentExecution doc so it survives Lambda handoffs / continuations.
   enableLattice: z.boolean().optional(),
+  // Artifact parity with chat_completion's `enableArtifacts` body field: the caller's per-request
+  // intent, which the executor ANDs with the admin `EnableArtifacts` setting via
+  // `resolveArtifactsEnabled`. Absent means "no preference" (admin setting decides); only an
+  // explicit `false` opts out. Persisted on the doc so continuations and dispatched children see it.
+  enableArtifacts: z.boolean().optional(),
   // User's selected image-generation config (#agent-mode-image-gen). Forwarded
   // so the image_generation / edit_image tools have a model to run with - the
   // executor path otherwise passes no image config and the tool short-circuits
@@ -412,6 +417,7 @@ async function handleStart(
     thinking: cmd.thinking,
     enableMementos: cmd.enableMementos,
     enableLattice: cmd.enableLattice,
+    enableArtifacts: cmd.enableArtifacts,
     // Snapshot the user's image config so image tools resolve a model on the
     // first AND continuation iterations (#agent-mode-image-gen).
     imageConfig: cmd.imageConfig,
@@ -512,6 +518,10 @@ async function handleStart(
             // channel is defense-in-depth so the first iteration never depends
             // on the doc write having landed first.
             enableLattice: cmd.enableLattice,
+            // Same dual channel as `enableLattice`, and for the same reason: the executor resolves
+            // `startPayload?.enableArtifacts ?? execution.enableArtifacts`, so the first iteration
+            // never depends on the doc write having landed first.
+            enableArtifacts: cmd.enableArtifacts,
           })
         ),
       })
