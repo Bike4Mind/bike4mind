@@ -774,4 +774,74 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(mockLogger.warn).toHaveBeenCalled();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
+
+  it('persists retrievalIndexModel with the chunk vector, so index residency does not wait on the stamp', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('leaves retrievalIndexModel unwritten when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate.mock.calls[0][0]).not.toHaveProperty('retrievalIndexModel');
+  });
+
+  // The bug: this message's chunks reach OpenSearch, then the file never finishes - the spend gate
+  // denies a later message terminally, SQS retries run out, or a purge lands mid-flight - so
+  // stampChunkEmbeddingModel never runs. Every removal path resolves the index to hit from the
+  // chunk rows, so residency has to be on them already or those documents are unreachable forever.
+  it('records residency on a message that leaves the file short of complete, with no stamp', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: 5 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 1,
+      embeddedCharCount: 11,
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('a terminal spend denial on a later message is consumed, leaving the earlier residency in place', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+    // batchId present: the spend gate is the data-lake path only.
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), chunkCount: 5 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 1,
+      embeddedCharCount: 11,
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const { dataLakeService } = await import('@bike4mind/services');
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(
+      new dataLakeService.EmbeddingSpendDeniedError('lake cap reached', { retryable: false })
+    );
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('denied by spend gate'));
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+    // Only the first message wrote chunks; the residency it recorded is all a later removal has.
+    expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
 });

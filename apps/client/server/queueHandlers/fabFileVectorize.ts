@@ -414,11 +414,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
     }
 
+    const indexesToOpenSearch = selfHostOpenSearchEnabled();
+
     // Write this message's chunk vectors in a transaction.
     await withTransaction(async () => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
           chunk.vector = vectors[index];
+          // Index residency, recorded per MESSAGE and persisted here rather than with the
+          // file-complete `embeddingModel` stamp below - see IFabFileChunk.retrievalIndexModel.
+          // Deliberately written BEFORE the fail-open OpenSearch write it predicts: removing from
+          // an index that holds nothing is a no-op, missing one orphans documents forever.
+          if (indexesToOpenSearch) chunk.retrievalIndexModel = embeddingModel;
           return fabFileChunkRepository.update(chunk);
         })
       );
@@ -427,7 +434,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Self-host OpenSearch dual-write: outside the transaction (an OpenSearch write cannot be
     // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
     // failed - the Mongo write above already succeeded and is the source of truth).
-    if (selfHostOpenSearchEnabled()) {
+    if (indexesToOpenSearch) {
       try {
         // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
         // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
