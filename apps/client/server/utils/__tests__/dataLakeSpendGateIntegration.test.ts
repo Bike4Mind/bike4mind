@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import {
@@ -6,7 +6,9 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import {
+  Cache,
   DataLakeModel,
+  FabFile,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   organizationRepository,
@@ -40,6 +42,7 @@ beforeAll(async () => {
   await mongoose.connect(mongod.getUri());
   await Promise.all([
     DataLakeModel.syncIndexes(),
+    FabFile.syncIndexes(),
     UsageEvent.syncIndexes(),
     DataLakeSpendNotificationModel.syncIndexes(),
     User.syncIndexes(),
@@ -55,6 +58,7 @@ afterEach(async () => {
   vi.clearAllMocks();
   await Promise.all([
     DataLakeModel.deleteMany({}),
+    FabFile.deleteMany({}),
     UsageEvent.deleteMany({}),
     DataLakeSpendNotificationModel.deleteMany({}),
     User.deleteMany({}),
@@ -416,5 +420,170 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
       (estimatedMicroUsd * 2) / 1_000_000,
       10
     );
+  });
+});
+
+/**
+ * The membership arm of the gate, against a REAL lakes collection and REAL tag documents.
+ * The unit tests for resolveIngestSpendScope mock the repositories, so they prove the decision
+ * table but not the query: whether an actual FabFile tag document matches an actual lake's
+ * meta-tag and prefix arms is exactly the assumption that, when wrong, silently returns "not
+ * lake work" and reopens the bypass this change closes.
+ */
+describe('resolveIngestSpendScope over real lake membership', () => {
+  const seedLake = async (ownerId: string, slug: string) =>
+    dataLakeRepository.create({
+      name: slug,
+      slug,
+      fileTagPrefix: `${slug}:`,
+      datalakeTag: `datalake:${slug}`,
+      createdByUserId: ownerId,
+      status: 'active',
+    } as never);
+
+  const scopeFor = (file: { id: string; userId: string; tags?: { name: string }[]; batchId?: string }) =>
+    dataLakeService.resolveIngestSpendScope(file, {
+      dataLakeBatches: { findById: vi.fn().mockResolvedValue(null) },
+      dataLakes: dataLakeRepository,
+    });
+
+  it('resolves a member joined by the lake meta-tag, with no batchId', async () => {
+    const owner = await User.create({ username: 'tagged-owner', name: 'Tagged', email: 'tagged@example.com' });
+    const lake = await seedLake(String(owner._id), 'membership-meta-lake');
+    const file = await FabFile.create({
+      userId: String(owner._id),
+      fileName: 'joined.txt',
+      type: 'FILE',
+      filePath: 'joined.txt',
+      tags: [{ name: 'datalake:membership-meta-lake', strength: 1 }],
+    });
+
+    const scope = await scopeFor({ id: String(file._id), userId: String(owner._id), tags: file.tags });
+
+    expect(scope).toEqual({ dataLakeId: lake.id });
+  });
+
+  it('resolves a member joined only by the owner-anchored prefix arm', async () => {
+    const owner = await User.create({ username: 'prefix-owner', name: 'Prefix', email: 'prefix@example.com' });
+    const lake = await seedLake(String(owner._id), 'membership-prefix-lake');
+    const file = await FabFile.create({
+      userId: String(owner._id),
+      fileName: 'prefixed.txt',
+      type: 'FILE',
+      filePath: 'prefixed.txt',
+      tags: [{ name: 'membership-prefix-lake:contracts', strength: 1 }],
+    });
+
+    const scope = await scopeFor({ id: String(file._id), userId: String(owner._id), tags: file.tags });
+
+    expect(scope).toEqual({ dataLakeId: lake.id });
+  });
+
+  it('returns null for a personal file that belongs to no lake, so ordinary uploads are unaffected', async () => {
+    const owner = await User.create({ username: 'solo-owner', name: 'Solo', email: 'solo@example.com' });
+    await seedLake(String(owner._id), 'membership-other-lake');
+    const file = await FabFile.create({
+      userId: String(owner._id),
+      fileName: 'personal.txt',
+      type: 'FILE',
+      filePath: 'personal.txt',
+      tags: [{ name: 'notes', strength: 1 }],
+    });
+
+    const scope = await scopeFor({ id: String(file._id), userId: String(owner._id), tags: file.tags });
+
+    expect(scope).toBeNull();
+  });
+});
+
+/** The TPM window against the REAL fixed-window counter, not a mocked cache. */
+describe('token-per-minute window over the real cache counter', () => {
+  // The throughput windows are ONE platform-wide counter each, deliberately - every data-lake
+  // embed shares them. That makes them cross-test state: earlier tests in this file spend tokens
+  // against the same key, so the window has to be cleared or this describe reads their spend as
+  // its own. (Discovering that here is the design working as documented, not a leak.)
+  beforeEach(async () => {
+    await Cache.deleteMany({ key: { $regex: '^dataLakeEmbeddingSpend:' } });
+  });
+
+  const levers = (maxTokensPerMinute: string) => ({
+    dataLakeEmbeddingSpendEnabled: 'true',
+    dataLakeEmbeddingBudgetPerRunUsd: '5',
+    dataLakeEmbeddingBudgetPerLakeUsd: '100',
+    dataLakeEmbeddingBudgetPerPeriodUsd: '50',
+    dataLakeEmbeddingBudgetPeriodHours: '24',
+    dataLakeEmbeddingMaxCallsPerMinute: '120',
+    dataLakeEmbeddingMaxTokensPerMinute: maxTokensPerMinute,
+    dataLakeVectorizeChunkBatchSize: '50',
+  });
+
+  it('grants a call that fits the window and denies the next one as retryable', async () => {
+    const owner = await User.create({ username: 'tpm-owner', name: 'TPM', email: 'tpm@example.com' });
+    const lake = await dataLakeRepository.create({
+      name: 'tpm-lake',
+      slug: 'tpm-lake',
+      fileTagPrefix: 'tpm-lake:',
+      datalakeTag: 'datalake:tpm-lake',
+      createdByUserId: String(owner._id),
+      status: 'active',
+    } as never);
+    mockedGetSettings.mockResolvedValue(levers('1000') as never);
+
+    const gateDb = {
+      adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]), findAll: vi.fn().mockResolvedValue([]) },
+      cache: cacheRepository,
+      dataLakes: dataLakeRepository,
+      dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
+    };
+    const call = (estimatedTokens: number) =>
+      dataLakeService.enforceEmbeddingSpendGate({
+        estimatedMicroUsd: 1,
+        estimatedTokens,
+        dataLakeId: lake.id,
+        db: gateDb,
+        // No real sleeping: the point is the deny, and the wait budget is exercised in unit tests.
+        sleep: vi.fn().mockResolvedValue(undefined),
+      });
+
+    await expect(call(600)).resolves.toBeUndefined();
+
+    // 600 + 600 > 1000, so the window has no room. Retryable: it drains on its own.
+    let denial: unknown;
+    await call(600).catch(err => (denial = err));
+    expect(denial).toBeInstanceOf(dataLakeService.EmbeddingSpendDeniedError);
+    expect((denial as { retryable: boolean }).retryable).toBe(true);
+    expect((denial as Error).message).toMatch(/token rate limit/);
+  });
+
+  it('denies a single call larger than the whole window as TERMINAL, since redelivery cannot help', async () => {
+    const owner = await User.create({ username: 'big-owner', name: 'Big', email: 'big@example.com' });
+    const lake = await dataLakeRepository.create({
+      name: 'big-call-lake',
+      slug: 'big-call-lake',
+      fileTagPrefix: 'big-call-lake:',
+      datalakeTag: 'datalake:big-call-lake',
+      createdByUserId: String(owner._id),
+      status: 'active',
+    } as never);
+    mockedGetSettings.mockResolvedValue(levers('1000') as never);
+
+    let denial: unknown;
+    await dataLakeService
+      .enforceEmbeddingSpendGate({
+        estimatedMicroUsd: 1,
+        estimatedTokens: 5_000,
+        dataLakeId: lake.id,
+        db: {
+          adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]), findAll: vi.fn().mockResolvedValue([]) },
+          cache: cacheRepository,
+          dataLakes: dataLakeRepository,
+          dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
+        },
+        sleep: vi.fn().mockResolvedValue(undefined),
+      })
+      .catch(err => (denial = err));
+
+    expect((denial as { retryable: boolean }).retryable).toBe(false);
+    expect((denial as Error).message).toMatch(/can never fit/);
   });
 });
