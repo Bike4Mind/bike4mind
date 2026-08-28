@@ -139,7 +139,14 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
  * scan's filter, and an un-stamped re-enqueue would be read as `user` work (isConvergenceHalted
  * fails soft to `user`) and chunked anyway - spending exactly the budget the switch was set to stop.
  * The tradeoff, which is the switch working as designed: while it is on, the sweep rescues nothing,
- * including a genuinely stranded non-lake file. It resumes on its own once the switch clears.
+ * including a genuinely stranded non-lake file. What brings such a file back is RE-SELECTION, not a
+ * resume path: the paused note is not excluded by the filter above, so the first sweep after the
+ * switch clears rebuilds it (pinned in chunkScan.test.ts, because it is the only thing making this
+ * tradeoff acceptable). Two limits on that, both pre-existing and neither owned here: the halt write
+ * nulls `chunkRebuildRequestedAt`, so a MEDIA file admitted only through the rebuild-marker arm
+ * above drops out of this filter permanently and needs a manual reprocess; and a future change that
+ * excludes paused files from selection would end the re-selection this relies on, so the two have to
+ * land together.
  *
  * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
  * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).

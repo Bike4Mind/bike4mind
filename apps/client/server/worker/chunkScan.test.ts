@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
+import { provenancePayloadShape, shouldHaltConvergence } from '@server/queueHandlers/convergenceProvenance';
 import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
@@ -86,6 +89,21 @@ describe('buildFabFileChunkScanFilter', () => {
       createdAt: old,
       deletedAt: null,
       notes: 'quarterly report, uploaded for the board deck',
+    };
+    expect(matches(doc, filter)).toBe(true);
+  });
+
+  it('still selects a file the kill switch paused - re-selection is the only way it ever resumes', () => {
+    // The paused note is deliberately NOT excluded here: nothing else re-drives a paused file, so
+    // adding it to the notes exclusion (tempting, to stop the re-sweep churn) strands every paused
+    // file permanently. Any change that does exclude it has to bring a resume path with it.
+    const doc = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
     };
     expect(matches(doc, filter)).toBe(true);
   });
@@ -197,5 +215,14 @@ describe('buildChunkScanQueuePayload', () => {
 
   it('sends no lakeId: a global sweep is halted by the platform switch, not a per-lake pause', () => {
     expect(buildChunkScanQueuePayload('ff1', 'u1')).not.toHaveProperty('lakeId');
+  });
+
+  it('is halted by the shape the chunk handler actually parses, not just by carrying an origin key', () => {
+    // Binds producer to consumer: fabFileChunk.ts parses the body with provenancePayloadShape and
+    // defaults a missing origin to 'user'. Renaming the key here (or stamping a value outside
+    // WORK_ORIGINS) would leave the payload assertions above passing while the kill switch went
+    // dead, which is exactly how the batchId-gated stamp this fix replaced went unnoticed.
+    const parsed = z.object(provenancePayloadShape).parse(buildChunkScanQueuePayload('ff1', 'u1'));
+    expect(shouldHaltConvergence(parsed.origin ?? 'user', true)).toBe(true);
   });
 });

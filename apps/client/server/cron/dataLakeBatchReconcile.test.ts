@@ -234,6 +234,24 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
 
+    it('projects userId as well as _id - the lean() fixtures would otherwise mask a trimmed projection', async () => {
+      h.getSettingsValue.mockResolvedValue(true);
+      const selectSpy = vi.fn();
+      h.fabFileFind.mockReturnValue({
+        select: (projection: string) => {
+          selectSpy(projection);
+          return { limit: () => ({ lean: async () => [{ _id: 'ff1', userId: 'u1' }] }) };
+        },
+      });
+
+      await handler();
+
+      // Every fixture here supplies userId whatever is projected, so a trim back to '_id' alone
+      // stays green while production enqueues `userId: 'undefined'`. This is the only assertion
+      // that fails on that.
+      expect(selectSpy).toHaveBeenCalledWith(expect.stringContaining('userId'));
+    });
+
     it('enqueues every id the filter selected - duplicates are the worker CAS to resolve', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       h.fabFileFind.mockReturnValue({

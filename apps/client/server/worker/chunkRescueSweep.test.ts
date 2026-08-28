@@ -34,14 +34,21 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const runSweep = () => runChunkRescueSweep(logger as never);
 
 const limitSpy = vi.fn();
+const selectSpy = vi.fn();
 const withCandidates = (candidates: Candidate[]) => {
   h.fabFileFind.mockReturnValue({
-    select: () => ({
-      limit: (n: number) => {
-        limitSpy(n);
-        return { lean: async () => candidates };
-      },
-    }),
+    // The projection is spied, not ignored: the lean() fixtures below carry userId whatever is
+    // projected, so without this a trim back to '_id' would keep every test green and ship
+    // `userId: 'undefined'` to the queue.
+    select: (projection: string) => {
+      selectSpy(projection);
+      return {
+        limit: (n: number) => {
+          limitSpy(n);
+          return { lean: async () => candidates };
+        },
+      };
+    },
   });
 };
 
@@ -65,6 +72,14 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     // an indexed scan of every complete-but-unchunked file once a minute, forever.
     expect(h.fabFileFind).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('projects userId as well as _id - the payload needs it and the fixtures would mask its absence', async () => {
+    withCandidates([{ _id: 'ff1', userId: 'u1' }]);
+
+    await runSweep();
+
+    expect(selectSpy).toHaveBeenCalledWith(expect.stringContaining('userId'));
   });
 
   it('selects with both cutoffs and the per-pass cap', async () => {
