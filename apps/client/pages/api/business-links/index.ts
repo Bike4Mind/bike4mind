@@ -6,6 +6,12 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@server/utils/errors';
+import { Types } from 'mongoose';
+
+// Round-trip rather than mongoose.isValidObjectId, which also accepts any
+// 12-character string and would let a junk id through as a silent no-match.
+const isValidObjectId = (id: string): boolean =>
+  Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
 
 interface IQuery {
   pageSize?: string;
@@ -26,6 +32,11 @@ const handler = baseApi()
       const query: any = {};
 
       if (categoryId) {
+        // categoryId is an ObjectId-typed field, so an unvalidated junk value casts
+        // and throws rather than answering the caller. 400 is the right answer.
+        if (!isValidObjectId(categoryId)) {
+          return res.status(400).json({ error: 'Invalid category ID format' });
+        }
         query.categoryId = categoryId;
       }
 

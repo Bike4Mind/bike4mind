@@ -9,9 +9,11 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
   if (typeof error === 'object' && error !== null && 'name' in error) {
     let errorObj = error as { name: string; message?: string };
 
-    // Only a cast on `_id` means the caller handed us a junk resource id, which is a
-    // genuine 404. A CastError raised anywhere else (a side effect, a non-lookup field)
-    // is a server-side bug and must stay a 5xx so it is logged at `error` and alarms.
+    // A cast on `_id` is the caller handing us a junk resource id, which is a genuine 404.
+    // A CastError raised on any other field (a side effect, a non-lookup field) is a
+    // server-side bug and must stay a 5xx so it is logged at `error` and alarms.
+    // `path` is the leaf SchemaType name, never a dotted path, so a cast on a subdocument
+    // `_id` is indistinguishable from a top-level one and still becomes a 404.
     if (errorObj.name === 'CastError' && (errorObj as { path?: string }).path === '_id') {
       errorObj = new NotFoundError('Resource not found');
     }

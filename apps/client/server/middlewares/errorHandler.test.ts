@@ -102,11 +102,14 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
   });
 
   it('maps a cast on `_id` to 404 and logs it as an expected client error', () => {
-    const { req, res, status } = makeReqRes();
+    const { req, res, status, json } = makeReqRes();
     errorHandler(castError('_id'), req, res);
     expect(status).toHaveBeenCalledWith(404);
     expect(req.logger.warn).toHaveBeenCalled();
     expect(req.logger.error).not.toHaveBeenCalled();
+    // The NotFoundError substitution is what keeps the junk id and the model name off a
+    // 404 body; without it the raw cast message would ship on the wire.
+    expect(json.mock.calls[0][0]).toMatchObject({ name: 'NotFoundError', error: 'Resource not found' });
   });
 
   it('leaves a cast on any other field a 500 and logs it as a server error', () => {
@@ -126,6 +129,11 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
   it('adds nothing beyond the envelope for a non-`_id` CastError', () => {
     const { req, res, json } = makeReqRes();
     errorHandler(castError('userId'), req, res);
+    // The 500 body deliberately carries the unmapped error through, unlike the 404 above.
+    expect(json.mock.calls[0][0]).toMatchObject({
+      name: 'CastError',
+      error: expect.stringContaining('userId'),
+    });
     for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
       expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
     }

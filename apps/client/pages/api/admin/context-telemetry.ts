@@ -5,9 +5,16 @@ import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 
+// A bare z.string() is not date validation: an unparseable value becomes an Invalid Date
+// and throws a Mongoose CastError on the `timestamp` filter, which reaches errorHandler
+// as a 500. Reject it here instead.
+const dateParam = z.string().refine(value => !Number.isNaN(Date.parse(value)), {
+  message: 'Must be a parseable date',
+});
+
 const querySchema = z.object({
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
+  startDate: dateParam.optional(),
+  endDate: dateParam.optional(),
   modelId: z.string().optional(),
   provider: z.string().optional(),
   minAnomalyScore: z.string().optional(),
