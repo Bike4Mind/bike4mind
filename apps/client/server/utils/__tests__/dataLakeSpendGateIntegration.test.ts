@@ -82,6 +82,7 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
       dataLakeEmbeddingBudgetPerPeriodUsd: '50',
       dataLakeEmbeddingBudgetPeriodHours: '24',
       dataLakeEmbeddingMaxCallsPerMinute: '120',
+      dataLakeEmbeddingMaxTokensPerMinute: '600000',
       dataLakeVectorizeChunkBatchSize: '50',
     });
 
@@ -102,6 +103,7 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
     const estimatedMicroUsd = 85;
     await dataLakeService.enforceEmbeddingSpendGate({
       estimatedMicroUsd,
+      estimatedTokens: 1_000,
       dataLakeId: lake.id,
       db: {
         adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]), findAll: vi.fn().mockResolvedValue([]) },
@@ -165,6 +167,7 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
       dataLakeEmbeddingBudgetPerPeriodUsd: '50',
       dataLakeEmbeddingBudgetPeriodHours: '24',
       dataLakeEmbeddingMaxCallsPerMinute: '120',
+      dataLakeEmbeddingMaxTokensPerMinute: '600000',
       dataLakeVectorizeChunkBatchSize: '50',
     });
 
@@ -187,10 +190,22 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
       dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
     };
 
-    await dataLakeService.enforceEmbeddingSpendGate({ estimatedMicroUsd: 85, dataLakeId: lake.id, db: gateDb, notify });
+    await dataLakeService.enforceEmbeddingSpendGate({
+      estimatedMicroUsd: 85,
+      estimatedTokens: 1_000,
+      dataLakeId: lake.id,
+      db: gateDb,
+      notify,
+    });
     // Second small embed on the same lake, still within the (already-exceeded) budget window key.
     await dataLakeService
-      .enforceEmbeddingSpendGate({ estimatedMicroUsd: 1, dataLakeId: lake.id, db: gateDb, notify })
+      .enforceEmbeddingSpendGate({
+        estimatedMicroUsd: 1,
+        estimatedTokens: 1_000,
+        dataLakeId: lake.id,
+        db: gateDb,
+        notify,
+      })
       .catch(() => {}); // may deny depending on remaining headroom; irrelevant to this assertion
 
     const claims = await DataLakeSpendNotificationModel.find({ dataLakeId: lake.id, kind: 'approaching_cap' });
@@ -216,6 +231,7 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
       dataLakeEmbeddingBudgetPerPeriodUsd: '50',
       dataLakeEmbeddingBudgetPeriodHours: '24',
       dataLakeEmbeddingMaxCallsPerMinute: '120',
+      dataLakeEmbeddingMaxTokensPerMinute: '600000',
       dataLakeVectorizeChunkBatchSize: '50',
     });
 
@@ -251,7 +267,13 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
     const WORKER_COUNT = 8;
     await Promise.all(
       Array.from({ length: WORKER_COUNT }, () =>
-        dataLakeService.enforceEmbeddingSpendGate({ estimatedMicroUsd: 12, dataLakeId: lake.id, db: gateDb, notify })
+        dataLakeService.enforceEmbeddingSpendGate({
+          estimatedMicroUsd: 12,
+          estimatedTokens: 1_000,
+          dataLakeId: lake.id,
+          db: gateDb,
+          notify,
+        })
       )
     );
 
@@ -324,6 +346,7 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
       dataLakeEmbeddingBudgetPerPeriodUsd: '50',
       dataLakeEmbeddingBudgetPeriodHours: '24',
       dataLakeEmbeddingMaxCallsPerMinute: '120',
+      dataLakeEmbeddingMaxTokensPerMinute: '600000',
       dataLakeVectorizeChunkBatchSize: '50',
     });
 
@@ -339,7 +362,12 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
     // caller ledgers the same amount - two separate writes to two separate collections, no
     // shared transaction.
     const ingestOnce = async () => {
-      await dataLakeService.enforceEmbeddingSpendGate({ estimatedMicroUsd, dataLakeId: lake.id, db: gateDb });
+      await dataLakeService.enforceEmbeddingSpendGate({
+        estimatedMicroUsd,
+        estimatedTokens: 7,
+        dataLakeId: lake.id,
+        db: gateDb,
+      });
       await recordOperationalUsage(
         {
           requestId: 'batch-agreement',

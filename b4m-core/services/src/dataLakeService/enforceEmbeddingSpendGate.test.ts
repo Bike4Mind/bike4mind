@@ -3,6 +3,7 @@ import { CreditHolderType } from '@bike4mind/common';
 import {
   EMBEDDING_SPEND_PERIOD_KEY,
   EMBEDDING_SPEND_RATE_KEY,
+  EMBEDDING_SPEND_TOKEN_RATE_KEY,
   EmbeddingSpendDeniedError,
   enforceEmbeddingSpendGate,
 } from './enforceEmbeddingSpendGate';
@@ -22,6 +23,7 @@ const levers = (overrides: Partial<DataLakeSpendLevers> = {}): DataLakeSpendLeve
   perPeriodBudgetMicroUsd: 50_000_000,
   periodHours: 24,
   maxCallsPerMinute: 120,
+  maxTokensPerMinute: 600_000,
   vectorizeChunkBatchSize: 50,
   tierMultiplier: 1,
   ...overrides,
@@ -47,10 +49,12 @@ const grantAll = () => ({
 const gate = (
   db: ReturnType<typeof grantAll>,
   estimatedMicroUsd = 1_000,
-  notify?: (event: unknown) => Promise<unknown>
+  notify?: (event: unknown) => Promise<unknown>,
+  estimatedTokens = 1_000
 ) =>
   enforceEmbeddingSpendGate({
     estimatedMicroUsd,
+    estimatedTokens,
     batchId: 'batch1',
     dataLakeId: 'lake1',
     db,
@@ -68,12 +72,19 @@ describe('enforceEmbeddingSpendGate', () => {
     const db = grantAll();
     await expect(gate(db)).resolves.toBeUndefined();
 
-    // run -> lake -> period, with the rate check first.
+    // run -> lake -> period, with both throughput windows (calls, then tokens) checked first.
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(1, EMBEDDING_SPEND_RATE_KEY, 1, 120, 60_000);
+    expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
+      2,
+      EMBEDDING_SPEND_TOKEN_RATE_KEY,
+      1_000,
+      600_000,
+      60_000
+    );
     expect(db.dataLakeBatches.tryAddEmbeddingSpend).toHaveBeenCalledWith('batch1', 1_000, 5_000_000);
     expect(db.dataLakes.tryAddEmbeddingSpendMetered).toHaveBeenCalledWith('lake1', 1_000, 100_000_000);
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
-      2,
+      3,
       EMBEDDING_SPEND_PERIOD_KEY,
       1_000,
       50_000_000,
@@ -119,7 +130,7 @@ describe('enforceEmbeddingSpendGate', () => {
 
   it('skips the per-run and per-lake meters when the ids are absent (non-batch work)', async () => {
     const db = grantAll();
-    await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1_000, db, sleep: vi.fn() });
+    await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1_000, estimatedTokens: 1_000, db, sleep: vi.fn() });
     expect(db.dataLakeBatches.tryAddEmbeddingSpend).not.toHaveBeenCalled();
     expect(db.dataLakes.tryAddEmbeddingSpendMetered).not.toHaveBeenCalled();
   });
@@ -131,7 +142,14 @@ describe('enforceEmbeddingSpendGate', () => {
       .mockResolvedValueOnce({ success: false, count: 120, expiresAt: new Date(Date.now() + 5_000) })
       .mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
 
-    await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1_000, batchId: 'b', dataLakeId: 'l', db, sleep });
+    await enforceEmbeddingSpendGate({
+      estimatedMicroUsd: 1_000,
+      estimatedTokens: 1_000,
+      batchId: 'b',
+      dataLakeId: 'l',
+      db,
+      sleep,
+    });
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
@@ -151,14 +169,79 @@ describe('enforceEmbeddingSpendGate', () => {
     expect((denial as Error).message).toMatch(/stayed exhausted after waiting/);
   });
 
+  it("meters the token window with the call's own token count, not one unit", async () => {
+    const db = grantAll();
+    await gate(db, 1_000, undefined, 4_096);
+    expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(EMBEDDING_SPEND_RATE_KEY, 1, 120, 60_000);
+    expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      EMBEDDING_SPEND_TOKEN_RATE_KEY,
+      4_096,
+      600_000,
+      60_000
+    );
+  });
+
+  it('does not re-charge the call window while waiting out the token window', async () => {
+    // The regression this guards: reserving both windows in one retry loop would consume a call
+    // slot on every probe, so a saturated TPM window would silently burn the RPM budget too.
+    const db = grantAll();
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) =>
+      key === EMBEDDING_SPEND_TOKEN_RATE_KEY && sleep.mock.calls.length === 0
+        ? { success: false, count: 600_000, expiresAt: new Date(Date.now() + 5_000) }
+        : { success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) }
+    );
+
+    await enforceEmbeddingSpendGate({
+      estimatedMicroUsd: 1_000,
+      estimatedTokens: 1_000,
+      batchId: 'b',
+      dataLakeId: 'l',
+      db,
+      sleep,
+    });
+
+    const callWindowProbes = db.cache.tryAddWithinLimitFixedWindow.mock.calls.filter(
+      ([key]: [string]) => key === EMBEDDING_SPEND_RATE_KEY
+    );
+    expect(callWindowProbes).toHaveLength(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies a call larger than the whole token window as terminal, since waiting cannot help', async () => {
+    const db = grantAll();
+    const sleep = vi.fn();
+    let denial: unknown;
+    await gate(db, 1_000, undefined, 700_000).catch(err => (denial = err));
+    expect(denial).toBeInstanceOf(EmbeddingSpendDeniedError);
+    expect((denial as EmbeddingSpendDeniedError).retryable).toBe(false);
+    expect((denial as Error).message).toMatch(/can never fit/);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('denies immediately on a token rate limit of 0 (the STOP value)', async () => {
+    mockedLevers.mockResolvedValue(levers({ maxTokensPerMinute: 0 }));
+    const db = grantAll();
+    const sleep = vi.fn();
+    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) =>
+      key === EMBEDDING_SPEND_TOKEN_RATE_KEY
+        ? { success: false, count: 0, expiresAt: new Date() }
+        : { success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) }
+    );
+    await expect(
+      enforceEmbeddingSpendGate({ estimatedMicroUsd: 1, estimatedTokens: 1, batchId: 'b', db, sleep })
+    ).rejects.toThrow(/token rate limit is 0/);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it('denies immediately on a rate limit of 0 (the STOP value) without waiting', async () => {
     mockedLevers.mockResolvedValue(levers({ maxCallsPerMinute: 0 }));
     const db = grantAll();
     const sleep = vi.fn();
     db.cache.tryAddWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 0, expiresAt: new Date() });
-    await expect(enforceEmbeddingSpendGate({ estimatedMicroUsd: 1, batchId: 'b', db, sleep })).rejects.toThrow(
-      /rate limit is 0/
-    );
+    await expect(
+      enforceEmbeddingSpendGate({ estimatedMicroUsd: 1, estimatedTokens: 1, batchId: 'b', db, sleep })
+    ).rejects.toThrow(/rate limit is 0/);
     expect(sleep).not.toHaveBeenCalled();
   });
 });
@@ -361,6 +444,7 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
 
     await enforceEmbeddingSpendGate({
       estimatedMicroUsd: 1_000,
+      estimatedTokens: 1_000,
       batchId: 'batch1',
       db,
       sleep: vi.fn(),
@@ -389,6 +473,7 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
     await expect(
       enforceEmbeddingSpendGate({
         estimatedMicroUsd: 1_000,
+        estimatedTokens: 1_000,
         batchId: 'batch1',
         dataLakeId: 'lake1',
         db,
@@ -444,7 +529,13 @@ describe('enforceEmbeddingSpendGate cost tier', () => {
 
   it('does not read a lake when the run has none (a per-run budget still applies)', async () => {
     const db = grantAll();
-    await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1, batchId: 'batch1', db, sleep: vi.fn() });
+    await enforceEmbeddingSpendGate({
+      estimatedMicroUsd: 1,
+      estimatedTokens: 1_000,
+      batchId: 'batch1',
+      db,
+      sleep: vi.fn(),
+    });
     expect(db.dataLakes.findById).not.toHaveBeenCalled();
     expect(ownerTypePassedToResolver()).toBeUndefined();
   });

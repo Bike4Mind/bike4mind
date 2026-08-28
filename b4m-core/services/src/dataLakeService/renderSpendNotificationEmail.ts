@@ -77,13 +77,15 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'stopped' && scope === 'rate') {
     // `reason` is deliberately not interpolated here - its only producer sends a fragment meant
-    // for logs ("the embedding rate limit is 0 (stopped)"), not a mid-paragraph clause, and
+    // for logs ("the embedding call rate limit is 0 (stopped)"), not a mid-paragraph clause, and
     // splicing it in read as a lowercase, unpunctuated restatement of the sentence before it.
+    // Covers BOTH throughput windows (calls/min and tokens/min), which share this scope, so the
+    // copy names neither one specifically - the log line carries which window it was.
     return {
-      subject: `Indexing paused for "${subjectName}" - the embedding rate limit is set to 0`,
+      subject: `Indexing paused for "${subjectName}" - an embedding throughput limit is set to 0`,
       html: wrap(
         lake,
-        `<p>A platform admin set the embedding rate limit to 0, which stops all indexing. ` +
+        `<p>A platform admin set an embedding throughput limit to 0, which stops all indexing. ` +
           `No action is available to you.</p>`
       ),
     };
@@ -143,7 +145,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
       subject: `Indexing for "${subjectName}" is being throttled`,
       html: wrap(
         lake,
-        `<p>The embedding rate limit is saturated; work retries automatically and no action is needed ` +
+        `<p>An embedding throughput limit is saturated; work retries automatically and no action is needed ` +
           `unless it persists.</p>`
       ),
     };
