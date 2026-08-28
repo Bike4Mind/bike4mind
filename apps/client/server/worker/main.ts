@@ -15,7 +15,12 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { buildStrandedVectorizeScanFilter, CHUNK_SCAN_BATCH, VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS } from './chunkScan';
+import {
+  buildStrandedVectorizeScanFilter,
+  CHUNK_CLAIM_STALE_MS,
+  CHUNK_SCAN_BATCH,
+  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
+} from './chunkScan';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { runChunkRescueSweep } from './chunkRescueSweep';
 import {
@@ -142,8 +147,10 @@ async function main() {
     // Second pass, same queue: files whose chunks landed but whose vectorize hand-off failed.
     // Ungated (these files were already chunked, so enableAutoChunk has nothing left to gate) and
     // separately capped - see buildStrandedVectorizeScanFilter.
-    const strandedCutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
-    const stranded = await FabFile.find(buildStrandedVectorizeScanFilter(strandedCutoff))
+    const strandedNow = Date.now();
+    const strandedCutoff = new Date(strandedNow - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+    const strandedStaleClaimBefore = new Date(strandedNow - CHUNK_CLAIM_STALE_MS);
+    const stranded = await FabFile.find(buildStrandedVectorizeScanFilter(strandedCutoff, strandedStaleClaimBefore))
       .select('_id userId batchId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();

@@ -228,6 +228,50 @@ describe('buildStrandedVectorizeScanFilter', () => {
     expect(matches(doc, filter)).toBe(false);
   });
 
+  describe('stale-claim arm', () => {
+    // resumeVectorizeEnqueue holds the claim across real work (a vectorless-chunk read plus N
+    // sends), so a hard-killed worker leaves isChunking:true with no finally to clear it. Every
+    // other automatic door is shut on that file - hence the same three arms the un-chunked sweep
+    // carries, with the same chunkClaimedAt cutoff.
+    const claimCutoff = new Date('2026-01-01T00:00:00Z');
+    const withStale = buildStrandedVectorizeScanFilter(cutoff, claimCutoff);
+    const base = { chunked: true, vectorizeEnqueueFailedAt: stale, deletedAt: null };
+
+    it('still selects a file that is not claimed at all', () => {
+      expect(matches({ ...base, isChunking: false }, withStale)).toBe(true);
+    });
+
+    it('selects a claim older than the stale cutoff', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: stale }, withStale)).toBe(true);
+    });
+
+    it('selects an in-flight file with no claim stamp - the pre-chunkClaimedAt backfill', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, withStale)).toBe(true);
+      expect(matches({ ...base, isChunking: true }, withStale)).toBe(true);
+    });
+
+    it('leaves a genuinely in-flight claim alone', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: fresh }, withStale)).toBe(false);
+    });
+
+    it('uses the same claim cutoff the un-chunked sweep does', () => {
+      const claimed = { isChunking: true, chunkClaimedAt: fresh };
+      expect(matches({ ...base, ...claimed }, withStale)).toBe(
+        matches(
+          {
+            status: 'complete',
+            chunkCount: 0,
+            createdAt: stale,
+            deletedAt: null,
+            mimeType: 'application/pdf',
+            ...claimed,
+          },
+          buildFabFileChunkScanFilter(cutoff, claimCutoff)
+        )
+      );
+    });
+  });
+
   it('skips a deleted file', () => {
     const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: new Date() };
     expect(matches(doc, filter)).toBe(false);

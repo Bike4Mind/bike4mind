@@ -130,8 +130,10 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
  * re-chunks. Not gated on enableAutoChunk: these files were already chunked.
  */
 async function rescueStrandedVectorizeFiles(): Promise<number> {
-  const cutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
-  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff))
+  const now = Date.now();
+  const cutoff = new Date(now - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+  const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
+  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff, staleClaimBefore))
     .select('_id userId batchId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
