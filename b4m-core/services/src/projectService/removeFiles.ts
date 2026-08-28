@@ -8,6 +8,7 @@ import {
   BadRequestError,
 } from '@bike4mind/common';
 import { z } from 'zod';
+import { usableObjectIds } from '@bike4mind/db-core';
 
 const removeProjectFilesSchema = z.object({
   projectId: z.string(),
@@ -42,7 +43,16 @@ export const removeFiles = async (
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
   // BadRequestError, not a bare Error - see addFiles.
-  if (files.length !== new Set(fileIds).size) throw new BadRequestError('Some files are not accessible');
+  // Asked for by id, not by count, so a duplicate cannot read as a miss. An id that cannot
+  // address a row is EXCLUDED rather than rejected: it is what the caller wants gone, the read
+  // guards skip it, and rejecting left it in the project permanently, warning on every read.
+  // The filter below still removes it. A castable id that did not resolve is still an access
+  // failure and still a 400.
+  const resolvedIds = new Set(files.map(f => f.id));
+  const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles'));
+  if (fileIds.some(id => addressable.has(id) && !resolvedIds.has(id))) {
+    throw new BadRequestError('Some files are not accessible');
+  }
 
   if (project.userId !== userId && files.some(f => f.userId !== userId)) {
     throw new Error('You are not authorized to remove files from this project');

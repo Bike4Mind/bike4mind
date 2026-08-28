@@ -51,6 +51,28 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
 
   const call = () => removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID] }, { db });
 
+  it('removes an id that cannot address a row instead of rejecting the request', async () => {
+    // The read guards skip such an entry rather than throwing, so rejecting here made a legacy
+    // id unremovable: it stayed in the project and warned on every read.
+    const JUNK_ID = 'legacy-uuid-not-an-objectid';
+    project.fileIds = [FILE_ID, JUNK_ID];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [JUNK_ID] }, { db });
+
+    expect(project.fileIds).toEqual([FILE_ID]);
+    expect(db.projects.update).toHaveBeenCalled();
+  });
+
+  it('still rejects a castable id that did not resolve, which is an access failure', async () => {
+    const UNREACHABLE_ID = '67dbe18a7f9cf1fa5d968600';
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await expect(removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UNREACHABLE_ID] }, { db })).rejects.toThrow(
+      'Some files are not accessible'
+    );
+  });
+
   it('drops a user whose only access to the file came from this project', async () => {
     file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
 

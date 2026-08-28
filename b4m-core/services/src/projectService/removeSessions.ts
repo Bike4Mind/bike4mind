@@ -6,6 +6,7 @@ import {
   BadRequestError,
 } from '@bike4mind/common';
 import { z } from 'zod';
+import { usableObjectIds } from '@bike4mind/db-core';
 
 const removeProjectSessionsSchema = z.object({
   projectId: z.string(),
@@ -38,7 +39,16 @@ export const removeSessions = async (
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
   // BadRequestError, not a bare Error - see addFiles.
-  if (sessions.length !== new Set(sessionIds).size) throw new BadRequestError('Some sessions are not accessible');
+  // Asked for by id, not by count, so a duplicate cannot read as a miss. An id that cannot
+  // address a row is EXCLUDED rather than rejected: it is what the caller wants gone, the read
+  // guards skip it, and rejecting left it in the project permanently, warning on every read.
+  // The filter below still removes it. A castable id that did not resolve is still an access
+  // failure and still a 400.
+  const resolvedIds = new Set(sessions.map(s => s.id));
+  const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions'));
+  if (sessionIds.some(id => addressable.has(id) && !resolvedIds.has(id))) {
+    throw new BadRequestError('Some sessions are not accessible');
+  }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
     throw new Error('You are not authorized to remove sessions from this project');
   }
