@@ -68,6 +68,12 @@ const handler = baseApi().get(async (req, res) => {
   // Query logs using findByDateRange which supports all filters
   const start = startDate ? new Date(startDate) : new Date(0);
   const end = endDate ? new Date(endDate) : new Date();
+  // An Invalid Date reaches the Date-typed `timestamp` filter and throws a CastError there
+  // rather than answering the caller. Mirrors admin/integration-audit-logs.
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new BadRequestError('Invalid date format for startDate or endDate');
+  }
+
   const logs = await slackAuditLogRepository.findByDateRange(start, end, filters, limit);
 
   Logger.info('📋 [Admin] Queried Slack audit logs', {

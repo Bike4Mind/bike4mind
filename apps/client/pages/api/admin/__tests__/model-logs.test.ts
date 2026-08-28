@@ -185,4 +185,16 @@ describe('GET /api/admin/model-logs', () => {
     expect(serialized).not.toContain('private tool output');
     expect(serialized).toContain('web_search');
   });
+  // A bare z.string() let an unparseable value become an Invalid Date and cast against the
+  // Date-typed `timestamp` filter, which surfaces as a 500 rather than answering the caller.
+  it.each(['startDate', 'endDate'])('rejects an unparseable %s', async param => {
+    const { req, res } = run({ [param]: 'not-a-date' });
+    await expect(handler(req, res)).rejects.toThrow();
+  });
+
+  it('still accepts a parseable startDate', async () => {
+    const { req, res } = run({ startDate: '2000-01-01T00:00:00.000Z' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
 });

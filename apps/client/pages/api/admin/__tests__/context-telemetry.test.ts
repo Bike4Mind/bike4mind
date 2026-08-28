@@ -158,4 +158,17 @@ describe('GET /api/admin/context-telemetry', () => {
     expect(body.total).toBe(1);
     expect(body.entries).toEqual([{ id: 'quest-1', timestamp: timestamp.toISOString(), telemetry }]);
   });
+  // A bare z.string() let an unparseable value become an Invalid Date and cast against the
+  // Date-typed `timestamp` filter, which surfaces as a 500 rather than answering the caller.
+  it.each(['startDate', 'endDate'])('rejects an unparseable %s before it reaches the query', async param => {
+    const { promise } = run({ [param]: 'not-a-date' });
+    await expect(promise).rejects.toThrow();
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a parseable date', async () => {
+    const { promise } = run({ startDate: '2026-08-01T00:00:00.000Z' });
+    await promise;
+    expect(findQuery().timestamp).toMatchObject({ $gte: new Date('2026-08-01T00:00:00.000Z') });
+  });
 });
