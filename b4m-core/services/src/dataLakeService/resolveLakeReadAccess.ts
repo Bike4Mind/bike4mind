@@ -1,4 +1,9 @@
-import type { AccessContext, IAdminSettingsRepository, IDataLakeDocument } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+} from '@bike4mind/common';
 import { classifyLakeAccess, type LakeAccessArm } from './classifyLakeAccess';
 import type { LakeGrant } from './manageRule';
 
@@ -141,3 +146,48 @@ export async function resolveEnforceReadGrants(
   }
   return intent && READ_GRANT_ENFORCEMENT_READY;
 }
+
+/** Grant-repo slice the id resolution needs: one principal's active grants. */
+type PrincipalGrantLookup = Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
+
+/**
+ * Lake ids the caller can reach via an active grant - fed to findAccessible/findPublicLakes so a
+ * transferred, delegated, or shared lake both lists AND discovers. Stays in lockstep with the single
+ * read gate (#1673):
+ *  - USER owner/curator ALWAYS included: the gate admits them via `canManageLake`.
+ *  - USER reader AND any ORG-principal grant (for an org the caller is a MEMBER of) included ONLY
+ *    when `includeReaders` (the enforced read-time grant cutover), matching resolveReadGrant at the
+ *    gate. In report-only the gate returns the legacy decision, so a lake reachable only by these
+ *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
+ * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
+ * rights); org membership never crosses orgs regardless (epic decision 12).
+ */
+export const grantedLakeIdsFor = async (
+  userId: string,
+  organizationIds: string[],
+  grants?: PrincipalGrantLookup,
+  includeReaders = false
+): Promise<string[]> => {
+  if (!grants) return [];
+  const activeAsOf = new Date();
+  const ids = new Set<string>();
+
+  const userRows = await grants.listByPrincipal('user', userId, { activeAsOf });
+  for (const row of userRows) {
+    if (row.role === 'owner' || row.role === 'curator' || (includeReaders && row.role === 'reader')) {
+      ids.add(row.dataLakeId);
+    }
+  }
+
+  // Org-principal grants resolve only under enforce: membership in an org holding ANY grant on a
+  // lake grants read (mirrors the gate's org read arm). One query per membership org - bounded by
+  // how many orgs the caller belongs to.
+  if (includeReaders && organizationIds.length > 0) {
+    const orgRowSets = await Promise.all(
+      organizationIds.map(orgId => grants.listByPrincipal('organization', orgId, { activeAsOf }))
+    );
+    for (const rows of orgRowSets) for (const row of rows) ids.add(row.dataLakeId);
+  }
+
+  return Array.from(ids);
+};
