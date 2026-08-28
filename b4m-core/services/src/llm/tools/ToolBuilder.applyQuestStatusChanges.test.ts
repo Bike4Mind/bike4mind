@@ -175,6 +175,52 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     });
 
+    it('never lets a success on another surface erase an unsearchable corpus, in either order', () => {
+      // The reason 'not_indexed' cannot be modelled at 'no_lakes' severity: an unindexed library
+      // is a real, actionable defect, and the multi-surface turns where one surface still succeeds
+      // are exactly the turns where diagnosis is hardest. Asserted in BOTH arrival orders because
+      // the merge keeps `existing` on a tie, so a wrong rank would only show up in one of them.
+      const forcedFirst = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(forcedFirst, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(forcedFirst.promptMeta?.retrieval?.outcome).toBe('not_indexed');
+
+      const searchFirst = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(searchFirst, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(searchFirst.promptMeta?.retrieval?.outcome).toBe('not_indexed');
+    });
+
+    it('still lets a genuine failure outrank an unsearchable corpus', () => {
+      // The other boundary of the new severity slot: an outage is acute and retryable, so it stays
+      // the headline when both conditions land in one turn.
+      const quest = makeQuest({
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: {
+          retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    });
+
     it('dedupes the union of surfaces/dataLakeTags rather than replacing with the incoming value', () => {
       // Partially overlapping, not identical, on both sides: an incoming write that shares ONE
       // entry with the existing state and adds ONE new entry can only produce the full union

@@ -2090,10 +2090,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         }
         // Zero chunks SCORED, so no comparison against the query ever happened - whether the cause
         // is an unvectorized corpus or a wholly mismatched one, the library was not searched.
-        // 'failed' rather than 'ok' for exactly that reason: nothing threw, but recall did not
-        // complete, and this is an actionable pipeline/config defect that must outrank a genuine
-        // topical zero in the merge severity order rather than reading as "nothing on this topic".
-        recordRetrieval('failed', dataLakeTags);
+        // 'not_indexed' rather than 'ok' because reporting that as a topical zero would claim the
+        // library was searched and came up empty, and rather than 'failed' because nothing threw:
+        // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
+        recordRetrieval('not_indexed', dataLakeTags);
         return this.noContextMessages('unavailable');
       }
       const scored = pool.sort(compareForcedRetrievalCandidates);
