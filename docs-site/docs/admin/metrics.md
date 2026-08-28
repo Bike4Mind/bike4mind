@@ -54,6 +54,13 @@ answering -- has **no** TTFVT rather than a fast-looking one. The Raw Data tab s
 `never rendered`, alongside the time the first chunk of any kind arrived, which tells you the model
 did respond while the user saw nothing.
 
+Turns recorded before this measurement was corrected keep the old meaning, and there is no way
+to repair them: the data needed to recompute them was never stored. Those rows have a TTFVT but
+no first-chunk time, which is how you spot them. Expect a one-time step in the First Token trend
+when the fix ships -- thinking-heavy models rise toward their true latency and turns that never
+rendered drop out of the average entirely. That step is the measurement changing, not the product
+getting slower, so do not compare across it.
+
 #### Troubleshooting: TTFVT looks better than users report
 
 - **`never rendered` rows in Raw Data.** These are frozen turns, and they are the ones users

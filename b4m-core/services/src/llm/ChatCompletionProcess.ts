@@ -3972,8 +3972,9 @@ export class ChatCompletionProcess {
 
                 // Time To First Visible Token: stamped off the ACCUMULATED reply, not the raw
                 // chunk, for two reasons. Hidden reasoning and the answer that follows it can
-                // land in a single chunk (kimiBackend.ts:515 prepends the close marker to real
-                // text), so only the accumulated slots say what the transcript now shows. And
+                // land in a single chunk (kimiBackend and xaiBackend both prepend the close
+                // marker to real text), so only the accumulated slots say what the transcript
+                // now shows. And
                 // `replies` is already cleared on every fallback/overload/timeout retry path,
                 // where a running "am I inside a thinking block" flag would need resetting at
                 // each of the five - drift this derivation cannot have.
