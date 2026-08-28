@@ -11,6 +11,7 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readRefreshCookie, setRefreshCookie } from '@server/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -55,6 +56,11 @@ const handler = baseApi({ auth: false })
       const rotated = await authSessionService.rotateSession(token, {
         db: { authSessions: authSessionRepository, users: userRepository },
         signAccessToken,
+        // Involuntary session outcomes -> the forensic audit log. The service's event types are
+        // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
+        // dropped so the service can await the write on the paths that throw immediately after
+        // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
+        audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { sid: event.sid } }),
         logger: req.logger,
       });
       requireNonSystemUser(rotated.user);

@@ -49,6 +49,7 @@ import {
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import axios from 'axios';
@@ -119,10 +120,6 @@ interface IImageEditServiceOptions {
   /** Checks an edited image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
 }
-
-// TODO make these adminSettings
-const TRUNCATE_THRESHOLD = 1000;
-const TRUNCATE_TO = 980;
 
 async function downloadImage(url: string) {
   const response = await axios.get(url, { responseType: 'arraybuffer' });
@@ -379,19 +376,22 @@ export class ImageEditService {
         }
       }
 
-      let truncatedPrompt = prompt;
-
       const models = await getAvailableModels(apiKeyTable);
-      const modelMaxTokens = models.find(m => m.id === model)?.max_tokens ?? TRUNCATE_THRESHOLD;
+      const { prompt: truncatedPrompt, truncated } = await truncateImagePrompt({
+        prompt,
+        promptTokens,
+        maxTokens: models.find(m => m.id === model)?.max_tokens,
+        tokenizer: this.tokenizer,
+        modelId: model,
+        logger,
+      });
 
-      // Check if prompt exceeds the threshold and truncate if necessary
-      if (promptTokens.length > modelMaxTokens) {
+      if (truncated) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
           statusMessage: 'Trimming the prompt...',
         });
-        truncatedPrompt = promptTokens.slice(0, TRUNCATE_TO).join(' ');
       }
 
       await clientMessageSender.sendToClient(userId, wsEndpoint, {

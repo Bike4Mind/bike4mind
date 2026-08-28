@@ -3125,7 +3125,7 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
 
   it('maps a lake to its card summary with owner name, counts, and per-caller flags', async () => {
     const db = makeDb([publicLake()]);
-    const { data, total } = await browsePublicDataLakes({ userId: 'someone-else', isAdmin: false }, {}, { db } as any);
+    const { data, total } = await browsePublicDataLakes(ctx({ userId: 'someone-else' }), {}, { db } as any);
     expect(total).toBe(1);
     expect(data[0]).toMatchObject({
       id: 'pub1',
@@ -3141,7 +3141,7 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
 
   it('never exposes the owner email; falls back to username when name is absent', async () => {
     const db = makeDb([publicLake({ id: 'pub2', slug: 'pub2', createdByUserId: 'owner2' })]);
-    const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
+    const { data } = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
     expect(data[0].ownerDisplayName).toBe('onlyuser');
     // No summary field should ever carry an email address.
     expect(JSON.stringify(data)).not.toContain('@example.com');
@@ -3149,37 +3149,65 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
 
   it('yields undefined (never the email) when the owner has neither name nor username', async () => {
     const db = makeDb([publicLake({ id: 'pub3', slug: 'pub3', createdByUserId: 'owner3' })]);
-    const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
+    const { data } = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
     expect(data[0].ownerDisplayName).toBeUndefined();
     expect(JSON.stringify(data)).not.toContain('@example.com');
   });
 
   it('marks the caller’s own lake and grants manage to owner and admin', async () => {
     const db = makeDb([publicLake({ createdByUserId: 'owner1' })]);
-    const asOwner = await browsePublicDataLakes({ userId: 'owner1', isAdmin: false }, {}, { db } as any);
+    const asOwner = await browsePublicDataLakes(ctx({ userId: 'owner1' }), {}, { db } as any);
     expect(asOwner.data[0]).toMatchObject({ isOwn: true, canManage: true });
 
-    const asAdmin = await browsePublicDataLakes({ userId: 'someone', isAdmin: true }, {}, { db } as any);
+    const asAdmin = await browsePublicDataLakes(ctx({ userId: 'someone', isAdmin: true }), {}, { db } as any);
     expect(asAdmin.data[0]).toMatchObject({ isOwn: false, canManage: true });
   });
 
   it('defaults missing counts to 0 and skips the owner lookup when there are no lakes', async () => {
     const empty = makeDb([], 0);
-    const { data, total } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: empty } as any);
+    const { data, total } = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db: empty } as any);
     expect(data).toEqual([]);
     expect(total).toBe(0);
     expect(empty.users.findByIds).not.toHaveBeenCalled();
 
     const noStats = makeDb([publicLake({ fileCount: undefined, totalSizeBytes: undefined })]);
-    const res = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: noStats } as any);
+    const res = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db: noStats } as any);
     expect(res.data[0]).toMatchObject({ fileCount: 0, totalSizeBytes: 0 });
   });
 
   it('threads search + paging through to the repository', async () => {
     const db = makeDb([publicLake()]);
-    await browsePublicDataLakes({ userId: 'x', isAdmin: false }, { search: 'widgets', limit: 10, offset: 20 }, {
+    await browsePublicDataLakes(ctx({ userId: 'x' }), { search: 'widgets', limit: 10, offset: 20 }, {
       db,
     } as any);
-    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith({ search: 'widgets', limit: 10, offset: 20 });
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(ctx({ userId: 'x' }), {
+      search: 'widgets',
+      limit: 10,
+      offset: 20,
+      grantedLakeIds: [],
+    });
+  });
+
+  it("resolves the caller's owner/curator grants and passes them to the repository", async () => {
+    // The arm listDataLakes already feeds findAccessible: without it a transferred owner opens a
+    // gated public lake from their lake list but cannot find it in discover. Reader and org rows
+    // stay out here because the read-grant cutover is still report-only (resolveEnforceReadGrants).
+    const db = {
+      ...makeDb([publicLake()]),
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn().mockResolvedValue([
+          { dataLakeId: 'granted-lake', role: 'curator', principalType: 'user', principalId: 'x' },
+          { dataLakeId: 'reader-only-lake', role: 'reader', principalType: 'user', principalId: 'x' },
+        ]),
+      },
+    };
+
+    await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
+
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(
+      ctx({ userId: 'x' }),
+      expect.objectContaining({ grantedLakeIds: ['granted-lake'] })
+    );
   });
 });

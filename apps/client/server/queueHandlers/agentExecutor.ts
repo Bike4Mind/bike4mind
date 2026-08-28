@@ -59,13 +59,7 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import {
-  getTextModelCost,
-  CreditHolderType,
-  ARTIFACT_EMISSION_PROMPT,
-  type IAgent,
-  type IUserDocument,
-} from '@bike4mind/common';
+import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -86,6 +80,13 @@ import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/service
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+// Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
+// header for why the start-payload/doc precedence is the part worth pinning in a test.
+import {
+  inheritedArtifactFields,
+  resolveAgentArtifactEmissionPrompt,
+  resolveAgentArtifactGate,
+} from '../utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
@@ -773,6 +774,13 @@ async function processExecution(
       });
     }
 
+    // One precedence rule for the caller's artifact intent across every consumer in this function:
+    // start payload first, persisted doc second, the same order `resolveAgentArtifactGate` reads
+    // them in below. Both channels are written from the same command object in `agentExecute`, so
+    // they cannot disagree today - hoisted so they still cannot if that doc write ever becomes
+    // optimistic.
+    const callerEnableArtifacts = startPayload?.enableArtifacts ?? execution.enableArtifacts;
+
     // Get API keys and LLM backend
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(execution.userId, {
       db: {
@@ -1080,6 +1088,10 @@ async function processExecution(
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
           // child that needs Lattice must be granted it explicitly. A future PR
           // adding a sibling flag should make the same deliberate choice.
+          //
+          // `enableArtifacts` is the deliberate exception - see `inheritedArtifactFields` for why an
+          // opt-OUT has to cross the dispatch boundary when a grant does not.
+          ...inheritedArtifactFields(callerEnableArtifacts),
         };
 
         // Three execution modes mapped to schema state:
@@ -1276,6 +1288,7 @@ async function processExecution(
         // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
         linkedQuestId: execution.linkedQuestId,
         spawnedByExecutionId: executionId,
+        enableArtifacts: callerEnableArtifacts,
       },
       logger,
     });
@@ -1618,20 +1631,23 @@ async function processExecution(
     //
     // Resolved only on NEW executions: continuations already carry the composed
     // system message in the checkpoint (messages[0]), same as `personaPrompt`.
-    // `enableArtifacts` is read on every invocation (new + continuation) because
+    // The gate is re-resolved on every invocation (new + continuation) because
     // the DAG bubble-up at persist-time gates on it too, and reading it here
     // avoids a second settings round-trip further down.
-    // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
-    // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
-    const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
-    // NOTE: this `|| ARTIFACT_EMISSION_PROMPT` fallback must resolve to the SAME default as the chat
-    // path, which uses the util getSettingsValue('ArtifactEmissionPrompt', settings, ARTIFACT_EMISSION_PROMPT)
-    // in ChatCompletionProcess. Two resolvers, one default - keep them in sync so an empty/unset value
-    // reverts to the same built-in prompt on both paths.
-    const artifactEmissionPrompt =
-      isNewExecution && enableArtifacts
-        ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
-        : undefined;
+    //
+    // Admin setting AND the caller's request flag, via the same resolver the chat pipeline uses - so
+    // an opt-out is honoured on an autonomous run too, where no human is reading each turn. See
+    // `server/utils/artifactGate.ts` for the start-payload/doc precedence.
+    const enableArtifacts = resolveAgentArtifactGate({
+      adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+      startPayloadEnableArtifacts: startPayload?.enableArtifacts,
+      executionEnableArtifacts: execution.enableArtifacts,
+    });
+    const artifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: enableArtifacts,
+      isNewExecution,
+      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+    });
 
     // Create or restore ReActAgent. LLM runtime knobs are merged via
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
@@ -3049,7 +3065,13 @@ async function processSubagentDispatch(
       toolAvailability
     );
 
+    // Created here rather than alongside its watchdog below because the tools built on the next
+    // line need its signal: a tool that runs its own llm.complete (deep_research, blog_draft, ...)
+    // otherwise keeps generating past both abort triggers. See ToolContext.getAbortSignal.
+    const abortController = new AbortController();
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
@@ -3126,7 +3148,6 @@ async function processSubagentDispatch(
     // LIMITATION: 0..5s window where an aborted child keeps running before
     // the next poll tick. Acceptable - the agent stops at the next iteration
     // boundary inside the LLM call.
-    const abortController = new AbortController();
     const abortPoller = setInterval(() => {
       // Cheap synchronous check first - no DB roundtrip if we're already done.
       if (context.getRemainingTimeInMillis() < PARENT_DEADLINE_BUFFER_MS && !abortController.signal.aborted) {
@@ -3159,15 +3180,20 @@ async function processSubagentDispatch(
     // Artifact-emission parity for dispatched subagents (DAG worker nodes and
     // Lambda-dispatched delegates). Give them the same `<artifact>` guidance as
     // the top-level agent so their answers carry tags the parent can surface on
-    // the completion. Gated on the admin `EnableArtifacts` setting; dispatched
-    // children are always fresh in-process runs (no checkpoint), so no
+    // the completion. Gated on the admin `EnableArtifacts` setting AND the artifact intent the
+    // child inherited from its parent at creation, so a caller opt-out survives delegation;
+    // dispatched children are always fresh in-process runs (no checkpoint), so no
     // isNewExecution guard is needed.
     // Hoist the gate into a local (mirrors the top-level path) so we only read
     // ArtifactEmissionPrompt when artifacts are actually on.
-    const childArtifactsEnabled = await adminSettingsRepository.getSettingsValue('EnableArtifacts');
-    const childArtifactEmissionPrompt = childArtifactsEnabled
-      ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
-      : undefined;
+    const childArtifactsEnabled = resolveAgentArtifactGate({
+      adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+      executionEnableArtifacts: child.enableArtifacts,
+    });
+    const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: childArtifactsEnabled,
+      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+    });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {
       agentName,

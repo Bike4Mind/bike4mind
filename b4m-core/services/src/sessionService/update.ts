@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { updateShareableFiles } from '../projectService';
+import { usableObjectIds } from '../utils/objectIds';
 import {
   ICacheRepository,
   IFabFileRepository,
@@ -15,7 +16,6 @@ import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from '
 import { secureParameters } from '@bike4mind/utils';
 import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
 import uniq from 'lodash/uniq.js';
-import isEqual from 'lodash/isEqual.js';
 import { z } from 'zod';
 
 // `id` is service-internal addressing, not a field the public PUT request body carries
@@ -46,8 +46,20 @@ export const updateSession = async (
   adapters: UpdateSessionAdapters
 ) => {
   const { db } = adapters;
-  const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel, forceKnowledgeRetrieval, propagateToProjects } =
-    secureParameters(parameters, updateSessionParamtersSchema);
+  const {
+    knowledgeIds: rawIds,
+    artifactIds,
+    name,
+    id,
+    tags,
+    lastUsedModel,
+    forceKnowledgeRetrieval,
+    propagateToProjects,
+  } = secureParameters(parameters, updateSessionParamtersSchema);
+
+  // Dropped, not rejected - a rename PUTs the whole session, so see usableObjectIds.
+  const knowledgeIds = rawIds && usableObjectIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
+
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
   if (!session) {
@@ -61,21 +73,29 @@ export const updateSession = async (
   // write that happens to have it on, and a removal - which sends the surviving files -
   // propagates all of them. Since project.fileIds is append-only and additive, the
   // delta is the only set that ever needs propagating anyway.
-  if (knowledgeIds && !isEqual(session.knowledgeIds, knowledgeIds) && propagateToProjects !== false) {
-    const alreadyKnown = new Set(session.knowledgeIds ?? []);
-    const addedFileIds = knowledgeIds.filter(id => !alreadyKnown.has(id));
-    if (addedFileIds.length > 0) {
-      await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
-    }
+  //
+  // Keyed on the ADDED set rather than "the list changed" for a second reason too: a rename PUTs
+  // the whole stored list back, and dropping an unusable id from it makes the incoming list differ
+  // from the stored one on EVERY such write. A changed-list test would then fire on a rename.
+  const alreadyKnown = new Set(session.knowledgeIds ?? []);
+  const addedFileIds = knowledgeIds?.filter(id => !alreadyKnown.has(id)) ?? [];
+
+  if (addedFileIds.length > 0 && propagateToProjects !== false) {
+    await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
   }
 
   session.name = name || session.name;
-  // Re-derive the lake scope whenever the attached set changes. Deriving only at CREATE left the
-  // most ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
+  // Re-derive the lake scope whenever a file is ATTACHED. Deriving only at CREATE left the most
+  // ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
   // already-open notebook goes through here, and an empty `retrievalTags` is not a narrow scope -
   // the search's tag clause is skipped entirely and retrieval falls through to every lake the
   // caller can reach. Only ever ADDS a derived scope; an explicitly-set one is left alone.
-  if (knowledgeIds && !isEqual(session.knowledgeIds, knowledgeIds) && !session.retrievalTags?.length) {
+  //
+  // Additions, not any change: a removal cannot bring a new lake into the attached set, and a
+  // write that adds nothing (a rename, a tag edit) must not acquire a scope as a side effect.
+  // Derives from the whole surviving list, since the scope describes the attached set, not the
+  // delta.
+  if (knowledgeIds && addedFileIds.length > 0 && !session.retrievalTags?.length) {
     const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
       db: { fabFiles: db.fabFiles },
       logger: adapters.logger,

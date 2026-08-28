@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
+  advanceVectorizeProgress: vi.fn(async () => true),
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
@@ -66,6 +67,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
+    advanceVectorizeProgress: h.advanceVectorizeProgress,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -102,16 +104,26 @@ vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifie
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
-vi.mock('@bike4mind/common', async () => ({
-  SupportedEmbeddingModelSchema: z.string(),
-  getEmbeddingModelCost: vi.fn(() => 0.0001),
-  // Pulled from the real module rather than retyped. This handler WRITES the note and the lake-health
-  // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
-  // drift (both import the same constant), but a literal here would let THIS suite keep passing
-  // against a string the constant no longer has.
-  CONVERGENCE_PAUSED_NOTE: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common'))
-    .CONVERGENCE_PAUSED_NOTE,
-}));
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    SupportedEmbeddingModelSchema: z.string(),
+    getEmbeddingModelCost: vi.fn(() => 0.0001),
+    // Pulled from the real module rather than retyped. This handler WRITES the note and the lake-health
+    // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
+    // drift (both import the same constant), but a literal here would let THIS suite keep passing
+    // against a string the constant no longer has.
+    CONVERGENCE_PAUSED_NOTE: actual.CONVERGENCE_PAUSED_NOTE,
+    // Same reason, for the provenance vocabulary convergenceProvenance.ts re-exports from common:
+    // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
+    // tests below exercise, so a stub here would make them assert against themselves.
+    WORK_ORIGINS: actual.WORK_ORIGINS,
+    WorkOriginSchema: actual.WorkOriginSchema,
+    CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
+    provenancePayloadShape: actual.provenancePayloadShape,
+    shouldHaltConvergence: actual.shouldHaltConvergence,
+  };
+});
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
   EmbeddingFactory: class {
@@ -763,5 +775,133 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.stampChunkEmbeddingModel).toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalled();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('persists retrievalIndexModel with the chunk vector, so index residency does not wait on the stamp', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('leaves retrievalIndexModel unwritten when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate.mock.calls[0][0]).not.toHaveProperty('retrievalIndexModel');
+  });
+
+  // The bug: this message's chunks reach OpenSearch, then the file never finishes - the spend gate
+  // denies a later message terminally, SQS retries run out, or a purge lands mid-flight - so
+  // stampChunkEmbeddingModel never runs. Every removal path resolves the index to hit from the
+  // chunk rows, so residency has to be on them already or those documents are unreachable forever.
+  it('records residency on a message that leaves the file short of complete, with no stamp', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: 5 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 1,
+      embeddedCharCount: 11,
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('a terminal spend denial on a later message is consumed, leaving the earlier residency in place', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+    // batchId present: the spend gate is the data-lake path only.
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), chunkCount: 5 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 1,
+      embeddedCharCount: 11,
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const { dataLakeService } = await import('@bike4mind/services');
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(
+      new dataLakeService.EmbeddingSpendDeniedError('lake cap reached', { retryable: false })
+    );
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('denied by spend gate'));
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+    // Only the first message wrote chunks; the residency it recorded is all a later removal has.
+    expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+});
+
+describe('fabFileVectorize handler - partial rollup write is guarded', () => {
+  // Two messages for one file. The one that finishes last stamps the terminal state; the other
+  // is still holding the smaller rollup it measured earlier. That late write must not land as a
+  // plain update, or the file sits below chunkCount with isVectorizing on and drops out of
+  // retrieval permanently.
+  const partialFile = () => ({
+    id: 'ff1',
+    vectorized: false,
+    chunkCount: 10,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.findAccessibleById.mockResolvedValue(partialFile());
+  });
+
+  it('routes a not-complete rollup through the guarded advance, never a plain update', async () => {
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 8,
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    h.advanceVectorizeProgress.mockResolvedValue(true);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.advanceVectorizeProgress).toHaveBeenCalledWith('ff1', 8, {
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ isVectorizing: true }));
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+
+  it('completes normally when the guard rejects the stale rollup', async () => {
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 8,
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    h.advanceVectorizeProgress.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
   });
 });

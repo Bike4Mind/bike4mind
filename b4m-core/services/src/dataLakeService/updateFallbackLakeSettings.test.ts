@@ -315,10 +315,9 @@ describe('updateFallbackLakeSettings - config-change audit', () => {
     const event = record.mock.calls[0][0];
     expect(event.dataLakeId).toBe('opti-knowledge');
     expect(event.action).toBe('update');
-    // Resolved, not overridden: resolveLakeManageRung's first arm is isAdmin -> platform-admin,
-    // and this route's gate guarantees isAdmin, so the resolver already names the only rung that
-    // can authorize this call. Asserted here so a widened gate shows up as a changed rung rather
-    // than silently recording an admin who was not involved.
+    // Overridden, not resolved: this route's gate is `ctx.isAdmin` and nothing else, while
+    // resolveLakeManageRung checks the admin rung LAST and would name `org-admin` on an
+    // org-scoped registry lake. Asserted here so a widened gate has to revisit the literal.
     expect(event.manageRung).toBe('platform-admin');
     expect(event.principalId).toBe('admin-1');
   });

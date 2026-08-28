@@ -414,11 +414,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
     }
 
+    const indexesToOpenSearch = selfHostOpenSearchEnabled();
+
     // Write this message's chunk vectors in a transaction.
     await withTransaction(async () => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
           chunk.vector = vectors[index];
+          // Index residency, recorded per MESSAGE and persisted here rather than with the
+          // file-complete `embeddingModel` stamp below - see IFabFileChunk.retrievalIndexModel.
+          // Deliberately written BEFORE the fail-open OpenSearch write it predicts: removing from
+          // an index that holds nothing is a no-op, missing one orphans documents forever.
+          if (indexesToOpenSearch) chunk.retrievalIndexModel = embeddingModel;
           return fabFileChunkRepository.update(chunk);
         })
       );
@@ -427,7 +434,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Self-host OpenSearch dual-write: outside the transaction (an OpenSearch write cannot be
     // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
     // failed - the Mongo write above already succeeded and is the source of truth).
-    if (selfHostOpenSearchEnabled()) {
+    if (indexesToOpenSearch) {
       try {
         // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
         // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
@@ -475,19 +482,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
       );
     } else {
-      await fabFileRepository.update({
-        id: fabFileId,
-        vectorized: true,
-        vectorizedChunkCount,
-        isVectorizing: true,
+      // Guarded, not a plain update: sibling messages for this same file each recompute the
+      // whole-file rollup, so one that finishes late holds a count measured before its peers
+      // committed. Writing that stale rollup over a file another message already stamped
+      // terminal would drag the stored count back below chunkCount, which isMemberIndexingInFlight
+      // reads as forever-indexing and withholds a fully-vectorized file from retrieval.
+      const advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount, {
         embeddedChunkCount,
         embeddedCharCount,
       });
+      if (!advanced) {
+        logger.log(
+          `FabFile ${fabFileId} partial rollup ${vectorizedChunkCount} is stale or the file is already settled, skipping write`
+        );
+      }
     }
-    fabFile.vectorizedChunkCount = vectorizedChunkCount;
-    fabFile.embeddedChunkCount = embeddedChunkCount;
-    fabFile.embeddedCharCount = embeddedCharCount;
-    fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
       // Non-fatal: a throw here must never reach the outer catch. This file is ALREADY

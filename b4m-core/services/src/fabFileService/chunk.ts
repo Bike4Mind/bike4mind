@@ -56,7 +56,7 @@ interface ChunkFileAdapters {
       deleteManyByFabFileId: (fabFileId: string) => Promise<void>;
       bulkInsert: (chunks: Omit<IFabFileChunkDocument, 'id'>[]) => Promise<IFabFileChunkDocument[]>;
       update: (chunk: IFabFileChunkDocument) => Promise<unknown>;
-      distinctEmbeddingModelsByFabFileIds: (fabFileIds: string[]) => Promise<string[]>;
+      distinctRetrievalIndexModelsByFabFileIds: (fabFileIds: string[]) => Promise<string[]>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -142,13 +142,13 @@ export const prepareFabFileChunks = async (
 
   const chunkCharLengths = chunks.map(chunk => countCodePoints(chunk.text));
 
-  // Resolved before the old chunks are deleted in the commit phase - their per-chunk embeddingModel
-  // is the only place this survives once they're gone. Chunks can span more than one model if this
-  // file was already re-embedded once before (see IFabFileChunk.embeddingModel), so
-  // fabFile.embeddingModel alone - the CURRENT model only - would miss an earlier OpenSearch
-  // index left behind by that prior re-embed.
+  // Resolved before the old chunks are deleted in the commit phase - the chunk rows are the only
+  // place this survives once they're gone. Chunks can span more than one model if this file was
+  // already re-embedded once before (see IFabFileChunk.embeddingModel), so fabFile.embeddingModel
+  // alone - the CURRENT model only - would miss an earlier OpenSearch index left behind by that
+  // prior re-embed.
   const previousChunkEmbeddingModels = searchIndex
-    ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([fabFileId])
+    ? await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([fabFileId])
     : [];
 
   // Lake admission contract (#1679): fingerprint the CANONICAL EXTRACTED TEXT (chunker.getExtractedText()),

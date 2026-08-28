@@ -22,6 +22,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -287,7 +288,11 @@ const handler = baseApi()
         (fabFile?.tags ?? []).map(tag => tag?.name),
         {
           logger: req.logger,
-          actor: { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+          actor: {
+            userId: req.user.id,
+            isAdmin: !!req.user.isAdmin,
+            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+          },
         }
       );
     }

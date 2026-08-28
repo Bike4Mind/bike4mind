@@ -179,6 +179,10 @@ export async function runQuestNode(args: {
       // pipelines: a V5 node never reads a user's beliefs into its prompt nor
       // writes machine-authored ones back.
       enableMementos: false,
+      // `enableArtifacts` is deliberately left UNSET, which is not the same call as `enableMementos`
+      // above: a node's answer bubbles up to a human-visible quest, so artifacts in it are wanted
+      // whenever the deployment wants them. Absence means "no preference" and leaves the admin
+      // setting as the only gate - an explicit `false` here would strip them unconditionally.
     });
 
     executionId = execution.id;
