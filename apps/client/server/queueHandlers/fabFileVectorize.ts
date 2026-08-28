@@ -482,19 +482,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
       );
     } else {
-      await fabFileRepository.update({
-        id: fabFileId,
-        vectorized: true,
-        vectorizedChunkCount,
-        isVectorizing: true,
+      // Guarded, not a plain update: sibling messages for this same file each recompute the
+      // whole-file rollup, so one that finishes late holds a count measured before its peers
+      // committed. Writing that stale rollup over a file another message already stamped
+      // terminal would drag the stored count back below chunkCount, which isMemberIndexingInFlight
+      // reads as forever-indexing and withholds a fully-vectorized file from retrieval.
+      const advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount, {
         embeddedChunkCount,
         embeddedCharCount,
       });
+      if (!advanced) {
+        logger.log(
+          `FabFile ${fabFileId} partial rollup ${vectorizedChunkCount} is stale or the file is already settled, skipping write`
+        );
+      }
     }
-    fabFile.vectorizedChunkCount = vectorizedChunkCount;
-    fabFile.embeddedChunkCount = embeddedChunkCount;
-    fabFile.embeddedCharCount = embeddedCharCount;
-    fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
       // Non-fatal: a throw here must never reach the outer catch. This file is ALREADY

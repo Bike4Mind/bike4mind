@@ -1111,6 +1111,71 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  /**
+   * Advance a file's partial vectorize progress WITHOUT ever regressing it or reopening a
+   * settled file. A file's chunks fan out across several vectorize messages, each of which
+   * recomputes the whole-file rollup; a message that finishes late still holds the count it
+   * measured before its peers committed theirs. An unguarded write of that stale rollup lands
+   * after the last message stamped the terminal state and leaves the stored count below
+   * chunkCount - which isMemberIndexingInFlight (lakeConvergence.ts) reads as forever-indexing,
+   * silently withholding a fully-vectorized file from every semantic read with no path back.
+   *
+   * Two conditions, both load-bearing. The count may only move up. And the file must not already
+   * be settled: either `chunkEmbeddingModelStampedAt` is still unset, or the stamp is there but
+   * the stored count is still short of `chunkCount` - a file only a stale terminal write could
+   * have left in, and one a later message must still be able to repair. The stamp (not
+   * `vectorized`/`isVectorizing`) is the terminal marker because `vectorized: true` +
+   * `isVectorizing: false` is also the state chunking leaves behind at count 0 (see
+   * fabFileService/chunk.ts), and re-chunking clears the stamp for the next round.
+   *
+   * The lake-health rollups move with the count, so they ride the same guarded write.
+   *
+   * Sets `vectorized: true` when it advances, and derives `isVectorizing` from whether the new
+   * count is still short of `chunkCount`; the terminal state itself is stamped by
+   * stampChunkEmbeddingModel.
+   *
+   * Returns true if this call advanced the file.
+   */
+  async advanceVectorizeProgress(
+    fabFileId: string,
+    vectorizedChunkCount: number,
+    rollup?: { embeddedChunkCount: number; embeddedCharCount: number }
+  ): Promise<boolean> {
+    const result = await this.fabFileModel.findOneAndUpdate(
+      {
+        _id: fabFileId,
+        $and: [
+          {
+            $or: [
+              // Matches an unset stamp as well as an explicitly null one.
+              { chunkEmbeddingModelStampedAt: null },
+              // A stamped file still short of its own chunkCount is the wedge a stale terminal
+              // write leaves behind; refusing it here would make that state unrepairable.
+              { $expr: { $lt: ['$vectorizedChunkCount', '$chunkCount'] } },
+            ],
+          },
+          // $lte alone would exclude a file whose count has never been written.
+          { $or: [{ vectorizedChunkCount: { $lte: vectorizedChunkCount } }, { vectorizedChunkCount: null }] },
+        ],
+      },
+      [
+        {
+          $set: {
+            vectorized: true,
+            vectorizedChunkCount,
+            // Derived, not a literal true: a repair landing the count exactly on chunkCount would
+            // otherwise leave a settled file flagged as vectorizing, which the guard above then
+            // refuses to advance again and the UI reprocess controls refuse to reset.
+            isVectorizing: { $lt: [vectorizedChunkCount, { $ifNull: ['$chunkCount', 0] }] },
+            ...rollup,
+          },
+        },
+      ],
+      { new: false }
+    );
+    return result !== null;
+  }
+
   async confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean> {
     // The WRITE succeeding or not is the signal (#1802 Phase 2), not any field it changes - but the
     // write must ACTUALLY be a write, not a no-op MongoDB is free to elide. A bare

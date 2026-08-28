@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
+  advanceVectorizeProgress: vi.fn(async () => true),
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
@@ -66,6 +67,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
+    advanceVectorizeProgress: h.advanceVectorizeProgress,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -843,5 +845,63 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.chunkUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
     );
+  });
+});
+
+describe('fabFileVectorize handler - partial rollup write is guarded', () => {
+  // Two messages for one file. The one that finishes last stamps the terminal state; the other
+  // is still holding the smaller rollup it measured earlier. That late write must not land as a
+  // plain update, or the file sits below chunkCount with isVectorizing on and drops out of
+  // retrieval permanently.
+  const partialFile = () => ({
+    id: 'ff1',
+    vectorized: false,
+    chunkCount: 10,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.findAccessibleById.mockResolvedValue(partialFile());
+  });
+
+  it('routes a not-complete rollup through the guarded advance, never a plain update', async () => {
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 8,
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    h.advanceVectorizeProgress.mockResolvedValue(true);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.advanceVectorizeProgress).toHaveBeenCalledWith('ff1', 8, {
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ isVectorizing: true }));
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+
+  it('completes normally when the guard rejects the stale rollup', async () => {
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 8,
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    h.advanceVectorizeProgress.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
   });
 });
