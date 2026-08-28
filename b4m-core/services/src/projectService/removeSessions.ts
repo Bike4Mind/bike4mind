@@ -38,7 +38,7 @@ export const removeSessions = async (
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
   // BadRequestError, not a bare Error - see addFiles.
-  if (sessions.length !== sessionIds.length) throw new BadRequestError('Some sessions are not accessible');
+  if (sessions.length !== new Set(sessionIds).size) throw new BadRequestError('Some sessions are not accessible');
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
     throw new Error('You are not authorized to remove sessions from this project');
   }

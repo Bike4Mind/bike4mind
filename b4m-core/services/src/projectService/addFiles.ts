@@ -36,14 +36,17 @@ export const addFiles = async (
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
   if (!project) throw new Error('Project not found');
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  const requestedIds = uniq(fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, requestedIds);
 
   // BadRequestError, not a bare Error: an id the caller cannot reach is a client mistake, and a
   // bare Error is a 500 that pages LiveOps. Reachable now that the repository skips uncastable
-  // ids instead of throwing a CastError the handler turned into a 404.
-  if (files.length !== fileIds.length) throw new BadRequestError('Some files are not accessible');
+  // ids instead of throwing a CastError the handler turned into a 404. Compared against the
+  // DEDUPED list, since the reader returns distinct rows and a file sent twice is not one that
+  // could not be reached.
+  if (files.length !== requestedIds.length) throw new BadRequestError('Some files are not accessible');
 
-  project.fileIds = uniq([...project.fileIds, ...fileIds]);
+  project.fileIds = uniq([...project.fileIds, ...requestedIds]);
   project.updatedAt = new Date();
 
   await updateShareableFiles(user.id, { project, files }, adapters);

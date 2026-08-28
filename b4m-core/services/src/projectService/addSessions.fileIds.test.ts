@@ -121,6 +121,15 @@ describe('addSessions - which ids reach the project', () => {
     expect(projects.update).not.toHaveBeenCalled();
   });
 
+  it('tolerates the same session id twice, since a duplicate resolves one row', async () => {
+    // Nothing dedupes the request: the zod tuple does not, and neither does the API route.
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID, SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.sessionIds).toEqual([SESSION_ID]);
+  });
+
   it('queries the repository with the session raw list, leaving the filtering to the guard', async () => {
     await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
       db: { projects, sessions, fabFiles },

@@ -42,7 +42,7 @@ export const removeFiles = async (
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
 
   // BadRequestError, not a bare Error - see addFiles.
-  if (files.length !== fileIds.length) throw new BadRequestError('Some files are not accessible');
+  if (files.length !== new Set(fileIds).size) throw new BadRequestError('Some files are not accessible');
 
   if (project.userId !== userId && files.some(f => f.userId !== userId)) {
     throw new Error('You are not authorized to remove files from this project');
