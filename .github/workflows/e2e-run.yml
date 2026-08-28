@@ -444,14 +444,11 @@ jobs:
           echo "credits_block=,{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*💳 AI Credits*\\n${CREDITS_LINES}\"}}" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        # Post on pass or fail, but NOT when the run was cancelled. A staging deploy
-        # that gets superseded (a newer queued deploy skips the in-flight/queued one)
-        # has its deploy-triggered gate run cancelled by the e2e-core-gate concurrency
-        # group (cancel_in_progress). On cancellation `always()` steps still run, so
-        # the results parser emits its empty defaults (total/failed/not_started = 0)
-        # and an `always()` post here announces a misleading ":white_check_mark:
-        # Passed / Total: 0". `!cancelled()` still fires on a genuine early failure
-        # (e.g. an unhealthy deploy), which stays worth a Slack alert.
+        # Cancelled = superseded gate run (the e2e-core-gate concurrency group cancels
+        # it): post nothing, since its parser emits zeros an always() post would show
+        # as a bogus green. A pre-test failure (install hang, health probe) is failure()
+        # not cancelled(), so it still posts - the total==0 branch in the status
+        # expressions below renders it red instead of a misleading green.
         if: ${{ !cancelled() }}
         uses: slackapi/slack-github-action@v2
         with:
@@ -459,7 +456,7 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
+              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
               "blocks": [
                 {
                   "type": "header",
@@ -473,7 +470,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
+                      "text": "*Status*\n${{ steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
                     },
                     {
                       "type": "mrkdwn",
