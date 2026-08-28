@@ -109,13 +109,14 @@ export const updateFallbackLakeSettings = async (
       // explicit rung below.
       action: 'update',
       changes: diffLakeConfig(before, projected),
-      // No `manageRung` override, deliberately. This route's gate is `ctx.isAdmin` directly (see
-      // assertFallbackLakeSettingsWriteAccess), and `resolveLakeManageRung`'s FIRST arm is
-      // `isAdmin -> 'platform-admin'`, so it already returns the one rung that can ever authorize
-      // this call. Hardcoding it would be redundant today and a LIE tomorrow: were the gate ever
-      // widened, the resolver would name the new rung while a literal kept reporting an admin who
-      // was not involved - and the rung is an authorization fact, not a label (see the override's
-      // own doc comment).
+      // Overridden, because this route's gate is `ctx.isAdmin` directly (see
+      // assertFallbackLakeSettingsWriteAccess) and nothing else: `resolveLakeManageRung` checks the
+      // admin rung LAST, so on an ORG-SCOPED registry lake (overlay-contributed entries may carry
+      // `organizationId`) it would name `org-admin` for an admin who also administers that org - a
+      // rung that cannot pass this gate at all, since an org admin who is not a platform admin is
+      // refused here. The rung is an authorization fact, so it must name the branch that let the
+      // call through. If this gate is ever widened, this literal must be revisited with it.
+      manageRung: 'platform-admin',
     },
     { db, logger }
   );
