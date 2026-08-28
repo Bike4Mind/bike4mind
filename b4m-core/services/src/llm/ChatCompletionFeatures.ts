@@ -1748,6 +1748,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       ...(quest.promptMeta.warnings ?? []),
       `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
     ];
+    // The same signal, structured, because `warnings` is a shared channel: response truncation and
+    // artifact elision append there too, so a reader cannot tell a coverage entry from a sibling's
+    // without matching on prose. The chat banner reads THIS field; the string above stays for the
+    // debug inspector and for anything already grepping the warning text.
+    quest.promptMeta.retrievalCoverage = { partial: true, reasons };
     return true;
   }
 

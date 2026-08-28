@@ -678,6 +678,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(content).not.toContain('Coverage note');
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
+    // Absence is half the banner's contract: the client shows it on presence, so a stamp written
+    // unconditionally would banner every fully-covered grounded turn in the product.
+    expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
   });
 
   it('more documents beyond the candidate cap warns, records a promptMeta warning, and hedges the prompt', async () => {
@@ -689,6 +692,13 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect(warn.mock.calls[0][0]).toContain('candidate cap');
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
+    // The structured twin of that warning - what the chat banner actually reads. `warnings` is a
+    // shared channel (truncation and elision append there too), so the banner cannot key on it.
+    const coverage = (quest.promptMeta as { retrievalCoverage?: { partial: boolean; reasons: string[] } })
+      .retrievalCoverage;
+    expect(coverage?.partial).toBe(true);
+    expect(coverage?.reasons).toHaveLength(1);
+    expect(coverage?.reasons[0]).toContain('candidate cap');
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls

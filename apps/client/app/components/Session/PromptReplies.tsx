@@ -46,6 +46,7 @@ import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
 import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
+import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -1585,6 +1586,14 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           defined). Deliberately softer than the truncation copy above - this is a heuristic,
           and the artifact below is shown exactly as generated. */}
       {isElidedArtifact && <ArtifactElisionBanner />}
+
+      {/* Partial grounding coverage: the knowledge-base scan behind this reply stopped short of
+          the library (a candidate cap, a per-turn chunk budget, or documents excluded for an
+          embedding-model mismatch). Sits with the banners above because it reports the same class
+          of fact - the output is less complete than it looks. */}
+      {promptMeta?.retrievalCoverage?.partial && (
+        <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
+      )}
 
       {showSyntaxHighlight ? (
         <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>

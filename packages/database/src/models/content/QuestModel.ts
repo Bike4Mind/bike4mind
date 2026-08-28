@@ -56,6 +56,15 @@ const RetrievalSummarySchema = subSchema({
   dataLakeTags: [{ type: String, required: false }],
 });
 
+// Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
+// RetrievalSummarySchema above: without it Mongoose auto-vivifies `{ reasons: [] }` on every
+// quest, which has no `partial` and so fails the Zod re-parse - and the client reads this field's
+// mere presence to decide whether to banner the reply, so every reply would carry the banner.
+const RetrievalCoverageSchema = subSchema({
+  partial: { type: Boolean, required: true },
+  reasons: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -280,6 +289,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     // Must stay in sync with the Zod PromptMeta `retrieval` (parity test enforces it). Top-level,
     // not nested under `context` above - see RetrievalSummarySchema's comment.
     retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
+    retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
