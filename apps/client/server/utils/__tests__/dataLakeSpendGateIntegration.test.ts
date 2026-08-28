@@ -479,6 +479,25 @@ describe('resolveIngestSpendScope over real lake membership', () => {
     expect(scope).toEqual({ dataLakeId: lake.id });
   });
 
+  it('treats a static-registry member as lake work against a REAL lakes collection', async () => {
+    // The interaction worth pinning with a real database: findMemberLakesForFile queries the real
+    // lakes collection and legitimately finds nothing for a static-registry tag (no document
+    // exists), so the static arm is the only thing standing between that corpus and an uncapped
+    // re-embed. Rebuild Passages runs over these lakes.
+    const owner = await User.create({ username: 'static-owner', name: 'Static', email: 'static@example.com' });
+    const file = await FabFile.create({
+      userId: String(owner._id),
+      fileName: 'registry.txt',
+      type: 'FILE',
+      filePath: 'registry.txt',
+      tags: [{ name: 'datalake:opti-knowledge', strength: 1 }],
+    });
+
+    const scope = await scopeFor({ id: String(file._id), userId: String(owner._id), tags: file.tags });
+
+    expect(scope).toEqual({});
+  });
+
   it('returns null for a personal file that belongs to no lake, so ordinary uploads are unaffected', async () => {
     const owner = await User.create({ username: 'solo-owner', name: 'Solo', email: 'solo@example.com' });
     await seedLake(String(owner._id), 'membership-other-lake');

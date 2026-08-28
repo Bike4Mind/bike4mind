@@ -48,6 +48,42 @@ describe('resolveIngestSpendScope', () => {
     expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
+  it('treats a static-registry lake member as lake work with no lake id', async () => {
+    // The population the first cut missed: findMemberLakesForFile discards static-registry
+    // meta-tags (documentless lakes cannot declare a chunk policy), which read as "not lake work"
+    // and routed the largest corpus on the platform around the cap. Rebuild Passages DOES run
+    // over these lakes, and their files carry the meta-tag with no batchId.
+    const db = deps();
+    const scope = await resolveIngestSpendScope(
+      { id: 'f1', userId: 'user1', tags: [{ name: 'datalake:opti-knowledge' }] },
+      db as never
+    );
+    // Empty scope, NOT null: the platform-wide throughput and period windows apply, while the
+    // run and lake meters are skipped because a documentless lake has nowhere to write them.
+    expect(scope).toEqual({});
+    expect(scope).not.toBeNull();
+  });
+
+  it('matches a static-registry meta-tag case-insensitively', async () => {
+    const db = deps();
+    const scope = await resolveIngestSpendScope(
+      { id: 'f1', userId: 'user1', tags: [{ name: 'DataLake:Opti-Knowledge' }] },
+      db as never
+    );
+    expect(scope).toEqual({});
+  });
+
+  it('prefers the DB-backed lake when a file carries both a static and a real lake tag', async () => {
+    const db = deps({ byTag: lake('lake1') });
+    const scope = await resolveIngestSpendScope(
+      { id: 'f1', userId: 'user1', tags: [{ name: 'datalake:lake1' }, { name: 'datalake:opti-knowledge' }] },
+      db as never
+    );
+    // A resolvable lake id is strictly better than none - it adds the run/lake meters on top of
+    // the platform windows the static arm would have given.
+    expect(scope).toEqual({ dataLakeId: 'lake1' });
+  });
+
   it('picks the lowest lake id for a multi-lake member, so a redelivery meters the same lake', async () => {
     const file = { id: 'f1', userId: 'user1', tags: [{ name: 'lakeB:docs' }] };
     const db = deps({

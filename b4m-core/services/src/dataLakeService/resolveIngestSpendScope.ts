@@ -1,6 +1,7 @@
 import type { IDataLakeBatchRepository, IDataLakeRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { findMemberLakesForFile, type ChunkPolicyFile } from './chunkPolicyConflict';
+import { extractDataLakeMetaTags, isStaticRegistryDatalakeTag } from './authorizeLakeWrite';
 
 /** The file facts the scope is derived from. `batchId` is present only for a lake-batch upload. */
 export type IngestSpendScopeFile = ChunkPolicyFile & { batchId?: string | null };
@@ -30,6 +31,16 @@ export interface IngestSpendScope {
  * upload. That case costs ZERO reads against the lakes collection: findMemberLakesForFile only
  * queries when the file carries a tag that could be a membership signal.
  *
+ * STATIC-REGISTRY lakes are lake work with NO `dataLakeId`. They have no lake document, which is
+ * why findMemberLakesForFile drops their meta-tags - a filter that exists there so a documentless
+ * lake cannot be asked to declare a chunk policy, and which would silently read as "not lake work"
+ * here. But Rebuild Passages does run over them (assertLakeRebuildAccess is deliberately the one
+ * file-level lake write that needs no lake document), and their members are stamped with the
+ * meta-tag and no batchId, so this is precisely the bulk-door-over-tagged-population case the
+ * throughput cap exists for. Returning an empty scope puts those calls under the platform-wide
+ * throughput and period windows while leaving the run and lake meters alone - correct rather than
+ * merely convenient, since neither has anywhere to write for a lake that does not exist.
+ *
  * Deliberately does NOT catch a failed lakes read. An unreadable membership is UNKNOWN, and
  * treating unknown as "not lake work" would route the call around the throughput cap and every
  * budget - the exact bypass this function exists to close, now triggered by an outage instead of
@@ -53,7 +64,17 @@ export async function resolveIngestSpendScope(
   }
 
   const memberLakes = await findMemberLakesForFile(file, db.dataLakes);
-  if (memberLakes.length === 0) return null;
+  if (memberLakes.length === 0) {
+    // No DB-backed lake. Before calling this "not lake work", check the one membership signal
+    // findMemberLakesForFile is built to discard (see the doc comment above).
+    const tagNames = (file.tags ?? []).map(t => t?.name);
+    const staticTags = extractDataLakeMetaTags(tagNames).filter(isStaticRegistryDatalakeTag);
+    if (staticTags.length > 0) {
+      logger?.log?.(`[spendGate] file ${file.id} is a static-registry lake member (${staticTags[0]}); metering platform windows only`);
+      return {};
+    }
+    return null;
+  }
 
   const [dataLakeId] = memberLakes.map(lake => lake.id).sort();
   if (memberLakes.length > 1) {

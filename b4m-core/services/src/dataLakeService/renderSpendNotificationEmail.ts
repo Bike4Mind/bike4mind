@@ -76,17 +76,22 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
   }
 
   if (kind === 'stopped' && scope === 'rate') {
-    // `reason` is deliberately not interpolated here - its only producer sends a fragment meant
-    // for logs ("the embedding call rate limit is 0 (stopped)"), not a mid-paragraph clause, and
-    // splicing it in read as a lowercase, unpunctuated restatement of the sentence before it.
-    // Covers BOTH throughput windows (calls/min and tokens/min), which share this scope, so the
-    // copy names neither one specifically - the log line carries which window it was.
+    // TWO producers now share this pairing, and they are different operator conditions: a
+    // throughput limit set to 0, and a single call whose tokens cannot fit the whole window (a
+    // limit set below one batch). Copy that named either cause asserted something false for the
+    // other, so it names NEITHER - it states only what is true in both cases, that a platform
+    // throughput limit is refusing the work. The precise cause travels on the file's own error
+    // and in the gate's log line.
+    //
+    // `reason` stays un-interpolated (N1): its only producers send log-shaped fragments, and
+    // splicing one mid-paragraph read as a lowercase, unpunctuated restatement of the sentence
+    // before it. A test pins that.
     return {
-      subject: `Indexing paused for "${subjectName}" - an embedding throughput limit is set to 0`,
+      subject: `Indexing paused for "${subjectName}" - an embedding throughput limit is refusing every call`,
       html: wrap(
         lake,
-        `<p>A platform admin set an embedding throughput limit to 0, which stops all indexing. ` +
-          `No action is available to you.</p>`
+        `<p>Indexing is stopped because a platform embedding throughput limit is currently refusing ` +
+          `every call for this lake. A platform admin controls that limit; no action is available to you.</p>`
       ),
     };
   }
