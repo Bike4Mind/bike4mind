@@ -5,6 +5,7 @@ import { ResearchLink } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 
 interface IParams {
   id?: string;
@@ -22,6 +23,12 @@ const handler = baseApi()
 
       const body = req.body as { name?: string; url?: string; ticker?: string; type?: string; categoryId?: string };
       const { name, url, ticker, type, categoryId } = body;
+
+      // Update payloads cast too, and casting runs before validators, so runValidators
+      // does not cover this. A junk categoryId would throw rather than answer the caller.
+      if (categoryId && !isValidObjectId(categoryId)) {
+        return res.status(400).json({ message: 'Invalid category ID format' });
+      }
 
       const link = await ResearchLink.findByIdAndUpdate(
         id,

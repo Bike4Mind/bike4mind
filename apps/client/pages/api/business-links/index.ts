@@ -6,12 +6,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@server/utils/errors';
-import { Types } from 'mongoose';
-
-// Round-trip rather than mongoose.isValidObjectId, which also accepts any
-// 12-character string and would let a junk id through as a silent no-match.
-const isValidObjectId = (id: string): boolean =>
-  Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
+import { isValidObjectId } from '@server/utils/objectId';
 
 interface IQuery {
   pageSize?: string;
