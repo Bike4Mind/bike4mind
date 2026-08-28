@@ -31,6 +31,12 @@ export interface AbstentionCaseResult {
   passRate: number;
 }
 
+/**
+ * A 200 carrying no usable message content. Distinct from a transport failure so the sweep can
+ * record the sample as a failure and keep going rather than discarding the cases already run.
+ */
+class EmptyCompletionError extends Error {}
+
 async function complete(config: AbstentionEvalConfig, evalCase: AbstentionCase): Promise<string> {
   const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
@@ -59,7 +65,9 @@ async function complete(config: AbstentionEvalConfig, evalCase: AbstentionCase):
   // whose text lives somewhere else (a `tool_calls` reply, a reasoning model) would report most of
   // the suite clean having measured nothing.
   if (typeof content !== 'string' || content.length === 0) {
-    throw new Error(`${config.model}: response carried no message content: ${JSON.stringify(body).slice(0, 400)}`);
+    throw new EmptyCompletionError(
+      `${config.model}: response carried no message content: ${JSON.stringify(body).slice(0, 400)}`
+    );
   }
   return content;
 }
@@ -79,8 +87,15 @@ export async function runAbstentionEval(
   for (const evalCase of cases) {
     const graded: (GradeResult & { reply: string })[] = [];
     for (let i = 0; i < samples; i++) {
-      const reply = await complete(config, evalCase);
-      graded.push({ ...grade(evalCase, reply), reply });
+      try {
+        const reply = await complete(config, evalCase);
+        graded.push({ ...grade(evalCase, reply), reply });
+      } catch (error) {
+        // A blank completion is as loud recorded as it is thrown, and a sequential sweep takes
+        // minutes: aborting would throw away every case already graded.
+        if (!(error instanceof EmptyCompletionError)) throw error;
+        graded.push({ passed: false, reason: error.message, claims: [], reply: '' });
+      }
     }
     results.push({
       caseId: evalCase.id,

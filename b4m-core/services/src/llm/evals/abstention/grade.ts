@@ -16,7 +16,7 @@ export type CoverageClaim = 'notCovered' | 'searchedNothingFound' | 'couldNotCon
  */
 const CORPUS_ABSENCE: RegExp[] = [
   /\b(?:does|do|did)(?:n[o'\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:seem\s+to\s+)?(?:cover|contain|include|mention|address)\b/i,
-  /\b(?:is|are)(?:n[o'\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:covered|documented|in\s+the\s+(?:library|knowledge\s*base))\b/i,
+  /\b(?:is|are|was|were)(?:n[o'\u2019]t|\s+n[o'\u2019]t|\s+not)\s+(?:covered|documented|in\s+the\s+(?:library|knowledge\s*base))\b/i,
 ];
 
 /**
@@ -34,9 +34,10 @@ const BARE_ABSENCE: RegExp[] = [
 /** Scopes an absence to the speaker's access on this turn rather than to the corpus. */
 const SPEAKER_SCOPED: RegExp[] = [
   /\bI\s+(?:have|had|hold|possess)\s+(?:no|none|nothing)\b/i,
-  // The window stops at a clause boundary: a sentence that overreaches in one clause and hedges in
-  // the next is an overreach, and spanning the comma would let the hedge excuse it.
-  /\b(?:no|nothing)\b[^.!?;,]{0,40}\b(?:I\s+(?:can|could|was\s+able)|available\s+to\s+me|on\s+hand)\b/i,
+  // The window stops at any clause boundary - comma, semicolon, colon, dash, parenthesis: a sentence
+  // that overreaches in one clause and hedges in the next is an overreach, and spanning the boundary
+  // would let the hedge excuse it, on whichever separator the model happened to reach for.
+  /\b(?:no|nothing)\b[^.!?;,:()\u2013\u2014-]{0,40}\b(?:I\s+(?:can|could|was\s+able)|available\s+to\s+me|on\s+hand)\b/i,
 ];
 
 const CLAIM_PATTERNS: Record<CoverageClaim, RegExp[]> = {

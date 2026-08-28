@@ -61,6 +61,23 @@ describe('detectCoverageClaims', () => {
     );
   });
 
+  it('flags a corpus claim in the past tense', () => {
+    // The conjugation a model reaches for right after a retrieval attempt. It failed permissively in
+    // both directions: a volunteered coverage claim on a pleasantry, and an overreach on `unavailable`.
+    expect(detectCoverageClaims("Password rotation wasn't covered in the material.")).toContain('notCovered');
+    expect(detectCoverageClaims('Password rotation was not covered in the material.')).toContain('notCovered');
+  });
+
+  it('stops the speaker-scope window at a colon or a dash', () => {
+    // Same semantics as the comma and semicolon rows above, on the separators that were still open.
+    expect(detectCoverageClaims('No documents mention password rotation: I could not search them anyway.')).toContain(
+      'notCovered'
+    );
+    expect(
+      detectCoverageClaims('There is no coverage of password rotation - I could not consult the library.')
+    ).toContain('notCovered');
+  });
+
   it('flags a could-not-consult claim', () => {
     expect(detectCoverageClaims('The curated library could not be consulted on this turn.')).toContain(
       'couldNotConsult'
@@ -96,6 +113,14 @@ describe('gradeMustNotMentionCoverage', () => {
     expect(result.reason).toContain('couldNotConsult');
   });
 
+  it('fails a volunteered coverage claim in the past tense', () => {
+    const result = gradeMustNotMentionCoverage(
+      "You're welcome! For what it's worth, password rotation wasn't covered in the material."
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain('notCovered');
+  });
+
   it('fails the same apology when the model contracts', () => {
     // The false PASS the contraction gap produced: the exact failure this eval was built to catch,
     // scoring clean whenever the model writes `can't` instead of `could not`.
@@ -121,6 +146,15 @@ describe('gradeMustHedge', () => {
     // The single worst outcome the abstention block exists to prevent: an outage reaching the user
     // as "that document is not in here".
     const result = gradeMustHedge('The library does not cover password rotation.', 'unavailable');
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain('notCovered');
+  });
+
+  it('fails an unavailable turn that reports the outage in the past tense', () => {
+    const result = gradeMustHedge(
+      'I could not consult the curated library, and password rotation was not covered there anyway.',
+      'unavailable'
+    );
     expect(result.passed).toBe(false);
     expect(result.reason).toContain('notCovered');
   });
