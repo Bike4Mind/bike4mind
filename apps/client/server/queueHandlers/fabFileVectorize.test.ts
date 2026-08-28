@@ -32,6 +32,12 @@ const h = vi.hoisted(() => ({
   indexChunks: vi.fn(),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   enforceEmbeddingSpendGate: vi.fn(async () => undefined),
+  // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
+  // tag-joined members are both lake work, everything else is not. Its own decision table is
+  // pinned in resolveIngestSpendScope.test.ts.
+  resolveIngestSpendScope: vi.fn(async (file: { batchId?: string }) =>
+    file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+  ),
   batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
   batchReleaseSpend: vi.fn(async () => true),
   lakeReleaseSpend: vi.fn(async () => true),
@@ -82,6 +88,7 @@ vi.mock('@bike4mind/services', () => ({
   recordOperationalUsage: h.recordOperationalUsage,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
+    resolveIngestSpendScope: h.resolveIngestSpendScope,
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
     EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
       retryable: boolean;
@@ -350,20 +357,37 @@ describe('fabFileVectorize handler - spend gate', () => {
     // clearAllMocks resets calls but not replaced implementations - re-grant so a
     // denial mocked in one test can never leak into later describes.
     h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.resolveIngestSpendScope.mockImplementation(async (file: { batchId?: string }) =>
+      file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+    );
   });
 
-  it('runs the gate for a data-lake file before any provider call', async () => {
+  it('runs the gate for a data-lake file before any provider call, metering its tokens', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
-      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1' })
+      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1', estimatedTokens: 5 })
     );
   });
 
-  it('skips the gate entirely for a turn-attached file (no batchId)', async () => {
+  it('runs the gate for a tag-joined lake member that carries NO batchId', async () => {
+    // The population a bulk rebuild is largest for: membership is by tag, so batchId is absent and
+    // the pre-#1743 gate skipped these files entirely - unthrottled and unmetered.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.resolveIngestSpendScope.mockResolvedValue({ dataLakeId: 'lake-9' });
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
+      expect.objectContaining({ batchId: undefined, dataLakeId: 'lake-9', estimatedTokens: 5 })
+    );
+  });
+
+  it('skips the gate entirely for a file that belongs to no lake', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 
