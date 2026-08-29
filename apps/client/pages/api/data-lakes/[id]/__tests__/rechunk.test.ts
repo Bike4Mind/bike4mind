@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/fab-file-chunk'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  isConvergenceHalted: vi.fn(async () => false),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,10 +41,14 @@ vi.mock('@bike4mind/database', () => ({
     resetChunkStateByIds: h.resetChunkStateByIds,
   },
   fabFileChunkRepository: {},
+  adminSettingsRepository: {},
+  scopedSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@server/queueHandlers/convergenceProvenance', () => ({ CONVERGENCE_ORIGIN: 'convergence' }));
+vi.mock('@server/queueHandlers/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
 
 import handler from '../rechunk';
 
@@ -73,6 +78,8 @@ beforeEach(() => {
   // Returns the ids actually reset - a file a worker is mid-run on is skipped (round-8 P1).
   h.resetChunkStateByIds.mockImplementation(async (ids: string[]) => ids);
   h.sendToQueue.mockResolvedValue(undefined);
+  // Switch OFF by default; the paused cases below opt in.
+  h.isConvergenceHalted.mockResolvedValue(false);
 });
 
 describe('GET /api/data-lakes/[id]/rechunk', () => {
@@ -107,6 +114,8 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
       userId: 'u1',
+      origin: 'convergence',
+      lakeId: 'lake1',
     });
     // The skipped file is not enqueued and is still outstanding, so it must remain countable.
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
@@ -124,10 +133,14 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
       userId: 'u1',
+      origin: 'convergence',
+      lakeId: 'lake1',
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f2',
       userId: 'u2',
+      origin: 'convergence',
+      lakeId: 'lake1',
     });
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
@@ -176,6 +189,54 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ detected: 0, enqueued: 0, remaining: 0 });
+  });
+
+  it('refuses BEFORE the reset when the convergence kill switch is on (#2223)', async () => {
+    // The producer-side gate is the whole point: the consumer's check only drops messages already
+    // on the queue, and by then resetChunkStateByIds has deleted this wave's passages and nulled its
+    // health rollups. A consumer-side stamp cannot protect a route that destroys before it enqueues.
+    h.isConvergenceHalted.mockResolvedValue(true);
+    h.detectUnderChunkedFiles.mockResolvedValue([
+      { fabFileId: 'f1', userId: 'u1' },
+      { fabFileId: 'f2', userId: 'u1' },
+    ]);
+    const { json } = await invoke('POST', {});
+
+    // Nothing touched - this is what "before the reset" means.
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    // And the caller is told, rather than shown a silent zero-count success.
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'paused', enqueued: 0, detected: 2, remaining: 2 })
+    );
+  });
+
+  it('asks the kill switch about THIS lake, so a per-lake override is honoured', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    await invoke('POST', {});
+
+    // First argument only: the third is req.logger, which this harness's fake request does not carry.
+    expect(h.isConvergenceHalted.mock.calls[0][0]).toEqual({ origin: 'convergence', lakeId: 'lake1' });
+  });
+
+  it('stamps convergence provenance on every message, so an in-flight wave halts too', async () => {
+    // The producer gate protects the passages; the stamp is what stops the consumer continuing to
+    // re-embed if the switch is turned on after these messages were already sent.
+    h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    await invoke('POST', {});
+
+    expect(h.sendToQueue).toHaveBeenCalledWith(
+      'https://sqs.example.com/fab-file-chunk',
+      expect.objectContaining({ fabFileId: 'f1', userId: 'u1', origin: 'convergence', lakeId: 'lake1' })
+    );
+  });
+
+  it('does not consult the kill switch when there is nothing to rechunk', async () => {
+    // The gate sits inside the wave.length > 0 branch, so an empty detection costs no settings read.
+    h.detectUnderChunkedFiles.mockResolvedValue([]);
+    await invoke('POST', {});
+
+    expect(h.isConvergenceHalted).not.toHaveBeenCalled();
   });
 
   it('gates on rebuild access - a rejected assert never resets or enqueues', async () => {
