@@ -2346,6 +2346,27 @@ describe('ChatCompletionProcess', () => {
         const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
         expect(saved).toEqual([]);
       });
+
+      // The no-regression half: surfacing failures must not cost a healthy attachment its delivery.
+      // A ~15KB markdown document is the size from the production report.
+      it('still carries a large attachment content through buildDataSources into the built messages', async () => {
+        const body = 'LARGE_DOC_MARKER\n' + 'the quarterly plan says forty-eight person-weeks. '.repeat(300);
+
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
+          fabPromptMessages: [
+            { role: 'user', content: `Here is the content from the attached file "context.md" for context:\n\n${body}` },
+          ],
+        });
+
+        const assembled = contextAndSystemMessages.map(m => String(m.content)).join('\n');
+        expect(assembled).toContain('LARGE_DOC_MARKER');
+        expect(assembled).toContain('forty-eight person-weeks');
+        // And nothing claims a delivery problem for a file that delivered.
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved).toEqual([]);
+      });
     });
 
     it('withholds both knowledge tools for an attachment with no readable chunk text yet', async () => {
