@@ -23,7 +23,7 @@ const capped = (notices: FabFileNotice[]): { shown: FabFileNotice[]; overflow: n
 export function toAttachmentNoticeStrings(notices: FabFileNotice[]): string[] {
   const { shown, overflow } = capped(notices);
   const lines = shown.map(notice => notice.message);
-  if (overflow > 0) lines.push(`...and ${overflow} more attachment(s) with the same problem.`);
+  if (overflow > 0) lines.push(`...and ${overflow} more attachment(s) not listed here.`);
   return lines;
 }
 
@@ -41,11 +41,11 @@ export function buildAttachmentNoticePrompt(notices: FabFileNotice[]): string {
       : 'was NOT delivered and its content is not in this conversation';
     return `- ${state}: ${notice.message}`;
   });
-  if (overflow > 0) lines.push(`- ...and ${overflow} more attachment(s) with the same problem.`);
+  if (overflow > 0) lines.push(`- ...and ${overflow} more attachment(s) not listed here.`);
 
   return `# Attachment delivery problems
 
-The user attached files to this conversation that did not arrive intact:
+Files that should have been available for this turn did not arrive intact:
 
 ${lines.join('\n')}
 

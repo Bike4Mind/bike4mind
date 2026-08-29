@@ -212,17 +212,28 @@ export function composeFirstIterationMessage(
 }
 
 /**
+ * Line cap for the notice block, matching MAX_ATTACHMENT_NOTICE_LINES in
+ * `b4m-core/services/src/llm/attachmentNotices.ts` (kept as a local literal so this module keeps
+ * its type-only imports). Reachable here: a run inlines every session knowledge id against ONE
+ * shared budget, so a large workbench truncates every file and would otherwise bury the query
+ * under a line per file. Change one, change the other.
+ */
+const MAX_NOTICE_LINES = 20;
+
+/**
  * The block appended to the query for attachments that did NOT arrive intact. Mirrors the chat
  * path's system-message wording so the two surfaces tell the model the same thing.
  */
 export function attachmentNoticeBlock(notices: FabFileNotice[]): string {
   if (notices.length === 0) return '';
-  const lines = notices.map(notice => {
+  const overflow = Math.max(0, notices.length - MAX_NOTICE_LINES);
+  const lines = notices.slice(0, MAX_NOTICE_LINES).map(notice => {
     const state = notice.delivered
       ? 'was delivered only in part - what is here is incomplete'
       : 'was NOT delivered and its content is not in this conversation';
     return `  - ${state}: ${notice.message}`;
   });
+  if (overflow > 0) lines.push(`  - ...and ${overflow} more attachment(s) not listed here.`);
   return (
     `\n\n[ATTACHMENT PROBLEMS - these files did not arrive intact:\n${lines.join('\n')}\n` +
     'Do not answer as though these files were present or complete. If the answer depends on one of ' +

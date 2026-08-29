@@ -16,10 +16,15 @@ const file = (id: string, fileName = `${id}.md`): IFabFileDocument =>
   ({ id, fileName, mimeType: 'text/markdown' }) as unknown as IFabFileDocument;
 
 const imageBlock = (bytes: number): MessageContentObject =>
-  ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x'.repeat(bytes) } }) as MessageContentObject;
+  ({
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: 'x'.repeat(bytes) },
+  }) as MessageContentObject;
 
 /** Default extractor result; override per test. */
-const extractorResult = (over: Partial<Awaited<ReturnType<Parameters<typeof materializeAttachmentContent>[2]>>> = {}) => ({
+const extractorResult = (
+  over: Partial<Awaited<ReturnType<Parameters<typeof materializeAttachmentContent>[2]>>> = {}
+) => ({
   userMessages: [],
   fileNotices: [],
   deliveredFileIds: [],
@@ -89,9 +94,15 @@ describe('materializeAttachmentContent', () => {
       message: '"a.md" was too large to send whole.',
       delivered: true,
     };
-    const extract = vi.fn().mockResolvedValue(
-      extractorResult({ userMessages: [{ role: 'user', content: 'partial' }], deliveredFileIds: ['a'], fileNotices: [notice] })
-    );
+    const extract = vi
+      .fn()
+      .mockResolvedValue(
+        extractorResult({
+          userMessages: [{ role: 'user', content: 'partial' }],
+          deliveredFileIds: ['a'],
+          fileNotices: [notice],
+        })
+      );
 
     const result = await materializeAttachmentContent([file('a')], [], extract, logger);
 
@@ -104,16 +115,16 @@ describe('materializeAttachmentContent', () => {
     const logger = makeLogger();
     const under = imageBlock(MAX_INLINED_IMAGE_BYTES - 10);
     const over = imageBlock(1000);
-    const extract = vi.fn().mockResolvedValue(
-      extractorResult({ userMessages: [{ role: 'user', content: [under, over] }], deliveredFileIds: ['i1', 'i2'] })
-    );
+    const extract = vi
+      .fn()
+      .mockResolvedValue(
+        extractorResult({ userMessages: [{ role: 'user', content: [under, over] }], deliveredFileIds: ['i1', 'i2'] })
+      );
 
     const result = await materializeAttachmentContent([file('i1'), file('i2')], [], extract, logger);
 
     expect(result.imageBlocks).toEqual([under]);
-    expect(result.notices).toEqual([
-      expect.objectContaining({ band: 'image_too_large', delivered: false }),
-    ]);
+    expect(result.notices).toEqual([expect.objectContaining({ band: 'image_too_large', delivered: false })]);
     expect(result.notices[0].message).toContain('1 attached image(s) were not sent');
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('per-run inline ceiling'),
@@ -218,5 +229,23 @@ describe('attachmentNoticeBlock', () => {
     expect(out).toContain('was NOT delivered');
     expect(out).toContain('delivered only in part');
     expect(out).toContain('Do not answer as though these files were present or complete');
+  });
+
+  it('caps the list so a large workbench cannot bury the query under one line per file', () => {
+    // Reachable: a run inlines every session knowledge id against one shared budget, so enough
+    // files means every one of them truncates and produces a notice.
+    const many = Array.from({ length: 25 }, (_, i) => ({
+      fabFileId: `f${i}`,
+      fileName: `f${i}.md`,
+      band: 'truncated' as const,
+      message: `"f${i}.md" was cut.`,
+      delivered: true,
+    }));
+
+    const out = attachmentNoticeBlock(many);
+
+    expect(out).toContain('"f19.md"');
+    expect(out).not.toContain('"f20.md"');
+    expect(out).toContain('5 more attachment(s) not listed here');
   });
 });

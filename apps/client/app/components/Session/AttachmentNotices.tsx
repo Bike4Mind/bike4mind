@@ -33,7 +33,7 @@ const AttachmentNotices: FC<AttachmentNoticesProps> = ({ attachmentNotices }) =>
         startDecorator={<WarningIcon sx={{ fontSize: 16 }} />}
         sx={{ mb: 0.5, fontWeight: 600 }}
       >
-        Some attachments did not reach the model
+        Some attachments did not reach the model intact
       </Typography>
       <List size="sm" marker="disc" sx={{ '--ListItem-minHeight': '0px', py: 0 }}>
         {attachmentNotices.map((notice, index) => (
