@@ -42,8 +42,20 @@ import {
   lakeAccessEventRepository,
   mcpServerRepository,
   scopedSettingsRepository,
+  cacheRepository,
 } from '@bike4mind/database';
-import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
+import {
+  registerLambdaErrorHandlers,
+  getSettingsByNames,
+  fetchAgentConversationHistory,
+  fetchAndConvertFabFiles,
+  processFabFilesServer,
+  attachedContentExtractionBudget,
+  safeInputWindow,
+} from '@bike4mind/utils';
+import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
+import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { defaultEmbeddingModelForEnv } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -103,11 +115,19 @@ import {
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
+import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
+// Content materialization for the agent path - see the module header. Without it the agent gets
+// attachment metadata only and can read a file solely through the chunk-backed retrieval tool.
+import {
+  materializeAttachmentContent,
+  composeFirstIterationMessage,
+  attachmentNoticeBlock,
+} from './agentExecutor.attachmentContent';
 import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
@@ -625,6 +645,104 @@ export function buildInProcessCreditCapCheck(
     const freshOrg = await organizations.findById(organizationId);
     return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, userId));
   };
+}
+
+/**
+ * Flat token allowance set aside for instructions before the attachment share is computed.
+ * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
+ * same attachment against the same window.
+ */
+const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
+
+/**
+ * Resolve this run's attachment ids and extract their content, using the SAME extractor the chat
+ * path uses so an agent turn gets the raw-content fallback, cosine excerpting, truncation notices
+ * and image blocks that a chat turn gets.
+ *
+ * Never throws. Extraction is an enhancement over the metadata preamble - a failure here has to
+ * leave the run behaving exactly as it did before, not kill the turn.
+ */
+async function materializeAttachmentsForRun(args: {
+  execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
+  sessionKnowledgeIds: string[];
+  scope: Record<string, unknown>;
+  modelInfo?: ModelInfo;
+  apiKeyTable: ApiKeyTable;
+  logger: Logger;
+}) {
+  const { execution, sessionKnowledgeIds, scope, modelInfo, apiKeyTable, logger } = args;
+
+  const requestedIds = Array.from(
+    new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
+  );
+  if (requestedIds.length === 0) return undefined;
+
+  // A model we cannot size gives no honest budget, and guessing one would inline against a window
+  // that may not exist. Fall through to the metadata preamble instead.
+  if (!modelInfo) {
+    logger.warn('[AttachmentContent] No resolved modelInfo; skipping content materialization', {
+      requested: requestedIds.length,
+    });
+    return undefined;
+  }
+
+  try {
+    const storage = getFilesStorage();
+    const { files, missingIds } = await fetchAndConvertFabFiles(
+      requestedIds,
+      { scope },
+      { db: { fabfiles: fabFileRepository, caches: cacheRepository }, storage, logger }
+    );
+
+    // Same construction as the chat path (ChatCompletionProcess ~2013): pick the env's default
+    // embedding model, then hand the factory ONLY the credential that model's provider needs.
+    // Getting this wrong is quiet rather than loud - the query embedding just fails and every file
+    // falls through to the raw-content path, so a vectorized file silently loses cosine selection.
+    const embeddingProvider = getProviderFromModel(defaultEmbeddingModelForEnv());
+    const embeddingFactory = new EmbeddingFactory({
+      ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
+      ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
+      ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
+    });
+
+    const budget = attachedContentExtractionBudget(
+      safeInputWindow(modelInfo, modelInfo.max_tokens),
+      AGENT_SYSTEM_PROMPT_RESERVE
+    );
+
+    return await materializeAttachmentContent(
+      files,
+      missingIds,
+      fabFiles =>
+        processFabFilesServer(
+          embeddingFactory,
+          fabFiles,
+          execution.query,
+          budget,
+          modelInfo,
+          // No per-file status channel on this path: the agent surface streams iteration events,
+          // not the chat status line. Delivery problems still reach the user via the notices.
+          async () => {},
+          {
+            logger,
+            storage,
+            db: {
+              fabfilechunks: fabFileChunkRepository,
+              fabfiles: fabFileRepository,
+              caches: cacheRepository,
+            },
+            resizeImageForModel: ensureImageWithinDimensionLimit,
+          }
+        ),
+      logger
+    );
+  } catch (err) {
+    logger.error('[AttachmentContent] Materialization failed; falling back to the metadata preamble', {
+      requested: requestedIds.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
 }
 
 async function processExecution(
@@ -1322,6 +1440,14 @@ async function processExecution(
         profileId: orchestrationProfile?.id,
       });
     }
+    // Filled in place by the materialization step below, which cannot run this early (it needs
+    // `iterationIndex`). ToolBuilder stores this exact array on the ToolContext, and the knowledge
+    // tools read it when INVOKED - always after materialization - so pushing into it here is what
+    // lets `retrieve_knowledge_content` say "its content is already in the conversation, answer
+    // from that" instead of the generic "indexing may still be in progress". Same shape as the
+    // chat path's abortSignalHolder. Must be mutated in place: reassigning would not propagate.
+    const inlinedAttachmentIds: string[] = [];
+    const fullyInlinedAttachmentIds: string[] = [];
 
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
@@ -1341,6 +1467,8 @@ async function processExecution(
       // suppression means running that predicate on this surface, which is real work rather than a
       // passthrough. Until then an agent delegated from a personal-corpus session searches the
       // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
+      inlinedAttachmentIds,
+      fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
@@ -2149,6 +2277,30 @@ async function processExecution(
       // iteration 0 of a new execution - continuation Lambdas replay the
       // checkpoint, which already embeds the preamble in the first user
       // message. The gate is wrapped in a helper so it's unit-testable.
+      // Extract attachment CONTENT before the metadata preamble is built, so the preamble knows
+      // which files are already in front of the agent and does not mark an inlined-but-chunkless
+      // file unreadable. Gated to the same iteration-0-of-a-new-execution window as the preamble:
+      // the content is baked into the checkpointed first message, and continuation Lambdas replay
+      // it rather than re-extracting.
+      const materialized =
+        isNewExecution && iterationIndex === 0
+          ? await materializeAttachmentsForRun({
+              execution,
+              sessionKnowledgeIds: session.knowledgeIds ?? [],
+              scope: fabFileReadScope,
+              modelInfo,
+              apiKeyTable: apiKeyTable as ApiKeyTable,
+              logger,
+            })
+          : undefined;
+
+      if (materialized) {
+        // In place - see the declaration. Populated before `runIteration`, so no tool can observe
+        // the empty array.
+        inlinedAttachmentIds.push(...materialized.inlinedFileIds);
+        fullyInlinedAttachmentIds.push(...materialized.fullyInlinedFileIds);
+      }
+
       let firstIterationQuery = await maybeBuildFirstIterationQuery(
         {
           isNewExecution,
@@ -2158,6 +2310,7 @@ async function processExecution(
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
           availableToolNames: resolvedToolNames,
+          inlinedFileIds: materialized?.inlinedFileIds ?? [],
         },
         logger,
         fabFileRepository
@@ -2201,6 +2354,13 @@ async function processExecution(
           logger
         );
         if (skillsPreamble) firstIterationQuery = `${firstIterationQuery}${skillsPreamble}`;
+
+        // Attachment problems ride the query as text, like every other preamble. Chat says the
+        // same thing in a system message; both exist so the model cannot answer as though a
+        // missing file were present.
+        if (materialized && materialized.notices.length > 0) {
+          firstIterationQuery = `${firstIterationQuery}${attachmentNoticeBlock(materialized.notices)}`;
+        }
       }
       // Seed the run with recent session history so short follow-ups ("yes", "go ahead") resolve
       // against prior turns. Only on iteration 0 of a new execution - continuation Lambdas restore
@@ -2220,8 +2380,16 @@ async function processExecution(
         }
       }
 
+      // Fold extracted content in last, so it sits after every preamble. Stays a plain string
+      // unless an image was inlined - only then does the message become a MessageContent array,
+      // which `runIteration` accepts and the checkpoint stores as-is.
+      const firstIterationMessage =
+        materialized && firstIterationQuery !== undefined
+          ? composeFirstIterationMessage(firstIterationQuery, materialized)
+          : firstIterationQuery;
+
       resetLastIterationConfidence();
-      iterationResult = await agent.runIteration(firstIterationQuery, {
+      iterationResult = await agent.runIteration(firstIterationMessage, {
         maxIterations,
         confidenceGate,
         previousMessages,

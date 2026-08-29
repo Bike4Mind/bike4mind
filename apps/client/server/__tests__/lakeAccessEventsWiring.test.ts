@@ -19,7 +19,16 @@ import { fileURLToPath } from 'node:url';
  * Heuristic: a KB-capable db literal is identified by carrying BOTH `fabfiles:` and
  * `fabfilechunks:` as object keys (not `fabFiles`/`fabFileChunks`, which name a different,
  * non-tool-context repository shape used elsewhere) - verified against every file under
- * apps/client/server to match exactly the known construction sites and nothing else. Scoped to
+ * apps/client/server to match exactly the known construction sites and nothing else.
+ *
+ * The COUNT is keyed on `dataLakes:`, not on `fabfilechunks:`. `fabfilechunks:` is no longer 1:1
+ * with a tool-context bundle: `processFabFilesServer`'s own deps take the same key and wire no
+ * lake at all (agentExecutor's attachment materialization), so counting it demanded a
+ * `lakeAccessEvents` that would be a dead field there. `dataLakes:` is the key that makes a bundle
+ * lake-capable in the first place, which is exactly the population that owes an audit row - it is
+ * 1:1 with `lakeAccessEvents:` at every real site today, including agentExecutor's two. This is
+ * tighter about intent, not looser: a bundle wiring `dataLakes` without `lakeAccessEvents` still
+ * fails, and one wiring neither has no lake access to audit. Scoped to
  * apps/client/server on purpose: b4m-core/services only ever CONSUMES ToolContext, it cannot
  * construct the concrete, @bike4mind/database-backed adapter bundle (the same import-direction
  * rule DataLakeAccessGrantModel and LakeAccessEventModel both split around), so a real
@@ -60,15 +69,15 @@ describe('ToolContext db construction sites wire lakeAccessEvents', () => {
     expect(kbCapableFiles.length).toBeGreaterThan(0);
   });
 
-  // Count, not just presence: agentExecutor.ts alone has two separate db literals (top-level
-  // agent loop + delegated subagent) - a boolean "does the file mention it anywhere" check would
-  // stay green even if wiring regressed at just one of the two.
+  // Count, not just presence: agentExecutor.ts alone has two separate lake-capable db literals
+  // (top-level agent loop + delegated subagent) - a boolean "does the file mention it anywhere"
+  // check would stay green even if wiring regressed at just one of the two.
   it.each(kbCapableFiles.map(({ file, content }) => [relative(REPO_ROOT, file), content] as const))(
-    '%s wires lakeAccessEvents at every one of its KB-capable db literals',
+    '%s wires lakeAccessEvents at every one of its lake-capable db literals',
     (_label, content) => {
-      const dbLiteralCount = countOccurrences(content, 'fabfilechunks:');
+      const lakeCapableLiteralCount = countOccurrences(content, 'dataLakes:');
       const wiredCount = countOccurrences(content, 'lakeAccessEvents:');
-      expect(wiredCount).toBeGreaterThanOrEqual(dbLiteralCount);
+      expect(wiredCount).toBeGreaterThanOrEqual(lakeCapableLiteralCount);
     }
   );
 });

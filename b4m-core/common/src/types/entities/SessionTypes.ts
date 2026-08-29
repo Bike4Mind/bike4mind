@@ -305,6 +305,14 @@ export interface IChatHistoryItem {
   };
 
   /**
+   * User-facing lines for attachments submitted with this turn that did not arrive intact - not
+   * found, unreadable, unsupported, or delivered only in part. Rendered under the reply; the same
+   * text is also given to the model in a system message, so an attachment failure is never silent
+   * and never surface-specific.
+   */
+  attachmentNotices?: string[];
+
+  /**
    * Navigation intents from the navigate_view tool.
    * Rendered as inline action buttons in the chat response.
    */
