@@ -1829,7 +1829,10 @@ export async function processFabFilesServer(
                 band: 'truncated',
                 message:
                   `"${noticeFileName(file.fileName)}" was too large to send whole; only the first ` +
-                  `${finalMaxFileSize} characters of ${originalFileSize} reached this conversation.`,
+                  // Floored: the budget is tokens * CHARS_PER_TOKEN, so it is routinely fractional, and
+                  // `substring` truncates toward the integer anyway. A user-facing "106949.5 characters"
+                  // reads as a bug; the persisted fabfiles.error string above keeps its exact wording.
+                  `${Math.floor(finalMaxFileSize)} characters of ${originalFileSize} reached this conversation.`,
                 delivered: true,
               });
             } else {

@@ -417,9 +417,7 @@ describe('processFabFilesServer file notices', () => {
     const { fileNotices, deliveredFileIds } = await run([audio]);
 
     expect(deliveredFileIds).toEqual([]);
-    expect(fileNotices).toEqual([
-      expect.objectContaining({ fabFileId: 'aud', band: 'audio', delivered: false }),
-    ]);
+    expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'aud', band: 'audio', delivered: false })]);
     expect(fileNotices[0].message).toContain('bark.mp3');
   });
 
@@ -469,9 +467,7 @@ describe('processFabFilesServer file notices', () => {
 
     // One unreadable attachment must not cost the turn its other attachments.
     expect(deliveredFileIds).toEqual(['good']);
-    expect(fileNotices).toEqual([
-      expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false }),
-    ]);
+    expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false })]);
   });
 
   it('reports an image on a backend that takes no image payload', async () => {
@@ -528,12 +524,24 @@ describe('processFabFilesServer file notices', () => {
 
     expect(deliveredFileIds).toEqual(['big']);
     expect(fullyDeliveredFileIds).toEqual([]);
-    expect(fileNotices).toEqual([
-      expect.objectContaining({ fabFileId: 'big', band: 'truncated', delivered: true }),
-    ]);
+    expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'big', band: 'truncated', delivered: true })]);
     // The in-band notice the model reads is unchanged - the new channel is additive.
     expect(emittedChars(userMessages)).toBeGreaterThan(0);
-    expect(userMessages.map(m => String(m.content)).join('\n')).toContain('[Content truncated to fit the context window.');
+    expect(userMessages.map(m => String(m.content)).join('\n')).toContain(
+      '[Content truncated to fit the context window.'
+    );
+  });
+
+  it('states a whole number of characters in the truncation notice', async () => {
+    // The budget is tokens * CHARS_PER_TOKEN (3.5), so an odd token share makes it fractional and
+    // the notice read "3496.5 characters" to the user. `substring` floors it anyway, so the floored
+    // value is also the accurate one.
+    mockGetFileContent.mockResolvedValue('X'.repeat(50_000));
+
+    const { fileNotices } = await run([textFile('big')], 999);
+
+    expect(fileNotices[0].message).toContain('3496 characters of 50000');
+    expect(fileNotices[0].message).not.toMatch(/\d\.\d/);
   });
 
   it('emits no notice when every attachment delivers whole', async () => {
