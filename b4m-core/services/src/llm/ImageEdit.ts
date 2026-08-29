@@ -377,7 +377,11 @@ export class ImageEditService {
       }
 
       const models = await getAvailableModels(apiKeyTable);
-      const { prompt: truncatedPrompt, truncated } = await truncateImagePrompt({
+      const {
+        prompt: truncatedPrompt,
+        tokenCount: sentPromptTokens,
+        truncated,
+      } = await truncateImagePrompt({
         prompt,
         promptTokens,
         maxTokens: models.find(m => m.id === model)?.max_tokens,
@@ -587,7 +591,10 @@ export class ImageEditService {
             feature: 'image_edit',
             provider,
             model,
-            inputTokens: 0,
+            // Prompt tokens actually sent to the model, as reported by truncateImagePrompt. Image
+            // models bill per-image (costUsd/units), so this is analytics-only completeness, not
+            // billing.
+            inputTokens: sentPromptTokens,
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
