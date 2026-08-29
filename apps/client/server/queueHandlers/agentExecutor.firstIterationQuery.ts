@@ -55,7 +55,12 @@ type PreambleFile = Pick<
  * Note the split between the two zero-chunk arms. "Try again shortly" is honest ONLY while
  * chunking is actually in flight; saying it about a stalled file is what cost that hour.
  */
-function unreadableReason(file: PreambleFile): string | null {
+function unreadableReason(file: PreambleFile, inlinedFileIds: ReadonlySet<string>): string | null {
+  // Content materialization (see `agentExecutor.attachmentContent.ts`) already put this file in
+  // front of the agent, so chunk state says nothing about whether it can be read - it is right
+  // there in the message. Checked first: a chunkless file that WAS inlined is exactly the case the
+  // chunk-state arms below would get backwards.
+  if (inlinedFileIds.has(file.id)) return null;
   // No agent code path builds an image message block (verified across the executor and the
   // agents package), so an image is metadata and nothing else here regardless of the toolbelt or
   // the model's own vision support. Says WHY, so the agent does not report it as its own defect.
@@ -132,7 +137,9 @@ export async function buildFirstIterationQuery(
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo,
   scope: Record<string, unknown>,
-  availableToolNames: readonly string[]
+  availableToolNames: readonly string[],
+  /** Ids whose content was already inlined into this run's first message; never marked unreadable. */
+  inlinedFileIds: readonly string[] = []
 ): Promise<string> {
   // `sessionFabFileIds` + `messageFileIds` are client-snapshotted at dispatch
   // (stable across Lambda handoffs), while `sessionKnowledgeIds` is re-read
@@ -180,8 +187,9 @@ export async function buildFirstIterationQuery(
 
   // Only meaningful when a reader exists: without one the whole preamble already says NOTHING is
   // readable, and a per-file reason there would just contradict the header.
+  const inlined = new Set(inlinedFileIds);
   const unreadable = canRead
-    ? listed.map(f => ({ file: f, reason: unreadableReason(f) })).filter(entry => entry.reason !== null)
+    ? listed.map(f => ({ file: f, reason: unreadableReason(f, inlined) })).filter(entry => entry.reason !== null)
     : [];
   const unreadableById = new Map(unreadable.map(entry => [entry.file.id, entry.reason as string]));
 
@@ -264,6 +272,8 @@ export async function maybeBuildFirstIterationQuery(
     scope: Record<string, unknown>;
     /** The run's resolved toolbelt - see `buildFirstIterationQuery`. */
     availableToolNames: readonly string[];
+    /** See `buildFirstIterationQuery`. */
+    inlinedFileIds?: readonly string[];
   },
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo
@@ -276,6 +286,7 @@ export async function maybeBuildFirstIterationQuery(
     logger,
     repo,
     args.scope,
-    args.availableToolNames
+    args.availableToolNames,
+    args.inlinedFileIds ?? []
   );
 }

@@ -481,6 +481,71 @@ describe('buildFirstIterationQuery unreadable-file marking', () => {
     );
   });
 
+  it('does NOT mark a chunkless file that content materialization already inlined', async () => {
+    // The whole point of materialization: the file is in front of the agent right now, so its
+    // chunk state says nothing about whether it can be read. Marking it unreadable here would
+    // tell the agent to ignore content sitting in its own first message.
+    const logger = makeLogger();
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })]));
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['id1'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER,
+      ['id1']
+    );
+
+    expect(result).not.toContain('NOT READABLE');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still marks a chunkless file that materialization did NOT inline', async () => {
+    const logger = makeLogger();
+    const repo = makeRepo(
+      vi.fn().mockResolvedValue([
+        makeFile('inlined', 'good.md', 'text/markdown', { chunkCount: 0 }),
+        makeFile('missed', 'bad.md', 'text/markdown', { chunkCount: 0 }),
+      ])
+    );
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['inlined', 'missed'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER,
+      ['inlined']
+    );
+
+    const lines = result.split('\n');
+    expect(lines.find(l => l.includes('fabFileId: inlined'))).not.toContain('NOT READABLE');
+    expect(lines.find(l => l.includes('fabFileId: missed'))).toContain('NOT READABLE');
+  });
+
+  it('does not mark an image that was inlined as a real image block', async () => {
+    const logger = makeLogger();
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('img', 'shot.png', 'image/png')]));
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['img'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER,
+      ['img']
+    );
+
+    expect(result).not.toContain('cannot open images');
+  });
+
   it('adds no per-file marking when the run has no reader at all', async () => {
     // The METADATA ONLY header already says nothing is readable; a per-file reason would only
     // contradict it, and naming the reader tool is exactly what that header exists to avoid.
