@@ -667,6 +667,41 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
 });
 
 /**
+ * Quest Timeout Sweep
+ * Server-side backstop for quests stuck at `status: 'running'` past the
+ * liveness threshold (120s). The read-time recovery in GET /api/quests/[id]
+ * handles polling API clients, but a quest no client ever reads again stays
+ * stuck without this cron. Uses the same pure decision function as the read
+ * path (resolveQuestTimeoutRecovery).
+ *
+ * Schedule: every 5 minutes
+ * Enabled: production + dev
+ */
+const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/questTimeoutSweep.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -773,6 +808,7 @@ export {
   attackSimulationCron,
   modelDiscoveryFunction,
   modelDiscoveryCron,
+  questTimeoutSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
