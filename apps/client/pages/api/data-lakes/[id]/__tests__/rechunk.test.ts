@@ -66,7 +66,11 @@ const invoke = async (method: 'GET' | 'POST', body: unknown = {}) => {
   return { res, json };
 };
 
-const lake = { id: 'lake1', datalakeTag: 'datalake:acme', createdByUserId: 'u1' };
+// Deliberately NOT the same string as the route param ('lake1'): assertLakeAccess resolves by id
+// THEN slug, so req.query.id may be a slug while lake.id is the resolved document id. With both
+// 'lake1', an assertion on the lakeId the handler forwards cannot tell which one it used - and
+// forwarding the slug is precisely what defeats the per-lake override downstream.
+const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme', createdByUserId: 'u1' };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -115,7 +119,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       fabFileId: 'f1',
       userId: 'u1',
       origin: 'convergence',
-      lakeId: 'lake1',
+      lakeId: 'lakeDoc1',
     });
     // The skipped file is not enqueued and is still outstanding, so it must remain countable.
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
@@ -134,13 +138,13 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       fabFileId: 'f1',
       userId: 'u1',
       origin: 'convergence',
-      lakeId: 'lake1',
+      lakeId: 'lakeDoc1',
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f2',
       userId: 'u2',
       origin: 'convergence',
-      lakeId: 'lake1',
+      lakeId: 'lakeDoc1',
     });
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
@@ -206,9 +210,9 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     // And the caller is told, rather than shown a silent zero-count success.
-    expect(json).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'paused', enqueued: 0, detected: 2, remaining: 2 })
-    );
+    // Exact, not objectContaining: this response shape is brand new, so an unintended extra field is
+    // exactly the drift worth catching - the same argument that keeps the success arms exact below.
+    expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 0, remaining: 2, outcome: 'paused' });
   });
 
   it('asks the kill switch about THIS lake, so a per-lake override is honoured', async () => {
@@ -216,7 +220,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     await invoke('POST', {});
 
     // First argument only: the third is req.logger, which this harness's fake request does not carry.
-    expect(h.isConvergenceHalted.mock.calls[0][0]).toEqual({ origin: 'convergence', lakeId: 'lake1' });
+    expect(h.isConvergenceHalted.mock.calls[0][0]).toEqual({ origin: 'convergence', lakeId: 'lakeDoc1' });
   });
 
   it('stamps convergence provenance on every message, so an in-flight wave halts too', async () => {
@@ -227,7 +231,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
 
     expect(h.sendToQueue).toHaveBeenCalledWith(
       'https://sqs.example.com/fab-file-chunk',
-      expect.objectContaining({ fabFileId: 'f1', userId: 'u1', origin: 'convergence', lakeId: 'lake1' })
+      expect.objectContaining({ fabFileId: 'f1', userId: 'u1', origin: 'convergence', lakeId: 'lakeDoc1' })
     );
   });
 
