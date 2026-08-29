@@ -468,7 +468,9 @@ const PendingPermissionSchema = new mongoose.Schema(
     toolCallId: { type: String },
     requestedAt: { type: Date, required: true },
   },
-  { _id: false }
+  // A zero-argument tool records `toolInput: {}`; without `minimize: false` that reads back as
+  // `undefined` and the permission card renders as if the arguments were unknown.
+  { _id: false, minimize: false }
 );
 
 const PendingGateSchema = new mongoose.Schema(
@@ -749,6 +751,14 @@ const AgentExecutionSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    // `minimize: false` because `checkpoint` and `result` are opaque LLM wire payloads read back
+    // verbatim and replayed to a provider. Mongoose's default `minimize` strips empty objects on
+    // `toObject()`/`toJSON()` (the read side - the stored document is fine), so a checkpointed
+    // `tool_use` block for a zero-argument tool (`input: {}`) came back with no `input` at all and
+    // Anthropic rejected the resumed request with
+    // "messages.N.content.0.tool_use.input: Field required". An empty object is meaningful here,
+    // never noise. Same reasoning as `OptiPlanStateSchema` above.
+    minimize: false,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
   }

@@ -31,7 +31,12 @@ import {
 } from './backend';
 import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
-import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
+import {
+  ensureToolPairingIntegrity,
+  normalizeToolUseInputs,
+  stripAllToolBlocks,
+  stripToolDependentMessages,
+} from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
@@ -854,7 +859,13 @@ export class AnthropicBackend implements ICompletionBackend {
     // filterRelevantMessages can break pairs by merging consecutive same-role messages
     // or removing messages via sanitizeMessageContent. This is a defense-in-depth
     // measure alongside the integrity check in buildAndSortMessages.
-    let filteredMessages = ensureToolPairingIntegrity(this.filterRelevantMessages(cacheStampedMessages), this.logger);
+    // `normalizeToolUseInputs` runs last so it also covers blocks the pairing pass rebuilt. It is a
+    // no-op unless a message lost its `input: {}` in serialization - see the helper for why that
+    // happens and why a miss is a hard 400 rather than a degraded reply.
+    let filteredMessages = normalizeToolUseInputs(
+      ensureToolPairingIntegrity(this.filterRelevantMessages(cacheStampedMessages), this.logger),
+      this.logger
+    );
 
     // Pre-API diagnostic: count tool blocks before sending
     const countToolBlocks = (msgs: IMessage[]) => {
