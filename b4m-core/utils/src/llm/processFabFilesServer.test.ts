@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CorruptedFileError, type IFabFileDocument, type ModelInfo } from '@bike4mind/common';
+import { BadRequestError } from '../errors';
 
 const mockGetFileContent = vi.fn();
 vi.mock('../fabfile', () => ({ getFileContent: (...a: unknown[]) => mockGetFileContent(...a) }));
@@ -387,5 +388,158 @@ describe('filename handling in the delivered-content wrapper', () => {
     expect(occurrences).toBe(1);
     expect(content).toContain('--- File 1: 30000.txt ---');
     expect(content).toContain('--- File 2: 40000.txt ---');
+  });
+});
+
+/**
+ * The acceptance criterion for #2228: an attachment either reaches the model or says why it did not.
+ * Most of these sites used to return with nothing pushed at all, so the caller had nothing to report
+ * even before it commented the destructure out - which is why the sweep at the end matters more than
+ * any single site.
+ */
+describe('processFabFilesServer file notices', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFileContent.mockResolvedValue('some file content');
+  });
+
+  const run = async (files: IFabFileDocument[], budget = 4000, info: ModelInfo = modelInfo) =>
+    processFabFilesServer(embeddingFactory, files, 'prompt', budget, info, async () => {}, deps());
+
+  it('reports an audio attachment as undelivered', async () => {
+    const audio = {
+      id: 'aud',
+      fileName: 'bark.mp3',
+      mimeType: 'audio/mpeg',
+      vectorized: false,
+    } as IFabFileDocument;
+
+    const { fileNotices, deliveredFileIds } = await run([audio]);
+
+    expect(deliveredFileIds).toEqual([]);
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'aud', band: 'audio', delivered: false }),
+    ]);
+    expect(fileNotices[0].message).toContain('bark.mp3');
+  });
+
+  it('reports an image held pending moderation as undelivered', async () => {
+    const held = {
+      id: 'held',
+      fileName: 'held.png',
+      mimeType: 'image/png',
+      moderationStatus: 'pending',
+      vectorized: false,
+    } as unknown as IFabFileDocument;
+    const visionModel = { id: 'gpt-4o', supportsVision: true, backend: 'openai' } as unknown as ModelInfo;
+
+    const { fileNotices } = await run([held], 4000, visionModel);
+
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'held', band: 'image_not_serveable', delivered: false }),
+    ]);
+  });
+
+  it('reports an image handed to a model that cannot read images', async () => {
+    const { fileNotices } = await run([imageFile('img')]);
+
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'img', band: 'vision_unsupported', delivered: false }),
+    ]);
+  });
+
+  it('reports an unsupported file type', async () => {
+    mockGetFileContent.mockRejectedValue(new BadRequestError('Unsupported file type: application/x-thing'));
+
+    const { fileNotices, deliveredFileIds } = await run([textFile('odd')]);
+
+    expect(deliveredFileIds).toEqual([]);
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'odd', band: 'unsupported_type', delivered: false }),
+    ]);
+  });
+
+  it('reports a corrupted read while a sibling file still delivers', async () => {
+    mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+      if (file.id === 'bad') throw new CorruptedFileError(file.fileName, 'PDF', 'unreadable stream');
+      return 'hello world';
+    });
+
+    const { fileNotices, deliveredFileIds } = await run([textFile('good'), textFile('bad')]);
+
+    // One unreadable attachment must not cost the turn its other attachments.
+    expect(deliveredFileIds).toEqual(['good']);
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false }),
+    ]);
+  });
+
+  it('reports an image on a backend that takes no image payload', async () => {
+    const storage = { download: vi.fn(), getSignedUrl: vi.fn().mockResolvedValue('https://signed') };
+    const withPath = {
+      ...imageFile('img'),
+      filePath: 'uploads/img.png',
+    } as IFabFileDocument;
+    const unsupportedBackend = { id: 'x', supportsVision: true, backend: 'made-up' } as unknown as ModelInfo;
+
+    const { fileNotices, deliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [withPath],
+      'prompt',
+      4000,
+      unsupportedBackend,
+      async () => {},
+      {
+        ...deps(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal shapes for the signed-url arm
+        storage: storage as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- getCachedSignedUrl reads/writes this
+        db: { ...deps().db, caches: { findByKey: vi.fn(), createOrUpdate: vi.fn() } } as any,
+      }
+    );
+
+    expect(deliveredFileIds).toEqual([]);
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'img', band: 'unsupported_backend', delivered: false }),
+    ]);
+  });
+
+  it('leaves no input file both undelivered and unreported, whatever mix is attached', async () => {
+    // The property the per-site pushes and the post-processing sweep exist to hold jointly. Asserted
+    // over a mixed batch rather than per site, because the defect is a file falling between them.
+    mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+      if (file.id === 'odd') throw new BadRequestError('Unsupported file type: application/x-thing');
+      return 'hello world';
+    });
+    const audio = { id: 'aud', fileName: 'a.mp3', mimeType: 'audio/mpeg', vectorized: false } as IFabFileDocument;
+    const files = [textFile('good'), textFile('odd'), audio, imageFile('img')];
+
+    const { fileNotices, deliveredFileIds } = await run(files);
+
+    const accountedFor = new Set([...deliveredFileIds, ...fileNotices.map(n => n.fabFileId)]);
+    expect(files.every(f => accountedFor.has(f.id))).toBe(true);
+    expect(deliveredFileIds).toEqual(['good']);
+  });
+
+  it('marks a truncated file as delivered and keeps it out of fullyDeliveredFileIds', async () => {
+    mockGetFileContent.mockResolvedValue('X'.repeat(50_000));
+
+    const { fileNotices, deliveredFileIds, fullyDeliveredFileIds, userMessages } = await run([textFile('big')], 1000);
+
+    expect(deliveredFileIds).toEqual(['big']);
+    expect(fullyDeliveredFileIds).toEqual([]);
+    expect(fileNotices).toEqual([
+      expect.objectContaining({ fabFileId: 'big', band: 'truncated', delivered: true }),
+    ]);
+    // The in-band notice the model reads is unchanged - the new channel is additive.
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+    expect(userMessages.map(m => String(m.content)).join('\n')).toContain('[Content truncated to fit the context window.');
+  });
+
+  it('emits no notice when every attachment delivers whole', async () => {
+    const { fileNotices, fullyDeliveredFileIds } = await run([textFile('a'), textFile('b')]);
+
+    expect(fileNotices).toEqual([]);
+    expect(fullyDeliveredFileIds).toEqual(expect.arrayContaining(['a', 'b']));
   });
 });

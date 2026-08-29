@@ -67,6 +67,7 @@ import CitableSources from './CitableSources';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
@@ -575,6 +576,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         pendingAction={messageData.pendingAction}
         attachmentList={messageData.attachmentList}
         navigationIntents={messageData.navigationIntents}
+        attachmentNotices={messageData.attachmentNotices}
         uiSideEffects={messageData.uiSideEffects}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
@@ -1123,6 +1125,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   pendingAction,
   attachmentList,
   navigationIntents,
+  attachmentNotices,
   uiSideEffects,
   jupyterNotebook,
   notebookContent,
@@ -1901,6 +1904,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {navigationIntents && navigationIntents.length > 0 && completed && (
         <NavigationButtons navigationIntents={navigationIntents} />
       )}
+
+      {/* Deliberately not gated on `completed`: a failed attachment is known before the reply
+          starts, and waiting hides it for exactly as long as the model is answering without it. */}
+      <AttachmentNotices attachmentNotices={attachmentNotices} />
 
       {uiSideEffects && uiSideEffects.length > 0 && completed && (
         <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />

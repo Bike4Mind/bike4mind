@@ -553,6 +553,9 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       ],
       required: false,
     },
+    // Per-file attachment delivery problems, shown under the reply. Must stay in the
+    // findPageBySessionId projection below or the banner vanishes on reload.
+    attachmentNotices: { type: [String], required: false },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -655,7 +658,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const { limit, page, sort = 'asc' } = options;
     const result = await this.model
       .find({ sessionId, deletedAt: null })
-      .select('sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed')
+      .select(
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices'
+      )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
       .limit(limit + 1);
