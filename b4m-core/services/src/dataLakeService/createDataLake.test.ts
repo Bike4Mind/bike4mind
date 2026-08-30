@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
-import { MAX_DATA_LAKE_SLUG_LENGTH, DATA_LAKE_SLUG_REGEX } from '@bike4mind/common';
+import { MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, DATA_LAKE_SLUG_REGEX } from '@bike4mind/common';
 import { buildDatalakeTag, createDataLake, isDatalakeTagWellFormed } from './createDataLake';
 
 describe('isDatalakeTagWellFormed (trap 4: org-qualified vs plain datalake tag)', () => {
@@ -116,16 +116,22 @@ describe('createDataLake slug disambiguation stays inside MAX_DATA_LAKE_SLUG_LEN
     await createDataLake('creator', paramsFor(base), { db } as never);
 
     const slug = create.mock.calls[0][0].slug as string;
+    // These two assertions are not independent sanity checks - together they ARE the predicate
+    // registry.ts applies to a `datalake:<slug>` entitlement key (`slug.length <= MAX && REGEX`).
+    // Dropping either one stops testing the bug this PR exists for.
     expect(slug.length).toBeLessThanOrEqual(MAX_DATA_LAKE_SLUG_LENGTH);
-    expect(slug).toBe(`${'a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH - 2)}-1`);
-    // Still legal by the same rule the request schema applied.
     expect(slug).toMatch(DATA_LAKE_SLUG_REGEX);
+    expect(slug).toBe(`${'a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH - 2)}-1`);
   });
 
   it('keeps fitting once the suffix reaches two digits', async () => {
     // The suffix grows, so the room for the base has to shrink with it.
     const base = 'a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH);
-    const taken = [base, ...Array.from({ length: 10 }, (_, i) => `${'a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH - 2)}-${i}`)];
+    // Suffixes start at 1: attempt 0 returns the base unsuffixed, so `-0` is never a candidate.
+    const taken = [
+      base,
+      ...Array.from({ length: 9 }, (_, i) => `${'a'.repeat(MAX_DATA_LAKE_SLUG_LENGTH - 2)}-${i + 1}`),
+    ];
     const { db, create } = makeDb(taken);
 
     await createDataLake('creator', paramsFor(base), { db } as never);
@@ -147,6 +153,9 @@ describe('createDataLake slug disambiguation stays inside MAX_DATA_LAKE_SLUG_LEN
     const slug = create.mock.calls[0][0].slug as string;
     expect(slug).not.toContain('--');
     expect(slug).toBe('a-1');
+    // The only case where the trim eats the base down to one character, so it is where the
+    // "cannot fall under the minimum" argument actually bites. Pin the floor, not just the literal.
+    expect(slug.length).toBeGreaterThanOrEqual(MIN_DATA_LAKE_SLUG_LENGTH);
     expect(slug).toMatch(DATA_LAKE_SLUG_REGEX);
   });
 

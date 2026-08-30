@@ -50,6 +50,33 @@ export function isDatalakeTagWellFormed(lake: { datalakeTag: string; slug: strin
 }
 
 /**
+ * Builds the `<base>-<attempt>` candidate, sized so the RESULT fits MAX_DATA_LAKE_SLUG_LENGTH
+ * rather than being appended past it. Disambiguation runs after validation, so an unbounded append
+ * persists a slug no other surface treats as legal - notably the `datalake:<slug>` entitlement key,
+ * which registry.ts re-checks against MAX_DATA_LAKE_SLUG_LENGTH and therefore reports as unknown,
+ * failing an admin's grant closed on a key that is in fact correct.
+ *
+ * Trailing hyphens are stripped after truncation so a cut landing mid-hyphen cannot produce
+ * `...a--1`. That still matches DATA_LAKE_SLUG_REGEX (which permits interior runs) but reads as a
+ * typo. The base is regex-guaranteed to start alphanumeric, so the trim can never empty it, and the
+ * shortest reachable result is a 1-char base plus a 2-char suffix - still over the 2-char minimum.
+ *
+ * Truncating means a max-length name loses its tail on collision, and two names sharing a
+ * (MAX - suffix.length)-char prefix collapse onto ONE candidate family, so they share the caller's
+ * 50-attempt budget instead of each having their own. That is the intended trade - a hash suffix
+ * would read worse to the lake's owner - but it is why the caller's exhaustion path is now
+ * reachable by lakes with different names.
+ */
+function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
+  const suffix = `-${attempt}`;
+  // Room is derived from `suffix.length`, deliberately, NOT hardcoded to 2: raising the attempt cap
+  // into 3-digit territory has to keep fitting with no edit here. Do not "simplify" this to a
+  // literal - every test in this file would still pass, and a 3-digit suffix would then persist 61.
+  const trimmedBase = baseSlug.slice(0, MAX_DATA_LAKE_SLUG_LENGTH - suffix.length).replace(/-+$/, '');
+  return `${trimmedBase}${suffix}`;
+}
+
+/**
  * Resolves a slug collision within the lake's scope (org) deterministically by
  * appending -1, -2, ... until free. Keeps create idempotent-ish instead of hard-failing.
  *
@@ -67,20 +94,7 @@ async function disambiguateSlug(
   const scope = organizationId ? { organizationId } : { organizationId: { $in: [null, ''] } };
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
-    // The suffix has to fit INSIDE the same bound the request schema enforced on `baseSlug`, not be
-    // appended past it. Disambiguation runs after validation, so an unbounded append persists a slug
-    // no other surface treats as legal - notably the `datalake:<slug>` entitlement key, which
-    // registry.ts re-checks against MAX_DATA_LAKE_SLUG_LENGTH and therefore reports as unknown,
-    // failing an admin's grant closed on a key that is in fact correct.
-    //
-    // Trailing hyphens are stripped after truncation so a cut landing mid-hyphen cannot produce
-    // `...a--1`. That still matches DATA_LAKE_SLUG_REGEX (which permits interior runs) but reads as
-    // a typo. The base is regex-guaranteed to start alphanumeric, so the trim can never empty it,
-    // and the shortest reachable result is a 1-char base plus a 2-char suffix - still over the
-    // 2-char minimum.
-    const suffix = `-${attempt}`;
-    const trimmedBase = baseSlug.slice(0, MAX_DATA_LAKE_SLUG_LENGTH - suffix.length).replace(/-+$/, '');
-    const slug = attempt === 0 ? baseSlug : `${trimmedBase}${suffix}`;
+    const slug = attempt === 0 ? baseSlug : withDisambiguatingSuffix(baseSlug, attempt);
     if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
     if (existing.length === 0) return slug;
