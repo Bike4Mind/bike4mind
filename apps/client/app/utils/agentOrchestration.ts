@@ -108,14 +108,10 @@ export function buildDefaultOrchestrationProfile(
 }
 
 /**
- * The agent-mode default toolbelt in **server tool vocabulary** (no UI alias):
+ * The agent-mode default toolbelt in server tool vocabulary:
  * `OrchestrationDefaultsSchema`'s seeded `allowedTools` minus its `deniedTools`.
- *
- * Two consumers derive from this one set so they cannot drift: the UI-facing
- * `AGENT_MODE_TOOL_IDS` (apps/client/app/utils/toolMapping.ts), which applies
- * the `retrieve_knowledge_content -> search_knowledge_base` alias, and
- * `resolveDispatchTools`, which unions it with the user's Smart Tools for an
- * agentless dispatch.
+ * `resolveDispatchTools` unions this with the user's Smart Tools for an
+ * agentless dispatch, so a tool missing here is one the agent silently loses.
  *
  * Caveat: these are the SCHEMA defaults, not the org's admin-configured
  * `orchestrationDefaults`. This is a best-effort client-side set, never the

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { IAgent, OrchestrationDefaults } from '@bike4mind/common';
-import { hasOrchestrationFields, pickOrchestrationAgent, buildDefaultOrchestrationProfile } from './agentOrchestration';
+import {
+  hasOrchestrationFields,
+  pickOrchestrationAgent,
+  buildDefaultOrchestrationProfile,
+  AGENT_MODE_DEFAULT_TOOL_NAMES,
+} from './agentOrchestration';
 
 const baseAgent = { id: 'a1', name: 'agent-1' } as unknown as IAgent;
 
@@ -155,5 +160,45 @@ describe('buildDefaultOrchestrationProfile', () => {
     expect(profile.isSynthetic).toBe(true);
     expect(profile.allowedTools).toContain('web_search');
     expect(profile.allowedTools).toContain('code_execute');
+  });
+});
+
+describe('AGENT_MODE_DEFAULT_TOOL_NAMES', () => {
+  // This set is what an agentless dispatch unions onto the user's Smart Tools
+  // (see `resolveDispatchTools`), so a tool missing here is a tool the agent
+  // silently loses. Mirrors OrchestrationDefaultsSchema in @bike4mind/common.
+  it('carries the web + storage-backed artifact tools the default profile allows', () => {
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('web_search')).toBe(true);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('image_generation')).toBe(true);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('excel_generation')).toBe(true);
+  });
+
+  it('carries the inline visualization artifact tools (recharts, mermaid)', () => {
+    // These emit an <artifact> block and write nothing, so they are exposed to
+    // agents. Regression guard for the bug where asking an agent for a chart
+    // returned "no Recharts tool" instead of rendering.
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('recharts')).toBe(true);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('mermaid_chart')).toBe(true);
+  });
+
+  it('carries the agent core tools a bare Smart Tools payload would have stripped', () => {
+    // `buildSharedTools` only surfaces tools named in `enabledTools`, which is
+    // why the agentless dispatch unions rather than replaces.
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('file_read')).toBe(true);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('code_execute')).toBe(true);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('coordinate_task')).toBe(true);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('retrieve_knowledge_content')).toBe(true);
+  });
+
+  it('carries current_datetime - read-only, cache-safe clock exposed to agents', () => {
+    // Agents need exact time-of-day on demand without a volatile
+    // minute-precision block polluting the cached system prefix.
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('current_datetime')).toBe(true);
+  });
+
+  it('omits the tools the default profile does not allow', () => {
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('wolfram_alpha')).toBe(false);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('web_fetch')).toBe(false);
+    expect(AGENT_MODE_DEFAULT_TOOL_NAMES.has('weather_info')).toBe(false);
   });
 });
