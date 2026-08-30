@@ -16,12 +16,18 @@ import type { QueryComplexityType } from './schemas/query';
  * Whether the message carries a date signal. A bare four-digit run is NOT one:
  * `$1400`, `70000` and quantities/ids all used to count as dates and inflate
  * the complexity score. So a year must be plausible (19xx/20xx) and must not be
- * `$`- or digit-adjacent. Slash dates are matched as-is.
+ * money - `$2024` and `$ 2024` are both amounts, not years. Slash dates are
+ * matched as-is.
+ *
+ * The `\s*` is what makes the spaced form work: the guard character is the last
+ * NON-space before the year, so whitespace can't launder a `$` out of view.
+ * A letter-adjacent year still counts (`v2024`, `A2024`) - only `$`/digit
+ * context disqualifies.
  *
  * No lookbehind (Safari) - the leading group is consumed, not asserted.
  */
 function isDateSignal(message: string): boolean {
-  return /(^|[^$\d])(19|20)\d{2}\b/.test(message) || /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(message);
+  return /(^|[^\s$\d])\s*(19|20)\d{2}\b/.test(message) || /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(message);
 }
 
 /**

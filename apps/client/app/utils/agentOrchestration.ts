@@ -108,18 +108,30 @@ export function buildDefaultOrchestrationProfile(
 }
 
 /**
- * The agent-mode default toolbelt in server tool vocabulary:
- * `OrchestrationDefaultsSchema`'s seeded `allowedTools` minus its `deniedTools`.
+ * The agent-mode default toolbelt in server tool vocabulary: the org's
+ * `orchestrationDefaults.allowedTools` minus its `deniedTools`. Any field an
+ * admin has not set falls back to the `OrchestrationDefaultsSchema` seed, and a
+ * malformed stored value falls back to the seed entirely - same degraded-mode
+ * reasoning as `buildDefaultOrchestrationProfile` above, whose `dagEnabled`
+ * handling this mirrors.
+ *
  * `resolveDispatchTools` unions this with the user's Smart Tools for an
  * agentless dispatch, so a tool missing here is one the agent silently loses.
  *
- * Caveat: these are the SCHEMA defaults, not the org's admin-configured
- * `orchestrationDefaults`. This is a best-effort client-side set, never the
- * authorization decision - the server's `pickEffectiveEnabledTools` intersects
- * against the real profile and subtracts `deniedTools` last.
+ * Sourced from admin settings rather than the schema seed for a load-bearing
+ * reason: the server does NOT intersect the payload against the profile.
+ * `pickEffectiveEnabledTools` REPLACES `profile.allowedTools` outright with a
+ * non-empty `enabledTools` payload - only `deniedTools` is subtracted
+ * afterwards, and only a `toolsetIsExclusive` profile ignores the payload. So
+ * unioning a hardcoded seed here would override an admin who narrowed
+ * `allowedTools` org-wide. `deniedTools` stays the payload-proof surface.
  */
-export const AGENT_MODE_DEFAULT_TOOL_NAMES: ReadonlySet<string> = (() => {
-  const defaults = OrchestrationDefaultsSchema.parse({});
+export function agentModeDefaultToolNames(adminDefaults: unknown): ReadonlySet<string> {
+  const parsed = OrchestrationDefaultsSchema.safeParse(adminDefaults ?? {});
+  const defaults = parsed.success ? parsed.data : OrchestrationDefaultsSchema.parse({});
   const denied = new Set(defaults.deniedTools);
-  return new Set(defaults.allowedTools.filter(tool => !denied.has(tool)));
-})();
+  const allowed = defaults.dagEnabled
+    ? defaults.allowedTools
+    : defaults.allowedTools.filter(t => t !== 'coordinate_task');
+  return new Set(allowed.filter(tool => !denied.has(tool)));
+}

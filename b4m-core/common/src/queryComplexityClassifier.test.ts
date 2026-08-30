@@ -23,8 +23,7 @@ function ctx(overrides: Partial<AgentRoutingContext> = {}): AgentRoutingContext 
 // The prompt that first surfaced the auto-engage bug: plainly conversational,
 // matches the `^how about` simple pattern, and contains a dollar amount that
 // used to register as a date.
-const REPORTED_PROMPT =
-  'How about 21 year old with 70k of assets, zero debt, $75k income, monthly spending of $1400';
+const REPORTED_PROMPT = 'How about 21 year old with 70k of assets, zero debt, $75k income, monthly spending of $1400';
 
 describe('classifyQueryComplexity', () => {
   describe('date signal', () => {
@@ -40,6 +39,7 @@ describe('classifyQueryComplexity', () => {
       ['a comma-grouped amount', 'budget for $1,400'],
       ['a five-digit quantity', 'budget for 70000'],
       ['a year-shaped dollar amount', 'budget for $2024'],
+      ['a year-shaped amount spaced off its sign', 'budget for $ 2024'],
     ])('does not count %s as a date', (_label, message) => {
       expect(classify(message)).toBe('contextual');
     });
@@ -49,6 +49,7 @@ describe('classifyQueryComplexity', () => {
       ['a year in prose', 'budget in 2019'],
       ['a four-digit slash date', 'budget for 3/14/2024'],
       ['a two-digit slash date', 'budget for 12/1/25'],
+      ['a letter-adjacent year', 'budget for v2024'],
     ])('still counts %s as a date', (_label, message) => {
       expect(classify(message)).toBe('complex');
     });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -31,6 +31,7 @@ import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
 import { resolveDispatchTools } from './resolveDispatchTools';
+import { agentModeDefaultToolNames } from '@client/app/utils/agentOrchestration';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -177,6 +178,15 @@ export function useSendMessage({
   const intentClassifierAdminEnabled =
     getSettingObject<{ intentClassifier?: { enabled?: boolean } }>('orchestrationDefaults', {})?.intentClassifier
       ?.enabled !== false;
+  // Union base for an agentless agent-executor dispatch. Read from admin
+  // settings rather than the schema seed because a non-empty `enabledTools`
+  // payload REPLACES `profile.allowedTools` server-side - see
+  // `agentModeDefaultToolNames`. Memoized so the set identity is stable.
+  const orchestrationDefaultsSetting = getSettingObject<unknown>('orchestrationDefaults', undefined);
+  const agentModeDefaultTools = useMemo(
+    () => agentModeDefaultToolNames(orchestrationDefaultsSetting),
+    [orchestrationDefaultsSetting]
+  );
   const classifyIntent = useIntentClassifier();
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { data: availableAgents = [] } = useGetAgents();
@@ -927,7 +937,8 @@ export function useSendMessage({
         const enabledTools = resolveDispatchTools(
           options?.toolsOverride,
           effectiveTools,
-          orchestrationAgent?.allowedTools
+          orchestrationAgent?.allowedTools,
+          agentModeDefaultTools
         );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
