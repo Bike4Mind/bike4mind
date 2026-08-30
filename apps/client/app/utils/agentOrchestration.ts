@@ -106,3 +106,24 @@ export function buildDefaultOrchestrationProfile(
     isSynthetic: true,
   };
 }
+
+/**
+ * The agent-mode default toolbelt in **server tool vocabulary** (no UI alias):
+ * `OrchestrationDefaultsSchema`'s seeded `allowedTools` minus its `deniedTools`.
+ *
+ * Two consumers derive from this one set so they cannot drift: the UI-facing
+ * `AGENT_MODE_TOOL_IDS` (apps/client/app/utils/toolMapping.ts), which applies
+ * the `retrieve_knowledge_content -> search_knowledge_base` alias, and
+ * `resolveDispatchTools`, which unions it with the user's Smart Tools for an
+ * agentless dispatch.
+ *
+ * Caveat: these are the SCHEMA defaults, not the org's admin-configured
+ * `orchestrationDefaults`. This is a best-effort client-side set, never the
+ * authorization decision - the server's `pickEffectiveEnabledTools` intersects
+ * against the real profile and subtracts `deniedTools` last.
+ */
+export const AGENT_MODE_DEFAULT_TOOL_NAMES: ReadonlySet<string> = (() => {
+  const defaults = OrchestrationDefaultsSchema.parse({});
+  const denied = new Set(defaults.deniedTools);
+  return new Set(defaults.allowedTools.filter(tool => !denied.has(tool)));
+})();

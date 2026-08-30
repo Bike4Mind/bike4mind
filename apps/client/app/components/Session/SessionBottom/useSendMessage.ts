@@ -196,7 +196,6 @@ export function useSendMessage({
     isArtifactsEnabled,
     isAgentsEnabled,
     isLatticeEnabled,
-    tools,
     safety_tolerance,
     prompt_upsampling,
     seed,
@@ -223,7 +222,6 @@ export function useSendMessage({
       s.isArtifactsEnabled,
       s.isAgentsEnabled,
       s.isLatticeEnabled,
-      s.tools,
       s.safety_tolerance,
       s.prompt_upsampling,
       s.seed,
@@ -490,12 +488,20 @@ export function useSendMessage({
       toast.warning("An image couldn't be added — it may violate our content policy.");
     }
     const messageFileIdsForRouting = sendableMessageFileIds;
-    const complexity = classifyQueryComplexity(
+    // Routing verdict ONLY - `tools`/`researchMode` are deliberately omitted.
+    // Passing them trips the classifier's tool short-circuit, which is a
+    // session-level setting: with any of recharts / image generation / deep
+    // research / chess / research mode toggled on, EVERY prompt scores
+    // 'complex' and auto-routes for the rest of the session. The tool-aware
+    // verdict is computed separately where it is actually consumed (LLMCommand
+    // for rapid reply, ChatCompletionProcess for feature selection and
+    // reasoning effort); nothing in this hook ships this value to the server.
+    const routingComplexity = classifyQueryComplexity(
       prompt,
       sessionFabFileIdsForRouting,
       messageFileIdsForRouting,
-      tools,
-      researchMode,
+      undefined,
+      undefined,
       sessionAgents.map(a => a.id)
     );
     // Real slash commands (e.g. `/gen_image`, `/roll`, `/gen_video`) must run
@@ -535,7 +541,7 @@ export function useSendMessage({
     const classifierEligible =
       agentModeFeatureEnabled &&
       agentModeDefault === 'auto' &&
-      complexity === 'contextual' &&
+      routingComplexity === 'contextual' &&
       !shortCircuit.shortCircuit;
 
     if (classifierEligible) {
@@ -562,12 +568,12 @@ export function useSendMessage({
 
     const userOverride: 'force_agent' | undefined =
       agentToggleActive || agentDefaultOn || classifierUpgraded ? 'force_agent' : undefined;
-    // Heuristic auto-routing (`complexity === 'complex'` -> agent_executor) is
-    // opt-in via the `'auto'` default - never the 'off' default or a bare
-    // feature flag. Without this gate, a query the classifier deems 'complex'
-    // (e.g. the recharts tool is enabled -> "generate random charts") dispatched
-    // the executor while the composer toggle read OFF. Slash-command-bypassed
-    // for the same reason as the toggle/default overrides above.
+    // Heuristic auto-routing (`routingComplexity === 'complex'` ->
+    // agent_executor) is opt-in via the `'auto'` default - never the 'off'
+    // default or a bare feature flag. Without this gate, a query the classifier
+    // deems 'complex' on its text alone dispatched the executor while the
+    // composer toggle read OFF. Slash-command-bypassed for the same reason as
+    // the toggle/default overrides above.
     //
     // Also honor the session-scoped opt-out. Dismissing the
     // AutoRouteBadge sets `disableAutoRouteForThisSession`, which already gates
@@ -578,14 +584,14 @@ export function useSendMessage({
       agentModeFeatureEnabled && agentModeDefault === 'auto' && !isRealSlashCommand && !disableAutoRouteForThisSession;
     const routeTarget = routeQuery({
       message: prompt,
-      complexity,
+      complexity: routingComplexity,
       agentExecutorEnabled: isAgentsEnabled,
       userOverride,
       hasOrchestrationAgent: orchestrationAgent !== null,
       autoRouteEnabled,
     });
     perfLogger.log(
-      `🧭 routeQuery → ${routeTarget} (complexity=${complexity}, toggle=${agentToggleActive}, ` +
+      `🧭 routeQuery → ${routeTarget} (routingComplexity=${routingComplexity}, toggle=${agentToggleActive}, ` +
         `default=${agentModeDefault}, classifier=${classifierUpgraded})`
     );
 
@@ -608,7 +614,7 @@ export function useSendMessage({
       // NOT imply the complexity path won - e.g. with `agentModeDefault === 'on'`
       // a complex prompt still resolves to `'user-default'` (see
       // pickRoutingSource.test.ts). Precedence decides; this only feeds it.
-      complexityUpgraded: complexity === 'complex',
+      complexityUpgraded: routingComplexity === 'complex',
     });
     // Local-only `effectiveAgentMode` - no Zustand write on the send hot path.
     // Nothing in the current UI reads `agentMode.source`; the value only
