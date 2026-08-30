@@ -13,6 +13,18 @@ import type { QueryComplexityType } from './schemas/query';
  */
 
 /**
+ * Whether the message carries a date signal. A bare four-digit run is NOT one:
+ * `$1400`, `70000` and quantities/ids all used to count as dates and inflate
+ * the complexity score. So a year must be plausible (19xx/20xx) and must not be
+ * `$`- or digit-adjacent. Slash dates are matched as-is.
+ *
+ * No lookbehind (Safari) - the leading group is consumed, not asserted.
+ */
+function isDateSignal(message: string): boolean {
+  return /(^|[^$\d])(19|20)\d{2}\b/.test(message) || /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(message);
+}
+
+/**
  * Classifies the complexity of a query based on various factors including:
  * - Message patterns (simple greetings, basic questions)
  * - Tool usage (deep research, image generation, recharts, chess engine)
@@ -51,6 +63,13 @@ export function classifyQueryComplexity(
 
   // Check for tool-dependent features - always marks as complex because
   // rapid reply without tools produces confusing "I don't have X tools" responses
+  //
+  // This short-circuit exists for rapid reply (LLMCommand) and server-side
+  // feature selection (ChatCompletionProcess); tool enablement is a SESSION
+  // setting, so it makes every prompt in such a session 'complex' regardless of
+  // what the user typed. Agent routing must therefore NOT consume this verdict:
+  // callers routing through `routeQuery` pass `tools`/`researchMode` as
+  // undefined so the verdict reflects the prompt, not the toolbar.
   const hasDeepResearch = tools?.includes('deep_research') || false;
   const hasImageGeneration = tools?.includes('image_generation') || false;
   const isResearchModeEnabled = researchMode?.enabled || false;
@@ -74,7 +93,7 @@ export function classifyQueryComplexity(
     messageFileIds.length > 0, // Attached files
     /\b(compare|analyze|evaluate|critique|summarize)\b/i.test(message), // Analytical verbs
     /\b(why|because|reason)\b/i.test(message), // Explanatory questions
-    /\b(\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/.test(message), // Dates
+    isDateSignal(message), // Dates
   ];
 
   // Integration-context upgrade: queries mentioning Jira/GitHub/Confluence terms
@@ -105,7 +124,12 @@ export function classifyQueryComplexity(
 export interface AgentRoutingContext {
   /** The user's message */
   message: string;
-  /** Complexity classification from classifyQueryComplexity */
+  /**
+   * Complexity classification from `classifyQueryComplexity`, which the caller
+   * MUST compute without `tools`/`researchMode` - see the tool short-circuit
+   * note there. A tool-aware verdict would auto-route every prompt in a session
+   * that merely has a tool toggled on.
+   */
   complexity: QueryComplexityType;
   /** Whether agent executor is enabled for this user/org (feature flag) */
   agentExecutorEnabled: boolean;
@@ -129,9 +153,9 @@ export interface AgentRoutingContext {
    * `'auto'`). Gates ONLY the `complexity === 'complex'` rule below - explicit
    * signals (`force_agent` toggle, `@agent` literal, orchestration-agent
    * mention) dispatch regardless. Without this gate a query the classifier
-   * deems `'complex'` (e.g. the recharts tool is enabled -> `'generate random
-   * charts'`) would silently dispatch the executor while the composer toggle
-   * reads OFF. Defaults to falsy (fail-closed: never auto-route unless opted in).
+   * deems `'complex'` on its text alone would silently dispatch the executor
+   * while the composer toggle reads OFF. Defaults to falsy (fail-closed: never
+   * auto-route unless opted in).
    */
   autoRouteEnabled?: boolean;
 }
@@ -175,10 +199,9 @@ export function routeQuery(ctx: AgentRoutingContext): QueryRouteTarget {
 
   // Complex queries route to agent executor only when the user opted into
   // heuristic auto-routing (Agent-mode default 'auto'). With auto-routing off,
-  // a 'complex' classification (e.g. the recharts tool is enabled) must NOT
-  // dispatch the executor on its own - otherwise agent runs fire behind an OFF
-  // composer toggle. Explicit signals above (force_agent / @agent / orchestration
-  // agent) are unaffected.
+  // a 'complex' classification must NOT dispatch the executor on its own -
+  // otherwise agent runs fire behind an OFF composer toggle. Explicit signals
+  // above (force_agent / @agent / orchestration agent) are unaffected.
   if (ctx.autoRouteEnabled && ctx.complexity === 'complex') {
     return 'agent_executor';
   }
