@@ -67,7 +67,7 @@ const scenarios: Scenario[] = [
     changedByFix: false,
   },
   {
-    name: 'briefcase override still beats both the agent whitelist and the agentless union',
+    name: 'briefcase override still beats the agentless union',
     toolsOverride: ['web_search'],
     effectiveTools: ['web_search'],
     agentAllowedTools: undefined,

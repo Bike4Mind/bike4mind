@@ -114,6 +114,15 @@ const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 const gated = (container: HTMLElement, toolClass: string) =>
   container.querySelector(`.${toolClass} [data-tool-disabled="true"]`);
 
+// Asserts a row is RENDERED and not dimmed. `gated()` alone returns null for a
+// row that never mounted, so a bare toBeFalsy() would pass vacuously if the
+// tool ever stopped rendering - and every assertion in the two agent-mode
+// blocks below is a negative one, with no positive control of its own.
+const expectNotDimmed = (container: HTMLElement, toolClass: string) => {
+  expect(container.querySelector(`.${toolClass}`)).toBeTruthy();
+  expect(gated(container, toolClass)).toBeFalsy();
+};
+
 beforeEach(() => {
   mocks.state.tools = [];
   mocks.useLLM.setState.mockClear();
@@ -143,23 +152,23 @@ describe('ToolsSection agent-mode gating', () => {
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     // Wolfram Alpha is not in the agent-mode DEFAULT toolset, but the dispatch
     // unions the user's Smart Tools with those defaults, so it still runs.
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
-    expect(gated(container, 'tool-item-web-search')).toBeFalsy();
-    expect(gated(container, 'tool-item-excel-generation')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
+    expectNotDimmed(container, 'tool-item-web-search');
+    expectNotDimmed(container, 'tool-item-excel-generation');
   });
 
   it('does NOT dim with bolt on when agentMode is enabled via the admin default (raw pref unset)', () => {
     mocks.agentModeFeatureFlag.value = true;
     mocks.experimentalAgentMode.value = false;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
   });
 
   it('does not dim when the agentMode feature is off (even with the bolt on + enableAgents on)', () => {
     mocks.state.isAgentsEnabled = true;
     mocks.agentModeFeatureFlag.value = false;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
   });
 
   it('dims every tool in Fast mode regardless of agent mode', () => {
@@ -187,15 +196,15 @@ describe('ToolsSection complexity auto-route gating', () => {
   it('does NOT dim when the draft would auto-route on complexity', () => {
     mocks.chatDraft.value = COMPLEX_DRAFT;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
-    expect(gated(container, 'tool-item-web-search')).toBeFalsy();
-    expect(gated(container, 'tool-item-excel-generation')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
+    expectNotDimmed(container, 'tool-item-web-search');
+    expectNotDimmed(container, 'tool-item-excel-generation');
   });
 
   it('does NOT dim for a simple draft', () => {
     mocks.chatDraft.value = 'What planets are visible tonight?';
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
   });
 
   it('does NOT dim on an image/video model with liveAI off (the last case that still dimmed)', () => {
@@ -203,14 +212,14 @@ describe('ToolsSection complexity auto-route gating', () => {
     mocks.state.model = 'gpt-image-1';
     mocks.chatDraft.value = COMPLEX_DRAFT;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
   });
 
   it('does NOT dim when Smart Routing is not Auto (even with a complex draft)', () => {
     mocks.agentModeDefault.value = 'off';
     mocks.chatDraft.value = COMPLEX_DRAFT;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+    expectNotDimmed(container, 'tool-item-wolfram-alpha');
   });
 });
 
