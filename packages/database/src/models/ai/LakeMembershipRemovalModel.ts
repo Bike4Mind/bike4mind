@@ -18,6 +18,12 @@ const LakeMembershipRemovalSchema = new mongoose.Schema(
   {
     dataLakeId: { type: String, required: true },
     fabFileId: { type: String, required: true },
+    // AUDIT ONLY - deliberately NOT read by the restore authorization, and nothing should start
+    // reading it without revisiting that decision. The restore gate is the record's EXISTENCE for
+    // this (lake, file): what is authorized is "this lake held this file minutes ago", not "you
+    // personally removed it", so any principal the manage gate admits may restore. Scoping to the
+    // actor would refuse one admin undoing another's removal, which is the narrowness #2248 exists
+    // to remove. See addFileToDataLake's restore branch.
     actorUserId: { type: String, required: true },
     contentTags: [
       {

@@ -58,7 +58,7 @@ describe('DataLakeArticlePanel - remove-from-lake copy', () => {
     expect(text).toMatch(/Undo/);
   });
 
-  it('shows the non-owner copy - states only certain post-removal reach, still promises Undo', () => {
+  it('shows the non-owner copy - only certain post-removal reach, and a TIME-BOUNDED Undo', () => {
     currentUserId.value = 'curator-1';
     render(
       <TestWrapper>
@@ -73,6 +73,11 @@ describe('DataLakeArticlePanel - remove-from-lake copy', () => {
     expect(text).toMatch(/owner's Files list/);
     expect(text).toMatch(/lose access/);
     expect(text).toMatch(/Undo/);
+    // A non-owner has NO other way back - no list route, no "recently removed" panel - so the copy
+    // must not promise recoverability open-endedly the way the owner branch fairly can. Promising
+    // an Undo that silently expires is the same defect #2248 was filed about, one layer in.
+    expect(text).toMatch(/gone once the toast closes/);
+    expect(text).not.toMatch(/re-adding it to this lake/);
   });
 
   it('fires the removal mutation on confirm', () => {

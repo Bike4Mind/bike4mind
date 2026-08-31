@@ -249,6 +249,39 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1'));
   });
 
+  it('hands the Undo click the toast id, so the restore can replace that toast in place', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    // This describe block has no beforeEach, so toast.success' call history accumulates and the
+    // sibling tests above have already raised Undo toasts of their own. Reset the three mocks this
+    // test reads so the toast it picks up is unambiguously the one it just caused.
+    const successMock = toast.success as ReturnType<typeof vi.fn>;
+    successMock.mockReset();
+    apiDelete.mockReset();
+    apiPost.mockReset();
+    successMock.mockReturnValue('removal-toast');
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    const call = successMock.mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    await waitFor(() =>
+      expect(successMock).toHaveBeenCalledWith('File restored to data lake.', { id: 'removal-toast' })
+    );
+  });
+
   it('does nothing extra when there is no dataLakeId to build an Undo affordance from', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
@@ -294,6 +327,72 @@ describe('useAddFileToDataLake', () => {
     const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
     expect(keys).toContain(JSON.stringify(['data-lakes']));
+  });
+
+  /**
+   * The Undo toast OUTLIVES the component that raised it: confirming a removal unmounts the shared
+   * dialog on both wizard surfaces (DataLakeManagerPanel stops rendering DataLakeArticlePanel;
+   * DataLakeViewer's ArticlePanel early-returns on a null file), while the toast sits on screen for
+   * 15s. TanStack v5 dispatches per-`mutate()` callbacks only while the observer still has
+   * listeners, so anything registered there fires for nobody once the hook unmounts - which is
+   * exactly how a failed restore went completely silent. These two tests fail if the toast handling
+   * moves back to per-call `mutate` options, and `renderHook` alone cannot catch that class: it
+   * never unmounts.
+   */
+  it('surfaces SUCCESS from a mutation-level callback after the calling component unmounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result, unmount } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    const restore = result.current.mutate;
+    unmount();
+
+    act(() => {
+      restore({ dataLakeId: 'lake1', fabFileId: 'f1', toastId: 'undo-toast' });
+    });
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('File restored to data lake.', { id: 'undo-toast' })
+    );
+  });
+
+  it('surfaces FAILURE from a mutation-level callback after the calling component unmounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockRejectedValueOnce(new Error('Restore window has closed'));
+
+    const { result, unmount } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    const restore = result.current.mutate;
+    unmount();
+
+    act(() => {
+      restore({ dataLakeId: 'lake1', fabFileId: 'f1', toastId: 'undo-toast' });
+    });
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Restore window has closed', { id: 'undo-toast' }));
+  });
+
+  it('still reports an error when there is no toast to replace (the cold-add caller)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiPost.mockReset();
+    apiPost.mockRejectedValueOnce(new Error('You do not have permission to add files to this data lake'));
+
+    const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' }).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('You do not have permission to add files to this data lake', undefined);
   });
 });
 

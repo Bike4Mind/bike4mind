@@ -18,7 +18,10 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  * Removes a single file from a data lake (lake-scoped: drops every tag that makes the file a
  * member of this lake, then recomputes stats; the file and its chunks survive - see
  * removeFileFromDataLake). Also writes a short-TTL removal record (#2248) that authorizes the
- * POST below to restore exactly what was removed, within its window.
+ * POST below to put the file back, within its window. "Back", not identically: the restore replays
+ * the record's content tags but rejoins through `addFileToLake`, which always stamps the lake's
+ * meta-tag - so a member that was in the lake by PREFIX ALONE returns as a meta-tag member too.
+ * That is a valid (in fact more durable) membership, not the removal's mirror image.
  * Access-gated like the articles list (org-aware, not-found-style denial); the write is
  * then further restricted to owner/admin inside the service.
  *

@@ -795,10 +795,20 @@ function invalidateLakeFileMembershipQueries(queryClient: ReturnType<typeof useQ
 }
 
 /** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
- *  This is the toast's visible life only; the restore itself stays reachable for as long as the
- *  server's removal record lives (30 minutes - see removeFileFromDataLake), so an Undo clicked
- *  from a still-open tab after the toast is gone can still succeed. */
+ *  The server's removal record outlives it by a lot (30 minutes - see removeFileFromDataLake), but
+ *  this toast is the ONLY affordance that spends it: there is no list route and no "recently
+ *  removed" panel, so once it closes the restore is reachable only by calling the route directly.
+ *  The non-owner confirmation copy says so, because for a non-owner there is no second way back. */
 const UNDO_TOAST_DURATION_MS = 15000;
+
+/** `toastId` is presentation, not payload - the server reads nothing but the two ids from the
+ *  route. It travels in the variables so `useAddFileToDataLake`'s callbacks can live at the
+ *  MUTATION level and still address the toast that triggered them; see the comment there. */
+export interface AddFileToDataLakeVariables {
+  dataLakeId: string;
+  fabFileId: string;
+  toastId?: string | number;
+}
 
 /**
  * Hook: restore a file to a data lake - either an Undo of a recent removal (the server's own
@@ -813,14 +823,26 @@ const UNDO_TOAST_DURATION_MS = 15000;
 export function useAddFileToDataLake() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ dataLakeId, fabFileId }: { dataLakeId: string; fabFileId: string }) => {
+    mutationFn: async ({ dataLakeId, fabFileId }: AddFileToDataLakeVariables) => {
       const res = await api.post<{ success: true; fileCount: number; totalSizeBytes: number }>(
         `/api/data-lakes/${dataLakeId}/files/${fabFileId}`
       );
       return res.data;
     },
-    onSuccess: (_data, { dataLakeId }) => {
+    // BOTH callbacks are MUTATION-level, and `toastId` rides in the variables purely so they can be.
+    // Per-`mutate()` callbacks are dispatched only while the observer still has listeners
+    // (mutationObserver's `#notify` guards on `hasListeners()`, and useMutation subscribes via
+    // useSyncExternalStore), and the only caller is an Undo button on a toast that OUTLIVES the
+    // component holding this hook: confirming a removal unmounts the dialog on both wizard
+    // surfaces. Per-call callbacks there fire for nobody, so a failed restore was silent - on the
+    // one affordance the user has, promised by the confirmation copy.
+    onSuccess: (_data, { dataLakeId, toastId }) => {
       invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
+      if (toastId !== undefined) toast.success('File restored to data lake.', { id: toastId });
+    },
+    onError: (error: Error, { toastId }) => {
+      const message = error.message || 'Failed to restore the file to the data lake';
+      toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
     },
   });
 }
@@ -862,15 +884,10 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
         action: {
           label: 'Undo',
           onClick: () => {
-            addFileToDataLake.mutate(
-              { dataLakeId: removedLakeId, fabFileId },
-              {
-                onSuccess: () => toast.success('File restored to data lake.', { id: toastId }),
-                onError: (error: Error) => {
-                  toast.error(error.message || 'Failed to restore the file to the data lake', { id: toastId });
-                },
-              }
-            );
+            // No per-call callbacks: this click routinely happens after the component holding the
+            // hook has unmounted, which is exactly when those are dropped. The toast id goes in the
+            // variables instead so the mutation-level handlers can replace this toast in place.
+            addFileToDataLake.mutate({ dataLakeId: removedLakeId, fabFileId, toastId });
           },
         },
       });

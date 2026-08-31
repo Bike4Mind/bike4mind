@@ -266,6 +266,7 @@ describe('addFileToDataLake', () => {
       expect(h.assertLakeAdmission).toHaveBeenCalledWith(
         [lake],
         [expect.objectContaining({ id: 'f1', userId: 'victim' })],
+        expect.anything(),
         expect.objectContaining({ forceReportOnly: true })
       );
     });
@@ -292,6 +293,58 @@ describe('addFileToDataLake', () => {
       expect(db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
     });
 
+    // THE coordinate that had no coverage in either direction, and the hole that lived there: a
+    // curator user grant clears `canManageLake` (rung 3) without being an effective owner, so an
+    // effective-owner arm that tests only `file.userId` admitted them for ANY file the lake's owner
+    // owned. Membership is read access, so that published a non-consenting owner's private file to
+    // every reader of the lake. The actor side of the arm is what refuses it.
+    it("refuses a non-owner CURATOR adding the lake owner's own file - manage rights are not ownership", async () => {
+      const { db, logger } = makeAdapters({
+        file: { id: 'f1', userId: 'owner', tags: [] },
+        grants: [{ principalType: 'user', principalId: 'curator', role: 'curator', status: 'active' }],
+      });
+      const curator = { userId: 'curator', isAdmin: false };
+
+      await expect(addFileToDataLake(curator, 'lake1', 'f1', { db, logger })).rejects.toThrow(/file not found/i);
+      expect(db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+    });
+
+    it("admits an effective OWNER-grant holder adding the creator's file - the arm still works for owners", async () => {
+      const { db, logger, fabFiles } = makeAdapters({
+        file: { id: 'f1', userId: 'owner', tags: [] },
+        grants: [{ principalType: 'user', principalId: 'transferee', role: 'owner', status: 'active' }],
+      });
+      // An owner grant supersedes the creator, so `resolveEffectiveOwnerIds` is ['transferee'] and
+      // the creator's own file is NOT reachable through the arm - but the transferee's is.
+      const transferee = { userId: 'transferee', isAdmin: false };
+
+      await expect(addFileToDataLake(transferee, 'lake1', 'f1', { db, logger })).rejects.toThrow(/file not found/i);
+
+      const own = makeAdapters({
+        file: { id: 'f2', userId: 'transferee', tags: [] },
+        grants: [{ principalType: 'user', principalId: 'transferee', role: 'owner', status: 'active' }],
+      });
+      const result = await addFileToDataLake(transferee, 'lake1', 'f2', { db: own.db, logger: own.logger });
+      expect(result.success).toBe(true);
+      expect(own.fabFiles._state.tags.map(t => t.name)).toContain('datalake:lake');
+      expect(fabFiles._state.tags).toEqual([]);
+    });
+
+    it('keeps the platform-admin rung exactly as wide as it was - lake-owner file yes, third party no', async () => {
+      const ownerFile = makeAdapters({ file: { id: 'f1', userId: 'owner', tags: [] } });
+      const result = await addFileToDataLake(admin, 'lake1', 'f1', {
+        db: ownerFile.db,
+        logger: ownerFile.logger,
+      });
+      expect(result.success).toBe(true);
+
+      // Not widened to "any file in the database" - the admin rung gates the same file-side test.
+      const thirdParty = makeAdapters({ file: { id: 'f2', userId: 'victim', tags: [] } });
+      await expect(
+        addFileToDataLake(admin, 'lake1', 'f2', { db: thirdParty.db, logger: thirdParty.logger })
+      ).rejects.toThrow(/file not found/i);
+    });
+
     it('is idempotent on a retry', async () => {
       const { db, logger, fabFiles } = makeAdapters({ file: { id: 'f1', userId: 'owner', tags: [] } });
 
@@ -310,6 +363,7 @@ describe('addFileToDataLake', () => {
       expect(h.assertLakeAdmission).toHaveBeenCalledWith(
         [lake],
         [expect.objectContaining({ id: 'f1', userId: 'owner' })],
+        expect.anything(),
         expect.objectContaining({ forceReportOnly: false })
       );
     });

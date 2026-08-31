@@ -170,6 +170,17 @@ export interface LakeAdmissionAdapters {
    */
   embeddingModel?: string;
   logger?: AdmissionLogger;
+}
+
+/**
+ * PER-CALL policy, deliberately NOT on `LakeAdmissionAdapters`. The adapters bag is infrastructure
+ * (`db`, `embeddingModel`, `logger`) and gets spread - both by callers assembling one and by this
+ * module at `resolved` below - so an enforcement-disabling flag living in it could ride a
+ * `{ ...adapters }` into a door that never asked for it, invisibly and with no type error. A
+ * positional options object cannot: every caller that wants it has to name it at the call site.
+ * Same split as `recomputeLakeStats(lake, adapters, opts)` and its `skipActivation`.
+ */
+export interface LakeAdmissionOptions {
   /**
    * Skip resolving `EnforceLakeAdmission` entirely and grade every lake as report-only - for a call
    * that is not a JOIN at all (#2248's restore: a removal deliberately retains the file's chunks,
@@ -271,7 +282,8 @@ async function resolveEnforcingLakes(
 export async function assertLakeAdmission(
   lakes: readonly AdmissionLake[],
   members: readonly AdmissionMember[],
-  adapters: LakeAdmissionAdapters
+  adapters: LakeAdmissionAdapters,
+  { forceReportOnly }: LakeAdmissionOptions = {}
 ): Promise<AdmissionVerdict> {
   // Short-circuit before ANY read: no members, or no lake declaring a passage policy, means there
   // is no contract to grade. Checked on the raw lakes rather than on `buildLakeRequirements` so the
@@ -291,7 +303,7 @@ export async function assertLakeAdmission(
   // grades nothing as enforceable, so there is nothing for that read to inform.
   const [resolvedMembers, enforcingLakeIds] = await Promise.all([
     resolveMemberTargets(members, resolved),
-    adapters.forceReportOnly ? Promise.resolve(new Set<string>()) : resolveEnforcingLakes(declaring, resolved),
+    forceReportOnly ? Promise.resolve(new Set<string>()) : resolveEnforcingLakes(declaring, resolved),
   ]);
 
   const verdict = decideLakeAdmission(resolvedMembers, requirements, enforcingLakeIds);

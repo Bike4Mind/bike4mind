@@ -10,7 +10,7 @@ import { DATALAKE_TAG_PREFIX, normalizeTagPrefix, prefixArmTagNames } from '@bik
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { addFileToLake, type MembershipActor } from './lakeMembership';
 import { assertLakeWritable } from './assertLakeAccess';
-import { canManageLake, resolveEffectiveOwnerIds } from './manageRule';
+import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
 import { createDataLakeFallbackTagger, UNCATEGORIZED_TAG_SUFFIX } from './fallbackLakeTags';
@@ -128,7 +128,22 @@ export const addFileToDataLake = async (
   if (!isRestore) {
     // Cold-add path: admit only the lake's effective owner. Not-found-style denial, so the door
     // does not confirm the existence of a file the actor cannot see.
-    const isOwner = file.userId === actor.userId || resolveEffectiveOwnerIds(lake, grants).includes(file.userId);
+    //
+    // BOTH SIDES of the effective-owner arm are load-bearing, and the ACTOR side is the one that is
+    // easy to drop: `resolveEffectiveOwnerIds(...).includes(file.userId)` is a property of the FILE,
+    // so on its own it admits any manage-gate rung (a curator user grant, an org admin, an org
+    // grant holder - see canManageLake) to stamp membership onto any file the lake's owner happens
+    // to own. Membership IS read access (the meta-tag arm of buildDataLakeMembershipFilter carries
+    // no ownership conjunct, and files/[id] re-authorizes by lake tag rather than per-file ACL), so
+    // that would publish a non-consenting owner's private file to every reader of the lake.
+    // Conjoining the actor test keeps the arm to "an owner adding their own library's files", and
+    // leaves the platform-admin rung exactly as wide as it already was - deliberately NOT wider:
+    // `actor.isAdmin` gates the same file-side test rather than replacing it, so an admin still
+    // cannot cold-add a third party's file.
+    const isOwner =
+      file.userId === actor.userId ||
+      ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
+        resolveEffectiveOwnerIds(lake, grants).includes(file.userId));
     if (!isOwner) {
       throw new NotFoundError('File not found');
     }
@@ -143,7 +158,7 @@ export const addFileToDataLake = async (
   // - grading it as a fresh join would measure something that did not change (the removal never
   // touched the file's chunks) and could permanently refuse a member ingested before the lake's
   // policy tightened, from a button labelled "Undo".
-  await assertLakeAdmission([lake], [member], { db, logger, forceReportOnly: isRestore });
+  await assertLakeAdmission([lake], [member], { db, logger }, { forceReportOnly: isRestore });
 
   // Idempotent (pushTagsByFabFileId), so a double-click or a retry converges.
   await addFileToLake(actor, lake, fabFileId, { db });
@@ -183,19 +198,23 @@ export const addFileToDataLake = async (
   }
 
   // On BOTH paths: give a member with no content tag under this prefix (a cold add, or a restore
-  // whose `contentTags` were empty) the `uncategorized` node, exactly as `toggleTags`'
-  // `backfillLakeContentTags` does. Re-reads because the writes above are element-level atomic
-  // ops with no returned document - the in-memory `file` is stale the moment any of them ran. That
-  // re-read also makes steps 7-9's convergence explicit: three independent writes with no
-  // compensation, each idempotent, so a retry converges rather than assuming it already did.
+  // whose `contentTags` were empty) the `uncategorized` node. Re-reads because the writes above are
+  // element-level atomic ops with no returned document - the in-memory `file` is stale the moment
+  // any of them ran. That re-read also makes steps 7-9's convergence explicit: three independent
+  // writes with no compensation, each idempotent, so a retry converges rather than assuming it did.
+  //
+  // ADDITIVE-ONLY, and deliberately NOT the same call `toggleTags`' `backfillLakeContentTags`
+  // makes: that one passes `{ previousTags }` (toggleTags.ts), which is the sole input the tagger
+  // derives `departed` -> `retractions` from. Omitting it here is what makes the reconcile a pure
+  // superset of the input, so this join path can only ever ADD a tag. Do not "restore parity" by
+  // threading `previousTags` through: nothing departs a lake on a join, so the only thing that
+  // would accomplish is arming a tag DELETION on the door whose entire job is putting tags back.
   const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
   const freshFile = await db.fabFiles.findById(fabFileId);
   const currentTags = freshFile?.tags ?? [];
   const reconciled = await applyFallbackTags(currentTags);
   const currentNames = new Set(currentTags.map(t => t.name));
-  const reconciledNames = new Set(reconciled.map(t => t.name));
   const toAdd = reconciled.filter(t => !currentNames.has(t.name));
-  const toRemove = [...currentNames].filter(name => !reconciledNames.has(name));
   if (toAdd.length > 0) {
     await db.fabFiles.pushTagsByFabFileId(
       fabFileId,
@@ -203,12 +222,14 @@ export const addFileToDataLake = async (
       toAdd[0].strength
     );
   }
-  if (toRemove.length > 0) {
-    await db.fabFiles.pullTagsByFabFileId(fabFileId, toRemove);
-  }
 
-  // Left in place on success rather than consumed: a consumed record would make a partial failure
-  // above unrecoverable, and re-running a restore is idempotent. It simply expires on its own TTL.
+  // Left in place on success rather than consumed, so a partial failure above stays recoverable by
+  // re-running the restore. The record therefore stays live for its full TTL, which makes a SECOND
+  // restore re-push the removal-time `contentTags` (above) even if the file has since been re-filed
+  // under a different node through the tag door - the file then sits in both. Narrow (it needs a
+  // deliberate second call after an intervening re-tag) and preferred over the alternative:
+  // consuming on success would make a concurrent double-restore fail closed for any actor who
+  // cannot cold-add, which is the exact persona this door exists to serve.
 
   const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
   return { success: true, ...stats };

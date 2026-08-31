@@ -272,8 +272,10 @@ describe('restore after removal (#2248) against real Mongo', () => {
     });
     const curator = { userId: curatorId, isAdmin: false };
 
-    // Round-1's ownership-based restore would have refused this actor outright (not the creator,
-    // not an admin); this is the exact persona the issue's AC names.
+    // The exact persona the issue's AC names: a curator grant is not an `owner` grant, so this
+    // actor is NOT an effective owner (resolveEffectiveOwnerIds counts only role: 'owner') and the
+    // cold-add branch refuses them. So reaching the original tag node below can only be the restore
+    // path - the record is what admits them, and the record is what carries `lk:invoices` back.
     await dataLakeService.removeFileFromDataLake(curator, lake.id as string, file.id as string, { db: removeDb });
     const afterRemoval = await FabFile.findById(file.id);
     expect((afterRemoval?.tags ?? []).map(t => t.name)).toEqual([]);

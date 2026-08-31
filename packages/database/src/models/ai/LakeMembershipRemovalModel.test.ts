@@ -81,6 +81,17 @@ describe('LakeMembershipRemovalRepository', () => {
       expect(stillThere).not.toBeNull();
     });
 
+    // Pins `$gt` rather than `$gte`: both pass the two tests above, since neither lands ON the
+    // boundary. The window is closed at its own expiry, which is the fail-closed direction for a
+    // lookup that is itself an authorization gate.
+    it('excludes a row when asOf lands exactly ON expiresAt', async () => {
+      const expiresAt = new Date('2026-08-30T00:30:00Z');
+      await repo.upsertRemoval(removal({ expiresAt }));
+
+      expect(await repo.findLive('lake-1', 'file-1', new Date(expiresAt))).toBeNull();
+      expect(await repo.findLive('lake-1', 'file-1', new Date(expiresAt.getTime() - 1))).not.toBeNull();
+    });
+
     it('returns null for a lake/file with no removal recorded', async () => {
       expect(await repo.findLive('lake-1', 'file-1')).toBeNull();
     });

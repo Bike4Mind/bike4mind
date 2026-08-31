@@ -45,8 +45,8 @@ export function RemoveFileFromLakeCopy({
   return (
     <>
       &ldquo;{title}&rdquo; will be removed from &ldquo;{lakeName}&rdquo;. This file is not deleted - it stays in its
-      owner&apos;s Files list. If you reach it only through this lake, you will lose access once it leaves. You can put
-      it back with Undo.
+      owner&apos;s Files list. If you reach it only through this lake, you will lose access once it leaves. Undo is your
+      only way back, so use it right away - it is gone once the toast closes.
     </>
   );
 }

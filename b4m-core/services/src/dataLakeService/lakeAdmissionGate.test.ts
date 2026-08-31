@@ -295,10 +295,12 @@ describe('assertLakeAdmission', () => {
     it('grades report-only even when EnforceLakeAdmission is true for the lake, and never resolves it', async () => {
       const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
 
-      const verdict = await assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
-        db,
-        forceReportOnly: true,
-      });
+      const verdict = await assertLakeAdmission(
+        [lake({ requiredPassageTokenTarget: 1000 })],
+        [{ userId: 'u1' }],
+        { db },
+        { forceReportOnly: true }
+      );
 
       expect(verdict.status).toBe('quarantined');
       expect(verdict.status === 'quarantined' && verdict.enforced).toBe(false);
@@ -310,11 +312,12 @@ describe('assertLakeAdmission', () => {
       const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' });
       const warn = vi.fn();
 
-      await assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
-        db,
-        logger: { warn },
-        forceReportOnly: true,
-      });
+      await assertLakeAdmission(
+        [lake({ requiredPassageTokenTarget: 1000 })],
+        [{ userId: 'u1' }],
+        { db, logger: { warn } },
+        { forceReportOnly: true }
+      );
 
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('report-only'));
     });
@@ -328,13 +331,32 @@ describe('assertLakeAdmission', () => {
       const explicitFalse = await assertLakeAdmission(
         [lake({ requiredPassageTokenTarget: 1000 })],
         [{ userId: 'u1' }],
-        {
-          db,
-          forceReportOnly: false,
-        }
+        { db },
+        { forceReportOnly: false }
       );
 
       expect(explicitFalse).toEqual(omitted);
+    });
+
+    // The whole point of moving this off `LakeAdmissionAdapters`: the adapters bag is spread (by
+    // callers, and by this module when it settles `embeddingModel`), so a flag living there could
+    // ride a `{ ...adapters }` into a door that never asked to disable enforcement. It is now
+    // positional, and a stray property on the adapters object must do nothing at all.
+    it('IGNORES forceReportOnly smuggled in via the adapters bag - it is positional policy, not an adapter', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
+
+      // Still THROWS - i.e. still enforced. Passing the same flag positionally makes this resolve
+      // report-only (the first test in this block), so the rejection is what proves the adapters
+      // bag is not a second, silent way in.
+      await expect(
+        assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
+          db,
+          // any: deliberately passing a property the adapter type no longer declares, which is the
+          // exact smuggling this test exists to reject - a typed object could not express it.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...({ forceReportOnly: true } as any),
+        })
+      ).rejects.toThrow(/requires passages of 1000 tokens/);
     });
   });
 });
