@@ -83,6 +83,22 @@ export interface ResolvedLakeAccess {
 }
 
 /**
+ * The membership arms a retrieval query should carry for a resolved access set: one per lake that
+ * HAS a membership scope. Registry lakes have none (no creator to anchor to) and keep using the
+ * OPEN `dataLakeTagPrefixes` arm - dropping them here is what stops a registry lake being silently
+ * demoted to meta-tag-only matching.
+ *
+ * INVARIANT: every scope this returns is creator-anchored to a DYNAMIC lake. `membership` is set
+ * ONLY on the `source: 'dynamic'` branch below - a registry lake never carries one. If a future
+ * change (e.g. a `kind`-discriminated `DataLakeMembershipScope`) gives registry lakes a membership
+ * scope of their own too, this helper must filter on that discriminant rather than on mere
+ * presence, or an unanchored prefix arm could reach a retrieval query and reopen the cross-tenant
+ * promotion the SCOPED/OPEN split exists to forbid.
+ */
+export const lakeMembershipsFrom = (lakes: ResolvedLakeAccess[]): DataLakeMembershipScope[] =>
+  lakes.flatMap(l => (l.membership ? [l.membership] : []));
+
+/**
  * Fetches dynamic data lake configs from DB (if available) and returns
  * the merged datalake: tags for the user.
  *
