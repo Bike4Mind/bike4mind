@@ -534,8 +534,10 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   // silently did not take it.
   // Restricted to the fileName branches, where ties are demonstrated. On MongoDB this is free - the
   // unconditional `{locale: 'en'}` collation already forces a blocking sort. On the DocumentDB branch
-  // it gives up the addLowercaseField plugin's `{fileNameLower: 1}` index for a per-lake blocking
-  // sort, accepted deliberately: a silently short page is worse than a slower one.
+  // it gives up the addLowercaseField plugin's `{fileNameLower: 1}` index for a blocking sort whose
+  // input is the whole filter-scoped set, not the page, and this find path sets no allowDiskUse
+  // (FabFileModel.executeSearch). Accepted deliberately: a silently short page is worse than a
+  // costly one.
   if (order.by === 'fileName') {
     sort._id = direction;
   }
