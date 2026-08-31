@@ -233,8 +233,10 @@ describe('GET /api/data-lakes/:id/articles access-event audit', () => {
 describe('GET /api/data-lakes/:id/articles pagination walk', () => {
   it('walking page by page over a tied fileName fixture returns exactly total distinct ids', async () => {
     // Simulates a fixed DB layer's tied-fileName total order (see fabFileSearchPageWalk.integration
-    // test for the real fix). This test guards the endpoint boundary: it is what regresses if a
-    // future change reintroduced a per-page sort override here that broke that total order.
+    // test for the real fix). The walk arithmetic pins page-param parsing, passthrough of
+    // data/total/hasMore, and termination; the order assertion at the end is what catches a
+    // per-page sort override here, since the mock below reads only pagination.page and would stay
+    // green under any sort at all.
     const files = [
       { id: 'f1', fileName: 'd1.txt' },
       { id: 'f2', fileName: 'd2.txt' },
@@ -281,5 +283,10 @@ describe('GET /api/data-lakes/:id/articles pagination walk', () => {
     expect(duplicateCount).toBe(0);
     expect(seenIds.size).toBe(total);
     expect(hasMore).toBe(false);
+
+    // fileName is the only sort buildFabFileSearchQuery gives an _id tiebreaker, so a page walk
+    // is only total-ordered while every page asks for it.
+    const orders = (h.search.mock.calls as [string, { order: unknown }][]).map(call => call[1].order);
+    expect(orders).toEqual(Array(4).fill({ by: 'fileName', direction: 'asc' }));
   });
 });

@@ -478,14 +478,15 @@ describe('buildFabFileSearchQuery', () => {
       expect(result.sort).toEqual({ fileName: -1, _id: -1 });
     });
 
-    it('applies to the DocumentDB fileNameLower branch too', () => {
+    // The asc case is covered by the DocumentDB sort block above; this is the desc branch.
+    it('applies to the DocumentDB fileNameLower branch too, in either direction', () => {
       const result = buildFabFileSearchQuery(
         makeParams({
-          order: { by: 'fileName', direction: 'asc' },
+          order: { by: 'fileName', direction: 'desc' },
           useDocumentDB: true,
         })
       );
-      expect(result.sort).toEqual({ fileNameLower: 1, _id: 1 });
+      expect(result.sort).toEqual({ fileNameLower: -1, _id: -1 });
     });
 
     it('leaves a createdAt sort alone', () => {

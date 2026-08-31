@@ -151,6 +151,11 @@ describe('count_knowledge_base', () => {
       expect(out).toContain('at least');
       expect(out).toContain('counting stopped at a scan limit');
       expect(search).toHaveBeenCalledTimes(10);
+      // Only a fileName sort gets buildFabFileSearchQuery's _id tiebreaker, so this walk is a
+      // total order - and so safe from counting a document twice - only while it asks for one.
+      expect((search.mock.calls as unknown[][]).map(call => call[4])).toEqual(
+        Array(10).fill({ by: 'fileName', direction: 'asc' })
+      );
     });
 
     it('an unset filter is a plain count - no walk', async () => {

@@ -334,6 +334,17 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
   });
 
+  it('pages the file walk in a fileName order, the only sort with an _id tiebreaker', async () => {
+    // buildFabFileSearchQuery appends the _id tiebreaker for `fileName` alone, so switching this
+    // multi-page walk to another sort would silently re-expose it to page-boundary loss.
+    const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
+    await semanticDataLakeSearch(baseParams(), {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect(search.mock.calls[0][4]).toEqual({ by: 'fileName', direction: 'asc' });
+  });
+
   it('the file budget marks the scan truncated and warns', async () => {
     const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
     const logger = makeLogger();
