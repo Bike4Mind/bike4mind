@@ -37,6 +37,11 @@ describe('fabFileRepository.search fileName page walk', () => {
       const copies = i < TRIPLED_NAMES ? 3 : 1;
       for (let c = 0; c < copies; c++) names.push(`file${String(i).padStart(4, '0')}.txt`);
     }
+    // insertMany bypasses addLowercaseField's pre-hook (it registers on save/findOneAndUpdate/
+    // updateOne/updateMany only), so `fileNameLower` is null on every row here. Harmless for this
+    // walk, which takes the fileName + collation branch and never reads the field - but extend this
+    // fixture to the DocumentDB branch and every sort key would be null, one giant tie that passes
+    // under the fix while proving nothing. Same gap as collation-compatibility.test.ts:230-233.
     await FabFile.insertMany(
       names.map(fileName => ({ userId: USER_ID, fileName, type: KnowledgeType.FILE, mimeType: 'text/plain' }))
     );
