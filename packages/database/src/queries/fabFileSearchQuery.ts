@@ -534,13 +534,15 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   } else {
     sort = { [order.by]: direction };
   }
-  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating a
-  // fileName sort can drop or repeat a file at a page boundary. Callers that walk more than one
-  // page opt in to an `_id` tiebreaker, which makes the sort a total order.
-  // Deliberately restricted to the fileName branches: they already require an in-memory sort
-  // (no usable collated fileName index), so the tiebreaker is free there, whereas adding it to
-  // `createdAt` would turn an indexed 21-document scan into a full-collection blocking sort.
-  if (options?.stableSort && (order.by === 'fileName' || sort.fileNameLower !== undefined)) {
+  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating
+  // a fileName sort can drop or repeat a file at a page boundary. The `_id` tiebreaker makes it a
+  // total order. Unconditional rather than opt-in: this was an opt-in and four listing callers
+  // silently did not take it.
+  // Restricted to the fileName branches, where ties are demonstrated. On MongoDB this is free - the
+  // unconditional `{locale: 'en'}` collation already forces a blocking sort. On the DocumentDB branch
+  // it gives up the addLowercaseField plugin's `{fileNameLower: 1}` index for a per-lake blocking
+  // sort, accepted deliberately: a silently short page is worse than a slower one.
+  if (order.by === 'fileName') {
     sort._id = direction;
   }
 
