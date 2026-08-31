@@ -178,8 +178,11 @@ describe('applyQuestStatusChanges', () => {
     it('never lets a success on another surface erase an unsearchable corpus, in either order', () => {
       // The reason 'not_indexed' cannot be modelled at 'no_lakes' severity: an unindexed library
       // is a real, actionable defect, and the multi-surface turns where one surface still succeeds
-      // are exactly the turns where diagnosis is hardest. Asserted in BOTH arrival orders because
-      // the merge keeps `existing` on a tie, so a wrong rank would only show up in one of them.
+      // are exactly the turns where diagnosis is hardest.
+      // The SECOND arm is the load-bearing one: the merge keeps `existing` on a tie, so ranking
+      // 'not_indexed' level with 'ok' trips only that direction. Arm 1 is strictly weaker (it fails
+      // only when 'ok' outranks 'not_indexed', which also fails arm 2) and is kept to document the
+      // intended symmetry, not for the coverage.
       const forcedFirst = makeQuest({
         promptMeta: {
           retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },

@@ -352,9 +352,16 @@ export const RetrievalSummarySchema = z.object({
    *   confident-wrong-answer this field exists to catch. Distinct from 'failed' because nothing
    *   broke: the remedy is re-vectorizing, which the corpus owner can do themselves, and a retry
    *   never helps.
-   * 'failed' - recall did not complete because it threw. Acute and retryable, which is what
-   *   separates it from 'not_indexed': an unindexed corpus is chronic, so it reports continuously
-   *   and would bury genuine outages in any alarm cut on the two together.
+   *   COVERAGE: only forced retrieval records this today. The same condition is reachable through
+   *   knowledgeBaseSearch's semantic arm, which still records 'ok' when every candidate was
+   *   withheld for having no usable vector - so a turn that used only that surface still
+   *   under-reports. Anything cutting on this field should treat 'ok' as "not proven searched"
+   *   until that arm is corrected.
+   * 'failed' - recall did not complete: it threw, OR the retrieval repository is not wired on
+   *   this host (the guards in ChatCompletionFeatures / knowledgeBaseSearch / knowledgeBaseRetrieve
+   *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
+   *   not the tempo: fix the outage or the host wiring, never re-index content. An unwired host
+   *   reports continuously too, so "chronic" alone does not pick out 'not_indexed'.
    * On multiple retrieval calls within one turn, merge priority is failed > not_indexed > ok >
    * no_lakes (see retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never
    * masked by a later success or abstain, an unsearchable corpus outranks a legitimate zero so a
