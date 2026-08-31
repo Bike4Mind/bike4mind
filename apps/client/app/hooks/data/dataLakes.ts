@@ -841,7 +841,14 @@ export function useAddFileToDataLake() {
       if (toastId !== undefined) toast.success('File restored to data lake.', { id: toastId });
     },
     onError: (error: Error, { toastId }) => {
-      const message = error.message || 'Failed to restore the file to the data lake';
+      // Surface the server's own refusal text, not axios' `"Request failed with status code N"`.
+      // Every actionable rejection on this door lands here - "You do not have permission to add
+      // files to this data lake", "Data lake not found", the built-in-lake refusal - and this is
+      // the toast the non-owner confirmation copy calls their only way back, so a status string is
+      // the one message that cannot help them. Body key is `error` (server/middlewares/
+      // errorHandler.ts); same extraction as useTransferLakeOwnership above.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const message = refusal || error.message || 'Failed to restore the file to the data lake';
       toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
     },
   });
@@ -893,7 +900,12 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to remove file from data lake');
+      // Same extraction as the restore door above: these two fire from the same confirmation
+      // dialog, so leaving this one bare would give Undo the server's reason and Remove a status
+      // code. `Only the creator can remove files from this data lake` is exactly the text a
+      // curator needs here.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to remove file from data lake');
     },
   });
 }

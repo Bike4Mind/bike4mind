@@ -17,6 +17,19 @@ import { toast } from 'sonner';
 const apiGet = vi.fn();
 const apiDelete = vi.fn();
 const apiPost = vi.fn();
+
+/**
+ * A rejection shaped the way axios actually rejects: `.message` is the generic status line and the
+ * server's own reason lives at `response.data.error` (server/middlewares/errorHandler.ts). The
+ * `isAxiosError` guard the hooks use keys off the `isAxiosError` flag, so this is the minimum
+ * faithful shape. Mocking a bare `Error` whose `.message` is already the server text is what let an
+ * earlier round of these tests pass with the extraction absent.
+ */
+const axiosRefusal = (status: number, serverMessage: string) =>
+  Object.assign(new Error(`Request failed with status code ${status}`), {
+    isAxiosError: true,
+    response: { status, data: { error: serverMessage } },
+  });
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: {
     get: (...args: unknown[]) => apiGet(...args),
@@ -282,6 +295,24 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     );
   });
 
+  it("surfaces the server's refusal on a failed removal, not axios' status line", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    apiDelete.mockReset();
+    apiDelete.mockRejectedValueOnce(axiosRefusal(403, 'Only the creator can remove files from this data lake'));
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1').catch(() => {});
+    });
+
+    // Removal and restore fire from the same confirmation dialog, so this must not degrade to a
+    // status code while the restore door reports the real reason.
+    expect(toast.error).toHaveBeenCalledWith('Only the creator can remove files from this data lake');
+  });
+
   it('does nothing extra when there is no dataLakeId to build an Undo affordance from', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
@@ -304,12 +335,18 @@ describe('useAddFileToDataLake', () => {
       React.createElement(QueryClientProvider, { client: queryClient }, children);
     apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
 
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+
     const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
     await act(async () => {
       await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' });
     });
 
     expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1');
+    // No `toastId` means no toast to replace, so the success handler must stay silent. Without this
+    // control, deleting the `toastId !== undefined` guard would make a cold add announce "File
+    // restored to data lake." - wrong copy - with every test still green.
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('invalidates the same membership-derived queries a removal does', async () => {
@@ -366,7 +403,10 @@ describe('useAddFileToDataLake', () => {
       React.createElement(QueryClientProvider, { client: queryClient }, children);
     (toast.error as ReturnType<typeof vi.fn>).mockReset();
     apiPost.mockReset();
-    apiPost.mockRejectedValueOnce(new Error('Restore window has closed'));
+    // An AxiosError, not a bare Error: axios sets `.message` to "Request failed with status code
+    // N" and puts the server's reason at `response.data.error`, so a plain-Error mock would assert
+    // a shape production never produces and would pass with the extraction removed.
+    apiPost.mockRejectedValueOnce(axiosRefusal(403, 'Restore window has closed'));
 
     const { result, unmount } = renderHook(() => useAddFileToDataLake(), { wrapper });
     const restore = result.current.mutate;
@@ -385,7 +425,7 @@ describe('useAddFileToDataLake', () => {
       React.createElement(QueryClientProvider, { client: queryClient }, children);
     (toast.error as ReturnType<typeof vi.fn>).mockReset();
     apiPost.mockReset();
-    apiPost.mockRejectedValueOnce(new Error('You do not have permission to add files to this data lake'));
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'You do not have permission to add files to this data lake'));
 
     const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
     await act(async () => {

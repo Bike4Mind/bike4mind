@@ -330,6 +330,24 @@ describe('addFileToDataLake', () => {
       expect(fabFiles._state.tags).toEqual([]);
     });
 
+    // Pins the `isEffectiveOwner` HALF of the conjunct, which nothing else did: dropping that
+    // disjunct (leaving `actor.isAdmin && includes(file.userId)`) passed every other test in this
+    // file. Reachable whenever a lake carries more than one `owner` grant, and it is the legitimate
+    // case the file-side arm exists to allow - so without this a refactor could delete it silently.
+    it('admits a co-owner adding a file owned by ANOTHER effective owner - the non-admin half of the arm', async () => {
+      const grants = [
+        { principalType: 'user', principalId: 'owner-a', role: 'owner', status: 'active' },
+        { principalType: 'user', principalId: 'owner-b', role: 'owner', status: 'active' },
+      ];
+      const { db, logger, fabFiles } = makeAdapters({ file: { id: 'f1', userId: 'owner-b', tags: [] }, grants });
+      const ownerA = { userId: 'owner-a', isAdmin: false };
+
+      const result = await addFileToDataLake(ownerA, 'lake1', 'f1', { db, logger });
+
+      expect(result.success).toBe(true);
+      expect(fabFiles._state.tags.map(t => t.name)).toContain('datalake:lake');
+    });
+
     it('keeps the platform-admin rung exactly as wide as it was - lake-owner file yes, third party no', async () => {
       const ownerFile = makeAdapters({ file: { id: 'f1', userId: 'owner', tags: [] } });
       const result = await addFileToDataLake(admin, 'lake1', 'f1', {

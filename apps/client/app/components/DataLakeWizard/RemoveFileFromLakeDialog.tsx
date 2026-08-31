@@ -14,8 +14,14 @@ function cleanFileName(fileName: string): string {
  *
  * Both branches promise Undo: the restore path admits every removal the actor was able to
  * perform, with no ownership test and regardless of whether the lake held content tags on the
- * file, so the promise is safe either way and bounded only by the removal record's 30-minute TTL
- * (comfortably longer than the toast that offers it).
+ * file, so the promise is safe either way.
+ *
+ * The two branches bound that promise DIFFERENTLY, on purpose. The server's removal record lives
+ * 30 minutes, but the Undo toast is the only affordance that spends it - there is no list route and
+ * no "recently removed" panel - so the toast, not the TTL, is what a user actually has. An owner
+ * has a second way back (re-add the file they own), so their copy can promise Undo plainly; a
+ * non-owner has none, so theirs says the chance closes with the toast. Do not "reconcile" the two
+ * copies: the asymmetry is the accurate part. See dataLakes.ts' UNDO_TOAST_DURATION_MS.
  *
  * The non-owner branch states only what is certain about post-removal reach. `file.userId` cannot
  * predict it: reach is the union of the per-file ACL (a direct share) and membership of any OTHER

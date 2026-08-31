@@ -322,20 +322,37 @@ describe('assertLakeAdmission', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('report-only'));
     });
 
-    it('leaves the verdict unchanged when omitted or explicitly false, for a lake with no lever set', async () => {
-      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' });
+    // The lever is ON for this lake, which is what makes the `false` case discriminating: with no
+    // `enforcingLake` in the fixture both branches of the short-circuit return an empty enforcing
+    // set, so the assertion held whichever one ran. `false` is a LIVE production value - cold add
+    // passes `forceReportOnly: isRestore` with `isRestore === false` (addFileToDataLake.ts) - so
+    // "an explicit false still enforces" is a real contract and not a hypothetical.
+    it('ENFORCES when omitted or explicitly false, even though `true` on the same lake grades report-only', async () => {
+      const enforcing = () =>
+        settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
 
-      const omitted = await assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
-        db,
-      });
-      const explicitFalse = await assertLakeAdmission(
+      await expect(
+        assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], { db: enforcing() })
+      ).rejects.toThrow(/requires passages of 1000 tokens/);
+
+      await expect(
+        assertLakeAdmission(
+          [lake({ requiredPassageTokenTarget: 1000 })],
+          [{ userId: 'u1' }],
+          { db: enforcing() },
+          { forceReportOnly: false }
+        )
+      ).rejects.toThrow(/requires passages of 1000 tokens/);
+
+      // Same lake, same lever, only the flag differs - so the pair pins the flag itself rather than
+      // the fixture.
+      const forced = await assertLakeAdmission(
         [lake({ requiredPassageTokenTarget: 1000 })],
         [{ userId: 'u1' }],
-        { db },
-        { forceReportOnly: false }
+        { db: enforcing() },
+        { forceReportOnly: true }
       );
-
-      expect(explicitFalse).toEqual(omitted);
+      expect(forced.status === 'quarantined' && forced.enforced).toBe(false);
     });
 
     // The whole point of moving this off `LakeAdmissionAdapters`: the adapters bag is spread (by
