@@ -9,9 +9,14 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   scopedTagPrefixes: [],
   lakes: [],
 });
-vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
-  getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
-}));
+// Keep lakeMembershipsFrom real (pure, over `lakes`) - only the DB-backed resolver is stubbed.
+vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', async () => {
+  const actual = await vi.importActual('../../../../dataLakeService/getDynamicDataLakeTags');
+  return {
+    ...actual,
+    getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
+  };
+});
 
 import { knowledgeBaseRetrieveTool } from './index';
 import type { ToolContext } from '../../base/types';
@@ -165,6 +170,77 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 
     expect(out).toContain('Clean Guide.pdf');
     expect(out).not.toContain('MARK - retired.pdf');
+  });
+});
+
+// #2243: search_knowledge_base now surfaces a dynamic lake's prefix-only members to every
+// caller who passes the lake gate (not only the lake's creator). Without this membership arm,
+// retrieve_knowledge_content would deny exactly the file search just returned.
+describe('retrieve_knowledge_content - by-id (Path A) dynamic-lake membership arm (#2243)', () => {
+  const LAKE_SCOPE = { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+  const lakesWith = (scope: typeof LAKE_SCOPE | undefined) => [
+    {
+      id: 'lake1',
+      name: 'Acme Docs',
+      slug: 'acme',
+      datalakeTag: LAKE_SCOPE.datalakeTag,
+      fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
+      source: 'dynamic' as const,
+      ...(scope ? { membership: scope } : {}),
+    },
+  ];
+
+  it('a non-creator retrieves a prefix-only member of a lake they may read', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+      dataLakeTags: [LAKE_SCOPE.datalakeTag],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [LAKE_SCOPE.fileTagPrefix],
+      lakes: lakesWith(LAKE_SCOPE),
+    });
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null); // not owned
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      // Creator-owned, prefix-only: no meta-tag, no share, no group - membership is the only door.
+      makeFile({ fileName: 'Prefix Owned.pdf', userId: 'creator-1', tags: [{ name: 'acme:report' }] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).toContain('Retrieved content from');
+  });
+
+  it('a same-prefix file under a DIFFERENT creator is still denied', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+      dataLakeTags: [LAKE_SCOPE.datalakeTag],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [LAKE_SCOPE.fileTagPrefix],
+      lakes: lakesWith(LAKE_SCOPE),
+    });
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      // Same prefix, but owned by someone other than THIS lake's creator - never a member.
+      makeFile({ fileName: 'Someone Elses.pdf', userId: 'stranger-1', tags: [{ name: 'acme:report' }] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+
+  it('a registry lake (no membership scope) grants no membership access on its own', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValueOnce({
+      dataLakeTags: [LAKE_SCOPE.datalakeTag],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: lakesWith(undefined),
+    });
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Prefix Owned.pdf', userId: 'creator-1', tags: [{ name: 'acme:report' }] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
   });
 });
 

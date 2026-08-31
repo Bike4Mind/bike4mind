@@ -1,5 +1,6 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
 import type {
+  DataLakeMembershipScope,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IFabFileDocument,
@@ -100,6 +101,32 @@ export const lakeMembershipSignals = (
       strength: tags.find(t => t.name === name)?.strength ?? 0,
     })),
   };
+};
+
+/**
+ * True when a file matches a lake's membership scope through either arm of
+ * `buildDataLakeMembershipFilter` (`@bike4mind/database`) - the boolean, in-memory mirror of that
+ * Mongo predicate, keyed on the SAME `DataLakeMembershipScope` type it takes so a caller cannot
+ * accidentally build the scope by hand and drift from it.
+ *
+ * Built on `prefixArmTagNames`, not on `lakeMembershipSignals`: the latter is itself built on the
+ * former and additionally computes which tags to pull, so calling it here for a boolean would name
+ * a hop away from the real primitive. Both should stay adjacent, not one delegating to the other.
+ *
+ * Used by `retrieve_knowledge_content`'s direct-fetch path so a prefix-only member search can now
+ * surface (#2243) is also openable, rather than returned by search and then denied.
+ */
+export const satisfiesMembershipScope = (
+  scope: DataLakeMembershipScope,
+  file: SignalSourceFile | null | undefined
+): boolean => {
+  if (!file) return false;
+  const tagNames = (file.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
+  if (tagNames.includes(scope.datalakeTag)) return true;
+  // Fails closed to the meta arm alone when there is no creator to anchor the prefix arm to,
+  // matching buildDataLakeMembershipFilter's `!scope.creatorUserId` branch.
+  if (!scope.creatorUserId || file.userId !== scope.creatorUserId) return false;
+  return prefixArmTagNames(tagNames, scope.fileTagPrefix).length > 0;
 };
 
 /**

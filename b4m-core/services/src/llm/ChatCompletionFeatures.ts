@@ -56,7 +56,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import { getDynamicDataLakeAccess, lakeMembershipsFrom } from '../dataLakeService/getDynamicDataLakeTags';
 import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
   classifyLoadedChunk,
@@ -1883,7 +1883,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     try {
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await this.resolveDataLakeAccess();
+      const { dataLakeTags, dataLakeTagPrefixes, lakes } = await this.resolveDataLakeAccess();
       attemptedDataLakeTags = dataLakeTags;
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
       const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
@@ -1903,7 +1903,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           userGroups: user.groups || [],
           dataLakeTags,
           dataLakeTagPrefixes, // static-registry (open) prefixes
-          scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
+          lakeMemberships: lakeMembershipsFrom(lakes), // dynamic-lake arms, each anchored to that lake's creator
           excludeContent: true, // metadata only; chunk text + vectors fetched below
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
