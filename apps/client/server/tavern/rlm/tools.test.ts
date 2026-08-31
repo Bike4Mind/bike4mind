@@ -34,7 +34,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
   it('exposes all five tools as callable async functions in the REPL', async () => {
     const tools = buildDataLakeTools({
       baseUrl: 'http://localhost:3000',
-      apiKey: 'test-key',
+      authHeaders: { 'x-api-key': 'test-key' },
       anthropicApiKey: 'test-anthropic',
       session,
     });
@@ -67,7 +67,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
 
     const tools = buildDataLakeTools({
       baseUrl: 'http://localhost:3000',
-      apiKey: 'k',
+      authHeaders: { 'x-api-key': 'k' },
       anthropicApiKey: 'a',
       session,
     });
@@ -91,7 +91,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
   it('subAgentQuery records the call against the session budget', async () => {
     const tools = buildDataLakeTools({
       baseUrl: 'http://localhost:3000',
-      apiKey: 'k',
+      authHeaders: { 'x-api-key': 'k' },
       anthropicApiKey: 'a',
       session,
     });
@@ -115,7 +115,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
   it('rejects semanticSearch when query is missing', async () => {
     const tools = buildDataLakeTools({
       baseUrl: 'http://localhost:3000',
-      apiKey: 'k',
+      authHeaders: { 'x-api-key': 'k' },
       anthropicApiKey: 'a',
       session,
     });
@@ -148,7 +148,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
 
     const tools = buildDataLakeTools({
       baseUrl: 'http://localhost:3000',
-      apiKey: 'k',
+      authHeaders: { 'x-api-key': 'k' },
       anthropicApiKey: 'a',
       session,
     });
@@ -171,5 +171,87 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
 
     // Two sub-LLM calls accounted for in the budget
     expect(session.getUsage().subLlmCalls).toBe(2);
+  });
+});
+
+describe('buildDataLakeTools - every loopback call runs as the requesting principal', () => {
+  let session: ReplSession;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  // A browser/JWT caller: no x-api-key at all, so a regression to a shared
+  // service key would show up as this header vanishing from the loopback calls.
+  const callerHeaders = { authorization: 'Bearer caller.jwt.token' };
+
+  beforeEach(() => {
+    session = new ReplSession({ sessionId: 'principal-test' });
+    fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as ReturnType<typeof vi.spyOn>;
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  const sentHeaders = (i: number) => (fetchSpy.mock.calls[i][1] as RequestInit).headers as Record<string, string>;
+
+  it('sends the caller credential on search and browse calls', async () => {
+    // Fresh Response per call - one shared instance would have its body consumed twice.
+    fetchSpy.mockImplementation(
+      async () => new Response(JSON.stringify({ results: [], data: [], total: 0 }), { status: 200 })
+    );
+
+    session.setTools(
+      buildDataLakeTools({
+        baseUrl: 'http://localhost:3000',
+        authHeaders: callerHeaders,
+        anthropicApiKey: 'a',
+        session,
+      })
+    );
+
+    const r = await session.runCode(`
+      await semanticSearch({ query: "q" });
+      await keywordSearch({ query: "q" });
+      await listArticles({});
+    `);
+    expect(r.error).toBeNull();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 3; i++) {
+      expect(sentHeaders(i).authorization).toBe('Bearer caller.jwt.token');
+      expect(sentHeaders(i)['x-api-key']).toBeUndefined();
+    }
+  });
+
+  it('sends the caller credential on both getArticle hops, including presigned-url', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ fileName: 'A.md', filePath: 'lake/A.md', tags: [] }] }), {
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ urls: ['https://s3.example/A.md'] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('body text', { status: 200 }));
+
+    session.setTools(
+      buildDataLakeTools({
+        baseUrl: 'http://localhost:3000',
+        authHeaders: callerHeaders,
+        anthropicApiKey: 'a',
+        session,
+      })
+    );
+
+    const r = await session.runCode(`
+      const out = await getArticle({ file_id: "0123456789abcdef01234567" });
+      console.log(out.file_name);
+    `);
+    expect(r.error).toBeNull();
+    expect(r.stdout).toBe('A.md');
+
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('/api/data-lakes/articles');
+    expect(sentHeaders(0).authorization).toBe('Bearer caller.jwt.token');
+    expect(String(fetchSpy.mock.calls[1][0])).toContain('/api/files/presigned-url');
+    expect(sentHeaders(1).authorization).toBe('Bearer caller.jwt.token');
+    // The S3 fetch is presigned - it must NOT carry the caller credential.
+    expect(sentHeaders(2)).toBeUndefined();
   });
 });

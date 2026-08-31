@@ -345,7 +345,16 @@ export const RetrievalSummarySchema = z.object({
   /**
    * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
    * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
-   * 'failed' - threw; recall did not complete.
+   * 'failed' - recall did not complete. TWO distinct causes share this value today: it threw, OR
+   *   it ran to completion having compared nothing (a corpus whose passages carry no usable
+   *   vector - unindexed, or embedded with a foreign model - so no chunk was ever scored against
+   *   the query). The second is NOT a mislabel: 'ok' would report an unsearchable library as a
+   *   topical zero, and 'no_lakes' is severity 0, so the worst-of merge below would let any other
+   *   surface's success erase the signal entirely.
+   *   The two causes want different remedies (an outage is acute and retryable; an unindexed
+   *   corpus is chronic and needs re-vectorizing), so alarming on 'failed' rate alone conflates
+   *   them - splitting the second into its own outcome is tracked separately, and should land
+   *   before anything renders this field.
    * On multiple retrieval calls within one turn, merge priority is failed > ok > no_lakes (see
    * retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never masked by a later
    * success or abstain, and a real success on one surface is never masked by another surface's

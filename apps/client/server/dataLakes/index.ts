@@ -80,7 +80,9 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 }
 
 export interface DataLakeArticlesQuery {
-  id?: string;
+  // `string[]` for the same reason as `tags`/`search` below: /api/data-lakes/articles has no `[id]`
+  // route segment, so `id` comes purely from the query string and is repeatable.
+  id?: string | string[];
   tags?: string | string[];
   search?: string | string[];
   page?: string;
@@ -135,8 +137,12 @@ export async function queryDataLakeArticles(
   // lakes safely - membership IS the meta-tag) OR a static-registry (open) prefix.
   // A dynamic lake's user-controlled prefix is deliberately NOT a grant here - that
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
-  if (query.id) {
-    const file = await fabFileRepository.findById(query.id);
+  // Narrowed like `search`/`tags` below: an array reaching findById casts to a Mongoose CastError
+  // and 500s the deep-link read. /api/data-lakes/articles has no `[id]` route segment, so nothing
+  // else overwrites this with a single value.
+  const articleId = firstQueryValue(query.id);
+  if (articleId) {
+    const file = await fabFileRepository.findById(articleId);
     const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
     if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };
@@ -244,12 +250,19 @@ export async function queryDataLakeTagCounts(
   // the config the browse surfaces receive deliberately carries no owner id. A static registry
   // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
   // safe direction (see buildDataLakeMembershipFilter).
-  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
-  const membershipScopes = lakes.map((lake, i) => ({
-    datalakeTag: lake.datalakeTag,
-    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
-    creatorUserId: lakeDocs[i]?.createdByUserId,
-  }));
+  //
+  // ONE batched read, never one per lake: an admin's lake set is every lake of every tenant, and
+  // the per-lake fan-out this replaced issued that many concurrent findOnes against a pool of two.
+  const lakeDocs = await dataLakeRepository.findByDatalakeTags(dataLakeTags);
+  const lakeDocsByTag = new Map(lakeDocs.map(doc => [doc.datalakeTag, doc]));
+  const membershipScopes = lakes.map(lake => {
+    const doc = lakeDocsByTag.get(lake.datalakeTag);
+    return {
+      datalakeTag: lake.datalakeTag,
+      fileTagPrefix: doc?.fileTagPrefix ?? lake.fileTagPrefix,
+      creatorUserId: doc?.createdByUserId,
+    };
+  });
 
   const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),

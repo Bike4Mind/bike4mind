@@ -57,6 +57,7 @@ export * from './semanticDataLakeSearch';
 export * from './boundedTopK';
 export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';
+export * from './resolveIngestSpendScope';
 export * from './enforceEmbeddingSpendGate';
 export * from './resolveLakeSpendAddressees';
 export * from './spendNotificationKeys';

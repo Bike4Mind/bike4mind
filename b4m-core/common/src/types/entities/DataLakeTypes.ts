@@ -311,6 +311,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
+  /**
+   * Batched `findByDatalakeTag`, for callers holding a whole lake set (the tag-count surface):
+   * one read instead of one per lake. Lakes with no document are simply absent from the result,
+   * so the caller must key by `datalakeTag` rather than assume a positional match.
+   */
+  findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Entitlement-aware variant of `findActiveByUserTags`: active lakes the user can reach by
@@ -345,18 +351,26 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   /**
-   * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
-   * independent of any caller identity (the catalog is the same for everyone). Only gate-less
-   * lakes qualify - a lake that acquired a `requiredUserTag`/`requiredEntitlement` after being
-   * published is no longer open to all, so it must not surface in a browse-everyone view (this
-   * mirrors the both-blank requirement arm on the retrieval/list paths). `search` matches name
-   * or description case-insensitively. Returns one page plus the unpaged `total` for the UI.
+   * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
+   * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
+   * `findAccessible`'s public arm, so a lake that acquired a `requiredUserTag`/
+   * `requiredEntitlement` after being published is hidden from callers who lack the gate but
+   * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
+   * Without that, an entitled user could open such a lake from their own lake list while discover
+   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
+   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * per-caller too. `search` matches name or description case-insensitively. Returns one page
+   * plus the unpaged `total` for the UI.
    */
-  findPublicLakes(opts?: {
-    search?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
+  findPublicLakes(
+    viewer: AccessContext,
+    opts?: {
+      search?: string;
+      limit?: number;
+      offset?: number;
+      grantedLakeIds?: string[];
+    }
+  ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(
     id: string,
@@ -606,7 +620,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * inside its Lambda timeout; the sweep is idempotent so any residue is picked up next run.
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
-  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -653,6 +667,19 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Guarded status transition to ANY status, terminal or not, carrying the client-supplied failure
+   * tallies in the same atomic write. The route variant of the two methods above: the PUT endpoint
+   * accepts any `BatchStatus` plus `failedFiles`/`failedFileNames`, which neither of them can
+   * express, and an unguarded `update` there could resurrect a batch the pipeline already settled.
+   * Returns the post-update doc to the single winner and null to a caller whose batch was already
+   * terminal, so the caller can tell a real transition from a no-op instead of inferring it from a
+   * stale read.
+   */
+  updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
    * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
@@ -682,7 +709,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
    * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
-  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   /**
    * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
    * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -

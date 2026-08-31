@@ -413,7 +413,8 @@ export function useSetLakeVisibility() {
 export const PUBLIC_LAKES_PAGE_SIZE = 24;
 
 /**
- * Browse the public-lake discovery catalog: gate-less public lakes across all orgs, with
+ * Browse the public-lake discovery catalog: the public lakes this caller can reach, across all
+ * orgs (gate-less ones plus any gated public lake whose gate the caller holds), with
  * search + load-more. `search` should already be debounced by the caller. Uses offset paging
  * with a FIXED page size (not a growing `limit`) so a deep load-more can never exceed the
  * route's max-limit cap; pages accumulate via useInfiniteQuery. A new `search` is a new query

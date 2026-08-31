@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   setStats: vi.fn(),
   activateIfDraft: vi.fn(),
   storageDelete: vi.fn(),
+  recordConfigChange: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -41,7 +42,16 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, setStats: h.setStats },
+  dataLakeRepository: {
+    findByDatalakeTag: h.findByDatalakeTag,
+    setStats: h.setStats,
+    activateIfDraft: h.activateIfDraft,
+  },
+  lakeConfigChangeEventRepository: { record: h.recordConfigChange },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   fabFileChunkRepository: { deleteManyByFabFileId: h.deleteManyByFabFileId },
   fabFileRepository: {
     findByIdAndUserId: h.findByIdAndUserId,
@@ -73,9 +83,9 @@ const makeRes = () => {
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
 
-const run = (fileIds: string[], res: unknown) =>
+const run = (fileIds: string[], res: unknown, over: Record<string, unknown> = {}) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(
-    { method: 'DELETE', user: { id: OWNER, isAdmin: false }, ability: {}, body: { fileIds }, logger },
+    { method: 'DELETE', user: { id: OWNER, isAdmin: false }, ability: {}, body: { fileIds }, logger, ...over },
     res
   );
 
@@ -150,6 +160,53 @@ describe('bulk-delete - data-lake stats', () => {
     // The unshared file's lake must not be dragged into the recompute: its membership never moved.
     expect(h.findByDatalakeTag).toHaveBeenCalledTimes(1);
     expect(h.findByDatalakeTag).toHaveBeenCalledWith(LAKE.datalakeTag);
+  });
+});
+
+/**
+ * A bulk delete can leave enough files behind to flip a draft lake active, which writes an
+ * append-only config-change row an owner reads. The actor is built HERE, so this is the only place
+ * the attribution can be pinned - drop the route's `auditPrincipal` line and every other suite
+ * stays green while key-driven deletes are recorded as the owning human's own edit.
+ */
+describe('bulk-delete - auto-activate attribution', () => {
+  const FILE_ID = '507f1f77bcf86cd799439011';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.update.mockResolvedValue(undefined);
+    h.deleteManyByFabFileId.mockResolvedValue(undefined);
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 2, totalSizeBytes: 200, totalChunkedChars: 0 });
+    h.setStats.mockResolvedValue(undefined);
+    h.activateIfDraft.mockResolvedValue(true);
+    h.recordConfigChange.mockResolvedValue({});
+    const file = memberFile(FILE_ID);
+    h.findById.mockResolvedValue(file);
+    h.findByIdAndUserId.mockResolvedValue(file);
+  });
+
+  const recorded = () => {
+    expect(h.recordConfigChange).toHaveBeenCalledTimes(1);
+    return h.recordConfigChange.mock.calls[0][0];
+  };
+
+  it('names the deleting user as the principal on a session request', async () => {
+    const { res } = makeRes();
+    await run([FILE_ID], res);
+    expect(recorded()).toMatchObject({ action: 'auto-activate', principalKind: 'user', principalId: OWNER });
+  });
+
+  it('names the KEY, not the human it acts for, on an API-key request', async () => {
+    const { res } = makeRes();
+    await run([FILE_ID], res, { apiKeyInfo: { keyId: 'key-abc' } });
+    expect(recorded()).toMatchObject({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: OWNER,
+    });
   });
 });
 

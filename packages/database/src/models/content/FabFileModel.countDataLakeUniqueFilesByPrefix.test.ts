@@ -1,9 +1,24 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, fabFileRepository } from './FabFileModel';
+import { BSON } from 'mongodb';
 import { setupMongoTest } from '../../__test__/utils';
 
 const USER = 'user-1';
+
+/** Lakes in the index-bounds fixture. 25 lakes x 20 files, against 20,000 unrelated files. */
+const LAKE_FIXTURE_COUNT = 25;
+
+const lakePrefixes = (count: number) => Array.from({ length: count }, (_, i) => `lake${i}:`);
+
+/** The shape `queryDataLakeTagCounts` passes: one meta-tag and one scoped prefix per lake, so the
+ *  ownership filter these counters build grows with the lake set. */
+const countOptions = (count: number) => ({
+  userGroups: ['group-1'],
+  dataLakeTags: Array.from({ length: count }, (_, i) => `datalake:org${i}:lake${i}`),
+  dataLakeTagPrefixes: [],
+  scopedTagPrefixes: lakePrefixes(count),
+});
 
 // Create a fab file directly on the model so the test can control tags,
 // sessionId, and deletedAt (the repository's create() guards some of these).
@@ -115,6 +130,124 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
     const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['datalake:']);
 
     expect(result).toEqual({ total: 0, byPrefix: { 'datalake:': 0 } });
+  });
+
+  it('issues a bounded number of database operations for a large lake set', async () => {
+    // The fan-out this batching exists to remove: `tagPrefixes` is one entry per lake the caller
+    // can see, and on the admin tag-count path that is every lake of every tenant - one count per
+    // prefix is thousands of round trips through a pool of two.
+    const prefixes = Array.from({ length: 60 }, (_, i) => `lake${i}:`);
+    // Two seeded lakes in different chunks: a facet key built from the wrong index would still
+    // read chunk 0 correctly and silently zero every later chunk.
+    await makeFile({ tags: ['lake7:alpha'], fileName: 'first-chunk' });
+    await makeFile({ tags: ['lake52:beta'], fileName: 'third-chunk' });
+
+    const countDocuments = vi.spyOn(FabFile, 'countDocuments');
+    const aggregate = vi.spyOn(FabFile, 'aggregate');
+    try {
+      const { total, byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, prefixes);
+
+      // One aggregate for `total` plus one per branch-chunk (25 prefixes each at this lake count).
+      expect(countDocuments.mock.calls.length + aggregate.mock.calls.length).toBeLessThanOrEqual(5);
+      expect(total).toBe(2);
+      expect(Object.keys(byPrefix)).toHaveLength(60);
+      expect(byPrefix['lake7:']).toBe(1);
+      expect(byPrefix['lake8:']).toBe(0);
+      expect(byPrefix['lake52:']).toBe(1);
+      expect(byPrefix['lake53:']).toBe(0);
+    } finally {
+      countDocuments.mockRestore();
+      aggregate.mockRestore();
+    }
+  });
+
+  it('keeps tags.name index bounds on the prefix union', async () => {
+    // A regex only yields index bounds when `^` is followed by literal characters, so a single
+    // `^(a|b|c)` alternation for the union drops `tags.name` and scans every tag in the install.
+    // So does folding the ownership filter into each arm and letting two `$match` stages coalesce -
+    // an `$and` around the union is no longer the ROOTED `$or` the subplanner bounds per arm.
+    //
+    // The fixture is deliberately large and uses ONLY the declared indexes: at a few hundred
+    // documents every shape collscans, so a smaller fixture (or a synthetic single-field
+    // `{ 'tags.name': 1 }` index, which a migration removed from this schema) cannot tell the
+    // shapes apart. Here the bounded shape examines ~500 documents and the unbounded ones 20,500.
+    const docs = [];
+    for (let lake = 0; lake < LAKE_FIXTURE_COUNT; lake++) {
+      for (let file = 0; file < 20; file++) {
+        docs.push({
+          userId: USER,
+          fileName: `member-${lake}-${file}`,
+          type: KnowledgeType.TEXT,
+          tags: [{ name: `lake${lake}:doc${file}` }],
+        });
+      }
+    }
+    for (let i = 0; i < 20000; i++) {
+      docs.push({ userId: USER, fileName: `other-${i}`, type: KnowledgeType.TEXT, tags: [{ name: `unrelated-${i}` }] });
+    }
+    await FabFile.insertMany(docs, { ordered: false });
+    await FabFile.ensureIndexes();
+
+    const prefixes = lakePrefixes(LAKE_FIXTURE_COUNT);
+    const pipelines: any[] = [];
+    const aggregate = vi.spyOn(FabFile, 'aggregate');
+    try {
+      // The real endpoint's option shape: the ownership filter names every accessible lake, which
+      // is what makes the arms expensive to repeat. The bounds must survive it.
+      const { byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(
+        USER,
+        prefixes,
+        countOptions(LAKE_FIXTURE_COUNT)
+      );
+      expect(byPrefix['lake0:']).toBe(20);
+      pipelines.push(...aggregate.mock.calls.map(c => c[0]));
+    } finally {
+      aggregate.mockRestore();
+    }
+
+    // Explain the pipelines the implementation actually built, not hand-rewritten copies.
+    for (const pipeline of pipelines) {
+      const explained: any = await FabFile.collection.aggregate(pipeline, { explain: true }).next();
+      const stats = (explained.stages ? explained.stages[0].$cursor : explained).executionStats;
+      expect(stats.totalDocsExamined).toBeLessThan(2000);
+    }
+  }, 180000);
+
+  it('keeps the query document bounded as the lake set grows', async () => {
+    // The regression this guards: the per-prefix arms used to carry the ownership filter, which is
+    // itself O(lakes) - `buildOwnershipConditions` names every accessible lake's meta-tag and
+    // prefix. That made the query document quadratic in the lake count; it crossed the 16MB BSON
+    // limit at ~640 lakes and the endpoint 500d with a RangeError before mongod ever saw it.
+    //
+    // Round trips are the wrong axis to measure here - batching them is worthless if each batched
+    // query is too big to send - so this asserts the size of what goes over the wire.
+    const lakes = 700;
+    const pipelines: any[] = [];
+    const aggregate = vi.spyOn(FabFile, 'aggregate');
+    try {
+      await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, lakePrefixes(lakes), countOptions(lakes));
+      pipelines.push(...aggregate.mock.calls.map(c => c[0]));
+    } finally {
+      aggregate.mockRestore();
+    }
+
+    expect(pipelines.length).toBeGreaterThan(0);
+    for (const pipeline of pipelines) {
+      expect(BSON.calculateObjectSize({ pipeline })).toBeLessThan(8_000_000);
+    }
+  }, 120000);
+
+  it('keeps prefixes independent across a chunk boundary', async () => {
+    // The multi-lake case above, but with the two lakes deliberately in different chunks: the
+    // chunk union is per-chunk, so a file must still count under a prefix in each.
+    const prefixes = Array.from({ length: 30 }, (_, i) => `lake${i}:`);
+    await makeFile({ tags: ['lake1:x', 'lake26:y'], fileName: 'spans-chunks' });
+
+    const { total, byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, prefixes);
+
+    expect(total).toBe(1);
+    expect(byPrefix['lake1:']).toBe(1);
+    expect(byPrefix['lake26:']).toBe(1);
   });
 
   it('counts a padded prefix under its trimmed key', async () => {

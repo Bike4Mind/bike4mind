@@ -67,6 +67,8 @@ import {
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
+import type { FabFileNotice } from '@bike4mind/utils';
+import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -166,7 +168,7 @@ import {
   buildInjectedBlockDetails,
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
-import { resolveArtifactsEnabled } from './artifactGating';
+import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
@@ -2377,7 +2379,15 @@ export class ChatCompletionProcess {
         featureContextMessages,
         actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
+        attachmentNotices,
       } = dataSources;
+
+      // Persisted before the completion runs: an attachment that failed to arrive is worth showing
+      // even on a turn that later errors out, and this is the only durable record the user sees.
+      if (attachmentNotices.length > 0) {
+        quest.attachmentNotices = attachmentNotices;
+        await saveQuest(quest);
+      }
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
       timer.phase('tool_setup');
@@ -2722,7 +2732,7 @@ export class ChatCompletionProcess {
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
         // never told to emit artifacts that the post-processing below will not extract.
-        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
+        artifactEmission: buildArtifactEmissionMessages(artifactsEnabled, artifactEmissionContent),
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
@@ -5473,16 +5483,16 @@ export class ChatCompletionProcess {
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-    const convertedFabFiles = await fetchAndConvertFabFiles(
+    const { files: convertedFabFiles, missingIds } = await fetchAndConvertFabFiles(
       fabFileIds,
       { scope },
-      { db: this.db, storage: this.storage }
+      { db: this.db, storage: this.storage, logger: this.logger }
     );
     const {
       userMessages: promptMessages,
       deliveredFileIds,
       fullyDeliveredFileIds,
-      // errorMessages,
+      fileNotices,
     } = await processFabFilesServer(
       embeddingFactory,
       convertedFabFiles,
@@ -5523,7 +5533,34 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds };
+    // An id `getAccessibleFiles` never returned reaches processFabFilesServer as nothing at all, so
+    // it can only be reported here. The file name is unknown by definition - the id is what the user
+    // and an operator can match against the attachment.
+    const allNotices: FabFileNotice[] = [
+      ...missingIds.map(id => ({
+        fabFileId: id,
+        fileName: id,
+        band: 'unresolved' as const,
+        message: `An attached file (id ${id}) could not be found or is no longer accessible, so its content was not sent.`,
+        delivered: false,
+      })),
+      ...fileNotices,
+    ];
+
+    if (allNotices.length > 0) {
+      promptMessages.unshift({
+        role: 'system',
+        content: buildAttachmentNoticePrompt(allNotices),
+      });
+    }
+
+    const result = {
+      promptMessages,
+      convertedFabFiles,
+      deliveredFileIds,
+      fullyDeliveredFileIds,
+      fileNotices: allNotices,
+    };
     return result;
   }
 
@@ -5859,6 +5896,10 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  "you already have everything, no need to search/retrieve further" for (#1163 review: the
      *  wording was claiming this for a merely-inlined file, which can still be a partial delivery). */
     fullyInlinedAttachmentIds: string[];
+    /** User-facing lines for every attachment that did not arrive intact, already said to the model
+     *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
+     *  thing - an attachment must never fail silently (#2228). */
+    attachmentNotices: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -6006,6 +6047,32 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const fullyDeliveredKnowledgeIds = new Set(fabResult?.fullyDeliveredFileIds ?? []);
     const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
 
+    const fileNotices: FabFileNotice[] = fabResult?.fileNotices ?? [];
+    if (dedupedFileIds.length > 0) {
+      // The one line a production attachment report is read from: what was asked for, what actually
+      // reached the model, and why the rest did not. Requested-minus-delivered is computed here (not
+      // taken from the notice list) so the counts stay true even if a drop site stops reporting.
+      const delivered = new Set(fabResult?.deliveredFileIds ?? []);
+      const droppedIds = dedupedFileIds.filter(id => !delivered.has(id));
+      const bandTally = fileNotices.reduce<Record<string, number>>((acc, notice) => {
+        acc[notice.band] = (acc[notice.band] ?? 0) + 1;
+        return acc;
+      }, {});
+      const summary = {
+        requested: dedupedFileIds.length,
+        delivered: delivered.size,
+        fullyDelivered: fullyDeliveredKnowledgeIds.size,
+        dropped: droppedIds.length,
+        droppedIds,
+        bands: bandTally,
+      };
+      if (droppedIds.length > 0 || fileNotices.length > 0) {
+        logger.warn('📎 Attachment delivery summary', summary);
+      } else {
+        logger.info('📎 Attachment delivery summary', summary);
+      }
+    }
+
     return {
       urlMessages: urlResult.userMessages,
       remainingUserPrompt: urlResult.remainingPrompt,
@@ -6018,6 +6085,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       featureContextMessages,
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
+      attachmentNotices: toAttachmentNoticeStrings(fileNotices),
     };
   }
 }

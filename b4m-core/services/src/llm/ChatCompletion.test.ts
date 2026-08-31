@@ -24,8 +24,11 @@ import {
   usdToCredits,
   usdToCreditsStochastic,
   getSettingsValue,
+  processFabFilesServer,
+  fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import type { FabFileNotice } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -74,6 +77,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCredits: vi.fn(),
   usdToCreditsStochastic: vi.fn(),
   processUrlsFromPrompt: vi.fn(),
+  // Stubbed so fabFilesToMessages can be exercised for real without a storage/embedding stack.
+  processFabFilesServer: vi.fn(),
+  fetchAndConvertFabFiles: vi.fn(),
   isOverloadedError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
@@ -147,6 +153,8 @@ const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
+const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
+const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
 
 const mockDb = {};
 const mockStorage = {};
@@ -264,6 +272,13 @@ describe('ChatCompletionProcess', () => {
     mockedBuildAndSortMessages.mockReset();
     mockedFetchAndProcessPreviousMessages.mockReset();
     mockedProcessUrlsFromPrompt.mockReset();
+    mockedProcessFabFilesServer.mockReset().mockResolvedValue({
+      userMessages: [],
+      fileNotices: [],
+      deliveredFileIds: [],
+      fullyDeliveredFileIds: [],
+    });
+    mockedFetchAndConvertFabFiles.mockReset().mockResolvedValue({ files: [], missingIds: [] });
     mockedShouldTriggerFallback.mockReset();
     mockedIsOverloadedError.mockReset();
     mockedGetLlmWithFallback.mockReset();
@@ -2225,6 +2240,7 @@ describe('ChatCompletionProcess', () => {
       dataLakeTags?: string[];
       promptMode?: 'raw';
       fabPromptMessages?: IMessage[];
+      fabFileNotices?: FabFileNotice[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
       const getAccessibleFiles = opts.getAccessibleFilesImpl
@@ -2240,10 +2256,13 @@ describe('ChatCompletionProcess', () => {
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
-      if (opts.fabPromptMessages) {
+      if (opts.fabPromptMessages || opts.fabFileNotices) {
         vi.spyOn(service as any, 'fabFilesToMessages').mockResolvedValue({
-          promptMessages: opts.fabPromptMessages,
+          promptMessages: opts.fabPromptMessages ?? [],
           convertedFabFiles: [],
+          deliveredFileIds: [],
+          fullyDeliveredFileIds: [],
+          fileNotices: opts.fabFileNotices ?? [],
         });
       }
 
@@ -2300,6 +2319,58 @@ describe('ChatCompletionProcess', () => {
 
       return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
     };
+
+    // #2228: a file that never reached the model used to leave no trace at all - the model answered
+    // as though it had the content and the user saw nothing. Both halves of the fix are asserted
+    // here because either one alone still leaves a surface where the failure is invisible.
+    describe('attachment notices reach the quest', () => {
+      const notice: FabFileNotice = {
+        fabFileId: 'f1',
+        fileName: 'context.md',
+        band: 'read_failed',
+        message: '"context.md" could not be read and was not sent.',
+        delivered: false,
+      };
+
+      it('persists a user-facing line on the quest for an attachment that did not arrive', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabFileNotices: [notice] });
+
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved.length).toBeGreaterThan(0);
+        expect(saved[0]).toEqual(['"context.md" could not be read and was not sent.']);
+      });
+
+      it('leaves the quest untouched when every attachment delivered', async () => {
+        await runKnowledgeGatingCase({ knowledgeIds: ['f1'], fabPromptMessages: [] });
+
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved).toEqual([]);
+      });
+
+      // The no-regression half: surfacing failures must not cost a healthy attachment its delivery.
+      // A ~15KB markdown document is the size from the production report.
+      it('still carries a large attachment content through buildDataSources into the built messages', async () => {
+        const body = 'LARGE_DOC_MARKER\n' + 'the quarterly plan says forty-eight person-weeks. '.repeat(300);
+
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
+          fabPromptMessages: [
+            {
+              role: 'user',
+              content: `Here is the content from the attached file "context.md" for context:\n\n${body}`,
+            },
+          ],
+        });
+
+        const assembled = contextAndSystemMessages.map(m => String(m.content)).join('\n');
+        expect(assembled).toContain('LARGE_DOC_MARKER');
+        expect(assembled).toContain('forty-eight person-weeks');
+        // And nothing claims a delivery problem for a file that delivered.
+        const saved = mockDb.quests.update.mock.calls.map((c: any[]) => c[0]?.attachmentNotices).filter(Boolean);
+        expect(saved).toEqual([]);
+      });
+    });
 
     it('withholds both knowledge tools for an attachment with no readable chunk text yet', async () => {
       const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
@@ -2376,6 +2447,124 @@ describe('ChatCompletionProcess', () => {
       expect(
         contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
       ).toBe(true);
+    });
+  });
+
+  /**
+   * The regression the commented-out `errorMessages` destructure caused, asserted at the one layer
+   * that can see it: processFabFilesServer computed a reason, fabFilesToMessages threw it away, and
+   * the model answered as though the attachment were present (#2228). Calls the prototype method
+   * directly because the suite's beforeEach spies the instance one out.
+   */
+  describe('fabFilesToMessages surfaces undelivered attachments to the model', () => {
+    const modelInfo = { id: 'gpt-4', backend: ModelBackend.OpenAI, supportsVision: false } as any;
+
+    const callReal = (fabFileIds: string[]) =>
+      (ChatCompletionProcess.prototype as any).fabFilesToMessages.call(
+        service,
+        fabFileIds,
+        { id: 'quest1' } as any,
+        {} as any,
+        'what does the attachment say?',
+        4000,
+        modelInfo
+      );
+
+    beforeEach(() => {
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+    });
+
+    it('prepends a system message naming the file and the reason it was not delivered', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'context.md', mimeType: 'text/markdown' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [],
+        deliveredFileIds: [],
+        fullyDeliveredFileIds: [],
+        fileNotices: [
+          {
+            fabFileId: 'f1',
+            fileName: 'context.md',
+            band: 'read_failed',
+            message: '"context.md" could not be read and was not sent.',
+            delivered: false,
+          },
+        ],
+      });
+
+      const { promptMessages, fileNotices } = await callReal(['f1']);
+
+      const systemText = promptMessages
+        .filter((m: IMessage) => m.role === 'system')
+        .map((m: IMessage) => String(m.content))
+        .join('\n');
+      expect(systemText).toContain('context.md');
+      expect(systemText).toContain('was NOT delivered');
+      expect(systemText).toContain('Do not answer as though these files were present');
+      expect(fileNotices).toHaveLength(1);
+    });
+
+    it('reports an id that could not be resolved at all', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({ files: [], missingIds: ['ghost-id'] });
+
+      const { promptMessages, fileNotices } = await callReal(['ghost-id']);
+
+      expect(fileNotices).toEqual([
+        expect.objectContaining({ fabFileId: 'ghost-id', band: 'unresolved', delivered: false }),
+      ]);
+      expect(promptMessages.map((m: IMessage) => String(m.content)).join('\n')).toContain('ghost-id');
+    });
+
+    it('says a partially-delivered file is incomplete rather than missing', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'big.csv', mimeType: 'text/csv' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [{ role: 'user', content: 'partial content' }],
+        deliveredFileIds: ['f1'],
+        fullyDeliveredFileIds: [],
+        fileNotices: [
+          {
+            fabFileId: 'f1',
+            fileName: 'big.csv',
+            band: 'truncated',
+            message: '"big.csv" was too large to send whole.',
+            delivered: true,
+          },
+        ],
+      });
+
+      const { promptMessages } = await callReal(['f1']);
+
+      const systemText = promptMessages
+        .filter((m: IMessage) => m.role === 'system')
+        .map((m: IMessage) => String(m.content))
+        .join('\n');
+      expect(systemText).toContain('delivered only in part');
+      expect(systemText).not.toContain('was NOT delivered');
+      // The content that DID arrive still reaches the model - the notice is additive.
+      expect(promptMessages.some((m: IMessage) => String(m.content).includes('partial content'))).toBe(true);
+    });
+
+    it('adds no system message when every attachment delivered whole', async () => {
+      mockedFetchAndConvertFabFiles.mockResolvedValue({
+        files: [{ id: 'f1', fileName: 'context.md', mimeType: 'text/markdown' } as any],
+        missingIds: [],
+      });
+      mockedProcessFabFilesServer.mockResolvedValue({
+        userMessages: [{ role: 'user', content: 'FULL_FILE_CONTENT' }],
+        deliveredFileIds: ['f1'],
+        fullyDeliveredFileIds: ['f1'],
+        fileNotices: [],
+      });
+
+      const { promptMessages, fileNotices } = await callReal(['f1']);
+
+      expect(fileNotices).toEqual([]);
+      expect(promptMessages).toEqual([{ role: 'user', content: 'FULL_FILE_CONTENT' }]);
     });
   });
 

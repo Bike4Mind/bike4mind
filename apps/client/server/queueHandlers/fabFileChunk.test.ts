@@ -53,6 +53,7 @@ const h = vi.hoisted(() => {
     isBatchComplete: vi.fn(),
     deferFailureIfRetryable: vi.fn(),
     fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+    userFindById: vi.fn(async () => ({ id: 'u1' })),
     // The lease acquire: truthy doc = claim won (acquired). Default wins; a test overrides it to null
     // to exercise a superseded/duplicate delivery bailing out.
     fabFileFindOneAndUpdate: vi.fn(async () => ({ _id: 'ff1' })),
@@ -84,7 +85,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findById: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
   FabFile: { updateOne: h.fabFileUpdateOne, findOneAndUpdate: h.fabFileFindOneAndUpdate },
-  User: { findById: vi.fn(async () => ({ id: 'u1' })) },
+  User: { findById: h.userFindById },
   // Run the callback so the commit phase actually executes (and rejects) under test.
   withTransaction: h.withTransaction,
 }));
@@ -127,7 +128,8 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@bike4mind/common', () => {
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
   class ChunkClaimLostError extends Error {
     constructor(public fabFileId: string) {
       super(`Chunk claim for FabFile ${fabFileId} was lost to a successor mid-run`);
@@ -148,6 +150,15 @@ vi.mock('@bike4mind/common', () => {
     // the real bug would hide behind.
     isChunkClaimLostError: (err: unknown): boolean =>
       Boolean(err && (err instanceof ChunkClaimLostError || (err as Error).name === 'ChunkClaimLostError')),
+    // Real, for the same reason as the note above: convergenceProvenance.ts re-exports this
+    // vocabulary from common (so producers outside apps/client can stamp a haltable message), and
+    // the payload schema's fail-soft `origin` plus the halt rule are what the kill-switch tests
+    // below exercise - a stub would make them assert against themselves.
+    WORK_ORIGINS: actual.WORK_ORIGINS,
+    WorkOriginSchema: actual.WorkOriginSchema,
+    CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
+    provenancePayloadShape: actual.provenancePayloadShape,
+    shouldHaltConvergence: actual.shouldHaltConvergence,
   };
 });
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
@@ -818,5 +829,72 @@ describe('fabFileChunk handler - convergence kill switch', () => {
     await dispatch(makeEvent({ fabFileId: 'ff1', userId: 'u1' }), {} as never, mockLogger);
 
     expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: PAUSED_CHUNK_NOTE }));
+  });
+});
+
+describe('fabFileChunk handler - pre-flight failures are accounted', () => {
+  // A pre-flight throw (deleted user, missing embedding-model setting) used to escape all
+  // failure accounting, leaving `error` unset. `error` is the terminal-exclusion clause of
+  // buildFabFileChunkScanFilter, so the daily un-chunked rescue sweep re-enqueued the same
+  // orphan every day and refilled the DLQ forever.
+  const MISSING_USER_ERR = 'User not found for userId: u1';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1', batchId: 'batch-1' } as never);
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.incrementCounters.mockResolvedValue({
+      failedFiles: 1,
+      processingFailedFiles: 1,
+      vectorizedFiles: 0,
+      totalFiles: 3,
+    });
+    h.isBatchComplete.mockReturnValue(false);
+  });
+
+  it('marks the file errored (terminal for the rescue sweep) when the user is gone, and re-throws', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', MISSING_USER_ERR);
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+  });
+
+  it('accounts the missing-user failure into its batch so the batch still reaches a terminal state', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', MISSING_USER_ERR);
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+  });
+
+  it('routes the missing-user failure through the same retry gate as a chunk failure', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(expect.anything(), FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+      fabFileId: 'ff1',
+      batchId: 'batch-1',
+      action: 'Chunking',
+      errorMessage: MISSING_USER_ERR,
+      logger: mockLogger,
+    });
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+
+  it('accounts a missing embedding-model setting the same way', async () => {
+    h.getSettingsValue.mockResolvedValue(undefined);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'Default embedding model not found');
+  });
+
+  it('releases the chunk claim even though pre-flight threw', async () => {
+    h.userFindById.mockResolvedValueOnce(null as never);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(MISSING_USER_ERR);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(expect.objectContaining({ _id: 'ff1' }), {
+      $set: { isChunking: false },
+    });
   });
 });

@@ -55,9 +55,12 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
       { logger: new Logger({ component: 'audio-guard-test' }), storage, db }
     );
 
-    // Audio yields neither user content nor an error - it is silently skipped.
+    // Audio yields no user content, but it is NOT silent: the caller turns this notice into a
+    // statement to the user and to the model (#2228).
     expect(result.userMessages).toEqual([]);
-    expect(result.errorMessages).toEqual([]);
+    expect(result.fileNotices).toHaveLength(1);
+    expect(result.fileNotices[0]).toMatchObject({ fabFileId: 'audio-1', band: 'audio', delivered: false });
+    expect(result.fileNotices[0].message).toContain('speech-hello-1234.mp3');
     // #1163: a silently-skipped file must never appear as "delivered" - a caller (e.g. a
     // knowledge tool reply) trusting this list to mean "already in the prompt" would otherwise
     // assert something false about a file whose content never reached the model.

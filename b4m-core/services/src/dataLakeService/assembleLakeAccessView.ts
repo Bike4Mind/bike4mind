@@ -150,10 +150,18 @@ export async function assembleLakeAccessView(
   { db, historyLimit = LAKE_ACCESS_VIEW_HISTORY_LIMIT, now = new Date() }: AssembleLakeAccessViewAdapters
 ): Promise<LakeAccessView> {
   // All-grants read (no activeAsOf): the view must render lapsed rows too, tagging each active/expired.
-  const [grantRows, events] = await Promise.all([
+  // One event MORE than the window, purely as a probe: fetching exactly `historyLimit` cannot
+  // distinguish "this lake has exactly that many reads" from "there are more behind the window", and
+  // captioning a COMPLETE audit trail as partial is the one thing a compliance surface must not do.
+  // The extra row is sliced off below and never reaches the aggregates. Same technique, and the same
+  // reasoning, as assembleLakeConfigHistory.
+  const [grantRows, fetchedEvents] = await Promise.all([
     db.dataLakeAccessGrants.listByLake(lake.id),
-    db.lakeAccessEvents.listByLake(lake.id, { limit: historyLimit }),
+    db.lakeAccessEvents.listByLake(lake.id, { limit: historyLimit + 1 }),
   ]);
+
+  const historyTruncated = fetchedEvents.length > historyLimit;
+  const events = historyTruncated ? fetchedEvents.slice(0, historyLimit) : fetchedEvents;
 
   const history = aggregateAccessHistory(events);
   const channels = deriveAccessChannels(lake);
@@ -205,8 +213,9 @@ export async function assembleLakeAccessView(
 
   // When the audit read hit the cap, the per-row aggregates only cover the fetched window. Events
   // come back newest-first, so the oldest fetched event is the window's start - carried so a consumer
-  // can qualify readCount/firstAccessedAt rather than present them as all-time.
-  const historyTruncated = events.length >= historyLimit;
+  // can qualify readCount/firstAccessedAt rather than present them as all-time. `historyTruncated` is
+  // decided by the probe row above, so a complete trail of exactly `historyLimit` reads reports
+  // untruncated and carries no window date.
   const windowStartsAt = historyTruncated ? events[events.length - 1]?.createdAt : undefined;
 
   const grants: LakeAccessGrantView[] = grantRows.map((g: IDataLakeAccessGrantDocument) => ({

@@ -172,6 +172,35 @@ describe('UsageEventRepository', () => {
       expect(rows[0].requests).toBe(3);
       expect(rows[0].cogsUsd).toBeCloseTo(0.07, 10);
     });
+
+    it('excludes rows older than the requested window', async () => {
+      await record();
+      // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+
+      expect(await usageEventRepository.monthlyCogsByProvider(12)).toHaveLength(0);
+
+      await record();
+      const rows = await usageEventRepository.monthlyCogsByProvider(12);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].requests).toBe(1);
+    });
+
+    // The bound is a UTC month start, so the oldest in-window month is whole rather
+    // than truncated the way a rolling now - N*30d bound would leave it.
+    it('bounds the window at the UTC start of the oldest in-window month', async () => {
+      const now = new Date();
+      const oldestMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1));
+
+      await record();
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: oldestMonthStart } });
+      const included = await usageEventRepository.monthlyCogsByProvider(3);
+      expect(included).toHaveLength(1);
+      expect(included[0].month).toBe(oldestMonthStart.toISOString().slice(0, 7));
+
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date(oldestMonthStart.getTime() - 1) } });
+      expect(await usageEventRepository.monthlyCogsByProvider(3)).toHaveLength(0);
+    });
   });
 
   describe('settlementBreakdown', () => {

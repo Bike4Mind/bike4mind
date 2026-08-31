@@ -97,7 +97,7 @@ describe('semanticDataLakeSearch retrieval exclusion', () => {
    * CALL shape (dataLakeTags: []), which passes whether or not this bail fires, so a fix that never
    * ran read as verified for a whole round.
    */
-  it('ownFilesOnly: with no lake tags it still scopes the caller\'s own files instead of bailing', async () => {
+  it("ownFilesOnly: with no lake tags it still scopes the caller's own files instead of bailing", async () => {
     const findVectors = vi.fn().mockResolvedValue([]);
     const adapters = makeAdapters(findVectors);
     await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, adapters as never);
@@ -334,13 +334,17 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
   });
 
-  it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
+  it('asks for a fileName order, the sort the file walk needs to be a total order', async () => {
+    // The sort literal is hardcoded inside the paging loop (semanticDataLakeSearch.ts), so pinning
+    // the first call pins every page - a one-page fixture is sufficient here. buildFabFileSearchQuery
+    // gives no _id tiebreaker to createdAt, so switching this walk to it would silently re-expose
+    // the walk to page-boundary loss.
     const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
     await semanticDataLakeSearch(baseParams(), {
       db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
     } as never);
 
-    expect(search.mock.calls[0][5]).toMatchObject({ stableSort: true });
+    expect(search.mock.calls[0][4]).toEqual({ by: 'fileName', direction: 'asc' });
   });
 
   it('the file budget marks the scan truncated and warns', async () => {

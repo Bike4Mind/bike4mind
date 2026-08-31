@@ -11,6 +11,7 @@ import LoginsView from '../LoginsView';
 import MFAStatusBadge from '../MFAStatusBadge';
 import UserIdChip from '../UserIdChip';
 import { computeStoragePercent } from './storageUtils';
+import { formatAccountAge, formatAccountCreatedTitle } from '../formatAccountAge';
 
 interface SlimUsersViewProps {
   user: AdminUserListItem;
@@ -22,15 +23,19 @@ interface SlimUsersContainerProps {
 }
 
 /** Header and row share these widths; they must be edited together or the table skews. */
+// MUI Joy Grid is 12 columns and these must sum to exactly 12, or rows wrap and
+// stop lining up with the sticky header. Adding `created` was funded by trimming
+// 0.25 from five neighbours rather than appending, which would have overflowed.
 const COLUMN_WIDTHS = {
-  name: 2,
+  name: 1.75,
   userId: 1.25,
-  email: 2.25,
+  email: 2,
+  created: 1.25,
   logins: 0.75,
-  storage: 1.25,
+  storage: 1,
   security: 1,
-  activity: 1.5,
-  actions: 2,
+  activity: 1.25,
+  actions: 1.75,
 } as const;
 
 const ELLIPSIS_SX = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
@@ -121,6 +126,7 @@ const SlimUsersViewHeader: React.FC = () => (
           ['Name', COLUMN_WIDTHS.name],
           ['User ID', COLUMN_WIDTHS.userId],
           ['Email', COLUMN_WIDTHS.email],
+          ['Created', COLUMN_WIDTHS.created],
           ['Logins', COLUMN_WIDTHS.logins],
           ['Storage', COLUMN_WIDTHS.storage],
           ['Security', COLUMN_WIDTHS.security],
@@ -172,6 +178,28 @@ const SlimUsersView: React.FC<SlimUsersViewProps> = ({ user, index }) => (
             {user.email}
           </Typography>
         </Tooltip>
+      </Grid>
+
+      {/* The table already sorts by createdAt by default (useUsersTabParams), so
+          until now it sorted by something the reader could not see. Relative age
+          answers "how new is this account" directly; the exact timestamp is on
+          hover rather than spending column width. */}
+      <Grid xs={COLUMN_WIDTHS.created} sx={{ minWidth: 0 }}>
+        {formatAccountAge(user.createdAt) ? (
+          <Tooltip title={formatAccountCreatedTitle(user.createdAt) ?? ''} placement="top">
+            <Typography
+              level="body-sm"
+              data-testid="admin-user-created"
+              sx={{ color: 'text.secondary', cursor: 'help', ...ELLIPSIS_SX }}
+            >
+              {formatAccountAge(user.createdAt)}
+            </Typography>
+          </Tooltip>
+        ) : (
+          <Typography level="body-xs" sx={{ color: 'text.tertiary', ...ELLIPSIS_SX }}>
+            &mdash;
+          </Typography>
+        )}
       </Grid>
 
       <Grid xs={COLUMN_WIDTHS.logins}>
