@@ -46,6 +46,7 @@ import {
   useDataLakeSpend,
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
+  useAddFileToDataLake,
   useRemoveFileFromDataLake,
   useRechunkDataLake,
   useSetLakeVisibility,
@@ -200,6 +201,99 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     // fileCount derived from the files holding each tag, and invalidating only the longer
     // key leaves that list stale. Prefix matching covers the counts endpoint too.
     expect(keys).toContain(JSON.stringify(['file-tags']));
+  });
+
+  it('offers Undo on the success toast, with an explicit long duration', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(
+      'File removed from data lake.',
+      expect.objectContaining({ duration: 15000, action: expect.objectContaining({ label: 'Undo' }) })
+    );
+  });
+
+  it('posts Undo against the lake removed FROM, not the hook prop at click time (#2248)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    // Mirrors DataLakeExplorer.tsx: the hook is built from a target that gets cleared (nulled) on
+    // remove success, well before the toast's Undo is ever clicked.
+    const { result, rerender } = renderHook(({ lakeId }) => useRemoveFileFromDataLake(lakeId), {
+      wrapper,
+      initialProps: { lakeId: 'lake1' as string | null },
+    });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+    rerender({ lakeId: null }); // simulates the confirm dialog clearing its target
+
+    const call = (toast.success as ReturnType<typeof vi.fn>).mock.calls.find(c => c[1]?.action?.label === 'Undo') as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    act(() => {
+      call[1].action.onClick();
+    });
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1'));
+  });
+
+  it('does nothing extra when there is no dataLakeId to build an Undo affordance from', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake(null), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('File removed from data lake.');
+  });
+});
+
+describe('useAddFileToDataLake', () => {
+  it('posts against the lake id given per call, not a hook-level one', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1');
+  });
+
+  it('invalidates the same membership-derived queries a removal does', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 10 } });
+
+    const { result } = renderHook(() => useAddFileToDataLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake1', fabFileId: 'f1' });
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
   });
 });
 

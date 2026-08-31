@@ -288,4 +288,53 @@ describe('assertLakeAdmission', () => {
     ];
     await expect(assertLakeAdmission(lakes, [{ userId: 'u1' }], { db })).rejects.toThrow(/Strict/);
   });
+
+  // #2248's restore path: not a join, so it must never be blockable regardless of the install's
+  // own EnforceLakeAdmission lever.
+  describe('forceReportOnly', () => {
+    it('grades report-only even when EnforceLakeAdmission is true for the lake, and never resolves it', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake-1')]);
+
+      const verdict = await assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
+        db,
+        forceReportOnly: true,
+      });
+
+      expect(verdict.status).toBe('quarantined');
+      expect(verdict.status === 'quarantined' && verdict.enforced).toBe(false);
+      const resolvedKeys = db.scopedSettings.findOverrides.mock.calls.map(([, names]) => (names as string[]).join(','));
+      expect(resolvedKeys).not.toContain('EnforceLakeAdmission');
+    });
+
+    it('still logs the violation as a warning', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' });
+      const warn = vi.fn();
+
+      await assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
+        db,
+        logger: { warn },
+        forceReportOnly: true,
+      });
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('report-only'));
+    });
+
+    it('leaves the verdict unchanged when omitted or explicitly false, for a lake with no lever set', async () => {
+      const db = settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' });
+
+      const omitted = await assertLakeAdmission([lake({ requiredPassageTokenTarget: 1000 })], [{ userId: 'u1' }], {
+        db,
+      });
+      const explicitFalse = await assertLakeAdmission(
+        [lake({ requiredPassageTokenTarget: 1000 })],
+        [{ userId: 'u1' }],
+        {
+          db,
+          forceReportOnly: false,
+        }
+      );
+
+      expect(explicitFalse).toEqual(omitted);
+    });
+  });
 });
