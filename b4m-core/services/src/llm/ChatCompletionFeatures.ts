@@ -1900,9 +1900,6 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           dataLakeTagPrefixes, // static-registry (open) prefixes
           scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
           excludeContent: true, // metadata only; chunk text + vectors fetched below
-          // fileName is not unique, so without an _id tiebreaker WHICH files survive the candidate
-          // cap is an arbitrary tie order - the "stable turn to turn" the comment above requires.
-          stableSort: true,
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
           ...this.retrievalFilter,

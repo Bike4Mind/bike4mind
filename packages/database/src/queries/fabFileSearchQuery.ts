@@ -354,12 +354,6 @@ export interface FabFileSearchParams {
     excludeFilenameMarkers?: string[];
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
-    /**
-     * When true, append an `_id` tiebreaker to a `fileName` sort so it becomes a total order.
-     * Required by callers that skip-paginate past page 1, because `fileName` is not unique.
-     * Ignored for other sort fields - see the sort block below for why.
-     */
-    stableSort?: boolean;
   };
   useDocumentDB?: boolean;
 }
