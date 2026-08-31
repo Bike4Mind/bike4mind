@@ -649,23 +649,37 @@ export function useApplyTaxonomySuggestions(batchId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (tags: TaxonomyTag[]) => {
-      const res = await api.post<{ success: true; filesUpdated: number; unchanged: number }>(
-        `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
-        { tags }
-      );
+      const res = await api.post<{
+        success: true;
+        filesUpdated: number;
+        unchanged: number;
+        // Files whose optimistic-concurrency check lost - something else changed their tags between
+        // the read and the write. Optional because a server mid-rolling-deploy omits it, and
+        // `undefined > 0` then falls through to the plain success arm rather than throwing.
+        skipped?: number;
+      }>(`/api/data-lakes/batches/${batchId}/apply-taxonomy`, { tags });
       return res.data;
     },
     onSuccess: result => {
-      // A re-apply that changes nothing is a success, not a no-show. Reporting only `filesUpdated`
-      // rendered it as "Tags applied to 0 files", which reads like the apply failed.
+      // A re-apply that changes nothing reported "Tags applied to N files" - every file counted as
+      // updated, because the identical-value write still bumped `updatedAt`. Splitting `unchanged`
+      // out is what stops that over-report.
       const plural = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
-      toast.success(
+      const applied =
         result.filesUpdated === 0 && result.unchanged > 0
           ? `Tags already up to date on ${plural(result.unchanged)}`
           : result.unchanged > 0
             ? `Tags applied to ${plural(result.filesUpdated)}, ${plural(result.unchanged)} already up to date`
-            : `Tags applied to ${plural(result.filesUpdated)}`
-      );
+            : `Tags applied to ${plural(result.filesUpdated)}`;
+      // Read `skipped` FIRST: "already up to date on 7 files" is an affirmative claim of
+      // completeness, and it would otherwise fire unchanged on a batch where the other 3 files
+      // silently failed their CAS check. Warning rather than success, because nothing in the
+      // product lets the user retry a batch once it is 'applied'.
+      if ((result.skipped ?? 0) > 0) {
+        toast.warning(`${applied}. ${plural(result.skipped!)} could not be updated - changed while applying.`);
+      } else {
+        toast.success(applied);
+      }
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });

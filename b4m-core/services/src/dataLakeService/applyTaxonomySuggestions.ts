@@ -55,7 +55,7 @@ export const applyTaxonomySuggestions = async (
   batchId: string,
   acceptedTags: TaxonomyTag[],
   { db, logger, metrics }: ApplyTaxonomySuggestionsAdapters
-): Promise<{ success: true; filesUpdated: number; unchanged: number }> => {
+): Promise<{ success: true; filesUpdated: number; unchanged: number; skipped: number }> => {
   const batch = await db.batches.findById(batchId);
   if (!batch) throw new NotFoundError('Batch not found');
 
@@ -105,6 +105,7 @@ export const applyTaxonomySuggestions = async (
     // bulkWrite round trip instead of one findOneAndUpdate per file - a batch can hold
     // thousands of files, and N sequential writes risked exceeding the caller's request
     // timeout mid-apply, stranding the batch in 'applying' with only some files updated.
+
     // Whether the merge produced the file's existing tag set unchanged. The merge seeds a Map from
     // `existingTags` in order and only sets names, so an unchanged result is element-wise identical -
     // no sorting needed. A legacy row holding the same name twice collapses in the Map, which makes
@@ -113,9 +114,18 @@ export const applyTaxonomySuggestions = async (
       merged.length === existing.length &&
       merged.every((t, i) => t.name === existing[i].name && t.strength === existing[i].strength);
 
-    // Files whose merge changes nothing. Counted, not written: Mongo does not report a $set to an
-    // identical value as modified, so emitting these ops would make `filesUpdated` under-report and
-    // the skip arithmetic below read every one of them as a lost CAS race.
+    // Files whose merge changes nothing. Counted, not written - for two reasons, neither of which is
+    // "Mongo ignores an identical $set". It does not, on this path: FabFileSchema sets
+    // `timestamps: true` and Mongoose injects `updatedAt` into every bulkWrite updateOne unless a
+    // `timestamps` option overrides it, which bulkUpdateTags does not pass. An identical-value op is
+    // therefore genuinely modified (pinned in FabFileModel.bulkUpdateTags.test.ts).
+    //
+    // 1. Writing them rewrites `updatedAt` on every file in the batch for a write that changes no
+    //    tags, which reshuffles the `updatedAt: -1` tail of the fileName text index and reorders
+    //    the user's file list for nothing.
+    // 2. It makes `skipped` below mean something. Because modifiedCount counts the timestamp bump,
+    //    it is NOT a change-detector here; the subtraction only isolates lost CAS races once the
+    //    no-op merges are excluded from `updates` in the first place.
     let unchanged = 0;
 
     const updates = files.flatMap(file => {
@@ -162,9 +172,10 @@ export const applyTaxonomySuggestions = async (
       // Every op in `updates` would genuinely CHANGE its file - the no-op merges were counted into
       // `unchanged` above and never emitted - so a lower filesUpdated means bulkUpdateTags'
       // optimistic-concurrency check lost the race for `skipped` of them (see its doc comment).
-      // That equivalence is what makes this warning trustworthy: before the no-ops were split out,
-      // an idempotent re-apply emitted an op per file, modified none of them, and reported the whole
-      // batch as lost races. Not an error - the concurrent writer's change legitimately wins - but
+      // That equivalence is what makes this warning trustworthy, and it depends on the filtering
+      // above rather than on Mongo: an identical-value op IS reported as modified here (see the note
+      // on `unchanged`), so without the split an idempotent re-apply would report every file as
+      // updated and `skipped` as 0. Not an error - the concurrent writer's change legitimately wins - but
       // otherwise invisible: filesUpdated just reaches the caller as a smaller-than-expected
       // number with no signal why. Log carries batchId for grepping one occurrence; the metric
       // (deliberately dimensionless, matching this file's low-cardinality convention) is the
@@ -185,7 +196,11 @@ export const applyTaxonomySuggestions = async (
       );
     }
 
-    return { success: true, filesUpdated, unchanged };
+    // `skipped` is returned, not just logged: without it the caller cannot tell "everything already
+    // had these tags" from "nothing could be written", and there is no in-product retry once the
+    // batch reaches 'applied' (apply requires 'ready', re-analyze requires 'ready'|'failed'), so
+    // that message is the user's last word on the batch.
+    return { success: true, filesUpdated, unchanged, skipped };
   } catch (error) {
     // Revert the claim so the batch isn't stranded in 'applying' (invisible to the fast
     // read-time reconciler path notwithstanding, this keeps the state machine honest without

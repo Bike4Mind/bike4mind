@@ -47,6 +47,7 @@ import {
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
+  useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
   useArchiveDataLake,
@@ -684,5 +685,80 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+});
+
+describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
+  // These branches produce the only sentence the user ever sees about an apply, and the batch is
+  // 'applied' afterwards - apply requires 'ready' and re-analyze requires 'ready'|'failed', so
+  // there is no in-product route back. A wrong message here is the user's last word on the batch.
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useApplyTaxonomySuggestions('b1'), { wrapper });
+  };
+
+  // toast.* are module-level spies shared across this file, so calls accumulate without this.
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  it('does not claim "already up to date" when files silently lost their CAS check', async () => {
+    // The review defect: 7 files already carried the tags and 3 needed them, but a concurrent tag
+    // edit made all 3 miss. Reading only filesUpdated/unchanged renders a green "Tags already up to
+    // date on 7 files" - an affirmative claim of completeness on a batch where 3 files were never
+    // tagged, and the user cannot retry.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 7, skipped: 3 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.warning).mock.calls[0][0]).toBe(
+      'Tags already up to date on 7 files. 3 files could not be updated - changed while applying.'
+    );
+  });
+
+  it('still reports a clean idempotent re-apply as a plain success', async () => {
+    // The guard on the fix above: suppressing the false completeness claim must not turn the
+    // genuine "nothing needed changing" case into a warning.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 0, unchanged: 3, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags already up to date on 3 files');
+  });
+
+  it('reports the split when some files were tagged and others already had them', async () => {
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 2, unchanged: 1, skipped: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 2 files, 1 file already up to date');
+  });
+
+  it('falls through to the plain success arm when the server omits skipped (rolling deploy)', async () => {
+    // A client on this build against a server that has not shipped `skipped` yet: `undefined > 0`
+    // must read as "no skips", not throw and not warn.
+    apiPost.mockResolvedValueOnce({ data: { success: true, filesUpdated: 4, unchanged: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync([]);
+    });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Tags applied to 4 files');
   });
 });

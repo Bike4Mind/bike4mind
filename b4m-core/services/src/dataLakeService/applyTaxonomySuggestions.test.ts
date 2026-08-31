@@ -83,7 +83,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0 });
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates).toHaveLength(1);
     expect(updates[0].id).toBe('f1');
@@ -108,10 +108,14 @@ describe('applyTaxonomySuggestions', () => {
   });
 
   it('counts a file that already carries every tag as unchanged, and writes nothing for it (#2093)', async () => {
-    // The idempotent re-apply: reachable through a re-analyze (status returns to 'ready') or the
-    // documented retry in the catch. Mongo does not report a $set to an identical value as modified,
-    // so emitting an op here made filesUpdated 0 and the skip arithmetic read the whole batch as
-    // lost concurrency races - a false warning and a false alarmable metric.
+    // The idempotent re-apply. Reachable only through the documented retry in the catch below: a
+    // successful apply leaves the batch 'applied', which both apply ('ready') and re-analyze
+    // ('ready'|'failed') refuse.
+    //
+    // Emitting an op here did NOT under-report. An identical-value write still bumps `updatedAt`
+    // (FabFileSchema has timestamps: true), so it counted as modified and the batch reported every
+    // file as freshly tagged. Suppressing the op is what stops that over-report, stops the
+    // pointless updatedAt churn, and leaves `skipped` meaning only "lost a CAS race".
     const alreadyTagged = file({
       tags: [
         { name: 'acme:legal', strength: 1 },
@@ -127,7 +131,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(result).toEqual({ success: true, filesUpdated: 0, unchanged: 1 });
+    expect(result).toEqual({ success: true, filesUpdated: 0, unchanged: 1, skipped: 0 });
     // No op emitted at all - a write that cannot change anything is not worth a round trip.
     expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
     // And critically: no lost-race warning, no metric. That was the defect.
@@ -157,7 +161,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 1 });
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 1, skipped: 0 });
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates.map((u: { id: string }) => u.id)).toEqual(['f1']);
     expect(adapters.logger.warn).not.toHaveBeenCalled();
@@ -185,7 +189,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0 });
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates[0].tags).toHaveLength(2);
   });
@@ -328,7 +332,7 @@ describe('applyTaxonomySuggestions', () => {
       bulkUpdateTagsResult: 1, // 2 files matched, only 1 actually written - 1 lost a concurrency race
     });
 
-    await applyTaxonomySuggestions(
+    const result = await applyTaxonomySuggestions(
       { userId: 'owner', isAdmin: false },
       'b1',
       [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
@@ -337,6 +341,9 @@ describe('applyTaxonomySuggestions', () => {
 
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('1/2'));
     expect(adapters.metrics.recordTagsApplySkipped).toHaveBeenCalledWith(1);
+    // Returned, not only logged: the caller has no other way to know the run was incomplete, and
+    // the batch is 'applied' afterwards so there is no in-product retry.
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 1 });
   });
 
   it('does not warn or record a metric when every matched file was actually updated', async () => {
