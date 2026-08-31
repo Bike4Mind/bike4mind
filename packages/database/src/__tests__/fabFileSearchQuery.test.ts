@@ -489,16 +489,23 @@ describe('buildFabFileSearchQuery', () => {
       expect(result.sort).toEqual({ fileNameLower: -1, _id: -1 });
     });
 
-    it('leaves a createdAt sort alone', () => {
-      // Restricted to fileName because that is where ties are demonstrated; createdAt is left
-      // alone until a tied lake is measured.
-      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'createdAt', direction: 'desc' } }));
-      expect(result.sort).toEqual({ createdAt: -1 });
+    it('adds an _id tiebreaker to a fileSize sort too', () => {
+      // fileSize ties wherever fileName does - byte-identical duplicate uploads tie on both - and
+      // no index serves a fileSize sort, so the tiebreaker costs nothing on any path.
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'asc' } }));
+      expect(result.sort).toEqual({ fileSize: 1, _id: 1 });
     });
 
-    it('leaves a fileSize sort alone', () => {
-      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'asc' } }));
-      expect(result.sort).toEqual({ fileSize: 1 });
+    it('matches the fileSize tiebreaker direction to the primary key', () => {
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'desc' } }));
+      expect(result.sort).toEqual({ fileSize: -1, _id: -1 });
+    });
+
+    it('leaves a createdAt sort alone - the one excluded key', () => {
+      // Excluded on measurement, not assumption: no lake with tied createdAt is known, and it is
+      // the only sort key with indexes to lose.
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'createdAt', direction: 'desc' } }));
+      expect(result.sort).toEqual({ createdAt: -1 });
     });
   });
 

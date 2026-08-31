@@ -528,17 +528,19 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   } else {
     sort = { [order.by]: direction };
   }
-  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating
-  // a fileName sort can drop or repeat a file at a page boundary. The `_id` tiebreaker makes it a
-  // total order. Unconditional rather than opt-in: this was an opt-in and four listing callers
-  // silently did not take it.
-  // Restricted to the fileName branches, where ties are demonstrated. On MongoDB this is free - the
-  // unconditional `{locale: 'en'}` collation already forces a blocking sort. On the DocumentDB branch
-  // it gives up the addLowercaseField plugin's `{fileNameLower: 1}` index for a blocking sort whose
-  // input is the whole filter-scoped set, not the page, and this find path sets no allowDiskUse
-  // (FabFileModel.executeSearch). Accepted deliberately: a silently short page is worse than a
-  // costly one.
-  if (order.by === 'fileName') {
+  // Neither `fileName` nor `fileSize` is unique - a lake legitimately holds duplicate uploads, and
+  // byte-identical ones tie on both - so skip-paginating either can drop or repeat a file at a page
+  // boundary. The `_id` tiebreaker makes them a total order. Unconditional rather than opt-in: this
+  // was an opt-in and four listing callers silently did not take it.
+  // Free on every path for these two: FabFileSchema declares no `fileName` and no `fileSize` index,
+  // so each is already an unavoidable blocking sort. The one real cost is `fileName` on the
+  // DocumentDB branch, which gives up the addLowercaseField plugin's `{fileNameLower: 1}` index -
+  // taken deliberately, since this find path sets no allowDiskUse (FabFileModel.executeSearch) and
+  // a silently short page is worse than a costly one.
+  // `createdAt` is the third key this builder accepts and is deliberately EXCLUDED, on measurement
+  // rather than assumption: no lake with tied values is known, and it is the only sort key with
+  // indexes to lose. If a tied population is ever demonstrated, the remedy is this same line.
+  if (order.by === 'fileName' || order.by === 'fileSize') {
     sort._id = direction;
   }
 
