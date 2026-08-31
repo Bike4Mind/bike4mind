@@ -15,7 +15,13 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  STATIC_LAKE_IDS,
+  getAccessibleDataLakes,
+  hasDeveloperUserTag,
+  isImageServeable,
+} from '@bike4mind/common';
 import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -249,11 +255,11 @@ export async function queryDataLakeTagCounts(
   // are fetched because an OWNED lake's prefix arm has to be anchored to the lake's CREATOR - the
   // config the browse surfaces receive deliberately carries no owner id.
   //
-  // A lake with no doc is a hardcoded registry lake, which takes the `registry` scope: meta-tag OR
-  // its (compile-time) prefix, no ownership arm. It previously fell through to meta-tag-only, which
-  // UNDER-COUNTED it against its own browse - the browse has always matched the open prefix arm.
-  // That is the drift the discriminated scope exists to stop; these counts and
-  // GET /api/data-lakes/:id/articles now resolve the same membership for both lake kinds.
+  // A lake in the hardcoded registry takes the `registry` scope: meta-tag OR its (compile-time)
+  // prefix, no ownership arm. It previously fell through to meta-tag-only, which UNDER-COUNTED it
+  // against its own browse - the browse has always matched the open prefix arm. That is the drift
+  // the discriminated scope exists to stop; these counts and GET /api/data-lakes/:id/articles now
+  // resolve the same membership for both lake kinds.
   //
   // ONE batched read, never one per lake: an admin's lake set is every lake of every tenant, and
   // the per-lake fan-out this replaced issued that many concurrent findOnes against a pool of two.
@@ -261,14 +267,31 @@ export async function queryDataLakeTagCounts(
   const lakeDocsByTag = new Map(lakeDocs.map(doc => [doc.datalakeTag, doc]));
   const membershipScopes: DataLakeMembershipScope[] = lakes.map(lake => {
     const doc = lakeDocsByTag.get(lake.datalakeTag);
-    return doc
-      ? {
-          kind: 'owned',
-          datalakeTag: lake.datalakeTag,
-          fileTagPrefix: doc.fileTagPrefix,
-          creatorUserId: doc.createdByUserId,
-        }
-      : { kind: 'registry', datalakeTag: lake.datalakeTag, fileTagPrefix: lake.fileTagPrefix };
+    if (doc) {
+      // `?? lake.fileTagPrefix`: a doc whose own prefix is unset must not silently lose the prefix
+      // arm it had before this scope existed. Restores the pre-union fallback.
+      return {
+        kind: 'owned',
+        datalakeTag: lake.datalakeTag,
+        fileTagPrefix: doc.fileTagPrefix ?? lake.fileTagPrefix,
+        creatorUserId: doc.createdByUserId,
+      };
+    }
+    // POSITIVE evidence of registry-ness, never the absence of a document. The registry arm drops
+    // the ownership conjunct, so misclassifying a dynamic lake into it would turn that lake's
+    // USER-CHOSEN prefix into a cross-tenant read arm. Before the union, the same doc-less branch
+    // produced `creatorUserId: undefined` and the filter fail-closed it to meta-tag-only, so a
+    // misclassification here was inert - that backstop is gone, and this is what replaces it.
+    // `STATIC_LAKE_IDS` is the same classifier `splitTagPrefixes` already uses above, via
+    // openLakeTagPrefix; classifying one response two different ways is what invited this.
+    if (STATIC_LAKE_IDS.has(lake.id)) {
+      return dataLakeService.registryMembershipScope(lake);
+    }
+    // Doc-less and not in the registry: should be unreachable (every dynamic entry is derived
+    // from a document), so fail closed to meta-tag-only - exactly what this branch did before the
+    // union. Skipping the lake instead would drop its key from lakeFileCounts, and the UI renders
+    // an absent count identically to zero, hiding the anomaly this function exists to surface.
+    return { kind: 'owned', datalakeTag: lake.datalakeTag };
   });
 
   const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([

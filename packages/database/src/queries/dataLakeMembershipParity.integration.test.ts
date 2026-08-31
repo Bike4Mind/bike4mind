@@ -4,6 +4,7 @@ import { KnowledgeType } from '@bike4mind/common';
 import { createMongoServer } from '../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
+import { buildFabFileSearchQuery } from './fabFileSearchQuery';
 
 /**
  * The invariant whose absence let a lake's counts and its file list disagree: STATS and BROWSE must
@@ -68,6 +69,27 @@ beforeAll(async () => {
       filePath: 'unrelated',
       tags: [{ name: 'globex:notes', strength: 1 }],
     },
+    // A member still uploading. computeDataLakeStats drops `pending`; the browse has no status
+    // clause at all, so this seed separates the two predicates.
+    {
+      userId: 'contributor',
+      fileName: 'pending.txt',
+      type: KnowledgeType.FILE,
+      status: 'pending',
+      filePath: 'pending',
+      tags: [{ name: 'opti:inflight', strength: 1 }],
+    },
+    // A member carrying a sessionId. The browse excludes session summaries unconditionally;
+    // computeDataLakeStats has no such clause - the divergence in the other direction.
+    {
+      userId: 'contributor',
+      fileName: 'session.txt',
+      type: KnowledgeType.FILE,
+      status: 'complete',
+      sessionId: 'session-1',
+      filePath: 'session',
+      tags: [{ name: 'opti:fromsession', strength: 1 }],
+    },
   ]);
 }, 30000);
 
@@ -76,21 +98,58 @@ afterAll(async () => {
   await server?.stop();
 }, 30000);
 
-/** The liveness conditions computeDataLakeStats applies, so the browse compares like for like. */
-const live = { deletedAt: null, archivedAt: null, status: { $ne: 'pending' } };
+/**
+ * The browse side, built the way GET /api/data-lakes/:id/articles builds it - through the real
+ * search query rather than by re-deriving the membership filter. Comparing an aggregate and a find
+ * over one hand-copied filter object is true by construction and cannot detect the two paths
+ * drifting apart, which is the whole thing this file exists to watch.
+ */
+const browseFilter = (scope: Parameters<typeof buildDataLakeMembershipFilter>[0]) =>
+  buildFabFileSearchQuery({
+    userId: 'viewer',
+    search: '',
+    filters: { tags: [], shared: false },
+    pagination: { page: 1, limit: 100 },
+    order: { by: 'fileName', direction: 'asc' },
+    options: { lakeMembership: scope, restrictToDataLake: true, includeShared: true, userGroups: [] },
+  }).filter;
 
 describe('stats and browse resolve the same membership', () => {
-  it("a registry lake counts its prefix-only members, including another user's", async () => {
+  it("a registry lake browses its prefix-only members, including another user's", async () => {
     const scope = { kind: 'registry' as const, datalakeTag: LAKE_TAG, fileTagPrefix: LAKE_PREFIX };
 
-    const listed = await FabFile.find({ ...buildDataLakeMembershipFilter(scope), ...live })
-      .select('fileName')
-      .lean();
-    const stats = await fabFileRepository.computeDataLakeStats(scope);
+    const listed = await FabFile.find(browseFilter(scope)).select('fileName').lean();
 
-    expect(listed.map(f => f.fileName).sort()).toEqual(['both.txt', 'meta.txt', 'prefixed.txt']);
-    // The assertion that matters: the number the product shows equals the list it shows.
-    expect(stats.fileCount).toBe(listed.length);
+    // The membership half - what this PR fixes. A prefix-only file owned by someone else IS a
+    // member of a registry lake, and `both.txt` appears once despite matching both arms.
+    expect(listed.map(f => f.fileName).sort()).toEqual(['both.txt', 'meta.txt', 'pending.txt', 'prefixed.txt']);
+  });
+
+  it('pins the REMAINING gap: membership now agrees, liveness still does not', async () => {
+    const scope = { kind: 'registry' as const, datalakeTag: LAKE_TAG, fileTagPrefix: LAKE_PREFIX };
+
+    const listed = await FabFile.find(browseFilter(scope)).select('fileName').lean();
+    const stats = await fabFileRepository.computeDataLakeStats(scope);
+    const listedNames = listed.map(f => f.fileName).sort();
+
+    // Deliberately pinned as DIVERGENT rather than asserted away. The two paths now share one
+    // membership predicate, but their liveness clauses still differ, in both directions:
+    //   - computeDataLakeStats drops `status: 'pending'`; the browse has no status clause, so an
+    //     in-flight upload is listed but not counted (the chip reads LOW);
+    //   - the browse drops session summaries unconditionally; stats has no such clause, so a
+    //     member carrying a sessionId is counted but not listed (the chip reads HIGH).
+    //
+    // Note what this fixture demonstrates: both errors are present and the totals still come out
+    // EQUAL (4 and 4), because the two exclusions cancel. That is exactly why a count-only
+    // assertion is a weak guard here - the sets differ while the numbers agree. Assert the
+    // membership of each side, not its cardinality.
+    //
+    // Both gaps are transient and one or two files wide, unlike the permanent membership gap this
+    // PR closes. Pinned so they stay visible and a later fix has a failing assertion to flip.
+    expect(listedNames).toContain('pending.txt'); // listed, but not in fileCount
+    expect(listedNames).not.toContain('session.txt'); // in fileCount, but not listed
+    expect(stats.fileCount).toBe(4); // meta + both + prefixed + session
+    expect(listed.length).toBe(4); // meta + both + prefixed + pending - same total, different set
   });
 
   it('the same lake under the owned model sees only the meta-tag - the pre-fix under-count', async () => {

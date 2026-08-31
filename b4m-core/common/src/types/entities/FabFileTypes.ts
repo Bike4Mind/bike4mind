@@ -560,7 +560,10 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
  * - `registry` (hardcoded DATA_LAKES lake): meta-tag OR `fileTagPrefix`, with NO ownership arm.
  *   Such a lake is a shared knowledge base with many contributors and no creator to anchor to.
  *   Safe ONLY because the prefix is compile-time config - see the ownership-bypass note on
- *   `dataLakeTagPrefixes` in fabFileSearchQuery, which this replaces.
+ *   `dataLakeTagPrefixes` in fabFileSearchQuery, which this replaces FOR PER-LAKE MEMBERSHIP only.
+ *   That mechanism is still live and must not be removed: the multi-lake retrieval surfaces
+ *   (semantic-search, the knowledge-base tools, ChatCompletionFeatures, and the tag-count prefix
+ *   arms) pass it for a whole SET of lakes at once, which a single-lake scope cannot express.
  *
  * A discriminated union rather than an optional `creatorUserId` because the previous shape could
  * not express the registry model at all: the filter DEGRADED a creator-less scope to meta-tag-only,

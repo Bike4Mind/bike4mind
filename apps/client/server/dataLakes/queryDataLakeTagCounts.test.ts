@@ -17,7 +17,18 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { search: vi.fn() },
-  dataLakeService: { isFallbackLake: vi.fn(), listDataLakes: vi.fn(), listAllDataLakes: vi.fn() },
+  dataLakeService: {
+    isFallbackLake: vi.fn(),
+    listDataLakes: vi.fn(),
+    listAllDataLakes: vi.fn(),
+    // The real shape, not a stub: these tests assert the emitted scope, so a vi.fn() returning
+    // undefined would let a broken classifier pass.
+    registryMembershipScope: (config: { datalakeTag: string; fileTagPrefix?: string | null }) => ({
+      kind: 'registry' as const,
+      datalakeTag: config.datalakeTag,
+      fileTagPrefix: config.fileTagPrefix,
+    }),
+  },
 }));
 
 // Spread the real module: the barrel re-exports mongoose and much else that the import chain
@@ -37,6 +48,7 @@ vi.mock('@bike4mind/database', async () => {
 
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
+import { DATA_LAKES } from '@bike4mind/common';
 import { queryDataLakeTagCounts } from './index';
 
 const req = { user: { id: 'viewer-9', groups: ['group-a'], tags: ['Opti'] } } as any;
@@ -78,16 +90,36 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     ]);
   });
 
-  it('scopes a lake with no document as a REGISTRY lake, keeping its open prefix arm', async () => {
-    // No document means a hardcoded registry lake. It used to fall through as an owned scope with
-    // no creator, which drops the prefix arm - so its count was meta-tag-only while its own browse
-    // matched the open prefix arm too, and the two disagreed. The registry scope is what keeps
-    // this count and GET /api/data-lakes/:id/articles resolving the same membership.
+  it('scopes a lake IN THE REGISTRY as a registry lake, keeping its open prefix arm', async () => {
+    // Registry-ness is positive evidence (STATIC_LAKE_IDS), never the absence of a document. The
+    // registry scope is what stops this count from being meta-tag-only while the lake's own browse
+    // matches the open prefix arm - the disagreement this whole change exists to remove.
+    const registryLake = DATA_LAKES[0];
+    h.findByDatalakeTags.mockResolvedValue([]);
+
+    await queryDataLakeTagCounts(req, [registryLake as never]);
+
+    expect(scopes()).toEqual([
+      {
+        kind: 'registry',
+        datalakeTag: registryLake.datalakeTag,
+        fileTagPrefix: registryLake.fileTagPrefix,
+      },
+    ]);
+  });
+
+  it('FAILS CLOSED for a doc-less lake that is not in the registry, rather than opening its prefix', async () => {
+    // The guard that matters. `lake-0` is not a registry id, so it must not reach the registry arm
+    // just because its document lookup came back empty - that arm drops the ownership conjunct,
+    // and this lake's prefix is user-chosen. Meta-tag-only is what this branch produced before the
+    // discriminated scope existed, so it is a no-op for real traffic and keeps the fail-closed
+    // property. Emitting a scope at all (rather than skipping) keeps the lake's key in
+    // lakeFileCounts, since the UI renders an absent count the same as zero.
     h.findByDatalakeTags.mockResolvedValue([]);
 
     await queryDataLakeTagCounts(req, [lake(0)]);
 
-    expect(scopes()).toEqual([{ kind: 'registry', datalakeTag: 'datalake:lake-0', fileTagPrefix: 'lake0:' }]);
+    expect(scopes()).toEqual([{ kind: 'owned', datalakeTag: 'datalake:lake-0' }]);
   });
 
   it('skips the lookup entirely when the caller can reach no lakes', async () => {
