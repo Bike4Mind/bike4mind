@@ -540,7 +540,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;
-      stableSort?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
@@ -2352,6 +2351,13 @@ FabFileSchema.index({ batchId: 1 });
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
+// No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
+// Two things to know before adding one: (a) any future `fileName` sort index would need
+// `collation: {locale: 'en'}` to be usable at all - buildFabFileSearchQuery sets that collation
+// on every non-DocumentDB query, and a simple-collation index cannot bound or sort a string key
+// under a different collation (same reason as email_ci/username_ci in UserModel.ts:911-926); and
+// (b) the plugin's `{fileNameLower: 1}` index below stops serving the DocumentDB-branch sort once
+// `_id` is appended to it, since that index has no `_id` key of its own.
 FabFileSchema.plugin(addLowercaseField, { fields: ['fileName'] });
 
 export const FabFile =

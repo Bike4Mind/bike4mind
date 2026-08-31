@@ -703,7 +703,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
-      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 

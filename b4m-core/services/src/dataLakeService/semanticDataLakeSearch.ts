@@ -535,9 +535,6 @@ async function collectScopedFiles(args: {
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
         scopedTagPrefixes: args.scopedTagPrefixes,
         excludeContent: true,
-        // fileName is not unique, so walking more than one page needs the _id tiebreaker or a
-        // file can fall between pages - the same silent loss this pagination exists to fix.
-        stableSort: true,
         // Retrieval exclusion (caller-driven) - best-effort DB pre-filter; the authoritative
         // in-memory pass below guarantees excluded files are dropped before any chunk load.
         ...args.retrievalFilter,

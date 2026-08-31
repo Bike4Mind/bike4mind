@@ -354,12 +354,6 @@ export interface FabFileSearchParams {
     excludeFilenameMarkers?: string[];
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
-    /**
-     * When true, append an `_id` tiebreaker to a `fileName` sort so it becomes a total order.
-     * Required by callers that skip-paginate past page 1, because `fileName` is not unique.
-     * Ignored for other sort fields - see the sort block below for why.
-     */
-    stableSort?: boolean;
   };
   useDocumentDB?: boolean;
 }
@@ -534,13 +528,19 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   } else {
     sort = { [order.by]: direction };
   }
-  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating a
-  // fileName sort can drop or repeat a file at a page boundary. Callers that walk more than one
-  // page opt in to an `_id` tiebreaker, which makes the sort a total order.
-  // Deliberately restricted to the fileName branches: they already require an in-memory sort
-  // (no usable collated fileName index), so the tiebreaker is free there, whereas adding it to
-  // `createdAt` would turn an indexed 21-document scan into a full-collection blocking sort.
-  if (options?.stableSort && (order.by === 'fileName' || sort.fileNameLower !== undefined)) {
+  // Neither `fileName` nor `fileSize` is unique - a lake legitimately holds duplicate uploads, and
+  // byte-identical ones tie on both - so skip-paginating either can drop or repeat a file at a page
+  // boundary. The `_id` tiebreaker makes them a total order. Unconditional rather than opt-in: this
+  // was an opt-in and four listing callers silently did not take it.
+  // Free on every path for these two: FabFileSchema declares no `fileName` and no `fileSize` index,
+  // so each is already an unavoidable blocking sort. The one real cost is `fileName` on the
+  // DocumentDB branch, which gives up the addLowercaseField plugin's `{fileNameLower: 1}` index -
+  // taken deliberately, since this find path sets no allowDiskUse (FabFileModel.executeSearch) and
+  // a silently short page is worse than a costly one.
+  // `createdAt` is the third key this builder accepts and is deliberately EXCLUDED, on measurement
+  // rather than assumption: no lake with tied values is known, and it is the only sort key with
+  // indexes to lose. If a tied population is ever demonstrated, the remedy is this same line.
+  if (order.by === 'fileName' || order.by === 'fileSize') {
     sort._id = direction;
   }
 
