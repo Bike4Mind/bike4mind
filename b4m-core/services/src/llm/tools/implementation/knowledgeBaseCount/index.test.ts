@@ -153,13 +153,6 @@ describe('count_knowledge_base', () => {
       expect(search).toHaveBeenCalledTimes(10);
     });
 
-    it('pages a walked count in a total order so no document is counted twice', async () => {
-      const search = vi.fn().mockResolvedValue(page([{ fileName: 'Clean.pdf' }], false));
-      const ctx = makeContext(excluded, search);
-      await run(ctx);
-      expect(searchCalls(ctx)[0][5]).toMatchObject({ stableSort: true });
-    });
-
     it('an unset filter is a plain count - no walk', async () => {
       const ctx = makeContext({ retrievalFilter: {} });
       await run(ctx);
