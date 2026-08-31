@@ -229,3 +229,57 @@ describe('GET /api/data-lakes/:id/articles access-event audit', () => {
     expect(json).toHaveBeenCalledWith({ data: [{ id: 'f1' }], total: 1, hasMore: false });
   });
 });
+
+describe('GET /api/data-lakes/:id/articles pagination walk', () => {
+  it('walking page by page over a tied fileName fixture returns exactly total distinct ids', async () => {
+    // Simulates a fixed DB layer's tied-fileName total order (see fabFileSearchPageWalk.integration
+    // test for the real fix). This test guards the endpoint boundary: it is what regresses if a
+    // future change reintroduced a per-page sort override here that broke that total order.
+    const files = [
+      { id: 'f1', fileName: 'd1.txt' },
+      { id: 'f2', fileName: 'd2.txt' },
+      { id: 'f3', fileName: 'd3.txt' },
+      { id: 'f4', fileName: 'tied.txt' },
+      { id: 'f5', fileName: 'tied.txt' },
+      { id: 'f6', fileName: 'tied.txt' },
+      { id: 'f7', fileName: 'tied.txt' },
+      { id: 'f8', fileName: 'tied.txt' },
+      { id: 'f9', fileName: 'tied.txt' },
+      { id: 'f10', fileName: 'z1.txt' },
+    ];
+    const limit = 3;
+    h.search.mockImplementation(async (_userId: string, params: { pagination: { page: number } }) => {
+      const skip = (params.pagination.page - 1) * limit;
+      const slice = files.slice(skip, skip + limit + 1);
+      return { data: slice.slice(0, limit), total: files.length, hasMore: slice.length > limit };
+    });
+
+    const seenIds = new Set<string>();
+    let duplicateCount = 0;
+    let total = -1;
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { res, json } = makeRes();
+      const req = { ...makeReq(), query: { id: 'lake1', page: String(page), limit: String(limit) } };
+      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+      const response = json.mock.calls[0][0] as { data: Array<{ id: string }>; total: number; hasMore: boolean };
+      total = response.total;
+      for (const file of response.data) {
+        if (seenIds.has(file.id)) duplicateCount++;
+        seenIds.add(file.id);
+      }
+      hasMore = response.hasMore;
+      page++;
+      // Bounds the walk even if a regression made hasMore never settle.
+      if (page > 20) break;
+    }
+
+    expect(total).toBe(files.length);
+    expect(duplicateCount).toBe(0);
+    expect(seenIds.size).toBe(total);
+    expect(hasMore).toBe(false);
+  });
+});
