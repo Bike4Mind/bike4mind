@@ -706,7 +706,7 @@ describe('ChatCompletionProcess', () => {
       expect(options).not.toHaveProperty('scopedTagPrefixes');
     });
 
-    it('Up: a creator-owned prefix-only attachment now counts as lake-reachable', async () => {
+    it('Up: forwards the membership arm on the path a creator-owned prefix-only attachment takes', async () => {
       (service as any).accessibleDataLakeAccessMemo = {
         dataLakeTags: [LAKE.datalakeTag],
         dataLakeTagPrefixes: [],

@@ -983,9 +983,15 @@ export class ChatCompletionProcess {
           dataLakeTagPrefixes: access.dataLakeTagPrefixes,
           // Anchored to each lake's CREATOR rather than the caller (#2243): a creator-owned
           // prefix-only member now counts as lake-reachable for every member, not only its
-          // creator. The one call site in the repo where this swap changes what matches at all -
-          // restrictToDataLake drops the broad owner/shared arms, so the caller's own file with a
-          // merely colliding prefix no longer counts here (see ChatCompletionFeatures's R2 note).
+          // creator. The one call site in the repo where this swap changes what matches at all,
+          // because restrictToDataLake drops the broad owner/shared arms. BOTH directions fire
+          // here, for different callers:
+          //   NARROWS for everyone - the caller's own file carrying a merely colliding prefix no
+          //   longer counts, since the arm now requires the lake creator's userId.
+          //   WIDENS only where the attachment is readable by a route buildOwnershipConditions'
+          //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
+          //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
+          //   full-resolution guard first, so this count is never reached at all.
           lakeMemberships: lakeMembershipsFrom(access.lakes),
           restrictToDataLake: true,
           excludeContent: true,
