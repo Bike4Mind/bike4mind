@@ -7,13 +7,17 @@ import { Request } from 'express';
 import { z } from 'zod';
 
 /**
- * Caps the ids the cleanup below will scope into one $in. It is a clamp, never a rejection: an
- * oversized list still describes a real batch that has to be tallied and finalized at the bottom of
- * this handler, and refusing the request would leave that batch non-terminal - the exact hang this
- * route exists to prevent. Generous, since the cleanup is now a single query whose cost barely moves
- * with list length; the 1 MB body cap already bounds the array at roughly 38k.
+ * How many ids the cleanup below scopes into one $in - a CHUNK SIZE, not a cap on what gets cleaned:
+ * the loop keeps going until every well-formed id is covered, so no orphan is left behind.
+ *
+ * Total work is bounded upstream rather than by this number. The client always sends
+ * `failedFileNames` in the same body as `failedFileIds` (dataLakeUploadPipeline.ts:483-484), so at
+ * roughly 27 bytes per quoted id plus ~50 per name the 1 MB body cap admits on the order of 13k
+ * failed files, not the ~38k an ids-only reading suggests. That makes this at most two iterations in
+ * practice - which is why chunking is affordable where refusing is not: everything below this point
+ * is what tallies and finalizes the batch, and a 422 here leaves it hanging.
  */
-const MAX_FAILED_FILE_IDS = 10000;
+const FAILED_FILE_ID_CHUNK = 10000;
 
 /**
  * A 24-char hex Mongo ObjectId string. Unvalidated, one malformed id made the id-scoped read throw a
@@ -41,7 +45,7 @@ const UploadCompleteInput = z.object({
   // object). Removed here so they don't inflate the lake's file count. Deliberately unconstrained
   // here: both the shape check and the length bound are applied in the handler as a filter and a
   // clamp, so a malformed or oversized list still tallies and finalizes instead of 422ing the batch
-  // into a three-hour hang. See OBJECT_ID_RE and MAX_FAILED_FILE_IDS.
+  // into a three-hour hang. See OBJECT_ID_RE and FAILED_FILE_ID_CHUNK.
   failedFileIds: z.array(z.string()).optional(),
 });
 
@@ -78,7 +82,8 @@ const handler = baseApi()
     // One scoped updateMany rather than two queries per id: the previous per-id loop ran before the
     // status flip and finalize below, so a long list timed the request out and left the batch hanging.
     if (failedFileIds?.length) {
-      // Filtered, then clamped - both degrade the request rather than refusing it, for the same
+      // Filtered, then chunked - the filter degrades the request rather than refusing it, and the
+      // chunking keeps a long list from becoming one oversized $in. Neither refuses, for the same
       // reason: everything below this point is what terminalizes the batch.
       const wellFormed = failedFileIds.filter(id => OBJECT_ID_RE.test(id));
       if (wellFormed.length < failedFileIds.length) {
@@ -86,24 +91,31 @@ const handler = baseApi()
           `upload-complete: batch ${batchId} sent ${failedFileIds.length - wellFormed.length} malformed file id(s), skipping them`
         );
       }
-      const ids = wellFormed.slice(0, MAX_FAILED_FILE_IDS);
-      if (ids.length < wellFormed.length) {
-        // Clamped, not refused. The excess orphans stay behind and keep inflating the lake's file
-        // count until someone deletes them, but the batch still reaches a terminal state below,
-        // which is the worse of the two failures to leave in place.
+      if (wellFormed.length > FAILED_FILE_ID_CHUNK) {
+        // Counts what the CLIENT sent, not the post-filter total: a list that is both malformed and
+        // oversized would otherwise under-report, reading "reported 10000" for a client that sent
+        // more. Both numbers are given so the two degradations stay distinguishable in the log.
         req.logger.warn(
-          `upload-complete: batch ${batchId} reported ${wellFormed.length} failed file ids, cleaning up the first ${ids.length}`
+          `upload-complete: batch ${batchId} sent ${failedFileIds.length} failed file id(s) ` +
+            `(${wellFormed.length} well-formed), cleaning up in chunks of ${FAILED_FILE_ID_CHUNK}`
         );
       }
-      if (ids.length) {
+      if (wellFormed.length) {
         // The count matters because moving the ownership guard into the query filter also made a
         // refusal SILENT: an id belonging to another user or another batch is simply not matched,
         // with no application-code branch left to notice. Reporting the shortfall turns a stale or
         // cross-scope client from invisible into greppable.
-        const modified = await fabFileRepository.softDeleteByIdsForUserBatch(ids, userId, batchId);
-        if (modified < ids.length) {
+        let modified = 0;
+        for (let i = 0; i < wellFormed.length; i += FAILED_FILE_ID_CHUNK) {
+          modified += await fabFileRepository.softDeleteByIdsForUserBatch(
+            wellFormed.slice(i, i + FAILED_FILE_ID_CHUNK),
+            userId,
+            batchId
+          );
+        }
+        if (modified < wellFormed.length) {
           req.logger.warn(
-            `upload-complete: batch ${batchId} reported ${ids.length} failed file ids, ${modified} were in scope`
+            `upload-complete: batch ${batchId} reported ${wellFormed.length} well-formed failed file ids, ${modified} were in scope`
           );
         }
       }

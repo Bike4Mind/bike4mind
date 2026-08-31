@@ -191,17 +191,21 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('clamps an oversized failed-id list instead of rejecting it, so the batch still finalizes (#2090)', async () => {
-    // The cap must never cost the batch its terminal state: rejecting the request would discard the
-    // failedFiles tally that completion depends on, reproducing the very hang #2090 is about. The
-    // ids past the cap simply go uncleaned.
+  it('chunks an oversized failed-id list instead of rejecting it, so the batch still finalizes (#2090)', async () => {
+    // Two properties at once. The size must never cost the batch its terminal state - rejecting the
+    // request would discard the failedFiles tally that completion depends on, reproducing the very
+    // hang #2090 is about. And nothing is left uncleaned: the loop covers the WHOLE list, so the
+    // residual orphans a clamp used to strand no longer exist.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
     const { res, json } = makeRes();
     const tooMany = Array.from({ length: 10001 }, () => FID_A);
     await run({ batchId: 'b1', failedFiles: 1, failedFileIds: tooMany }, res);
 
-    expect(h.fabSoftDeleteScoped).toHaveBeenCalledWith(tooMany.slice(0, 10000), 'u1', 'b1');
-    // Truncation is silent to the client, so it has to be visible in the logs.
+    // Two calls tiling the list exactly - the second is the one a clamp would have dropped.
+    expect(h.fabSoftDeleteScoped).toHaveBeenCalledTimes(2);
+    expect(h.fabSoftDeleteScoped).toHaveBeenNthCalledWith(1, tooMany.slice(0, 10000), 'u1', 'b1');
+    expect(h.fabSoftDeleteScoped).toHaveBeenNthCalledWith(2, tooMany.slice(10000), 'u1', 'b1');
+    // Chunking is silent to the client, so it has to be visible in the logs.
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('10001'));
     expect(h.incrementCounter).toHaveBeenCalledWith('b1', 'failedFiles', 1);
     expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
