@@ -42,6 +42,7 @@ export * from './chunkPolicyConflict';
 export * from './admissionContract';
 export * from './lakeAdmissionGate';
 export * from './removeFileFromDataLake';
+export * from './addFileToDataLake';
 export * from './acceptDataLakePurge';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';

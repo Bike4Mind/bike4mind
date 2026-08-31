@@ -15,6 +15,7 @@ export * from './DataLakeSpendNotificationModel';
 export * from './DataLakeProposalModel';
 export * from './LakeAccessQueryTextModel';
 export * from './LakeConfigChangeEventModel';
+export * from './LakeMembershipRemovalModel';
 export * from './LatticeModel';
 export * from './McpServerModel';
 export * from './MemoryLedgerEventModel';
