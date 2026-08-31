@@ -367,6 +367,29 @@ export const RetrievalSummarySchema = z.object({
   dataLakeTags: z.array(z.string()),
 });
 
+/**
+ * Why a grounded turn's library scan stopped short of the whole library.
+ *
+ * Written ONLY on a partially-covered turn (reportCoverage returns early otherwise), so presence
+ * means "partial" and `partial` is always true - the flag is explicit anyway because a reader
+ * checking `retrievalCoverage.partial` should not have to know that absence is the other half of
+ * the contract.
+ *
+ * Single producer (ChatCompletionFeatures.reportCoverage), which is why - unlike `warnings`,
+ * `citables` and `retrieval` - this field needs no merge case in applyQuestStatusChanges: a
+ * later tool-arm write that omits it is preserved by the one-level spread.
+ *
+ * `reasons` is the same diagnostic prose the warnings entry interpolates. It is shown to the
+ * reader behind a disclosure rather than in the banner body, because only some reasons are
+ * actionable (a document mid-reindex returns on its own; a per-turn chunk budget does not).
+ */
+export const RetrievalCoverageSchema = z.object({
+  /** Always true - see the presence contract above. */
+  partial: z.boolean(),
+  /** One entry per distinct cause, e.g. a candidate cap, a scan budget, an embedding mismatch. */
+  reasons: z.array(z.string()),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
@@ -376,6 +399,9 @@ export const PromptMetaZodSchema = z.object({
    * deliberately: applyQuestStatusChanges does a one-level spread merge, so a field nested under
    * `context` would be replaced wholesale by any tool-arm write instead of merging. */
   retrieval: RetrievalSummarySchema.optional(),
+  /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
+   * one-level-spread-merge reason as `retrieval` above. */
+  retrievalCoverage: RetrievalCoverageSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`

@@ -56,6 +56,14 @@ Yes. The AI retrieval tools automatically search across all Data Lakes you have 
 **How are files added to a Data Lake?**
 Files are tagged with the lake's file tag prefix when uploaded. The lake tracks file count and total size automatically.
 
+**Why does a reply say "Only part of your library was searched"?**
+Grounded answers scan the library under per-turn bounds -- a candidate-document cap and a chunk
+budget -- and they skip documents whose embeddings came from a different model than the one running
+the query. When any of that applies, the reply carries a warning banner, and expanding it lists the
+specific reasons. The important consequence is what the answer does *not* prove: a "nothing found"
+on a partial scan is not evidence that the library holds nothing relevant. Narrow the question, or
+wait if the banner says documents are still being re-indexed.
+
 ## Related
 
 - [Knowledge Management](./knowledge-management.md) -- uploading and managing files
