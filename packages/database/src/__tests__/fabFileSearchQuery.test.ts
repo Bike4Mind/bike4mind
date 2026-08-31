@@ -7,6 +7,7 @@ import {
   getMimeTypeFilter,
   FabFileSearchParams,
 } from '../queries/fabFileSearchQuery';
+import { buildDataLakeMembershipFilter } from '../queries/dataLakeLifecycleScope';
 
 function makeParams(overrides: Partial<FabFileSearchParams> = {}): FabFileSearchParams {
   return {
@@ -375,19 +376,21 @@ describe('buildFabFileSearchQuery', () => {
       });
 
       // Regression guard for a dropped hand-off: buildFabFileSearchQuery forwards its options to
-      // buildOwnershipConditions by naming each one, so omitting lakeMembership there left the
+      // buildOwnershipConditions by naming each one, so omitting lakeMemberships there left the
       // single-lake browse with no arm at all and threw on every request. The route-level test
       // could not see it - it mocks the search service - so this drives the real builder with
       // exactly the option set that route sends.
-      it('forwards lakeMembership, the only lake arm the single-lake browse sends', () => {
+      it('forwards lakeMemberships, the only lake arm the single-lake browse sends', () => {
         const result = buildFabFileSearchQuery(
           makeParams({
             options: {
               // The single-lake browse's exact option set: includeShared is what reaches the
-              // ownership branch at all, and lakeMembership is its only lake arm.
+              // ownership branch at all, and lakeMemberships is its only lake arm.
               includeShared: true,
               restrictToDataLake: true,
-              lakeMembership: { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+              lakeMemberships: [
+                { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+              ],
             },
           })
         );
@@ -407,12 +410,75 @@ describe('buildFabFileSearchQuery', () => {
         // Dropping the broad arms with no lake arm would build `{ $or: [] }`, which MongoDB
         // rejects at query time. Fail fast with a descriptive error instead.
         expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true })).toThrow(
-          /requires lakeMembership, dataLakeTags or scopedTagPrefixes/
+          /requires lakeMemberships, dataLakeTags or scopedTagPrefixes/
         );
         // An empty-string prefix doesn't count (validPrefixes filters it), so still throws.
         expect(() =>
           buildOwnershipConditions('user1', { restrictToDataLake: true, scopedTagPrefixes: [''] })
         ).toThrow();
+        // An empty lakeMemberships array is likewise not an arm - same failure, named field.
+        expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true, lakeMemberships: [] })).toThrow(
+          /requires lakeMemberships, dataLakeTags or scopedTagPrefixes/
+        );
+      });
+
+      it('restrictToDataLake + a single lakeMemberships scope alone: one arm, no throw', () => {
+        const conditions = buildOwnershipConditions('user1', {
+          restrictToDataLake: true,
+          lakeMemberships: [{ datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' }],
+        });
+        expect(conditions).toHaveLength(1);
+        expect(conditions.some(c => 'userId' in (c as Record<string, unknown>))).toBe(false);
+      });
+    });
+
+    // ── Membership arms (#2243) ────────────────────────────
+    // buildDataLakeMembershipFilter is the ONE predicate the browse, health, archive and
+    // permanent delete already run on; these pin that buildOwnershipConditions's lakeMemberships
+    // arm reuses it verbatim rather than re-deriving a second, driftable copy.
+    describe('lakeMemberships', () => {
+      const SCOPE_A = { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+      const SCOPE_B = { datalakeTag: 'datalake:org1:globex', fileTagPrefix: 'globex:', creatorUserId: 'creator-2' };
+
+      it('a single-element array is byte-identical to the pre-plural singular arm (Step 1 inertness)', () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
+        // [owned, shared, membership] - same shape a single `lakeMembership` option produced.
+        expect(conditions).toHaveLength(3);
+        expect(conditions[2]).toEqual(buildDataLakeMembershipFilter(SCOPE_A));
+      });
+
+      it('two scopes produce two arms, in input order, each identical to calling the builder directly', () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A, SCOPE_B] });
+        expect(conditions).toHaveLength(4); // owned, shared, membership A, membership B
+        expect(conditions[2]).toEqual(buildDataLakeMembershipFilter(SCOPE_A));
+        expect(conditions[3]).toEqual(buildDataLakeMembershipFilter(SCOPE_B));
+      });
+
+      it('with lakeMemberships and no scopedTagPrefixes, no arm conjoins a prefix regex with base access', () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
+        // The old caller-anchored SCOPED arm ANDs a prefix regex with `{ $or: baseAccess }` - the
+        // membership arm never does; it ANDs the prefix with the LAKE'S creator instead.
+        for (const c of conditions) {
+          const asAnd = (c as { $and?: unknown[] }).$and;
+          if (!asAnd) continue;
+          const hasBaseAccessOr = asAnd.some(
+            arm => typeof arm === 'object' && arm !== null && '$or' in (arm as Record<string, unknown>)
+          );
+          expect(hasBaseAccessOr).toBe(false);
+        }
+      });
+
+      it("the caller's own id appears in no membership arm", () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
+        const membershipArm = conditions[2];
+        expect(JSON.stringify(membershipArm)).not.toContain('"user1"');
+      });
+
+      it('a creator-less scope contributes only its meta arm (no $regex)', () => {
+        const creatorless = { datalakeTag: 'datalake:org1:orphan', fileTagPrefix: 'orphan:', creatorUserId: '' };
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [creatorless] });
+        expect(conditions[2]).toEqual({ 'tags.name': 'datalake:org1:orphan' });
+        expect(JSON.stringify(conditions[2])).not.toContain('$regex');
       });
     });
   });

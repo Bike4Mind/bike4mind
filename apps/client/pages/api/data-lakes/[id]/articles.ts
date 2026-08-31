@@ -107,7 +107,7 @@ const handler = baseApi()
         },
       },
       {
-        lakeMembership,
+        ...(lakeMembership ? { lakeMemberships: [lakeMembership] } : {}),
         includeShared: true,
         userGroups: req.user.groups ?? [],
         ...(isFallback ? { dataLakeTags: [datalakeTag], dataLakeTagPrefixes: [dataLake.fileTagPrefix] } : {}),

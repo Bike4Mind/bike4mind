@@ -694,11 +694,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       /**
-       * One lake's membership scope, matching the whole-lake writes exactly. Server-supplied
-       * only: it names the creator whose OWNED files the prefix arm matches, so it must never be
-       * read from request input.
+       * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
+       * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
+       * it must never be read from request input.
        */
-      lakeMembership?: DataLakeMembershipScope;
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean; // Allow-list-as-authority: skip the ownership predicate; ignored unless restrictToFileIds is present
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)

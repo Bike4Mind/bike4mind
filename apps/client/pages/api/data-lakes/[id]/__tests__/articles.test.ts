@@ -96,12 +96,14 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     // The creator, NOT the viewer: a viewer's own file that merely carries a colliding tag
     // prefix is not a member of someone else's lake, and a per-viewer answer could never match
     // the lake's persisted fileCount.
-    expect(serverOptions.lakeMembership).toEqual({
-      datalakeTag: 'datalake:org1:acme-docs',
-      fileTagPrefix: 'acme:',
-      creatorUserId: 'creator-1',
-    });
-    expect(serverOptions.lakeMembership.creatorUserId).not.toBe('viewer-9');
+    expect(serverOptions.lakeMemberships).toEqual([
+      {
+        datalakeTag: 'datalake:org1:acme-docs',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    ]);
+    expect(serverOptions.lakeMemberships[0].creatorUserId).not.toBe('viewer-9');
   });
 
   it('passes the scope OUTSIDE the parsed params so a caller cannot forge one', async () => {
@@ -111,7 +113,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const [, params, , serverOptions] = h.search.mock.calls[0];
     // search() zod-parses params; a forgeable creatorUserId there would read anyone's files.
     // Every other scope key is out of the parsed params for the same reason.
-    expect(params.options).not.toHaveProperty('lakeMembership');
+    expect(params.options).not.toHaveProperty('lakeMemberships');
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
     expect(params.options).not.toHaveProperty('dataLakeTagPrefixes');
@@ -142,7 +144,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const [, , , serverOptions] = h.search.mock.calls[0];
     expect(serverOptions.dataLakeTagPrefixes).toEqual(['acme:']);
     expect(serverOptions.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
-    expect(serverOptions?.lakeMembership).toBeUndefined();
+    expect(serverOptions?.lakeMemberships).toBeUndefined();
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
   });
 
