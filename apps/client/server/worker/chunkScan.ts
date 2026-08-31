@@ -92,14 +92,20 @@ export interface ChunkScanFilterOptions {
    * Exclude files carrying a convergence pause marker. TRUE only while the convergence kill switch is
    * ON, and that conditionality is the whole point (see the `notes` clause below) - the caller passes
    * the resolved flag rather than this being a constant.
+   *
+   * REQUIRED, and so is `opts` itself, deliberately: an omitted flag would default to "do not
+   * exclude", which is the pre-fix behaviour - the sweep would re-select every paused file on every
+   * pass while the switch is ON. Silently reinstating the bug is the wrong default, so a new caller
+   * has to state which side it wants and the compiler asks. Both existing callers resolve it from
+   * the platform setting; a test that does not care passes `false` explicitly.
    */
-  excludeConvergencePaused?: boolean;
+  excludeConvergencePaused: boolean;
 }
 
 export const buildFabFileChunkScanFilter = (
   cutoff: Date,
-  staleClaimBefore?: Date,
-  opts: ChunkScanFilterOptions = {}
+  staleClaimBefore: Date | undefined,
+  opts: ChunkScanFilterOptions
 ) => ({
   status: 'complete' as const,
   chunkCount: 0,

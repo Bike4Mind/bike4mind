@@ -74,7 +74,9 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'an-image', mimeType: 'image/png' }),
     ]);
 
-    expect(await selectedNames(buildFabFileChunkScanFilter(CUTOFF))).toEqual(['plain']);
+    expect(
+      await selectedNames(buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: false }))
+    ).toEqual(['plain']);
   });
 
   it('excludes both pause markers while the kill switch is ON, and nothing else', async () => {

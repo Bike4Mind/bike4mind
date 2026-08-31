@@ -58,7 +58,7 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
 describe('buildFabFileChunkScanFilter', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const old = new Date('2025-12-31T00:00:00Z'); // before cutoff
-  const filter = buildFabFileChunkScanFilter(cutoff);
+  const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
 
   it("requires status 'complete' so a never-completed upload is skipped", () => {
     expect(filter.status).toBe('complete');
@@ -249,7 +249,7 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', (
   it('defaults to NOT excluding when no options are passed', () => {
     // The safer default: a caller that forgets the flag keeps the pre-existing rescue behaviour
     // rather than silently stranding paused files.
-    const filter = buildFabFileChunkScanFilter(cutoff);
+    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
     expect(matches(paused(CONVERGENCE_PAUSED_CHUNK_NOTE), filter)).toBe(true);
   });
 });
@@ -258,7 +258,7 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const staleClaimBefore = new Date('2026-01-01T00:00:00Z'); // a claim older than this is stranded
   const old = new Date('2025-12-31T00:00:00Z'); // before both cutoffs
-  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore);
+  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: false });
   const base = { status: 'complete', chunkCount: 0, createdAt: old, deletedAt: null };
 
   it('still selects a normal not-in-progress file', () => {
