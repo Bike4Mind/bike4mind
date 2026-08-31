@@ -339,6 +339,14 @@ export interface IAgentExecution {
      * timeout", not "definitely not a timeout".
      */
     timedOut?: boolean;
+    /**
+     * Marks `message` as already phrased for an external caller, so the public
+     * projection may publish it verbatim. Absent/false means the message is a raw
+     * internal exception and MUST be sanitized before it leaves the process - see
+     * `loadAgentExecutionTrace`. Fail-closed by design: a new failure path that
+     * forgets this flag gets sanitized, not leaked.
+     */
+    callerSafe?: boolean;
   };
   /**
    * Coarse classifier for failures that operators / dashboards filter on.
@@ -697,6 +705,7 @@ const AgentExecutionSchema = new mongoose.Schema(
         message: { type: String, required: true },
         stack: { type: String },
         timedOut: { type: Boolean },
+        callerSafe: { type: Boolean },
       },
       required: false,
     },
@@ -1467,7 +1476,10 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     );
   }
 
-  async markFailed(id: string, error: { message: string; stack?: string; timedOut?: boolean }): Promise<void> {
+  async markFailed(
+    id: string,
+    error: { message: string; stack?: string; timedOut?: boolean; callerSafe?: boolean }
+  ): Promise<void> {
     await this.model.updateOne(
       { _id: id },
       {
