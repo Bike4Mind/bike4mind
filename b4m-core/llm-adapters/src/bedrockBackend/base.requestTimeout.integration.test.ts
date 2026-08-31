@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BEDROCK_REQUEST_HANDLER } from './base';
 
 /**
  * Drives a REAL BedrockRuntimeClient, configured the way base.ts configures it, against a local
@@ -17,7 +18,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
  * TimeoutError is retryable and the real client would otherwise burn 6 attempts per assertion.
  */
 
-const TIMEOUT_MS = 300;
+const TIMEOUT_MS = 800;
 
 describe('BedrockRuntimeClient transport timeout (real client)', () => {
   let server: http2.Http2Server;
@@ -41,8 +42,10 @@ describe('BedrockRuntimeClient transport timeout (real client)', () => {
       endpoint,
       credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
       maxAttempts: 1,
-      // Mirrors BEDROCK_REQUEST_HANDLER in base.ts.
-      requestHandler: { requestTimeout, sessionTimeout: requestTimeout + 100, disableConcurrentStreams: true },
+      // Spread the REAL shipped config rather than a hand-copied literal, so a rename in
+      // base.ts reaches this test instead of leaving it quietly proving the old key names
+      // still work against the SDK. Only the durations are scaled down for test speed.
+      requestHandler: { ...BEDROCK_REQUEST_HANDLER, requestTimeout, sessionTimeout: requestTimeout + 100 },
     });
   }
 
@@ -53,6 +56,18 @@ describe('BedrockRuntimeClient transport timeout (real client)', () => {
       accept: 'application/json',
       body: JSON.stringify({ prompt: 'hi' }),
     });
+
+  /**
+   * The durations above are overridden for speed, so a rename of those keys could otherwise
+   * slip through here. Pin the shipped shape directly: this is the drift guard's real anchor.
+   */
+  it('ships exactly the option names the h2 handler understands', () => {
+    expect(Object.keys(BEDROCK_REQUEST_HANDLER).sort()).toEqual([
+      'disableConcurrentStreams',
+      'requestTimeout',
+      'sessionTimeout',
+    ]);
+  });
 
   it('uses the h2 handler, so h1 timeout knobs would be no-ops', () => {
     const client = makeClient();
@@ -77,8 +92,8 @@ describe('BedrockRuntimeClient transport timeout (real client)', () => {
   // takes far longer than the timeout while still making progress must survive. This is what
   // makes the 120s production value safe for long streaming completions.
   it('does not kill a slow-but-active response whose total time exceeds the timeout', async () => {
-    const CHUNKS = 10;
-    const GAP_MS = 100; // total ~1s, well past TIMEOUT_MS
+    const CHUNKS = 20;
+    const GAP_MS = 100; // total ~2s, well past TIMEOUT_MS, and an 8x margin per gap
 
     onStream = stream => {
       stream.respond({ ':status': 200, 'content-type': 'application/json' });

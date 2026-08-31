@@ -40,9 +40,12 @@ const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 
 /**
  * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
- * here rather than imported: declaring @smithy/node-http-handler as a direct dependency makes
- * pnpm collapse every transitive copy in the repo onto one version, a repo-wide transport change
- * that has no place in this fix. Deliberately narrow, so `satisfies` rejects an h1 knob.
+ * here rather than imported: adding @smithy/node-http-handler to this package's manifest was
+ * measured to re-resolve the lockfile and unify the transitive copies the repo currently carries
+ * (4.8.2, 4.9.3, 4.9.4 all collapsed onto 4.9.13), which silently changes the transport version
+ * other packages' AWS clients get. That is a repo-wide change with no place in this fix - not a
+ * claim that pnpm cannot hold several versions at once, which it plainly does today.
+ * Deliberately narrow, so `satisfies` rejects an h1 knob.
  *
  * The names are covered at runtime by base.requestTimeout.integration.test.ts, which drives a
  * REAL BedrockRuntimeClient built from this config against a stalled h2 server. If upstream
@@ -82,7 +85,7 @@ type BedrockHttp2HandlerOptions = {
 // `disableConcurrentStreams` is NOT optional: supplying our own requestHandler replaces the
 // SDK's default config object, which sets it. Dropping it would silently move Bedrock from an
 // isolated session per request to multiplexed sessions.
-const BEDROCK_REQUEST_HANDLER = {
+export const BEDROCK_REQUEST_HANDLER = {
   requestTimeout: 120_000,
   // Above requestTimeout so the stream timer normally wins (clearer error); this is the
   // backstop for a hung TCP/TLS connect, the gap h1's connectionTimeout would have covered.
@@ -488,6 +491,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
         // count is deliberately NOT part of the condition: an empty response can still report phantom
         // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
+        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
+        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
+        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
+        // profile produces literally the same observable (no chunks, no terminal event), so the
+        // two are indistinguishable at this layer and the more actionable message should win.
         if (emittedTextChars === 0 && !func.some(f => f.name)) {
           throw new Error(
             `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
@@ -504,11 +512,20 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // stopReason is absent on healthy turns for most adapters, so the terminal event is the
         // only trustworthy signal that the model actually finished. @see BEDROCK_REQUEST_HANDLER
         //
+        // A user Stop is EXCLUDED, and must stay excluded. In the h2 handler the abort callback
+        // and the requestTimeout callback do the same two things (close the stream, then reject an
+        // already-settled promise), so a cancel reaches this point looking exactly like a stall:
+        // verified against the real event-stream path, where BOTH end the body iterator cleanly
+        // with no throw. Without this check a routine cancel would discard the partial reply, log
+        // at ERROR, and trigger the retry below - re-running a completion the user just stopped.
+        //
         // Worded to include "stream timeout" on purpose: that is the substring
         // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
-        // retry-once-then-fallback path and a WARN-severity log rather than a false ERROR page.
-        // Keep the phrase if you reword this.
-        if (this.signalsStreamTermination && !sawTerminalEvent) {
+        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
+        // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
+        // that survived a retry and a provider fallback is worth seeing.
+        if (this.signalsStreamTermination && !sawTerminalEvent && !options.abortSignal?.aborted) {
           throw new Error(
             `[BaseBedrockBackend] stream timeout - model "${model}" in region ${this._options.region} ` +
               `ended after ${emittedTextChars} chars without a terminal event, so the response is ` +

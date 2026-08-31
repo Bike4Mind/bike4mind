@@ -6,7 +6,6 @@ import { ChatModels } from '@bike4mind/common';
 import AnthropicBedrockBackend from './anthropic';
 import DeepSeekBedrockBackend from './deepseek';
 import LlamaBedrockBackend from './llama';
-import JurassicTwoBedrockBackend from './jurassicTwo';
 import TitanBedrockBackend from './titan';
 import MoonshotBedrockBackend from './moonshot';
 
@@ -72,8 +71,24 @@ const withBody = <T extends BaseBedrockBackend>(backend: T, body: unknown): T =>
 };
 
 const cb = async (_text: (string | null | undefined)[], _info?: CompletionInfo) => {};
-const run = (backend: BaseBedrockBackend) =>
-  backend.complete(TEST_MODEL, [{ role: 'user', content: 'hi' }], { stream: true } as Partial<ICompletionOptions>, cb);
+const run = (backend: BaseBedrockBackend, extra: Partial<ICompletionOptions> = {}) =>
+  backend.complete(
+    TEST_MODEL,
+    [{ role: 'user', content: 'hi' }],
+    { stream: true, ...extra } as Partial<ICompletionOptions>,
+    cb
+  );
+
+/** Yields chunks, aborting the controller partway so the stream ends mid-answer like a user Stop. */
+const abortingBody = (chunks: unknown[], controller: AbortController, abortAfter: number) => ({
+  [Symbol.asyncIterator]: async function* () {
+    let i = 0;
+    for (const c of chunks) {
+      if (i++ === abortAfter) controller.abort();
+      yield { chunk: { bytes: new TextEncoder().encode(JSON.stringify(c)) } };
+    }
+  },
+});
 
 const textChunk = (text: string, terminal = false) =>
   ({
@@ -108,11 +123,16 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     await expect(run(withBody(new TerminalSignallingBackend(), body))).rejects.toThrow(/stream timeout/);
   });
 
+  // The region asserted here is the constructor default: this double no-ops
+  // updateClientForModel to keep the injected client, so it never region-switches. The point
+  // is that the message carries the region the backend is actually holding, whatever that is.
   it('names the model, region and how much was lost', async () => {
-    const body = streamBody([textChunk('12345')]);
-    const err = await run(withBody(new TerminalSignallingBackend(), body)).catch((e: Error) => e);
+    const backend = new TerminalSignallingBackend();
+    const region = (backend as unknown as { _options: { region: string } })._options.region;
+    const err = await run(withBody(backend, streamBody([textChunk('12345')]))).catch((e: Error) => e);
+
     expect((err as Error).message).toMatch(/test-model/);
-    expect((err as Error).message).toMatch(/us-east-2/);
+    expect((err as Error).message).toContain(region);
     expect((err as Error).message).toMatch(/5 chars/);
   });
 
@@ -139,6 +159,35 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).not.toMatch(/stream timeout/i);
   });
 
+  /**
+   * A user Stop must NOT be reported as a truncation. In the h2 handler the abort callback and
+   * the requestTimeout callback do the same two things, and both were verified to end the real
+   * event-stream body iterator cleanly with no throw - so a cancel arrives here byte-for-byte
+   * like a stall: output emitted, no terminal event.
+   *
+   * Without the abortSignal check this throws `stream timeout ... TRUNCATED`, which is not an
+   * abort error, so it logs at ERROR, escapes logToSlackClassify's skip list, and matches
+   * isStreamIdleTimeoutError - discarding the partial reply and re-running a completion the user
+   * deliberately stopped. Cancel must keep its pre-existing behaviour: return what arrived.
+   */
+  it('does not report a user cancellation as a truncated stream', async () => {
+    const controller = new AbortController();
+    const body = abortingBody([textChunk('partial ans'), textChunk('wer')], controller, 1);
+
+    await expect(
+      run(withBody(new TerminalSignallingBackend(), body), { abortSignal: controller.signal })
+    ).resolves.not.toThrow();
+  });
+
+  it('still throws for a stall when an abortSignal is present but un-aborted', async () => {
+    const controller = new AbortController();
+    const body = streamBody([textChunk('half an answ')]);
+
+    await expect(
+      run(withBody(new TerminalSignallingBackend(), body), { abortSignal: controller.signal })
+    ).rejects.toThrow(/TRUNCATED/);
+  });
+
   // Opt-in means silence keeps the old behaviour: adapters that never report done - titan and
   // moonshot report it on every chunk, the test doubles never - must be unaffected.
   it('leaves a backend that has not opted in untouched', async () => {
@@ -153,12 +202,13 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
    *
    * titan and moonshot are deliberately absent: they report `done: true` on every content chunk,
    * so opting them in would be inert. Tightening them means a stopReason passthrough instead.
+   * jurassicTwo is absent for a different reason - it forces stream:false, so the guard's
+   * branch is unreachable there and an override would be dead code.
    */
   it.each([
     ['anthropic', AnthropicBedrockBackend, true],
     ['deepseek', DeepSeekBedrockBackend, true],
     ['llama', LlamaBedrockBackend, true],
-    ['jurassicTwo', JurassicTwoBedrockBackend, true],
     ['titan', TitanBedrockBackend, false],
     ['moonshot', MoonshotBedrockBackend, false],
   ])('%s opts into the terminal-event check: %s', (_name, Backend, expected) => {

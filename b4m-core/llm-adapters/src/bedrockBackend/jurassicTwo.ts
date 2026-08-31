@@ -22,10 +22,9 @@ interface JurassicChunk {
 }
 
 export default class JurassicTwoBedrockBackend extends BaseBedrockBackend {
-  /** Reports done only on every completion carrying a finishReason, so a missing terminal event means a truncated stream. */
-  protected override get signalsStreamTermination(): boolean {
-    return true;
-  }
+  // Deliberately does NOT opt into signalsStreamTermination: complete() below forces
+  // stream:false, and the truncation guard lives on the streaming branch, so the override
+  // would be unreachable. Re-add it only if this adapter ever streams.
 
   // Override complete method to force non-streaming since Jurassic-2 doesn't support streaming
   async complete(
