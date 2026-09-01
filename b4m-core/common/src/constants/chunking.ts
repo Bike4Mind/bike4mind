@@ -190,6 +190,37 @@ export function isConvergencePausedNote(notes?: string | null): boolean {
 }
 
 /**
+ * TRANSITIONAL, and the ONE stall predicate every RETRIEVAL path must use until #2016's migration
+ * has run in every environment. Reads the new field, then falls back to the legacy prose that the
+ * pre-migration rows still carry in `notes`.
+ *
+ * It exists because the migration and the code that reads the new field do not deploy atomically,
+ * in EITHER direction:
+ *
+ * - Forward: `migratorInvocation` is a `dependsOn` of the web stack only (infra/web.ts); the queue
+ *   stack has none, so the executor can serve forced retrieval and `knowledge_base_search` while
+ *   rows still carry the marker in `notes` and no `chunkStallReason`. A row stalled by the chunk arm
+ *   then reads as a plain unindexed file: `isRetrievalExcluded` drops it upstream of the withhold on
+ *   a vectorizedOnly lake, and `partitionByIndexAvailability` calls it servable everywhere else. The
+ *   turn answers around a passage-less file and reports FULL coverage - the silent degradation this
+ *   whole path exists to prevent.
+ * - Backward: nothing reverts the data. `migratorInvocation` only ever runs `up`, and `migrate down`
+ *   is a manual CLI step, so a code rollback leaves rows migrated and pre-#2016 readers looking at an
+ *   absent `notes`.
+ *
+ * Deliberately NOT used by the grading/health/UI readers: they are gated behind the web stack, and
+ * a legacy row there renders the notice line AND the identical text as the owner's note.
+ *
+ * Mirrored in Mongo by `buildFabFileSearchQuery`'s `vectorizedOnly` exemption. Delete the legacy arm
+ * from both together, one release after the migration has landed everywhere.
+ */
+export const LEGACY_CHUNK_STALL_NOTES: readonly string[] = Object.values(CHUNK_STALL_NOTICES);
+
+export function isChunkStalledFile(file: { chunkStallReason?: string | null; notes?: string | null }): boolean {
+  return isChunkStalled(file.chunkStallReason) || LEGACY_CHUNK_STALL_NOTES.includes(file.notes ?? '');
+}
+
+/**
  * Owner-facing prose for `FabFile.noExtractableTextAt`, the stamp the chunk handler writes when a
  * file produces 0 chunks. Same migration note as CHUNK_STALL_NOTICES: the pre-#2016 rows carry this
  * text (prefixed 'No extractable text') in `notes`.

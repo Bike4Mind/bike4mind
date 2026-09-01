@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CHUNK_STALL_REASONS } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
   buildOwnershipConditions,
@@ -739,7 +739,7 @@ describe('buildFabFileSearchQuery', () => {
     // making this matcher silently stop finding the clause.
     const findVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(
-        (c): c is { $or: [{ vectorized: boolean }, { chunkStallReason: { $in: string[] } }] } =>
+        (c): c is { $or: [{ vectorized: boolean }, { chunkStallReason: { $in: string[] } }, ...unknown[]] } =>
           Array.isArray((c as { $or?: unknown[] }).$or) &&
           (c as { $or: Record<string, unknown>[] }).$or.some(arm => 'vectorized' in arm)
       );
@@ -795,10 +795,15 @@ describe('buildFabFileSearchQuery', () => {
       expect(clause!.$or[1].chunkStallReason.$in).toEqual([...CHUNK_STALL_REASONS]);
       expect(clause!.$or[1].chunkStallReason.$in).toContain('rechunkPaused');
       expect(clause!.$or[1].chunkStallReason.$in).toContain('vectorizePaused');
-      // Third arm (#1939): the window between the reset and the consumer's marker carries no reason,
-      // so the two arms above cannot cover it. `$ne: null` also excludes a missing field, which is
+      // Transitional third arm: the queue stack does not wait on #2016's migrator, so this query can
+      // run against rows still carrying the marker as prose in `notes`. Asserted against
+      // LEGACY_CHUNK_STALL_NOTES so it cannot drift from the in-memory `isChunkStalledFile`. Deleted
+      // with that arm.
+      expect(clause!.$or[2]).toEqual({ notes: { $in: [...LEGACY_CHUNK_STALL_NOTES] } });
+      // Fourth arm (#1939): the window between the reset and the consumer's marker carries no reason,
+      // so the arms above cannot cover it. `$ne: null` also excludes a missing field, which is
       // what keeps this from matching every legacy row.
-      expect(clause!.$or[2]).toEqual({ chunkRebuildRequestedAt: { $ne: null } });
+      expect(clause!.$or[3]).toEqual({ chunkRebuildRequestedAt: { $ne: null } });
     });
 
     it('does NOT clobber a plain-search fileName filter (markers push to $and, not baseFilter)', () => {

@@ -45,7 +45,7 @@ describe('describePipelineStall', () => {
 // land here first and be a deliberate act. Reading the migration source is the only thing that
 // notices; a fixture would carry its own copy and drift green.
 describe('the backfill migration still matches the current prose', () => {
-  it('inlines both stall notices verbatim', () => {
+  it('inlines both stall notices and the zero-chunk notice verbatim', () => {
     const dir = join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/scripts/migrate/migrations');
     const name = readdirSync(dir).find(f => f.endsWith('_split-chunk-stall-markers-off-notes.ts'));
     expect(name).toBeDefined();
@@ -56,5 +56,8 @@ describe('the backfill migration still matches the current prose', () => {
       // The source escapes the em dash, so compare against the same escaped form.
       expect(source).toContain(CHUNK_STALL_NOTICES[reason].replace(/\u2014/g, '\\u2014'));
     }
+    // The zero-chunk notice is matched by the migration's `$unset` arm byte-for-byte, so it needs the
+    // same guard: a reword here that did not land there would strand the prose in `notes` forever.
+    expect(source).toContain(NO_EXTRACTABLE_TEXT_NOTICE);
   });
 });

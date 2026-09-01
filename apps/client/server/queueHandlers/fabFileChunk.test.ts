@@ -352,6 +352,25 @@ describe('fabFileChunk handler - idempotency guard against re-chunking (human re
     expect(h.chunkFabfile).not.toHaveBeenCalled();
   });
 
+  // The WRITE half of the guard above. Both halves name the same field and nothing checks that they
+  // agree: Mongoose `strict` silently drops a $set on a misspelt field, and `buildFabFileChunkScanFilter`
+  // then matches `noExtractableTextAt: null` forever, so the rescue sweep re-enqueues the file on every
+  // pass. A field-name drift here is invisible in both directions without this.
+  it('stamps noExtractableTextAt (and nothing else) on a file that chunks to zero', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: false });
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.chunkFabfile.mockResolvedValue([]);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $set: { noExtractableTextAt: expect.any(Date) } }
+    );
+    // The owner's own note is never named by a pipeline write (#2016).
+    for (const [, update] of h.fabFileUpdateOne.mock.calls) {
+      expect(JSON.stringify(update)).not.toContain('notes');
+    }
+  });
+
   it('still chunks a file that has not been chunked yet', async () => {
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: false });
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');

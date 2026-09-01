@@ -1,6 +1,6 @@
 import {
   isChunkRebuildPending,
-  isChunkStalled,
+  isChunkStalledFile,
   isMemberIndexingInFlight,
   type ChunkStallReason,
 } from '@bike4mind/common';
@@ -73,6 +73,12 @@ export type IndexStateFile = {
   error?: string | null;
   /** Set when the convergence kill switch stalled the file (`FabFile.chunkStallReason`). */
   chunkStallReason?: ChunkStallReason | null;
+  /**
+   * The owner's own note. Read ONLY through `isChunkStalledFile`, as the transitional fallback for
+   * rows #2016's migration has not reached yet - see its docblock in `common`. Nothing else here
+   * may key on it, and it goes away with that arm.
+   */
+  notes?: string | null;
   /** A requested-but-uncommitted passage rebuild (#1939) - see the partition below. */
   chunkRebuildRequestedAt?: Date | string | null;
 };
@@ -138,7 +144,7 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     // decides (so `error` and the stall reason keep their precedence there, and a stamp left behind by
     // a rebuild that stopped does not read as one still running).
     const rebuildPending = isChunkRebuildPending(file.chunkRebuildRequestedAt);
-    if (isChunkStalled(file.chunkStallReason) && hasNoRetrievablePassage) withheld.push(file);
+    if (isChunkStalledFile(file) && hasNoRetrievablePassage) withheld.push(file);
     else if ((chunkCount > 0 || rebuildPending) && isMemberIndexingInFlight({ ...file, chunkCount }))
       withheld.push(file);
     else servable.push(file);
@@ -155,8 +161,8 @@ export function buildRetrievalUnavailableReport(withheld: readonly IndexStateFil
   // tells the reader to do. Both arms are alike on that point and neither auto-resumes - a dropped
   // vectorize message has no producer that will re-send it - so bucketing the vectorize arm as
   // `indexing` would print "they will return on their own" about a file that never will.
-  const paused = withheld.filter(f => isChunkStalled(f.chunkStallReason));
-  const indexing = withheld.filter(f => !isChunkStalled(f.chunkStallReason));
+  const paused = withheld.filter(f => isChunkStalledFile(f));
+  const indexing = withheld.filter(f => !isChunkStalledFile(f));
   return {
     indexing: { count: indexing.length, sample: nameSample(indexing) },
     paused: { count: paused.length, sample: nameSample(paused) },

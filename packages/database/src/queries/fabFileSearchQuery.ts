@@ -1,6 +1,7 @@
 import {
   CHUNK_STALL_REASONS,
   CODE_FILE_MIME_TYPES,
+  LEGACY_CHUNK_STALL_NOTES,
   normalizeTagPrefix,
   type DataLakeMembershipScope,
 } from '@bike4mind/common';
@@ -504,6 +505,11 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       $or: [
         { vectorized: true },
         { chunkStallReason: { $in: [...CHUNK_STALL_REASONS] } },
+        // Transitional fourth arm, the Mongo mirror of `isChunkStalledFile`: rows #2016's migration
+        // has not reached yet still carry the marker as prose in `notes` and no `chunkStallReason`.
+        // The queue stack does not wait on the migrator, so it can run this query against them.
+        // Delete with the in-memory arm, one release after the migration has landed everywhere.
+        { notes: { $in: [...LEGACY_CHUNK_STALL_NOTES] } },
         { chunkRebuildRequestedAt: { $ne: null } },
       ],
     });

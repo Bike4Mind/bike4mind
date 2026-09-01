@@ -14,9 +14,7 @@ describe('AttachmentNotices', () => {
   it('renders one line per notice under the testid the app keys on', () => {
     render(
       <Wrapper>
-        <AttachmentNotices
-          attachmentNotices={['"a.md" was not sent: it could not be read.', '"b.png" was not sent.']}
-        />
+        <AttachmentNotices attachmentNotices={['"a.md" was not sent: it could not be read.', '"b.png" was not sent.']} />
       </Wrapper>
     );
 

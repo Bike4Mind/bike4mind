@@ -281,6 +281,8 @@ interface RankableFile {
   chunkCount?: number;
   error?: string | null;
   chunkStallReason?: ChunkStallReason | null;
+  /** Transitional legacy stall prose; read only by `isChunkStalledFile` - see its docblock in `common`. */
+  notes?: string | null;
   /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
    *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
   chunkRebuildRequestedAt?: Date | string | null;
@@ -621,6 +623,7 @@ async function rankChunksForFiles(args: {
       chunkCount: file?.chunkCount,
       error: file?.error,
       chunkStallReason: file?.chunkStallReason,
+      notes: file?.notes,
       chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
     };
   });
@@ -1007,6 +1010,7 @@ export async function semanticDataLakeSearch(
         chunkCount: f.chunkCount,
         error: f.error,
         chunkStallReason: f.chunkStallReason,
+        notes: f.notes,
         // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
@@ -1104,6 +1108,7 @@ export async function fileScopedSemanticSearch(
         chunkCount: f.chunkCount,
         error: f.error,
         chunkStallReason: f.chunkStallReason,
+        notes: f.notes,
         // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.

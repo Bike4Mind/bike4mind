@@ -94,13 +94,15 @@ describe('materializeAttachmentContent', () => {
       message: '"a.md" was too large to send whole.',
       delivered: true,
     };
-    const extract = vi.fn().mockResolvedValue(
-      extractorResult({
-        userMessages: [{ role: 'user', content: 'partial' }],
-        deliveredFileIds: ['a'],
-        fileNotices: [notice],
-      })
-    );
+    const extract = vi
+      .fn()
+      .mockResolvedValue(
+        extractorResult({
+          userMessages: [{ role: 'user', content: 'partial' }],
+          deliveredFileIds: ['a'],
+          fileNotices: [notice],
+        })
+      );
 
     const result = await materializeAttachmentContent([file('a')], [], extract, logger);
 

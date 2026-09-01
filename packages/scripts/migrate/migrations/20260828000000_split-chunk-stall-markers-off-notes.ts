@@ -40,9 +40,17 @@ import { type MigrationFile } from './index';
  * the remedy if it ever happens is a second dated migration running these same arms after cutover.
  * Gating the queue stacks on the migrator would not close it: the old handlers keep serving until
  * their own deploy either way.
+ *
+ * The READ side of both windows - the forward one above, and a code rollback, where nothing reverts
+ * the data because `migratorInvocation` only ever runs `up` and `migrate down` is a manual CLI step -
+ * is covered by `isChunkStalledFile` (b4m-core/common/src/constants/chunking.ts) and its Mongo mirror
+ * in `buildFabFileSearchQuery`. Those transitional arms read the legacy prose alongside the new field,
+ * so a retrieval path serving ahead of, or behind, this migration still withholds and NAMES a stalled
+ * file. They are what makes rolling the code back safe without also running `down()`, and they are
+ * deleted one release after this has landed everywhere - see that docblock.
  */
 
-/** The markers are fixed literals, but they contain regex metacharacters ('(', ')', '.'). */
+/** Applied to the two stall notes only; they are fixed literals but contain a regex metacharacter ('.'). */
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const VECTORIZE_PAUSED_NOTE = 'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';

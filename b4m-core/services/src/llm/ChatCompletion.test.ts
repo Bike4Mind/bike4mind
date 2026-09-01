@@ -2356,10 +2356,7 @@ describe('ChatCompletionProcess', () => {
           knowledgeIds: ['f1'],
           files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
           fabPromptMessages: [
-            {
-              role: 'user',
-              content: `Here is the content from the attached file "context.md" for context:\n\n${body}`,
-            },
+            { role: 'user', content: `Here is the content from the attached file "context.md" for context:\n\n${body}` },
           ],
         });
 

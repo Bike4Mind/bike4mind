@@ -1787,8 +1787,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // file's passages away on paper; this is what says so. Without it the gap between
                 // this reset and the caller's queue send carries no marker at all, and a producer
                 // that dies in that gap - or a consumer whose own marker write is lost - leaves a
-                // chunkless, error-less, note-less file that health, convergence, the retrieval
-                // withhold and the rebuild door all read as an image.
+                // chunkless, error-less, marker-less file that health, convergence, the retrieval
+                // withhold and the rebuild door all read as an image. (`notes` is deliberately NOT
+                // one of the fields this reset touches - it is the owner's own text, #2016.)
                 chunkRebuildRequestedAt: new Date(),
               },
             }

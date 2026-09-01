@@ -1,4 +1,4 @@
-import { isChunkRebuildPending, isChunkStalled, type ChunkStallReason } from '@bike4mind/common';
+import { isChunkRebuildPending, isChunkStalledFile, type ChunkStallReason } from '@bike4mind/common';
 import { escapeRegex } from './escapeRegex';
 
 /**
@@ -85,6 +85,8 @@ export function isRetrievalExcluded(
     fileName?: string | null;
     vectorized?: boolean;
     chunkStallReason?: ChunkStallReason | null;
+    /** Transitional; read only by `isChunkStalledFile` - see its docblock in `common`. */
+    notes?: string | null;
     chunkRebuildRequestedAt?: Date | string | null;
   },
   opts: RetrievalExclusionOptions
@@ -111,8 +113,7 @@ export function isRetrievalExcluded(
   // between that write and the consumer's marker there is nothing for the arm above to key on and the
   // file was dropped here - upstream of the withhold - for the whole window. On a producer that died
   // before its sends, that window never ends.
-  const stalledByConvergence =
-    isChunkStalled(file.chunkStallReason) || isChunkRebuildPending(file.chunkRebuildRequestedAt);
+  const stalledByConvergence = isChunkStalledFile(file) || isChunkRebuildPending(file.chunkRebuildRequestedAt);
   if (opts.vectorizedOnly && !file.vectorized && !stalledByConvergence) return true;
   const re = buildFilenameMarkerRegex(opts.excludeFilenameMarkers);
   return !!re && re.test((file.fileName ?? '').toLowerCase());
@@ -129,6 +130,8 @@ export function filterRetrievalExcluded<
     fileName?: string | null;
     vectorized?: boolean;
     chunkStallReason?: ChunkStallReason | null;
+    /** Transitional; read only by `isChunkStalledFile` - see its docblock in `common`. */
+    notes?: string | null;
     chunkRebuildRequestedAt?: Date | string | null;
   },
 >(files: T[], opts: RetrievalExclusionOptions): T[] {

@@ -486,9 +486,7 @@ describe('buildFirstIterationQuery unreadable-file marking', () => {
     // chunk state says nothing about whether it can be read. Marking it unreadable here would
     // tell the agent to ignore content sitting in its own first message.
     const logger = makeLogger();
-    const repo = makeRepo(
-      vi.fn().mockResolvedValue([makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })])
-    );
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })]));
 
     const result = await buildFirstIterationQuery(
       BASE_QUERY,
@@ -508,12 +506,10 @@ describe('buildFirstIterationQuery unreadable-file marking', () => {
   it('still marks a chunkless file that materialization did NOT inline', async () => {
     const logger = makeLogger();
     const repo = makeRepo(
-      vi
-        .fn()
-        .mockResolvedValue([
-          makeFile('inlined', 'good.md', 'text/markdown', { chunkCount: 0 }),
-          makeFile('missed', 'bad.md', 'text/markdown', { chunkCount: 0 }),
-        ])
+      vi.fn().mockResolvedValue([
+        makeFile('inlined', 'good.md', 'text/markdown', { chunkCount: 0 }),
+        makeFile('missed', 'bad.md', 'text/markdown', { chunkCount: 0 }),
+      ])
     );
 
     const result = await buildFirstIterationQuery(
@@ -553,10 +549,7 @@ describe('buildFirstIterationQuery unreadable-file marking', () => {
   it('adds no per-file marking when the run has no reader at all', async () => {
     // The METADATA ONLY header already says nothing is readable; a per-file reason would only
     // contradict it, and naming the reader tool is exactly what that header exists to avoid.
-    const { result } = await build(
-      [makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })],
-      TOOLS_WITHOUT_READER
-    );
+    const { result } = await build([makeFile('id1', 'context.md', 'text/markdown', { chunkCount: 0 })], TOOLS_WITHOUT_READER);
 
     expect(result).toContain('METADATA ONLY');
     expect(result).not.toContain('NOT READABLE:');
