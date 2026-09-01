@@ -161,11 +161,16 @@ export const usdToCreditsStochastic = (
  *
  * UNDER-RESERVATION IS ACCEPTED, NOT PREVENTED. A turn that emits more than this
  * settles as a shortfall debit at reconciliation, which is already a supported path
- * (see computeSettlementDelta in services/llm/ChatCompletionProcess.ts: provider-basis
- * settlement could always exceed a hold priced on the local estimate). Worst case a
- * holder is debited past their remaining balance and the shortfall is written off -
- * once, since incrementCredits is an unclamped $inc and the resulting negative
- * balance fails the next turn's own gate.
+ * (provider-basis settlement could always exceed a hold priced on the local
+ * estimate). The two sites clamp the shortfall differently: chat's
+ * computeSettlementDelta (services/llm/ChatCompletionProcess.ts) floors the debit at
+ * the remaining balance and reports the remainder as writtenOffCredits, so that path
+ * never goes negative; cliCompletions.ts does an unclamped $inc on success and only
+ * logs an ALERT if it lands negative. Either way the shortfall fails the *next*
+ * turn's own admission gate - but that bound is per turn, not per holder: turns
+ * admitted concurrently are each checked against the balance at their own admission
+ * and settle against a snapshot that predates their siblings' spend, so a holder
+ * running turns in parallel can be shorted once per in-flight turn, not once total.
  */
 export const PREFLIGHT_RESERVATION_OUTPUT_TOKENS = 16_384;
 

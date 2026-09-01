@@ -289,6 +289,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // a ceiling, and holding it gates the request on a cost it will not incur. The per-member
     // cap below is gated on the unshrunk ceiling instead, so a shrunk hold cannot wave a member
     // past an administrator-configured cap. Settlement below charges actual usage.
+    //
+    // `?? DEFAULT_OUTPUT_MAX_TOKENS` must stay: with no explicit budget, maxTokens can be up to
+    // 64K on an adaptive reasoner, and reservationOutputTokens alone would still let a
+    // ceiling-sized hold through and reject short prompts outright for anyone near their
+    // balance. That also makes the reservationOutputTokens term inert on this no-budget path -
+    // it only binds once a caller passes an explicit options.maxTokens above the ceiling.
     const estimatedInputTokens = estimateInputTokens(messages);
     const estimatedOutputTokens = Math.min(
       maxTokens,

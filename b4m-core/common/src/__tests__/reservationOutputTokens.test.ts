@@ -46,6 +46,9 @@ describe('pre-flight reservation output sizing', () => {
     expect(pricing.PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS).toBeGreaterThan(
       pricing.PREFLIGHT_RESERVATION_OUTPUT_TOKENS
     );
+    // Absolute pin: every other assertion on this constant is relative to itself,
+    // so raising it toward the old ceiling would otherwise leave the suite green.
+    expect(pricing.PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS).toBe(32_768);
   });
 
   it('never raises a request that asks for less than the ceiling', () => {
