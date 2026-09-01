@@ -126,6 +126,11 @@ export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<num
   // Per-send catch so one throttled or unroutable send costs only itself: this is the last pass of
   // a scheduled task, so an escaping rejection would abandon every candidate behind it AND fail the
   // whole tick.
+  // Sequential, unlike the ENQUEUE_CONCURRENCY fan-out above - that bound does NOT apply here. It
+  // stays sequential to match the hosted twin, so bounding it is a change that belongs in both
+  // rather than a self-host-only edit. Worth knowing if that is ever revisited: this pass shares
+  // the 60s non-reentrant tick with runChunkRescueSweep, so the worst case the ENQUEUE_CONCURRENCY
+  // docblock describes is both passes' CHUNK_SCAN_BATCH inside one tick's budget.
   let sent = 0;
   for (const file of candidates) {
     try {

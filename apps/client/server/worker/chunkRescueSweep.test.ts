@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
@@ -251,5 +253,20 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
 
     expect(logger.info).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('the scheduled task isolates the two passes', () => {
+  // Source-shape guard: main.ts registers the task inside an unexported boot closure, so the
+  // chaining is unreachable from a behavioural test. The regression is silent - dropping either
+  // catch type-checks and only shows up as a stranded backlog that stops draining whenever the
+  // un-chunked pass's FabFile.find throws.
+  it('wraps both sweep calls in their own catch', async () => {
+    const src = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+    for (const fn of ['runChunkRescueSweep', 'runStrandedVectorizeRescue']) {
+      const call = src.match(new RegExp(`await ${fn}\\(bootLogger\\)(\\.catch)?`));
+      expect(call, `${fn} call site vanished - move or delete this guard with it`).not.toBeNull();
+      expect(call![1], `${fn} must not reject out of the tick and skip the other pass`).toBe('.catch');
+    }
   });
 });

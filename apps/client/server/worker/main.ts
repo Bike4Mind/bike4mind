@@ -135,9 +135,16 @@ async function main() {
   // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose
   // vectorize hand-off was stranded. Selection and enqueue accounting for both passes live in
   // chunkRescueSweep.ts, shared in shape with the hosted daily cron.
+  // Each pass is isolated, as in the hosted twin: neither guards its own FabFile.find, so a Mongo
+  // blip in the first would otherwise reject out of the tick and leave the stranded-vectorize
+  // backlog growing untouched until the error cleared.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    await runChunkRescueSweep(bootLogger);
-    await runStrandedVectorizeRescue(bootLogger);
+    await runChunkRescueSweep(bootLogger).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] un-chunked rescue sweep failed: ${err}`);
+    });
+    await runStrandedVectorizeRescue(bootLogger).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] stranded-vectorize rescue sweep failed: ${err}`);
+    });
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
