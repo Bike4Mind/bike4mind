@@ -195,9 +195,13 @@ async function buildLakeMembershipScopes(
  * `queryDataLakeTagCounts` deliberately does NOT use this: `countDataLakeFilesByMembership` re-applies
  * each scope in its own `$facet` branch, so the pipeline's cross-lake `$or` only widens the candidate
  * pool and never a per-lake count - each number still comes from that lake's own filter.
+ *
+ * An ALLOW-list on `kind`, not `!== 'registry'`: the invariant is "only creator-anchored arms may
+ * enter the shared `$or`", and a future third kind whose prefix arm is likewise unanchored would
+ * ride a deny-list in silently, with no type error.
  */
 const dynamicMembershipScopesFor = (scopes: DataLakeMembershipScope[]): DataLakeMembershipScope[] =>
-  scopes.filter(scope => scope.kind !== 'registry');
+  scopes.filter(scope => scope.kind === 'owned');
 
 /**
  * Browse articles across the given lakes (resolved by `resolveAccessibleLakes`).

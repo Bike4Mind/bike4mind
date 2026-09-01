@@ -23,11 +23,14 @@ export type ResolvedLakeAccessSet = Awaited<ReturnType<typeof getDynamicDataLake
  * Pairing `restrictToDataLake` with a no-op narrow drops the owner/shared/group base arms for a
  * session that expressed no lake opinion, silently confining its grounding to lake content. Keep
  * this and the narrowing on the SAME predicate - a second copy is how those two states re-merge.
+ *
+ * Returns a plain boolean, deliberately NOT a `sessionRetrievalTags is string[]` type predicate: it
+ * answers false for a non-empty list that names no lake, so the predicate form would narrow the
+ * argument to `undefined` in the false branch - or to `never` where it is declared `string[]`, as at
+ * the forced-retrieval call site. A later `if (!sessionNamesALake(...)) { tags.filter(...) }` would
+ * then type-check against `never` and hide a real error.
  */
-export function sessionNamesALake(
-  access: ResolvedLakeAccessSet,
-  sessionRetrievalTags: string[] | undefined
-): sessionRetrievalTags is string[] {
+export function sessionNamesALake(access: ResolvedLakeAccessSet, sessionRetrievalTags: string[] | undefined): boolean {
   if (!sessionRetrievalTags?.length) return false;
   if (datalakeTagsFrom(sessionRetrievalTags).length > 0) return true;
   return access.lakes.some(lake => !!lake.fileTagPrefix && sessionRetrievalTags.includes(lake.fileTagPrefix));
@@ -60,10 +63,10 @@ export function narrowLakeAccessToSession(
 ): ResolvedLakeAccessSet {
   if (!sessionNamesALake(access, sessionRetrievalTags)) return access;
 
-  const lakeTags = datalakeTagsFrom(sessionRetrievalTags);
-  const prefixMatched = access.lakes.filter(
-    lake => lake.fileTagPrefix && sessionRetrievalTags.includes(lake.fileTagPrefix)
-  );
+  // Non-empty past the guard above, which returns false for an absent or empty list.
+  const tags = sessionRetrievalTags ?? [];
+  const lakeTags = datalakeTagsFrom(tags);
+  const prefixMatched = access.lakes.filter(lake => lake.fileTagPrefix && tags.includes(lake.fileTagPrefix));
 
   // UNION, not either/or: a session may name one lake by identity and another by prefix, and
   // dropping the prefix-named one would narrow it further than it asked for.

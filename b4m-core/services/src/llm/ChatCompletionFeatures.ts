@@ -1906,6 +1906,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // restrictToDataLake would drop the base arms for a session that never asked to be
       // lake-scoped - silently confining its grounding to lake content and losing the caller's own
       // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      //
+      // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
+      // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
+      // predicate cannot change across the narrowing - but the pre-narrowing set is the meaning
+      // wanted here ("did the session name a lake among what this caller can reach"), and it does
+      // not depend on that superset relation continuing to hold.
       const resolvedAccess = await this.resolveDataLakeAccess();
       const lakeScoped = sessionNamesALake(resolvedAccess, this.retrievalTags);
       const access = narrowLakeAccessToSession(resolvedAccess, this.retrievalTags);
