@@ -106,9 +106,11 @@ const cases: Array<{ name: string; handler: unknown; params: string[]; queried: 
 ];
 
 describe.each(cases)('$name - date filter guard', ({ handler, params, queried }) => {
-  it.each(params)('rejects an unparseable %s before any query runs', async param => {
+  it.each(params)('rejects an unparseable %s as a 400 before any query runs', async param => {
     const { promise } = run(handler, { id: 'job1', [param]: 'not-a-date' });
-    await expect(promise).rejects.toThrow(/date/i);
+    // Pin the status, not just that something threw: a bare Error would still fail the
+    // request but would come back as the 500 this PR exists to stop.
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
     expect(queried()).not.toHaveBeenCalled();
   });
 

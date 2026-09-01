@@ -26,7 +26,10 @@ const handler = baseApi()
 
       // Update payloads cast too, and casting runs before validators, so runValidators
       // does not cover this. A junk categoryId would throw rather than answer the caller.
-      if (categoryId && !isValidObjectId(categoryId)) {
+      // The payload below is built unconditionally, so a falsy-but-present value ('' is what
+      // the edit form sends with no categories loaded) reaches the cast as well; only null
+      // casts cleanly, and it is how a caller clears the field.
+      if (categoryId !== undefined && categoryId !== null && !isValidObjectId(categoryId)) {
         return res.status(400).json({ message: 'Invalid category ID format' });
       }
 

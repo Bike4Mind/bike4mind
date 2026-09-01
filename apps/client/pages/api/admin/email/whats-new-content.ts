@@ -1,7 +1,7 @@
 import { ModalModel } from '@bike4mind/database';
 import { IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { marked } from 'marked';
 import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
@@ -40,6 +40,11 @@ const handler = baseApi().get(async (req, res) => {
   } else {
     // Fetch modals from the last N days
     const daysAgo = parseInt(days, 10);
+    // parseInt yields NaN for a non-numeric value, and setDate(NaN) makes an Invalid Date
+    // that casts against the Date-typed `createdAt` filter below.
+    if (Number.isNaN(daysAgo)) {
+      throw new BadRequestError('Invalid days: must be a number');
+    }
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysAgo);
 

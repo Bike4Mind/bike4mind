@@ -30,9 +30,6 @@ const handler = baseApi().get(async (req, res) => {
 
   // An Invalid Date reaches a Date-typed filter downstream and throws a CastError there
   // rather than answering the caller.
-
-  // An Invalid Date reaches a Date-typed filter downstream and throws a CastError there
-  // rather than answering the caller.
   for (const [name, value] of [
     ['startDate', startDate],
     ['endDate', endDate],

@@ -59,4 +59,22 @@ describe('GET /api/security/user-recent - email leak strip', () => {
     expect(item.data.usernames).toEqual(['me']);
     expect(JSON.stringify(body)).not.toContain('victim@example.com');
   });
+  // Same NaN-arithmetic shape as user-summary: `hours` reaches a Date-typed `createdAt`
+  // filter, and this route has no admin gate either.
+  it('rejects a non-numeric hours as a 400 before the repository is queried', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { hours: 'abc' } });
+    (req as any).user = { email: 'me@example.com', username: 'me' };
+
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.getUserFailedLogins).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a numeric hours and passes a valid date window down', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { hours: '48' } });
+    (req as any).user = { email: 'me@example.com', username: 'me' };
+    await mockRefs.getHandler!(req, res);
+
+    const since = repo.getUserFailedLogins.mock.calls[0][2] as Date;
+    expect(Number.isNaN(since.getTime())).toBe(false);
+  });
 });

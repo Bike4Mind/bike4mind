@@ -162,8 +162,16 @@ describe('GET /api/admin/context-telemetry', () => {
   // Date-typed `timestamp` filter, which surfaces as a 500 rather than answering the caller.
   it.each(['startDate', 'endDate'])('rejects an unparseable %s before it reaches the query', async param => {
     const { promise } = run({ [param]: 'not-a-date' });
-    await expect(promise).rejects.toThrow();
+    // Pin that it failed at schema parse (errorHandler maps a ZodError to 422). A bare
+    // Error would still fail the request but would come back as a 500.
+    await expect(promise).rejects.toMatchObject({ name: 'ZodError' });
     expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('still accepts an empty date param, which the handler skips', async () => {
+    const { promise } = run({ startDate: '' });
+    await promise;
+    expect(findQuery().timestamp).toBeUndefined();
   });
 
   it('still accepts a parseable date', async () => {

@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { authFailLogRepository } from '@bike4mind/database';
+import { BadRequestError } from '@server/utils/errors';
 
 /**
  * GET /api/security/user-recent
@@ -13,6 +14,11 @@ const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { limit?: string; hours?: string }>(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '5', 10), 50); // cap at 50
     const hours = Math.min(parseInt(req.query.hours || '24', 10), 168); // cap at 7 days
+    // parseInt yields NaN for a non-numeric value, and the NaN propagates through the
+    // arithmetic into an Invalid Date that casts against the Date-typed `createdAt` filter.
+    if (Number.isNaN(hours)) {
+      throw new BadRequestError('Invalid hours: must be a number');
+    }
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
     const user = req.user;
