@@ -3,9 +3,10 @@ import { isPublicArtifact, canUserReadArtifact, canUserWriteArtifact, canUserDel
 import type { BaseArtifact } from '../types/entities/ArtifactTypes';
 
 /**
- * `permissions` has no schema default, so a stored artifact can lack it entirely. These helpers
- * are the ACCESS-CHECK path, so an unguarded dereference threw a TypeError where the answer should
- * simply be "no". Must stay in sync with the isPublic virtual in packages/database ArtifactModel.
+ * `permissions` is `required: true` in the schema, so the gap is not new writes: a legacy row and
+ * a field projection both hand these helpers an artifact with `permissions` undefined. They are the
+ * ACCESS-CHECK path, so an unguarded dereference threw a TypeError where the answer should simply
+ * be "no". Must stay in sync with the isPublic virtual in packages/database ArtifactModel.
  */
 
 const withoutPermissions = {
