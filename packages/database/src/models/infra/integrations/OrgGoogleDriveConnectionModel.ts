@@ -9,10 +9,22 @@ import BaseRepository from '@bike4mind/db-core';
 
 const MAX_LAST_ERROR_LEN = 500;
 
-// A 'syncing' claim older than this is treated as abandoned and is reclaimable. The ingest queue's
-// Lambda has a hard 10-minute timeout (visibility 12 min - see infra/queues.ts), so a run that dies
-// without releasing cannot legitimately hold a claim past this bound; anything older is a dead owner.
+// An UNCHAINED 'syncing' claim older than this is treated as abandoned and is reclaimable. Such a
+// claim is refreshed once per run, so the longest a live one can go un-refreshed is one invocation:
+// the ingest queue's Lambda has a hard 10-minute timeout (visibility 12 min - see infra/queues.ts),
+// and anything older is a dead owner.
 const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-min Lambda ceiling
+
+// A CHAINED claim (one carrying activeIngestBatchId) is a different measurement. It is refreshed at
+// each slice boundary, so the un-refreshed interval is the continuation message's QUEUE WAIT, not the
+// run length - and driveLakeIngestQueue is shared across every Drive connection, so two full-length
+// messages ahead of a continuation already exceed the bound above. Stealing such a claim is not a
+// harmless reclaim: the poll that takes it runs a FRESH sync with no resumeBatchId, so it never
+// subtracts what the chain already uploaded (still `pending`, hence invisible to the ordinary diff)
+// and re-ingests the tail as new ADDs - the exact duplicate spiral chaining exists to prevent. Hence
+// a longer bound here, sized for several full-length messages queued ahead of a continuation. Still
+// finite, so an abandoned chain cannot wedge a connection in 'syncing' forever.
+const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 12-min visibility windows
 
 /**
  * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
@@ -267,13 +279,27 @@ class OrgGoogleDriveConnectionRepository
    * process that died past the Lambda timeout without releasing - the connection would be wedged in
    * 'syncing' forever with no operator path back. The stale-claim arm makes that failure degrade to
    * "one ingest was lost" (reclaimable next run) instead of "this connection can never sync again".
+   *
+   * The staleness arm is SPLIT by whether the claim carries a chain token, because the two measure
+   * different durations and stealing a live chain is far more damaging than stealing an idle claim -
+   * see CHAINED_SYNC_CLAIM_STALE_MS.
    */
   async claimForSync(id: string): Promise<boolean> {
     const staleBefore = new Date(Date.now() - SYNC_CLAIM_STALE_MS);
+    const chainedStaleBefore = new Date(Date.now() - CHAINED_SYNC_CLAIM_STALE_MS);
     const claimed = await this.model.findOneAndUpdate(
       {
         _id: id,
-        $or: [{ status: 'connected' }, { status: 'syncing', syncClaimedAt: { $lt: staleBefore } }],
+        $or: [
+          { status: 'connected' },
+          // $in: [null] matches a missing field too - a claim that never started a chain.
+          { status: 'syncing', activeIngestBatchId: { $in: [null] }, syncClaimedAt: { $lt: staleBefore } },
+          {
+            status: 'syncing',
+            activeIngestBatchId: { $ne: null },
+            syncClaimedAt: { $lt: chainedStaleBefore },
+          },
+        ],
       },
       // A fresh claim starts no chain, so any continuation token left by a dead one is cleared here -
       // otherwise a stale message could still present it to adoptSyncClaim and join a chain that is
@@ -297,10 +323,19 @@ class OrgGoogleDriveConnectionRepository
     return adopted !== null;
   }
 
-  /** Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one. */
+  /**
+   * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one,
+   * and - like adoptSyncClaim - a compare-and-set on the token: it writes only over its OWN chain's id
+   * or over no chain at all (the first slice, which claimed fresh). Without that conjunct a slow slice
+   * renewing after its claim was reclaimed would re-point the token at a chain nobody is running.
+   */
   async renewSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean> {
     const renewed = await this.model.findOneAndUpdate(
-      { _id: id, status: 'syncing' },
+      {
+        _id: id,
+        status: 'syncing',
+        $or: [{ activeIngestBatchId }, { activeIngestBatchId: { $in: [null] } }],
+      },
       { $set: { syncClaimedAt: new Date(), activeIngestBatchId } }
     );
     return renewed !== null;

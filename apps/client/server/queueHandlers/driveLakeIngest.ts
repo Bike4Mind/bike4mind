@@ -80,7 +80,9 @@ const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
 // Hard ceiling on how many slices ONE ingest chain runs before it stops re-enqueuing itself, so a
 // pathological folder cannot turn one sync into an unbounded run of invocations. Coverage is not lost
 // when it trips: the files earlier slices uploaded become durable, non-`pending` lake members, so the
-// next scheduled poll's walk no longer proposes them and the remainder ingests in a fresh chain.
+// next scheduled poll's walk no longer proposes them and the remainder ingests in a fresh chain. That
+// holds because the chunk pipeline each upload enqueues has drained by then - the same durability the
+// claim's staleness bound leans on, and the reason a chained claim must not be stolen mid-chain.
 export const MAX_INGEST_SLICES = 20;
 
 // Per-sync candidate cap. This is NO LONGER a throughput bound - the deadline guard above yields to a
@@ -201,7 +203,9 @@ export function hasDriveFileChanged(
  *     it is exactly the duplicate-tail spiral this chain exists to avoid.
  *   - The `syncing` claim is HANDED from slice to slice (renewSyncClaim -> adoptSyncClaim) and never
  *     returns to 'connected' in between, so the re-sync poll cannot slip in and start a competing walk
- *     mid-chain. The batch id is the token: only this chain's own next slice can adopt it.
+ *     mid-chain. The batch id is the token: only this chain's own next slice can adopt it, and it is
+ *     also what tells claimForSync's staleness arm to hold a chained claim for much longer than an
+ *     unchained one - a continuation's un-refreshed interval is its queue wait, not its run length.
  *   - `totalFiles` is re-planned as the chain goes (raised when a later walk finds more, set exactly
  *     when the chain ends), so the finalize gate is still reached exactly and the batch never settles
  *     mid-chain or strands in `processing` afterwards.
