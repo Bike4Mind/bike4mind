@@ -3,7 +3,12 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
-import { summarizeOptionalPathRetrieval, type RetrievalRateInput } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  RETRIEVAL_RATE_FIELDS,
+  summarizeOptionalPathRetrieval,
+  type RetrievalRateInput,
+} from '@bike4mind/common';
 
 /**
  * How often the model retrieves when the knowledge tools are merely OFFERED (#1394).
@@ -61,7 +66,12 @@ const endBoundExclusive = (value: string | undefined, parsed: Date | undefined):
   return next;
 };
 
-const handler = baseApi().get(
+/**
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key before req.user
+ * is set, so a key issued for a narrow integration can't read platform-wide retrieval telemetry
+ * just because its owner is an admin. JWT/browser callers still go through the isAdmin check below.
+ */
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
@@ -77,6 +87,11 @@ const handler = baseApi().get(
     // `retrieval` is written for every turn that could have retrieved - forced retrieval enabled,
     // or the knowledge tool offered - so its presence IS the population. Turns with no knowledge
     // in scope never carry the field and are excluded without a second predicate.
+    //
+    // Presence does NOT imply a `mode`, so the population is wider than the two rate buckets: the
+    // seed fires only on `forcedRetrievalEnabled || search_knowledge_base offered`, while the tool
+    // arms write `retrieval` unconditionally. A config offering `retrieve_knowledge_content` alone
+    // (it is independently selectable) therefore lands live turns in `unclassifiedTurns`.
     const query: Record<string, unknown> = { 'promptMeta.retrieval': { $exists: true } };
     if (startDate || endBefore) {
       query.timestamp = {
@@ -85,12 +100,14 @@ const handler = baseApi().get(
       };
     }
 
-    // Only the three fields the fold reads. `dataLakeTags` stays in the database: naming which
-    // lakes a turn touched is not needed to count turns (see RetrievalRateInput).
+    // Only the fields the fold reads. `dataLakeTags` stays in the database: naming which lakes a
+    // turn touched is not needed to count turns (see RetrievalRateInput). Built from
+    // RETRIEVAL_RATE_FIELDS rather than hand-written, so a field added to the fold's input cannot
+    // go unselected here and silently fold as undefined.
     const rows = await Quest.find(query)
-      .select(
-        'promptMeta.retrieval.attempted promptMeta.retrieval.mode promptMeta.retrieval.forcedSkipReason timestamp'
-      )
+      .select([...RETRIEVAL_RATE_FIELDS.map(field => `promptMeta.retrieval.${field}`), 'timestamp'].join(' '))
+      // Descending matches `retrieval_timestamp_desc`, which is what lets the limit below walk the
+      // index instead of bounding a blocking sort over the whole collection.
       .sort({ timestamp: -1 })
       .limit(MAX_TURNS_SCANNED + 1)
       .lean();

@@ -149,8 +149,8 @@ export default function RetrievalRateTab() {
           {hasNoRatePopulation && (
             <Alert color="neutral" data-testid="retrieval-rate-empty">
               No turns in this window reached the optional path, so there is no rate to report. Any forced or
-              unclassified turns below are counted but cannot answer this question - a turn only measures the offer
-              when the model was free to decline it.
+              unclassified turns below are counted but cannot answer this question - a turn only measures the offer when
+              the model was free to decline it.
             </Alert>
           )}
 
@@ -173,7 +173,7 @@ export default function RetrievalRateTab() {
             <StatCard
               label="Unclassified"
               value={summary.unclassifiedTurns.toLocaleString()}
-              caption="No mode recorded - pre-deploy turns, or agent-mode runs"
+              caption="No mode recorded - pre-deploy turns, agent-mode runs, or a tool-only write"
             />
           </Stack>
 

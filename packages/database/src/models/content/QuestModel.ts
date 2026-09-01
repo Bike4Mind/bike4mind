@@ -938,6 +938,8 @@ function initializeQuestModel() {
     // sorted by timestamp desc. Partial rather than sparse so the filter itself is the index
     // predicate - only turns that could have retrieved are indexed, and the endpoint's sort and
     // limit are served from the index instead of examining (and blocking-sorting) every Quest.
+    // Pre-built by 20260902000000_ensure-quest-retrieval-index rather than left to autoIndex, for
+    // the same DocumentDB foreground-lock reason as status_updatedAt below.
     ChatHistoryItemSchema.index(
       { timestamp: -1 },
       {
@@ -955,7 +957,7 @@ function initializeQuestModel() {
     // usable `status` prefix - `id_status` is `{_id: 1, status: 1}` - so without
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
-    // 20260825000000_ensure-quest-status-updatedat-index rather than left to
+    // 20260826000000_ensure-quest-status-updatedat-index rather than left to
     // autoIndex, because prod runs DocumentDB where the build takes a foreground
     // collection lock and would otherwise land on a request path.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });

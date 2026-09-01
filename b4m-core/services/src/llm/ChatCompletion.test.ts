@@ -38,13 +38,12 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder } from './tools/ToolBuilder';
+import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
-import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -2533,24 +2532,26 @@ describe('ChatCompletionProcess', () => {
       it('becomes the numerator when a knowledge-tool call merges its result onto the seed', async () => {
         // The seed lands first and says attempted:false; the tool's own write arrives later in the
         // turn. Composing the REAL seeded value here (rather than a hand-written literal) is what
-        // ties the merge unit tests to the shape `process()` actually produces.
+        // ties this to the shape `process()` actually produces, and driving it through
+        // applyQuestStatusChanges - the site every tool write goes through - is what would catch
+        // that path being changed from a merge to an assignment, which would erase `mode`.
         const { retrieval } = await runKnowledgeGatingCase({
           knowledgeIds: ['f1'],
           files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
         });
 
-        const merged = mergeRetrievalSummary(retrieval as any, {
-          attempted: true,
-          outcome: 'ok',
-          surfaces: ['knowledge-base'],
-          dataLakeTags: [],
-        });
+        const quest = { promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(quest, {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as any);
 
-        expect(merged).toEqual({
+        expect(quest.promptMeta.retrieval).toEqual({
           attempted: true,
           outcome: 'ok',
           mode: 'optional',
-          surfaces: ['knowledge-base'],
+          surfaces: ['knowledgeBaseSearch'],
           dataLakeTags: [],
         });
       });

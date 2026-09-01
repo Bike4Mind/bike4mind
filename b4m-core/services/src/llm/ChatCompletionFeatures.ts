@@ -698,14 +698,23 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     // outer-scoped variable, not read from a local inside the try, because the catch below must
     // report whichever lakes were resolved even if recall itself is what threw.
     let attemptedDataLakeTags: string[] = [];
-    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+    // NonNullable, not RetrievalSummary['outcome']: the latter now includes undefined, so an
+    // explicit `outcome: undefined` would type-check here and merge through verbatim, breaking
+    // the present-iff-`attempted` contract. Same guard recordForcedSkip uses for forcedSkipReason.
+    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
         // Both recorders run only under forced retrieval, so they can label the turn themselves.
-        // Redundant with the seed in ChatCompletionProcess on the normal path, but the agent-mode
-        // runner reaches these features without passing that site.
+        // Redundant with the seed in ChatCompletionProcess, which every path that constructs this
+        // feature also reaches - the redundancy is for ORDERING, not for a second entry point: a
+        // turn that exits between this write and the seed keeps its label.
+        //
+        // CAUTION for a third writer: 'forced' wins the merge irreversibly, so stamping it on an
+        // optional turn silently removes that turn from the #1394 denominator. Self-label only if
+        // the surface cannot run except under forced retrieval; otherwise omit `mode` and let the
+        // seed classify.
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags,
@@ -1890,7 +1899,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // the audit spine and the per-turn summary name this surface identically.
     // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
     let attemptedDataLakeTags: string[] = [];
-    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+    // NonNullable for the same reason as LakeMemoryFeature's recorder above.
+    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,

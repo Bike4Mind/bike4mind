@@ -29,6 +29,8 @@ vi.mock('@bike4mind/database', () => ({
   Quest: { find: (...a: unknown[]) => mockFind(...a) },
 }));
 
+import { RETRIEVAL_RATE_FIELDS } from '@bike4mind/common';
+
 import handler from '../retrieval-rate';
 
 const TIMESTAMP = new Date('2026-08-20T00:00:00.000Z');
@@ -102,9 +104,9 @@ describe('GET /api/admin/retrieval-rate', () => {
   it('reports the rate over the folded turns', async () => {
     mockFind.mockReturnValue(
       questChain([
-        row({ attempted: true, mode: 'optional' }),
-        row({ attempted: false, mode: 'optional' }),
-        row({ attempted: true, mode: 'forced' }),
+        row({ attempted: true, mode: 'optional', surfaces: ['knowledgeBaseSearch'] }),
+        row({ attempted: false, mode: 'optional', surfaces: [] }),
+        row({ attempted: true, mode: 'forced', surfaces: ['forced-retrieval'] }),
         row({ attempted: false, mode: 'forced', forcedSkipReason: 'attached_files' }),
       ])
     );
@@ -123,24 +125,42 @@ describe('GET /api/admin/retrieval-rate', () => {
     expect(body(res).truncated).toBe(false);
   });
 
-  it('projects only the three fields the fold reads, leaving dataLakeTags in the database', async () => {
+  it('projects only the fields the fold reads, leaving dataLakeTags in the database', async () => {
     const chain = questChain([]);
     mockFind.mockReturnValue(chain);
     const { promise } = run();
     await promise;
 
     const projection = chain.select.mock.calls[0][0] as string;
-    expect(projection).toContain('promptMeta.retrieval.attempted');
-    expect(projection).toContain('promptMeta.retrieval.mode');
-    expect(projection).toContain('promptMeta.retrieval.forcedSkipReason');
+    // Every field of RetrievalRateInput, since a missing one folds as undefined and shifts buckets.
+    for (const field of RETRIEVAL_RATE_FIELDS) {
+      expect(projection).toContain(`promptMeta.retrieval.${field}`);
+    }
     expect(projection).not.toContain('dataLakeTags');
+  });
+
+  it('asks the database for one row past the ceiling, sorted the way the index is', async () => {
+    // Neither was pinned before. Drop the +1 and truncation becomes permanently undetectable in
+    // production with every other test still green; flip the sort and it stops matching
+    // retrieval_timestamp_desc, so the limit bounds a blocking sort instead of an index walk.
+    const chain = questChain([]);
+    mockFind.mockReturnValue(chain);
+    const { res, promise } = run();
+    await promise;
+
+    expect(chain.sort).toHaveBeenCalledWith({ timestamp: -1 });
+    expect(chain.limit).toHaveBeenCalledWith(body(res).maxTurnsScanned + 1);
   });
 
   it('says so when the window exceeds the scan ceiling rather than reporting a silent prefix', async () => {
     // One row over the ceiling: the handler must drop the extra, report the truncation, and log
     // it. A rate quietly computed over a prefix of the window reads as if it covered all of it.
     mockFind.mockReturnValue(
-      questChain(Array.from({ length: 50_001 }, () => row({ attempted: true, mode: 'optional' })))
+      questChain(
+        Array.from({ length: 50_001 }, () =>
+          row({ attempted: true, mode: 'optional', surfaces: ['knowledgeBaseSearch'] })
+        )
+      )
     );
     const { res, promise } = run();
     await promise;

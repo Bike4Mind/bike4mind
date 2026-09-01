@@ -40,12 +40,16 @@ describe('summarizeOptionalPathRetrieval', () => {
   it('counts a zero-result retrieval as a retrieval - the model still chose to look', () => {
     // 'ok' with nothing recalled is a legitimate retrieval per RetrievalSummarySchema. The
     // question here is whether the model reached for the corpus, not what came back.
-    const summary = summarizeOptionalPathRetrieval([turn({ mode: 'optional', attempted: true, outcome: 'ok' })]);
+    const summary = summarizeOptionalPathRetrieval([
+      turn({ mode: 'optional', attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'] }),
+    ]);
     expect(summary.retrievedTurns).toBe(1);
   });
 
   it('counts a failed retrieval as a retrieval too', () => {
-    const summary = summarizeOptionalPathRetrieval([turn({ mode: 'optional', attempted: true, outcome: 'failed' })]);
+    const summary = summarizeOptionalPathRetrieval([
+      turn({ mode: 'optional', attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'] }),
+    ]);
     expect(summary).toMatchObject({ offeredTurns: 1, retrievedTurns: 1, rate: 1 });
   });
 
@@ -81,6 +85,45 @@ describe('summarizeOptionalPathRetrieval', () => {
       });
       // Suppressed turns never ran forced retrieval, so they are not forced turns either.
       expect(summary).toMatchObject({ forcedTurns: 0, offeredTurns: 0, rate: null });
+    });
+  });
+
+  describe('automatic surfaces are not the model choosing to retrieve', () => {
+    // The failure this guards: LakeMemoryFeature has no fabFileIds guard, so it injects its card
+    // and records attempted:true on the very turns forced retrieval skipped for attached files.
+    // The merged turn then looks identical to one where the model called a tool itself, which
+    // inflates the one card the routing question leans on.
+    it('excludes a lake-memory injection on a suppressed turn from the numerator', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        turn({
+          mode: 'forced',
+          forcedSkipReason: 'attached_files',
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['lake-memory'],
+        }),
+      ]);
+      expect(summary.forcedSuppressed).toMatchObject({ turns: 1, retrievedTurns: 0, rate: 0 });
+    });
+
+    it('still counts the turn when the model called a knowledge tool alongside the injection', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        turn({
+          mode: 'forced',
+          forcedSkipReason: 'attached_files',
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['lake-memory', 'knowledgeBaseSearch'],
+        }),
+      ]);
+      expect(summary.forcedSuppressed).toMatchObject({ turns: 1, retrievedTurns: 1, rate: 1 });
+    });
+
+    it('treats an unrecognised surface as not-model-initiated, so a new surface cannot inflate the rate', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        turn({ mode: 'optional', attempted: true, outcome: 'ok', surfaces: ['some-future-auto-surface'] }),
+      ]);
+      expect(summary).toMatchObject({ offeredTurns: 1, retrievedTurns: 0, rate: 0 });
     });
   });
 
