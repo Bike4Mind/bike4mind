@@ -132,6 +132,9 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       }}
       onPointerDown={handlePointerDown}
       data-dragging={isDragging}
+      // Without a role the aria-label is ignored; separator is what a resize handle is.
+      role="separator"
+      aria-orientation="vertical"
       aria-label="Drag to resize"
     />
   );
