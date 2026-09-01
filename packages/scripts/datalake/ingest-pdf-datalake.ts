@@ -148,7 +148,15 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
 /** Complete-but-unchunked lake files (lost S3 event / failed extraction), including files stranded
  * mid-claim by a hard-killed worker. Keep in sync with buildFabFileChunkScanFilter in
  * apps/client/server/worker/chunkScan.ts - including its stale-claim arm (a claim older than
- * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable). */
+ * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable).
+ *
+ * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes
+ * convergence-pause markers while the kill switch is ON, and this mirror does not. Nor does the
+ * reset below honour the switch - it writes `notes: ''`, which erases a pause marker, and
+ * re-enqueues with no `origin`, which isConvergenceHalted defaults to 'user' and lets through. So
+ * running this script against a lake while convergence is paused re-chunks anyway. That is an
+ * operator-run script and closing it properly means teaching it the switch, which is deliberately
+ * out of scope here; do not treat this filter as equivalent to the sweep's in the meantime. */
 const stragglerFilter = (lake: LakeTarget) => ({
   status: 'complete',
   chunkCount: 0,

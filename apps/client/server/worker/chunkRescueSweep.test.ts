@@ -6,7 +6,10 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   // Spied (not a bare stub) so a test can assert the sweep passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
-  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
+  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date, _opts?: unknown) => ({
+    chunkCount: 0,
+    createdAt: { $lt: cutoff },
+  })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -16,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('./chunkScan', () => ({
-  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
+  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
   CHUNK_SCAN_BATCH: 50,
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
   CHUNK_CLAIM_STALE_MS: 30 * 60_000,
@@ -164,5 +167,47 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+});
+
+describe('runChunkRescueSweep convergence-pause wiring', () => {
+  // The self-host twin of the rows in dataLakeBatchReconcile.test.ts. Until the sweep was extracted
+  // out of main.ts this had nowhere to live, so this side of the wiring was unpinned: the flag could
+  // be dropped or hardcoded here and every suite stayed green.
+  const withPauseFlag = (pauseFlag: unknown) =>
+    h.getSettingsValue.mockImplementation(async (key: string) => (key === 'enableAutoChunk' ? true : pauseFlag));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withCandidates([]);
+  });
+
+  it.each([
+    ['ON - paused files must not consume the rescue cap', true, true],
+    ['OFF - paused files must be swept back in and rebuilt', false, false],
+  ])('kill switch %s', async (_label, pauseFlag, expected) => {
+    withPauseFlag(pauseFlag);
+
+    await runSweep();
+
+    // Pinned as the third ARGUMENT, not as an outcome: the filter itself is mocked here, so this is
+    // the only place this caller's wiring is observable. Dropping it no longer compiles; hardcoding
+    // it to a constant is what these two rows still catch.
+    expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+    expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: expected });
+  });
+
+  it('treats a missing or non-boolean setting as OFF, never as ON', async () => {
+    // `=== true` rather than coercion, deliberately: wrongly EXCLUDING is the far worse direction -
+    // it strands every paused file with no automatic rebuild at all, since this sweep is their only
+    // one. An unset setting or a legacy string must therefore fall to sweeping.
+    for (const raw of [undefined, null, 'true', 1]) {
+      h.buildScanFilter.mockClear();
+      withPauseFlag(raw);
+
+      await runSweep();
+
+      expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: false });
+    }
   });
 });

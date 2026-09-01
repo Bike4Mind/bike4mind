@@ -5554,7 +5554,13 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds, fileNotices: allNotices };
+    const result = {
+      promptMessages,
+      convertedFabFiles,
+      deliveredFileIds,
+      fullyDeliveredFileIds,
+      fileNotices: allNotices,
+    };
     return result;
   }
 
