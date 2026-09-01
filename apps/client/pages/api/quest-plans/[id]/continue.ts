@@ -11,12 +11,8 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
-
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
 
 const ContinueRequestSchema = z.object({
   sessionId: z.string().refine(isValidObjectId, {

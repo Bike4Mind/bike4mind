@@ -27,7 +27,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi()
@@ -105,9 +105,8 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
-    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
-    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+    // Same guard the DELETE branch below carries.
+    if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
 
@@ -204,7 +203,7 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+    if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
 

@@ -183,6 +183,14 @@ describe('POST /api/work-items', () => {
     ).rejects.toThrow(/invalid work item id/);
   });
 
+  it('accepts an uppercase-hex dependency id, which names the same work item', async () => {
+    repo.findManyByIdsForUser.mockResolvedValue([item({ id: OID_B })]);
+
+    await call('collection', 'post', { body: { title: 'Ship it', dependencies: [OID_B.toUpperCase()] } }).result;
+
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ dependencies: [OID_B.toUpperCase()] }));
+  });
+
   it('rejects dependencies the caller does not own', async () => {
     repo.findManyByIdsForUser.mockResolvedValue([]);
 

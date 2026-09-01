@@ -9,11 +9,7 @@ import {
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
-import { Types } from 'mongoose';
-
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi()
   /**

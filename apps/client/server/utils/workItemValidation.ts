@@ -5,8 +5,8 @@
  * constraints - see packages/database/src/models/ai/WorkItemModel.ts.
  */
 
-import { Types } from 'mongoose';
 import { BadRequestError } from '@bike4mind/utils';
+import { isValidObjectId } from '@server/utils/objectId';
 import { WORK_ITEM_STATUSES, type WorkItemStatus } from '@bike4mind/common';
 
 const TITLE_MAX = 300;
@@ -22,12 +22,6 @@ export const WORK_ITEM_RATE_LIMIT = 120;
 export const WORK_ITEM_RATE_WINDOW_MS = 60 * 1000;
 /** Bounds the fan-in of a single item, and with it the cycle check's cost. */
 const DEPENDENCIES_MAX = 50;
-
-// Round-trip rather than mongoose.isValidObjectId, which also accepts any
-// 12-character string. Matches the check in orgAccess.ts.
-function isValidObjectId(id: string): boolean {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-}
 
 export function validateWorkItemTitle(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {

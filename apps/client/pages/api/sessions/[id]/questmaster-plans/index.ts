@@ -1,11 +1,7 @@
 import { questMasterPlanRepository, sessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
-import { Types } from 'mongoose';
-
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().get<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
   const userId = req.user?.id;

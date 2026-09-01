@@ -4,14 +4,10 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 
 const MAX_SHARED_WITH_USERS = 50;
-
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
 
 // Regex for safe tag characters (alphanumeric, spaces, hyphens, underscores)
 const SAFE_TAG_PATTERN = /^[a-zA-Z0-9\s\-_]+$/;
