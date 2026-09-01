@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  censusResultLine,
   classifyDynamicLakeMode,
   reconcilePrefixOnly,
   isFinding,
@@ -247,11 +248,78 @@ describe('renderCensusReport', () => {
     expect(result.lines.some(l => l.includes('fileTagPrefix="acme: "'))).toBe(true);
   });
 
+  // A RECONCILE mismatch used to leave exitCode at 0 and the summary at "No lake needs owner
+  // sign-off." while main() aborted the run - so the two signals the docblock calls authoritative
+  // both said CLEAN on a census that had just declared itself untrustworthy.
+  it('exits 1 on a RECONCILE mismatch even when NO lake escalates', () => {
+    const result = renderCensusReport(
+      [baseLake({ reconcileMismatch: true, total: 1, metaTagged: 0, prefixOnlyDirect: 0, narrowingUpperBound: 0 })],
+      'production'
+    );
+    expect(result.findingsCount).toBe(0);
+    expect(result.reconcileMismatchCount).toBe(1);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('never prints a clean summary on a RECONCILE mismatch', () => {
+    const result = renderCensusReport(
+      [baseLake({ reconcileMismatch: true, total: 1, metaTagged: 0, prefixOnlyDirect: 0, narrowingUpperBound: 0 })],
+      'production'
+    );
+    expect(result.lines).not.toContain('No lake needs owner sign-off.');
+    expect(result.lines.some(l => l.includes('DO NOT MERGE'))).toBe(true);
+  });
+
+  it('a mismatch outranks a findings verdict rather than sitting beside it', () => {
+    const result = renderCensusReport([baseLake({ reconcileMismatch: true, prefixOnlyDirect: 3 })], 'production');
+    expect(result.findingsCount).toBe(1);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.some(l => l.includes('need owner sign-off before'))).toBe(false);
+  });
+
+  it('surfaces the missing creator even when the lake is ALSO reserved-prefix', () => {
+    // classifyDynamicLakeMode short-circuits on the reserved prefix, so keying the ESCALATE line
+    // off `mode === 'creator-less'` hid the data-quality defect entirely on stdout.
+    const result = renderCensusReport(
+      [baseLake({ mode: 'reserved-prefix', fileTagPrefix: 'datalake:acme:', createdByUserId: '', unanchoredCount: 4 })],
+      'production'
+    );
+    expect(result.lines.some(l => l.includes('no creator on record'))).toBe(true);
+  });
+
+  it('does not claim a missing creator for a registry (open) lake', () => {
+    const result = renderCensusReport(
+      [baseLake({ mode: 'open', createdByUserId: null, total: null, totalExcludingPending: null, metaTagged: null })],
+      'production'
+    );
+    expect(result.lines.some(l => l.includes('no creator on record'))).toBe(false);
+  });
+
   it('marks the widening listing as truncated, not just the narrowing one', () => {
     const result = renderCensusReport(
       [baseLake({ prefixOnlyDirect: 501, prefixOnlyFiles: { files: [], truncated: true } })],
       'dev'
     );
     expect(result.lines.find(l => l.includes('prefix-only members:'))).toContain('(truncated listing)');
+  });
+});
+
+describe('censusResultLine', () => {
+  it('reports CENSUS FAILED, not a verdict, when the census could not be trusted', () => {
+    const line = censusResultLine(1, 0, 2);
+    expect(line).toContain('CENSUS FAILED');
+    expect(line).toContain('2 lake(s) failed the RECONCILE');
+    expect(line).not.toContain('CLEAN');
+  });
+
+  it('reports CLEAN only on 0 and the sign-off count on 2', () => {
+    expect(censusResultLine(0, 0, 0)).toContain('CLEAN, no lake needs owner sign-off');
+    expect(censusResultLine(2, 3, 0)).toContain('3 lake(s) NEED OWNER SIGN-OFF');
+  });
+
+  it('always tells the operator not to trust the shell exit code', () => {
+    for (const code of [0, 1, 2] as const) {
+      expect(censusResultLine(code, 1, 1)).toContain('not $?');
+    }
   });
 });

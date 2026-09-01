@@ -17,6 +17,7 @@ import { Config } from '../utils/config';
 import {
   classifyDynamicLakeMode,
   reconcilePrefixOnly,
+  censusResultLine,
   renderCensusReport,
   type ExampleFileListing,
   type LakeReport,
@@ -61,8 +62,14 @@ import {
  * whether its id/tag also happens to appear in the static registry (a "shadowed" row) - getting
  * that backwards would drop a shadowed row's user-controlled prefix out of the gate entirely.
  *
- * Shape: raw models only (FabFile, DataLakeModel), no repository import, no write method -
- * mechanically enforced by checkDatalakeCensusReadOnly.test.ts. One lake per query (never a
+ * Shape: raw models only (FabFile, DataLakeModel), no repository import, and no write method OF
+ * ITS OWN - the latter mechanically enforced by checkDatalakeCensusReadOnly.test.ts. Read that
+ * claim narrowly, because the guard is a source grep over this file and prefixOnlyMembersReport.ts
+ * and structurally cannot see a transitive one: the shared `connectDB` wrapper
+ * (packages/database/src/priceCatalogBootstrap.ts) builds unique indexes on three collections -
+ * including the DataLake collection this script audits - and seeds the model catalog. Those are
+ * idempotent, touch no audited DOCUMENT, and are how every script in this audit family connects,
+ * but "READ-ONLY" here means this script issues no writes, not that the process issues none. One lake per query (never a
  * cross-lake $or); counts never materialise documents except a capped example listing for an
  * anchored finding (a `+1` probe to detect truncation). The JSON artifact this script writes
  * carries cross-tenant identity data - per-file owner ids and file names, plus each lake's name,
@@ -177,8 +184,9 @@ async function buildDynamicLakeReport(row: DataLakeRow): Promise<LakeReport> {
   if (!prefix) return base; // classifier already routed this to no-prefix; defensive only.
 
   // Both fail-closed modes get the same un-anchored reach figure. For `reserved-prefix` it is
-  // heavily inflated by construction (a `datalake:` regex matches every OTHER lake's membership
-  // meta-tag), which is why renderLakeLines labels it over-match rather than narrowing.
+  // inflated by construction - a `datalake:`-namespace regex can match OTHER lakes' membership
+  // meta-tags, a bare `datalake:` matching all of them and a longer `datalake:acme:` only those
+  // beneath it - which is why renderLakeLines labels it over-match rather than narrowing.
   if (mode === 'creator-less' || mode === 'reserved-prefix') {
     const unanchoredCount = await countLive({
       $and: [prefixRegexArm(prefix), notMetaTag(datalakeTag)],
@@ -286,7 +294,11 @@ async function main() {
   // RECONCILE lines and the sign-off summary exist, and it is the surface most likely to be lost.
   fs.writeFileSync(
     artifactPath,
-    JSON.stringify({ stage, generatedAt: new Date().toISOString(), exitCode, findingsCount, lines, lakes }, null, 2),
+    JSON.stringify(
+      { stage, generatedAt: new Date().toISOString(), exitCode, findingsCount, reconcileMismatchCount, lines, lakes },
+      null,
+      2
+    ),
     { mode: 0o600 }
   );
   console.log(`\nFull per-lake detail written to ${artifactPath} (mode 0600).`);
@@ -297,18 +309,17 @@ async function main() {
       'it deliberately if it is needed for sign-off.'
   );
 
+  // BEFORE the throw, not after. `$?` cannot carry the verdict (see the exit-code note above), so
+  // this line and the artifact are the only authoritative signals - and the RECONCILE path is
+  // exactly the one where the operator most needs them. renderCensusReport has already folded the
+  // mismatch into `exitCode`, so this cannot announce CLEAN on a run that is about to abort.
+  console.log(censusResultLine(exitCode, findingsCount, reconcileMismatchCount));
+
   if (reconcileMismatchCount > 0) {
     throw new Error(
       `${reconcileMismatchCount} lake(s) failed the RECONCILE cross-check - the census cannot be trusted on this run.`
     );
   }
-
-  // Printed last and stated in words because `$?` cannot carry it: see the exit-code note above.
-  console.log(
-    `\nCENSUS RESULT: exitCode=${exitCode} - ${
-      exitCode === 0 ? 'CLEAN, no lake needs owner sign-off' : `${findingsCount} lake(s) NEED OWNER SIGN-OFF`
-    }. The shell will report 1 for any non-zero; trust this line and the artifact, not $?.`
-  );
 
   return exitCode;
 }

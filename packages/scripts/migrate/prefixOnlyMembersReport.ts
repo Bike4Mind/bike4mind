@@ -119,8 +119,9 @@ const modeColumn = (lake: LakeReport): string => {
     case 'no-prefix':
       return '0 (no prefix arm)';
     case 'reserved-prefix':
-      // NOT a member count: a `datalake:`-namespace regex matches every OTHER lake's
-      // membership meta-tag, so this figure is inflated by design. See renderLakeLines.
+      // NOT a member count: a `datalake:`-namespace regex can match OTHER lakes' membership
+      // meta-tags, so this figure is inflated. How much depends on prefix length - a bare
+      // `datalake:` matches every one of them, a longer `datalake:acme:` only those beneath it.
       return `n/a (reserved prefix - whole arm dropped by the fix) - prefix over-match: ${lake.unanchoredCount ?? 0}`;
     case 'creator-less':
       return `n/a (fails closed) - unanchored: ${lake.unanchoredCount ?? 0}`;
@@ -175,13 +176,17 @@ export function renderLakeLines(lake: LakeReport): string[] {
         'collapsed "0 (no prefix arm)" would have hidden. Only meta-tagged files stay reachable.'
     );
     lines.push(
-      '    The over-match figure above is NOT a member count and is inflated by design: a "datalake:" regex ' +
-        "matches every other lake's membership meta-tag. Treat it as reach, not as narrowing. Note the arm " +
-        'being dropped is also an ownership leak, so removing it is a fix - review what this lake loses, not ' +
-        'whether the drop is correct.'
+      '    The over-match figure above is NOT a member count and is inflated: a "datalake:" regex can match ' +
+        'OTHER lakes\' membership meta-tags, and how much depends on prefix length - a bare "datalake:" ' +
+        'matches every one of them, a longer "datalake:acme:" only those beneath it. Treat it as reach, not ' +
+        'as narrowing. Note the arm being dropped is also an ownership leak, so removing it is a fix - ' +
+        'review what this lake loses, not whether the drop is correct.'
     );
   }
-  if (lake.mode === 'creator-less') {
+  // Keyed off the FIELD, not the mode: classifyDynamicLakeMode short-circuits on a reserved prefix
+  // before it ever looks at the creator, so a lake that is both would otherwise show no trace of
+  // the missing creator on stdout. `open` (registry) lakes have no creator by construction.
+  if (!lake.createdByUserId && lake.mode !== 'open') {
     lines.push('  ESCALATE: dynamic lake with no creator on record - legacy row or bad ingest, review before merge.');
   }
   return lines;
@@ -189,7 +194,13 @@ export function renderLakeLines(lake: LakeReport): string[] {
 
 export interface CensusRenderResult {
   lines: string[];
-  exitCode: 0 | 2;
+  /**
+   * 0 clean, 2 findings need owner sign-off, 1 the census cannot be trusted. A RECONCILE mismatch
+   * OUTRANKS a findings verdict and is why this is not just `isFinding`-derived: the two widening
+   * queries disagreed, so no number in the report is trustworthy - including a `0` that would
+   * otherwise announce "nothing needs sign-off" on a run main() is about to abort.
+   */
+  exitCode: 0 | 1 | 2;
   findingsCount: number;
   reconcileMismatchCount: number;
 }
@@ -201,15 +212,43 @@ export function renderCensusReport(lakes: LakeReport[], stage: string): CensusRe
   }
   const findings = lakes.filter(isFinding);
   const reconcileMismatches = lakes.filter(l => l.reconcileMismatch);
-  lines.push(
-    findings.length === 0
-      ? 'No lake needs owner sign-off.'
-      : `${findings.length} lake(s) need owner sign-off before #2254 merges: ${findings.map(l => l.name).join(', ')}`
-  );
+  if (reconcileMismatches.length > 0) {
+    // Deliberately REPLACES the clean/findings summary rather than sitting beside it. On a mismatch
+    // there is no verdict to report: "No lake needs owner sign-off." would be the most dangerous
+    // line in the file, since it reads as a green light on a run whose own numbers disagree.
+    lines.push(
+      `${reconcileMismatches.length} lake(s) failed the RECONCILE cross-check - DO NOT MERGE on this run. ` +
+        'No verdict is available: the two widening queries disagree, so neither a sign-off list nor a ' +
+        'clean result can be trusted. Re-run; a concurrent write does not reproduce, a real divergence does.'
+    );
+  } else {
+    lines.push(
+      findings.length === 0
+        ? 'No lake needs owner sign-off.'
+        : `${findings.length} lake(s) need owner sign-off before #2254 merges: ${findings.map(l => l.name).join(', ')}`
+    );
+  }
   return {
     lines,
-    exitCode: findings.length === 0 ? 0 : 2,
+    exitCode: reconcileMismatches.length > 0 ? 1 : findings.length === 0 ? 0 : 2,
     findingsCount: findings.length,
     reconcileMismatchCount: reconcileMismatches.length,
   };
+}
+
+/**
+ * The operator-facing verdict line. Pure and exported, rather than built inline in main(), because
+ * `$?` is unreliable through the documented invocation - which makes this line and the artifact's
+ * `exitCode` the only authoritative signals, and an untested authoritative signal is exactly how
+ * the RECONCILE case came to announce CLEAN.
+ */
+export function censusResultLine(exitCode: 0 | 1 | 2, findingsCount: number, reconcileMismatchCount: number): string {
+  const verdict =
+    exitCode === 1
+      ? `CENSUS FAILED - ${reconcileMismatchCount} lake(s) failed the RECONCILE cross-check. These numbers ` +
+        'cannot be trusted and nothing may merge on them'
+      : exitCode === 0
+        ? 'CLEAN, no lake needs owner sign-off'
+        : `${findingsCount} lake(s) NEED OWNER SIGN-OFF`;
+  return `\nCENSUS RESULT: exitCode=${exitCode} - ${verdict}. The shell will report 1 for any non-zero; trust this line and the artifact, not $?.`;
 }
