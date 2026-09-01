@@ -3,7 +3,11 @@ import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
-import { getDynamicDataLakeAccess, lakeMembershipsFrom } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+} from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMembership';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
@@ -250,6 +254,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               );
             } else {
               const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
+              const lakeMemberships = lakeMembershipsFrom(lakes);
+              warnIfManyLakeMemberships(lakeMemberships, context.logger, 'retrieve_knowledge_content');
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -262,7 +268,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   userGroups: context.user.groups || [],
                   dataLakeTags,
                   dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                  lakeMemberships: lakeMembershipsFrom(lakes), // Dynamic-lake arms, each anchored to that lake's creator
+                  lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                   ...retrievalFilter,

@@ -1847,6 +1847,182 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
   });
 });
 
+/**
+ * The forced-retrieval conjunct fix (#2243): `retrievalTags` scopes candidates via an AND'ed
+ * `filters.tags` conjunct, not the ownership `$or` - so on a lake-created session (retrievalTags =
+ * [lake.datalakeTag]) every candidate had to carry that meta-tag, and the creator-anchored
+ * `lakeMemberships` arm could never admit a prefix-only member. The fix pairs
+ * narrowLakeAccessToSession + restrictToDataLake (scope to THIS session's lake only) with dropping
+ * the datalake: meta-tag from `filters.tags` (so the membership arm can do the admitting instead).
+ */
+describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  // Not the caller below ("viewer-1") - the membership arm must anchor to THIS creator.
+  const LAKE_DOC = {
+    id: 'lake-acme',
+    slug: 'acme',
+    name: 'Acme',
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    createdByUserId: 'creator-1',
+  };
+
+  const makeCtx = (opts: {
+    files?: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>;
+    dataLakes?: Array<Record<string, unknown>>;
+  }) => {
+    const files = opts.files ?? [];
+    const chunksByFile: Record<string, unknown[]> = Object.fromEntries(
+      files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.fileName}`, vector: [1, 0] }]])
+    );
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'viewer-1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(opts.dataLakes ?? []) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  it('scopes a lake-created session to that lake only, so a non-creator viewer reaches a creator-owned prefix-only member', async () => {
+    // No `datalake:acme` meta-tag - a prefix-only member, unreachable to a non-creator before #2243.
+    const prefixOnlyFile = { id: 'f1', fileName: 'playbook.pdf', tags: [{ name: 'acme:playbook' }] };
+    const ctx = makeCtx({ files: [prefixOnlyFile], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what is in the playbook'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      // The meta-tag conjunct is dropped entirely - the membership arm scopes instead.
+      { tags: [], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        restrictToDataLake: true,
+        lakeMemberships: [
+          { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+        ],
+      })
+    );
+    expect(messages[0]?.content ?? '').toContain('playbook.pdf');
+  });
+
+  it('drops only the datalake: meta-tag from filters.tags, retaining a non-lake content tag', async () => {
+    const file = { id: 'f1', fileName: 'legal-memo.pdf', tags: [{ name: 'acme:legal' }, { name: 'legal:review' }] };
+    const ctx = makeCtx({ files: [file], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme', 'legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the memo say'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('abstains as no_lakes - not failed - when the session names a lake this caller cannot reach', async () => {
+    // A revoked grant / archived lake / lapsed entitlement on a session that still names that lake.
+    // Nothing is in scope to search, which is an ACCESS state, not an outage: it must never reach
+    // buildOwnershipConditions' restrictToDataLake fail-fast, whose throw would land in the outer
+    // catch and stamp `failed` at error level on every turn of that session, indefinitely.
+    const ctx = makeCtx({ dataLakes: [] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:unreachable']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+    expect(ctx.logger.error).not.toHaveBeenCalled();
+    // Returned before the query: a zero-arm restricted search has nothing to ask.
+    expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+  });
+
+  it('leaves the personal base arms alone for a session whose tags name no lake at all', async () => {
+    // `retrievalTags` is not universally lake identity - a curated surface may scope by a content
+    // tag. narrowLakeAccessToSession deliberately no-ops there ("no lake opinion"), so pairing it
+    // with an unconditional restrictToDataLake would drop the own/shared/group arms and silently
+    // confine grounding to lake content, losing the caller's own files carrying that same tag.
+    const ctx = makeCtx({ files: [], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ restrictToDataLake: false })
+    );
+  });
+
+  it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
+    const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+    // A genuine outage on the query itself - distinct from the no_lakes abstain above, and the one
+    // case that SHOULD record `failed` and log at error level.
+    ctx.db.fabfiles.search = vi.fn().mockRejectedValue(new Error('connection reset'));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    expect(ctx.logger.error).toHaveBeenCalled();
+  });
+});
+
 describe('LakeMemoryFeature personal-corpus skip', () => {
   it('injects nothing when the session corpus is personal files', async () => {
     // Without this the card takes its empty-retrievalTags branch and falls back to the FULL entitled

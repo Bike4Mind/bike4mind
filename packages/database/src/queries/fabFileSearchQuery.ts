@@ -156,16 +156,7 @@ export function buildOwnershipConditions(
      */
     dataLakeTagPrefixes?: string[];
     /**
-     * SCOPED tag prefixes - DYNAMIC (user-created) lakes, anchored to the CALLER rather than the
-     * lake's creator. Affects only a query that also sets `restrictToDataLake`; everywhere else it
-     * is a strict subset of base access and matches nothing new. Retrieval resolves lake
-     * membership through `lakeMemberships` instead - a caller-anchored prefix left a creator-owned
-     * prefix-only member of a lake unretrievable by every OTHER member (#2243). A future retrieval
-     * author reaching for this option is exactly that bug; use `lakeMemberships`.
-     */
-    scopedTagPrefixes?: string[];
-    /**
-     * Restrict results to the lake(s) named by `dataLakeTags`/`scopedTagPrefixes` only -
+     * Restrict results to the lake(s) named by `dataLakeTags`/`lakeMemberships` only -
      * omit the broad owner/shared/group arms that otherwise return ALL of the user's files.
      * Single-lake views (GET /api/data-lakes/:id/articles) set this so one lake's browser
      * shows only that lake's files, not every file the user owns (other lakes' files
@@ -175,9 +166,9 @@ export function buildOwnershipConditions(
     restrictToDataLake?: boolean;
     /**
      * One arm per accessible lake's membership scope - the SAME predicate the whole-lake writes
-     * use, so any caller of this builder (the single-lake browse, and retrieval once it stops
-     * passing `scopedTagPrefixes`) lists/matches exactly what an archive or a permanent delete
-     * would act on. Each arm's prefix is anchored to THAT lake's CREATOR, not the viewer: a
+     * use, so any caller of this builder (the single-lake browse, and retrieval) lists/matches
+     * exactly what an archive or a permanent delete would act on. Each arm's prefix is anchored
+     * to THAT lake's CREATOR, not the viewer: a
      * viewer's own file that merely happens to carry a colliding tag prefix is not a member of
      * someone else's lake, and a per-viewer answer could never agree with the lake's persisted
      * fileCount.
@@ -293,26 +284,13 @@ export function buildOwnershipConditions(
     });
   }
 
-  // SCOPED prefix arm (dynamic lakes) - prefix match ANDed with base access, so a
-  // user-chosen prefix colliding with another tenant's tags can never bypass ownership.
-  // Inherits excludePersonalShares through baseAccess: a scoped-lake file reachable ONLY via a
-  // 1:1 share would also drop out. Currently unreachable - no caller passes scopedTagPrefixes
-  // alongside excludePersonalShares - but documented so a future one doesn't get surprised.
-  const scopedPrefixes = validPrefixes(options?.scopedTagPrefixes);
-  if (scopedPrefixes.length > 0) {
-    const prefixPattern = scopedPrefixes.map(p => escapeRegex(p)).join('|');
-    conditions.push({
-      $and: [{ tags: { $elemMatch: { name: { $regex: new RegExp(`^(${prefixPattern})`) } } } }, { $or: baseAccess }],
-    });
-  }
-
   // Guard the footgun: in lake-scoped mode we drop the broad ownership arms, so if the
   // caller set restrictToDataLake but supplied no lake tag/prefix arm, `conditions` is
   // empty and downstream would build `{ $or: [] }` - which MongoDB rejects at query time
   // ($or must be a non-empty array). Fail fast here with a descriptive error instead.
   if (options?.restrictToDataLake && conditions.length === 0) {
     throw new Error(
-      'buildOwnershipConditions: restrictToDataLake requires lakeMemberships, dataLakeTags or scopedTagPrefixes'
+      'buildOwnershipConditions: restrictToDataLake requires lakeMemberships, dataLakeTags or dataLakeTagPrefixes'
     );
   }
 
@@ -348,8 +326,6 @@ export interface FabFileSearchParams {
     dataLakeTags?: string[];
     /** Static-registry (open) lake prefixes - see buildOwnershipConditions. */
     dataLakeTagPrefixes?: string[];
-    /** Dynamic (owner/org-scoped) lake prefixes - see buildOwnershipConditions. */
-    scopedTagPrefixes?: string[];
     /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
     lakeMemberships?: DataLakeMembershipScope[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
@@ -476,7 +452,6 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       userGroups: options.userGroups,
       dataLakeTags: options.dataLakeTags,
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
-      scopedTagPrefixes: options.scopedTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
       lakeMemberships: options.lakeMemberships,
     });

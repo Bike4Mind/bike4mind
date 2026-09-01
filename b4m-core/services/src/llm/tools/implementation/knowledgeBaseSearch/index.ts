@@ -18,7 +18,7 @@ import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
-import { lakeMembershipsFrom } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { lakeMembershipsFrom, warnIfManyLakeMemberships } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
@@ -420,6 +420,8 @@ async function trySemanticKbSearch(
     const adaptive = budgets.kbResultTokenBudget > 0 || budgets.kbMinRelevance > 0;
     const topK = Math.max(ceiling, adaptive ? KB_SEARCH_MAX_RESULTS : 0, KB_SEARCH_CANDIDATE_FLOOR);
 
+    const lakeMemberships = lakeMembershipsFrom(lakes);
+    warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:semantic');
     const search = await semanticDataLakeSearch(
       {
         userId: context.userId,
@@ -432,7 +434,7 @@ async function trySemanticKbSearch(
         apiKeyTable,
         dataLakeTags,
         dataLakeTagPrefixes,
-        lakeMemberships: lakeMembershipsFrom(lakes),
+        lakeMemberships,
         // Without this the arm below returns empty for a suppressed session and the turn silently
         // falls to metadata-only keyword search - see ownFilesOnly.
         ownFilesOnly: context.suppressLakeArms === true,
@@ -1031,6 +1033,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // lake access would undo the scope on exactly the turns semantic search found nothing.
             const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
             keywordArmLakes = lakes;
+            const lakeMemberships = lakeMembershipsFrom(lakes);
+            warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(
               context.userId,
               query,
@@ -1059,7 +1063,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 userGroups: context.user.groups || [], // Pass user's groups for org-level sharing
                 dataLakeTags,
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                lakeMemberships: lakeMembershipsFrom(lakes), // Dynamic-lake arms, each anchored to that lake's creator
+                lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                 excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
                 // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                 ...(context.retrievalFilter ?? {}),
