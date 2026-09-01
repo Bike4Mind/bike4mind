@@ -33,6 +33,12 @@ const JUNK_ID = 'legacy-uuid-not-an-objectid';
 
 const user = { id: OWNER, groups: [] } as unknown as IUserDocument;
 
+// Each `it` seeds its own row, and several of these models carry a unique (name, userId) index -
+// `projects.userId_1_name_1`, `skills.name_1_userId_1` - so a fixed name makes the second insert
+// in a describe fail with E11000. Unique per call, not per model.
+let seq = 0;
+const uniqueName = (base: string) => `${base} ${++seq}`;
+
 /** One owned row per model, plus the repository whose shareable guard resolves it. */
 const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: string[]) => Promise<unknown[]> }> = [
   {
@@ -40,7 +46,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
     create: async () => {
       const d = await FabFile.create({
         userId: OWNER,
-        fileName: 'live.txt',
+        fileName: `live-${++seq}.txt`,
         type: KnowledgeType.FILE,
         mimeType: 'text/plain',
         fileSize: 4,
@@ -53,7 +59,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
     name: 'Session',
     create: async () => {
       const d = await Session.create({
-        name: 'live session',
+        name: uniqueName('live session'),
         userId: OWNER,
         lastUpdated: new Date(),
         firstCreated: new Date(),
@@ -65,7 +71,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
   {
     name: 'Project',
     create: async () => {
-      const d = await Project.create({ name: 'live project', description: 'd', userId: OWNER });
+      const d = await Project.create({ name: uniqueName('live project'), description: 'd', userId: OWNER });
       return String(d._id);
     },
     find: ids => projectRepository.shareable.findAllAccessibleByIds(user, ids),
@@ -73,7 +79,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
   {
     name: 'Agent',
     create: async () => {
-      const d = await Agent.create({ name: 'live agent', description: 'd', userId: OWNER });
+      const d = await Agent.create({ name: uniqueName('live agent'), description: 'd', userId: OWNER });
       return String(d._id);
     },
     find: ids => agentRepository.shareable.findAllAccessibleByIds(user, ids),
@@ -81,7 +87,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
   {
     name: 'Skill',
     create: async () => {
-      const d = await Skill.create({ name: 'live skill', description: 'd', body: 'b', userId: OWNER });
+      const d = await Skill.create({ name: uniqueName('live skill'), description: 'd', body: 'b', userId: OWNER });
       return String(d._id);
     },
     find: ids => skillRepository.shareable.findAllAccessibleByIds(user, ids),
@@ -91,7 +97,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
     create: async () => {
       // userId is an ObjectId ref here, unlike the string userId the other models use.
       const d = await Tool.create({
-        name: 'live tool',
+        name: uniqueName('live tool'),
         userId: new mongoose.Types.ObjectId(OWNER),
         workBenchFiles: [],
         llmParams: {},
@@ -103,7 +109,7 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
   {
     name: 'Organization',
     create: async () => {
-      const d = await Organization.create({ name: 'live org', userId: OWNER });
+      const d = await Organization.create({ name: uniqueName('live org'), userId: OWNER });
       return String(d._id);
     },
     find: ids => organizationRepository.shareable.findAllAccessibleByIds(user, ids),
@@ -113,6 +119,11 @@ const cases: Array<{ name: string; create: () => Promise<string>; find: (ids: st
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // Build the indexes before any insert. Mongoose creates them in the background, so without this
+  // the unique (name, userId) constraints on projects and skills may not exist yet when the first
+  // test inserts - which is why the E11000 this guards against reproduced only in CI. Limited to
+  // these two models: Session carries a partial index the in-memory server rejects outright.
+  await Promise.all([Project, Skill].map(m => m.init()));
 });
 
 afterAll(async () => {
