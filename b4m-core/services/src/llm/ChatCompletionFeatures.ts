@@ -56,7 +56,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import { getDynamicDataLakeAccess, lakeMembershipsFrom } from '../dataLakeService/getDynamicDataLakeTags';
 import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
   classifyLoadedChunk,
@@ -1883,7 +1883,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     try {
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await this.resolveDataLakeAccess();
+      const { dataLakeTags, dataLakeTagPrefixes, lakes } = await this.resolveDataLakeAccess();
       attemptedDataLakeTags = dataLakeTags;
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
       const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
@@ -1894,6 +1894,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
+        // `tags` is an AND'ed conjunct (fabFileSearchQuery's filters.tags), not part of the ownership
+        // $or below: on a lake-created session retrievalTags is [lake.datalakeTag], so every candidate
+        // must carry that meta-tag and the creator-anchored lakeMemberships arm cannot admit a
+        // prefix-only member. Scoping here the way the KB tools do (resolveSessionLakeAccess narrows
+        // the lake arms) would also need restrictToDataLake - this call resolves lake access owner-wide.
         { tags: this.retrievalTags, shared: false },
         { page: 1, limit: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES },
         { by: 'fileName', direction: 'asc' },
@@ -1903,7 +1908,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           userGroups: user.groups || [],
           dataLakeTags,
           dataLakeTagPrefixes, // static-registry (open) prefixes
-          scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
+          lakeMemberships: lakeMembershipsFrom(lakes), // dynamic-lake arms, each anchored to that lake's creator
           excludeContent: true, // metadata only; chunk text + vectors fetched below
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.

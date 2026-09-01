@@ -32,24 +32,35 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): Record<string, unknown> {
   const metaArm = { 'tags.name': scope.datalakeTag };
   const prefix = normalizeTagPrefix(scope.fileTagPrefix);
-  // Fail closed to the meta-tag alone. A reserved-namespace prefix is dropped because it would
-  // match every OTHER lake's membership tag, and a scope with no creator has nothing to anchor
-  // the prefix arm to - in both cases matching less is the safe direction.
-  if (!prefix || isReservedTagPrefix(prefix) || !scope.creatorUserId) {
+  // A reserved-namespace prefix is dropped because it would match every OTHER lake's membership
+  // tag. Matching less is the safe direction.
+  if (!prefix || isReservedTagPrefix(prefix)) {
+    return metaArm;
+  }
+  // Anchored so the index on `tags.name` still bounds the scan; escaped because a user-chosen
+  // prefix can carry regex metacharacters.
+  const prefixArm = { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } };
+
+  // A REGISTRY lake's prefix arm carries no ownership conjunct, deliberately: the lake is a shared
+  // knowledge base whose files come from many contributors, and it has no creator to anchor to.
+  // That is only safe because a registry prefix is compile-time config from DATA_LAKES rather than
+  // user input - the same reasoning `dataLakeTagPrefixes` documents in fabFileSearchQuery. Never
+  // route a user-supplied prefix through this branch.
+  //
+  // This arm is also why registry lakes cannot be narrowed to meta-tag-only "for safety": doing so
+  // under-counts them against their own browse, which is the drift this union exists to stop.
+  if (scope.kind === 'registry') {
+    return { $or: [metaArm, prefixArm] };
+  }
+
+  // OWNED lake: the prefix is user-chosen and unique only per creator, so it MUST be conjoined
+  // with positive ownership. With no creator to anchor to there is nothing safe to match on, so
+  // fail closed to the meta-tag alone.
+  if (!scope.creatorUserId) {
     return metaArm;
   }
   return {
-    $or: [
-      metaArm,
-      {
-        $and: [
-          // Anchored so the index on `tags.name` still bounds the scan; escaped because a
-          // user-chosen prefix can carry regex metacharacters.
-          { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } },
-          { userId: scope.creatorUserId },
-        ],
-      },
-    ],
+    $or: [metaArm, { $and: [prefixArm, { userId: scope.creatorUserId }] }],
   };
 }
 

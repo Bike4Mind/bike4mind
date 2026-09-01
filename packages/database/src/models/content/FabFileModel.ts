@@ -534,8 +534,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
-      /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
-      lakeMembership?: DataLakeMembershipScope;
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
@@ -1322,10 +1322,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * transition is one-way. Same exclusion as findByContentHashes, for the same reason.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
-   * The prefix arm is bounded by the `{ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 }`
-   * index declared further down this file: `userId` equality narrows the scan to the lake
-   * creator's own files before the `tags.name` range is applied, so a prefix-heavy lake no longer
-   * fetches every other user's matching documents to check ownership.
+   * An OWNED scope's prefix arm is bounded by the `{ userId: 1, 'tags.name': 1, archivedAt: 1,
+   * deletedAt: 1 }` index declared further down this file: `userId` equality narrows the scan to
+   * the lake creator's own files before the `tags.name` range is applied, so a prefix-heavy lake
+   * no longer fetches every other user's matching documents to check ownership.
+   *
+   * A REGISTRY scope emits no `userId` conjunct at all (see DataLakeMembershipScope), so that
+   * sentence does not apply to it. Its prefix arm is still index-bound, just more widely: the
+   * `{ 'tags.name': 1, ... }` index leads on `tags.name`, which bounds an anchored `^prefix`
+   * regex as a range scan rather than a collection scan.
    */
   async computeDataLakeStats(
     scope: DataLakeMembershipScope

@@ -267,7 +267,7 @@ const handler = baseApi()
       };
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
+      const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
@@ -415,7 +415,7 @@ const handler = baseApi()
           apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
-          scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
+          lakeMemberships: dataLakeService.lakeMembershipsFrom(lakes), // dynamic-lake arms, each anchored to that lake's creator
           budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
           vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           logger: req.logger,

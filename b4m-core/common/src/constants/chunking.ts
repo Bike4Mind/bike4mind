@@ -132,6 +132,15 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
  *
  * Neither auto-resumes; both need a reprocess or a lifted switch.
  *
+ * Without a marker either state is misread by every surface at once, which is the failure the field
+ * exists to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so
+ * health drops it from the denominator, convergence grades it `conformant` (its stale stamp still
+ * matches), and search does not withhold it because it is not "in flight". The file's passages are
+ * simply gone and nothing REPORTS it. The rescue sweep is the one exception and deliberately so: an
+ * unmarked file matches its filter and gets re-chunked, which is repair rather than reporting. That
+ * is why the sweep excludes a stalled file only while the switch is ON - see
+ * buildFabFileChunkScanFilter.
+ *
  * A dedicated field rather than prose in `FabFile.notes` (#2016): `notes` is the USER's note, and
  * while the markers lived there every writer of the field clobbered the others - a "Rebuild
  * passages" wave silently deleted whatever the owner had typed.

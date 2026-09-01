@@ -89,6 +89,9 @@ describe('fabFileService search - the access scope cannot come from request inpu
     dataLakeTags: ['datalake:someone-else:private'],
     dataLakeTagPrefixes: ['datalake:'],
     scopedTagPrefixes: ['acme:'],
+    lakeMemberships: [
+      { datalakeTag: 'datalake:someone-else:private', fileTagPrefix: 'acme:', creatorUserId: 'anyone' },
+    ],
     restrictToDataLake: true,
   };
 
@@ -101,6 +104,7 @@ describe('fabFileService search - the access scope cannot come from request inpu
     const options = optionsArgOf(fabFilesSearch);
     expect(options.dataLakeTagPrefixes).toBeUndefined();
     expect(options.scopedTagPrefixes).toBeUndefined();
+    expect(options.lakeMemberships).toBeUndefined();
     expect(options.dataLakeTags).toBeUndefined();
     expect(options.userGroups).toBeUndefined();
     expect(options.restrictToDataLake).toBeUndefined();
@@ -108,6 +112,7 @@ describe('fabFileService search - the access scope cannot come from request inpu
     // Nothing hostile survived under any key.
     expect(JSON.stringify(options)).not.toContain('datalake:');
     expect(JSON.stringify(options)).not.toContain('acme:');
+    expect(JSON.stringify(options)).not.toContain('anyone');
   });
 
   it('still honors the presentation options a caller is allowed to set', async () => {
@@ -122,6 +127,11 @@ describe('fabFileService search - the access scope cannot come from request inpu
 
   it('passes the same scope through when the SERVER supplies it', async () => {
     const { adapters: a, fabFilesSearch } = adapters();
+    const membershipScope = {
+      datalakeTag: 'datalake:org1:handbook',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    };
 
     await search('u1', {}, a, {
       includeShared: true,
@@ -129,6 +139,7 @@ describe('fabFileService search - the access scope cannot come from request inpu
       dataLakeTags: ['datalake:org1:handbook'],
       dataLakeTagPrefixes: ['acme:'],
       scopedTagPrefixes: ['docs:'],
+      lakeMemberships: [membershipScope],
       restrictToDataLake: true,
     });
 
@@ -138,6 +149,9 @@ describe('fabFileService search - the access scope cannot come from request inpu
     expect(options.dataLakeTags).toEqual(['datalake:org1:handbook']);
     expect(options.dataLakeTagPrefixes).toEqual(['acme:']);
     expect(options.scopedTagPrefixes).toEqual(['docs:']);
+    // Mirrors the forwarding regression fabFileSearchQuery.test.ts guards - a second named-hop
+    // (R4) that can just as easily drop the field silently (see search.ts's forward at :119).
+    expect(options.lakeMemberships).toEqual([membershipScope]);
     expect(options.restrictToDataLake).toBe(true);
   });
 

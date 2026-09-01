@@ -117,17 +117,30 @@ async function collectFiles(dir: string): Promise<CandidateFile[]> {
 }
 
 /**
- * Every lake-file query here runs on the shared membership predicate (meta-tag OR a
- * fileTagPrefix match on a file the creator owns), so this script agrees with what
- * computeDataLakeStats counts. A static lake carries no creator, so it fails closed
- * to the meta-tag arm - see buildDataLakeMembershipFilter.
+ * Every lake-file query here runs on the shared membership predicate. For a DB lake that is
+ * meta-tag OR a fileTagPrefix match on a file the creator owns, matching computeDataLakeStats
+ * exactly.
+ *
+ * For a STATIC lake this deliberately stays meta-tag-only and so is NARROWER than
+ * computeDataLakeStats, which matches a registry lake's open prefix arm too. The divergence is
+ * intentional: the filters below drive a soft-delete of stale-pending twins, and a registry
+ * prefix arm carries no ownership conjunct - widening here would let this script soft-delete a
+ * pending file another user happened to tag with the lake's prefix. Planning and reconciliation may
+ * therefore under-count a registry lake's prefix-only members; that is the safe direction for a
+ * script that deletes. See buildDataLakeMembershipFilter.
  */
 const membership = (lake: LakeTarget) =>
-  buildDataLakeMembershipFilter({
-    datalakeTag: lake.datalakeTag,
-    fileTagPrefix: lake.fileTagPrefix,
-    creatorUserId: lake.createdByUserId,
-  });
+  buildDataLakeMembershipFilter(
+    lake.createdByUserId
+      ? {
+          kind: 'owned',
+          datalakeTag: lake.datalakeTag,
+          fileTagPrefix: lake.fileTagPrefix,
+          creatorUserId: lake.createdByUserId,
+        }
+      : // No fileTagPrefix on purpose - see the divergence note above.
+        { kind: 'registry', datalakeTag: lake.datalakeTag }
+  );
 
 /** Live lake files: members, not soft-deleted, not archived (parity with computeDataLakeStats). */
 const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null, archivedAt: null });
@@ -135,7 +148,13 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
 /** Complete-but-unchunked lake files (lost S3 event / failed extraction), including files stranded
  * mid-claim by a hard-killed worker. Keep in sync with buildFabFileChunkScanFilter in
  * apps/client/server/worker/chunkScan.ts - including its stale-claim arm (a claim older than
- * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable). */
+ * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable).
+ *
+ * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes a
+ * `chunkStallReason` while the kill switch is ON, and this mirror does not - so --status still
+ * lists a paused file as a straggler, which is why it labels one (see below). --requeue-stragglers
+ * refuses outright while the switch is ON, so nothing is re-chunked behind the switch's back; do
+ * not treat this filter as equivalent to the sweep's in the meantime. */
 const stragglerFilter = (lake: LakeTarget) => ({
   status: 'complete',
   chunkCount: 0,

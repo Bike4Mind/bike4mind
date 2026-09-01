@@ -682,6 +682,48 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // #2243: this is the ONE site (restrictToDataLake: true) where swapping the caller-anchored
+  // scopedTagPrefixes arm for the creator-anchored lakeMemberships arm changes what matches -
+  // see Approach property 1. Pin both directions.
+  describe('countLakeReachableAttachments (#2243 lake-membership arm)', () => {
+    const LAKE = { id: 'lake1', name: 'Acme', slug: 'acme', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:' };
+    const MEMBERSHIP = { datalakeTag: LAKE.datalakeTag, fileTagPrefix: LAKE.fileTagPrefix, creatorUserId: 'creator-1' };
+
+    it('forwards lakeMemberships (derived from access.lakes), not scopedTagPrefixes', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [LAKE.fileTagPrefix],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      const search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+      (service as any).db = { fabfiles: { search } };
+
+      await (service as any).countLakeReachableAttachments(['f1']);
+
+      const options = search.mock.calls[0][5];
+      expect(options.lakeMemberships).toEqual([MEMBERSHIP]);
+      expect(options).not.toHaveProperty('scopedTagPrefixes');
+    });
+
+    it('Up: forwards the membership arm on the path a creator-owned prefix-only attachment takes', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      // Stands in for buildOwnershipConditions's real membership arm - already proven correct
+      // by the query-builder's own unit + real-Mongo tests; this pins that the count call SITE
+      // forwards what it needs to reach that arm.
+      const search = vi.fn().mockResolvedValue({ data: [{ id: 'f1' }], hasMore: false, total: 1 });
+      (service as any).db = { fabfiles: { search } };
+
+      const count = await (service as any).countLakeReachableAttachments(['f1']);
+      expect(count).toBe(1);
+    });
+  });
+
   describe('process', () => {
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
@@ -2356,7 +2398,10 @@ describe('ChatCompletionProcess', () => {
           knowledgeIds: ['f1'],
           files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
           fabPromptMessages: [
-            { role: 'user', content: `Here is the content from the attached file "context.md" for context:\n\n${body}` },
+            {
+              role: 'user',
+              content: `Here is the content from the attached file "context.md" for context:\n\n${body}`,
+            },
           ],
         });
 

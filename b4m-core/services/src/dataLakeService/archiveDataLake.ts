@@ -139,7 +139,10 @@ export const archiveDataLake = async (
   // multi-membership or prefix collisions exist.
   const hasUnstampedArchive =
     !existing.filesArchivedAt &&
-    (await db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag({ datalakeTag: existing.datalakeTag }));
+    (await db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag({
+      kind: 'owned',
+      datalakeTag: existing.datalakeTag,
+    }));
   let stamp: Date | undefined;
   if (!hasUnstampedArchive) {
     const at = new Date();
