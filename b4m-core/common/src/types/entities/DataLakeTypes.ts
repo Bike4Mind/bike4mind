@@ -1,3 +1,4 @@
+import type { CorpusInconsistencyReport } from '../../constants/corpusInconsistency';
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
@@ -144,6 +145,17 @@ export interface IDataLake {
    * `null` is the explicit clear sentinel written by updateDataLake, undefined is never-set.
    */
   requiredPassageTokenTarget?: number | null;
+  /**
+   * Last computed cross-document inconsistency report (#2242), and when.
+   *
+   * STORED rather than computed on read, because detection needs chunk TEXT and lake health is
+   * forbidden from scanning the chunk collection (#1665 measured that as ruinous at connector scale).
+   * So an owner-triggered pass writes it here and health renders what it finds, the same separation
+   * `converge` uses between planning and executing. A null report means "never run", which the
+   * surface must distinguish from "run and found nothing".
+   */
+  inconsistencyReport?: CorpusInconsistencyReport | null;
+  inconsistencyComputedAt?: Date | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */

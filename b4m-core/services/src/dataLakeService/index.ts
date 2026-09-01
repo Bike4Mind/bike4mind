@@ -22,6 +22,7 @@ export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
 export * from './lakeMembershipScope';
 export * from './computeLakeHealth';
+export * from './detectLakeInconsistencies';
 export * from './convergeLakePolicy';
 export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';

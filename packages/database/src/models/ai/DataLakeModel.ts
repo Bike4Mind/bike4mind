@@ -59,6 +59,11 @@ const DataLakeSchema = new mongoose.Schema(
     // (#1662): a member file whose effective target differs is reported as a conflict, never
     // re-chunked. No index (tiny collection, only read from a lake already in hand).
     requiredPassageTokenTarget: { type: Number },
+    // Last inconsistency report (#2242) and when it ran. `mongoose.Schema.Types.Mixed` deliberately: this is a
+    // report payload the pure detector owns the shape of, and re-declaring its fields here would give
+    // two sources of truth that drift. Bounded at write time by the caller's maxFindings, never here.
+    inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
+    inconsistencyComputedAt: { type: Date, default: null },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },

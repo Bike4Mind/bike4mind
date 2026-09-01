@@ -1,3 +1,4 @@
+import type { CorpusInconsistencyReport } from './corpusInconsistency';
 import type { LakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
@@ -401,6 +402,12 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * upload generations of the same files - each generation genuinely is chunked and vectorized.
    */
   membership: LakeMembershipReport;
+  /**
+   * Last cross-document inconsistency report (#2242), or null when detection has never run for this
+   * lake. Null is NOT "clean" and a surface must not render it as such - detection is an
+   * owner-triggered pass, because it reads chunk text and health may not (#1665).
+   */
+  inconsistency: { report: CorpusInconsistencyReport; computedAt: Date | null } | null;
 };
 
 function emptyTally(): PredicateTally {

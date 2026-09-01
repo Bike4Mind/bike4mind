@@ -467,6 +467,13 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
+   * The first `limit` chunks of one file as text only, ascending by insertion order.
+   *
+   * A separate read from `findByFabFileId`, which is unbounded and carries `vector` - the bulk of a
+   * chunk row. Callers that want prose over a bounded sample (#2242) must not pay for embeddings.
+   */
+  findChunkTextSample(fabFileId: string, limit: number): Promise<string[]>;
+  /**
    * The file's vectorize rollup in ONE pass over its chunks (the `vector` fetch is unavoidable and
    * must not be paid twice per batch):
    *  - `terminalChunkCount`: chunks that have a vector OR are oversized past the context window

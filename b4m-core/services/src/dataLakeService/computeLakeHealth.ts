@@ -52,7 +52,14 @@ export interface ComputeLakeHealthAdapters {
 export async function computeLakeHealth(
   lake: Pick<
     IDataLakeDocument,
-    'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
+    | 'id'
+    | 'datalakeTag'
+    | 'fileTagPrefix'
+    | 'createdByUserId'
+    | 'organizationId'
+    | 'requiredPassageTokenTarget'
+    | 'inconsistencyReport'
+    | 'inconsistencyComputedAt'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
@@ -81,6 +88,7 @@ export async function computeLakeHealth(
       affectedMemberCount: 0,
       scanTruncated: false,
       membership: summarizeLakeMembership([], { scope: membershipScopeDisclosure(lake) }),
+      inconsistency: storedInconsistency(lake),
     };
   }
 
@@ -101,7 +109,19 @@ export async function computeLakeHealth(
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
     membership: await computeMembership(lake, db, logger),
+    // READ, never computed here: detection needs chunk text and this function may not touch the chunk
+    // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
+    inconsistency: storedInconsistency(lake),
   };
+}
+
+/** Null means "never run", which a surface must not render as "clean". */
+function storedInconsistency(
+  lake: Pick<IDataLakeDocument, 'inconsistencyReport' | 'inconsistencyComputedAt'>
+): LakeHealthApiResponse['inconsistency'] {
+  return lake.inconsistencyReport
+    ? { report: lake.inconsistencyReport, computedAt: lake.inconsistencyComputedAt ?? null }
+    : null;
 }
 
 /** The principal the prefix arm is anchored to, carried onto every membership number (#2243). */

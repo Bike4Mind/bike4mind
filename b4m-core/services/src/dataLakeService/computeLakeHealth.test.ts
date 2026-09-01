@@ -273,3 +273,36 @@ describe('computeLakeHealth membership dimension (#2245)', () => {
     expect(result.membership.bucketCounts['proven-identical']).toBe(0);
   });
 });
+
+describe('computeLakeHealth inconsistency surface (#2242)', () => {
+  it('renders the STORED report rather than computing one', async () => {
+    // Detection reads chunk text and this function may not (#1665), so health is a reader here. A
+    // future refactor that ran the detector inline is exactly what this pins against.
+    const report = { findings: [], countsByKind: {}, sampled: false } as never;
+    const computedAt = new Date('2026-06-01T00:00:00Z');
+
+    const result = await computeLakeHealth(
+      { ...lake, inconsistencyReport: report, inconsistencyComputedAt: computedAt } as never,
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency).toEqual({ report, computedAt });
+  });
+
+  it('reports null when detection has never run, which is NOT the same as clean', async () => {
+    const result = await computeLakeHealth(lake, makeAdapters([], []) as never);
+
+    expect(result.inconsistency).toBeNull();
+  });
+
+  it('carries a stored report with no timestamp as computedAt null rather than dropping it', async () => {
+    const report = { findings: [], countsByKind: {}, sampled: false } as never;
+
+    const result = await computeLakeHealth(
+      { ...lake, inconsistencyReport: report, inconsistencyComputedAt: undefined } as never,
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency).toEqual({ report, computedAt: null });
+  });
+});
