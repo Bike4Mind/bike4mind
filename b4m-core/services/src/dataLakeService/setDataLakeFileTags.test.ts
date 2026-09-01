@@ -225,6 +225,20 @@ describe('setDataLakeFileTags', () => {
     expect(fabFiles._state.tags.map(t => t.name)).toEqual(['lk:invoices']);
   });
 
+  it('PUT [] on a prefix-only member whose only prefix tag is the placeholder still refuses', async () => {
+    const { db, logger } = makeAdapters({
+      file: { id: 'f1', userId: 'owner', tags: [{ name: 'lk:uncategorized', strength: 1 }] },
+    });
+
+    // Pins the `datalakeTag` conjunct of the re-mint skip above the diff. The sibling refusal test
+    // uses `lk:invoices`, so it never reaches the placeholder - and without that conjunct the skip
+    // retains the placeholder here, `satisfiesMembershipScope` passes on the prefix arm, and this
+    // documented 400 silently resolves `{ success: true }` instead.
+    await expect(setDataLakeFileTags(admin, 'lake1', 'f1', [], { db, logger })).rejects.toThrow(
+      /would remove the file from/
+    );
+  });
+
   it('lets a prefix-only member escape to the uncategorized placeholder instead', async () => {
     const { db, logger, fabFiles } = makeAdapters({
       file: { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] },
