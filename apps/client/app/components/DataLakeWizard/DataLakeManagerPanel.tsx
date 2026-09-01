@@ -208,6 +208,7 @@ export default function DataLakeManagerPanel() {
           <DataLakeArticlePanel
             file={selectedFile}
             dataLakeId={activeLake.id}
+            lakeName={activeLake.name}
             canManage={activeLake.canManage}
             // Narrower than canManage on purpose - see DataLakeArticlePanel's canPurge. `isOwn` is
             // the DTO's effective-owner flag (grant-aware), and it is false for an admin acting on

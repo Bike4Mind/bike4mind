@@ -8,6 +8,7 @@
  */
 
 import type { AgentStep } from '@bike4mind/agents';
+import { isHeadlessConnection } from '@server/utils/headlessConnection';
 
 // Tools that never require permission - not all strictly read-only, but none have
 // an unreviewed side effect: `recharts` / `mermaid_chart` only emit an <artifact>
@@ -132,4 +133,32 @@ export function selectGatedAction(
   }
 
   return firstNeedsApproval;
+}
+
+/**
+ * What the executor should do about a gated action.
+ *
+ * - `denied` - the tool is on the execution's deny list; fail the run.
+ * - `no_approver` - the tool needs approval but the run has no WebSocket peer, so
+ *   there is nobody to render a permission card and `permission_response` (a
+ *   WebSocket-only command) can never arrive. Fail the run naming the tool.
+ * - `ask` - pause in `awaiting_permission` and ask the client.
+ */
+export type GateDisposition = 'denied' | 'no_approver' | 'ask';
+
+/**
+ * Decide a gated action's fate from its verdict and whether the run has a live peer.
+ *
+ * Split out from the executor so the `no_approver` branch is testable on its own: it is
+ * what keeps a REST-started run from parking in `awaiting_permission` until the
+ * 20-minute stale sweep, holding one of the caller's concurrency slots the whole time -
+ * and the caller cannot avoid it, because the AGENT chooses to call a gated tool. It
+ * reads the sentinel itself rather than taking a boolean, so a dispatcher that stops
+ * threading `connectionId` through cannot quietly reintroduce that wedge.
+ *
+ * "No approver" is treated as denial, the same fail-safe reading the deny list gets.
+ */
+export function resolveGateDisposition(verdict: GatedAction['verdict'], connectionId: string): GateDisposition {
+  if (verdict === 'denied') return 'denied';
+  return isHeadlessConnection(connectionId) ? 'no_approver' : 'ask';
 }

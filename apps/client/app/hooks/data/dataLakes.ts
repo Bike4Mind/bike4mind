@@ -763,12 +763,110 @@ export function useReprocessFabFile(dataLakeId: string | null) {
 }
 
 /**
+ * The invalidation fan-out shared by a removal and a restore - both change the same lake's
+ * membership, so a caller left stale by one is left stale by the other. Kept in one place so
+ * `useRemoveFileFromDataLake` and `useAddFileToDataLake` cannot drift apart on what "membership
+ * changed" invalidates.
+ */
+function invalidateLakeFileMembershipQueries(queryClient: ReturnType<typeof useQueryClient>, dataLakeId: string) {
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+  // Membership changes the lake's reachable-content denominator and predicate tallies.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+  // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+  // A membership write can reach activateIfDraft's draft -> active flip (see
+  // removeFileFromDataLake / addFileToDataLake), which records a `system`-principal
+  // config-history row. Inert today because these hooks fire from the file wizard, where the
+  // History observer is unmounted - invalidated anyway for the same reason the lifecycle hook
+  // does it: the cost is nothing, and reasoning about which paths qualify is what rots.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+  // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
+  // files only, so a membership change scoped to a prefix-only file moves rows without
+  // moving the count.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+  // Membership also changes the file's tags under the lake's prefix, so every tag-derived view
+  // is stale (incl. the manager's count-chip fallback). Root prefixes: these caches are
+  // keyed by an opti/datalakes source discriminator, and a fully-specified key would
+  // refresh only one surface.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+  // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+  // so a membership change stales the list too, not only the counts endpoint.
+  queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+}
+
+/** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
+ *  The server's removal record outlives it by a lot (30 minutes - see removeFileFromDataLake), but
+ *  this toast is the ONLY affordance that spends it: there is no list route and no "recently
+ *  removed" panel, so once it closes the restore is reachable only by calling the route directly.
+ *  The non-owner confirmation copy says so, because for a non-owner there is no second way back. */
+const UNDO_TOAST_DURATION_MS = 15000;
+
+/** `toastId` is presentation, not payload - the server reads nothing but the two ids from the
+ *  route. It travels in the variables so `useAddFileToDataLake`'s callbacks can live at the
+ *  MUTATION level and still address the toast that triggered them; see the comment there. */
+export interface AddFileToDataLakeVariables {
+  dataLakeId: string;
+  fabFileId: string;
+  toastId?: string | number;
+}
+
+/**
+ * Hook: restore a file to a data lake - either an Undo of a recent removal (the server's own
+ * short-TTL removal record supplies the real tags) or a cold add of a file the actor owns. The
+ * server decides which path applies; this hook sends nothing that could select one - no
+ * `restoreTags`, nothing beyond the ids.
+ *
+ * Takes the lake id PER CALL, not at hook construction - see `useRemoveFileFromDataLake`'s Undo
+ * wiring for why a hook-level id is the wrong shape for an action that fires long after the
+ * confirming component may have cleared its own state.
+ */
+export function useAddFileToDataLake() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ dataLakeId, fabFileId }: AddFileToDataLakeVariables) => {
+      const res = await api.post<{ success: true; fileCount: number; totalSizeBytes: number }>(
+        `/api/data-lakes/${dataLakeId}/files/${fabFileId}`
+      );
+      return res.data;
+    },
+    // BOTH callbacks are MUTATION-level, and `toastId` rides in the variables purely so they can be.
+    // Per-`mutate()` callbacks are dispatched only while the observer still has listeners
+    // (mutationObserver's `#notify` guards on `hasListeners()`, and useMutation subscribes via
+    // useSyncExternalStore), and the only caller is an Undo button on a toast that OUTLIVES the
+    // component holding this hook: confirming a removal unmounts the dialog on both wizard
+    // surfaces. Per-call callbacks there fire for nobody, so a failed restore was silent - on the
+    // one affordance the user has, promised by the confirmation copy.
+    onSuccess: (_data, { dataLakeId, toastId }) => {
+      invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
+      if (toastId !== undefined) toast.success('File restored to data lake.', { id: toastId });
+    },
+    onError: (error: Error, { toastId }) => {
+      // Surface the server's own refusal text, not axios' `"Request failed with status code N"`.
+      // Every actionable rejection on this door lands here - "You do not have permission to add
+      // files to this data lake", "Data lake not found", the built-in-lake refusal - and this is
+      // the toast the non-owner confirmation copy calls their only way back, so a status string is
+      // the one message that cannot help them. Body key is `error` (server/middlewares/
+      // errorHandler.ts); same extraction as useTransferLakeOwnership above.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      const message = refusal || error.message || 'Failed to restore the file to the data lake';
+      toast.error(message, toastId !== undefined ? { id: toastId } : undefined);
+    },
+  });
+}
+
+/**
  * Hook: Remove a single file from a data lake. Drops the lake's membership tags from the file
  * and leaves the file itself alone - no soft-delete, no chunk teardown. Owner/admin only; the
  * server verifies the file actually belongs to the lake.
+ *
+ * Offers Undo on the success toast, backed by the server's short-TTL removal record (#2248) - not
+ * by anything captured client-side, since there is nothing left to capture: the tags to restore
+ * live on the server.
  */
 export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
+  const addFileToDataLake = useAddFileToDataLake();
   return useMutation({
     mutationFn: async (fabFileId: string) => {
       const res = await api.delete<{ success: true; fileCount: number; totalSizeBytes: number }>(
@@ -776,37 +874,39 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       );
       return res.data;
     },
-    onSuccess: () => {
-      toast.success('File removed from data lake.');
+    onSuccess: (_data, fabFileId) => {
       if (dataLakeId) {
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
-        // Removing a member changes the lake's reachable-content denominator and predicate tallies.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
-        // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
-        // A removal can still reach activateIfDraft's draft -> active flip (see
-        // removeFileFromDataLake), which records a `system`-principal config-history row. Inert
-        // today because this hook fires from the file wizard, where the History observer is
-        // unmounted - invalidated anyway for the same reason the lifecycle hook does it: the cost
-        // is nothing, and reasoning about which paths qualify is what rots.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+        invalidateLakeFileMembershipQueries(queryClient, dataLakeId);
       }
-      // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
-      // files only, so removing a file that was in the lake by prefix alone drops a row from
-      // the list without moving the count.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
-      // is stale (incl. the manager's count-chip fallback). Root prefixes: these caches are
-      // keyed by an opti/datalakes source discriminator, and a fully-specified key would
-      // refresh only one surface.
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
-      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
-      // so dropping tags here staled the list too, not only the counts endpoint.
-      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+
+      if (!dataLakeId) {
+        toast.success('File removed from data lake.');
+        return;
+      }
+      // Captured NOW, in this closure - not read later off the hook's own `dataLakeId` prop, which
+      // a caller typically nulls out (clearing its confirm-dialog target) as soon as this onSuccess
+      // returns. The Undo button's onClick below closes over this constant, not over the hook.
+      const removedLakeId = dataLakeId;
+      const toastId = toast.success('File removed from data lake.', {
+        duration: UNDO_TOAST_DURATION_MS,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            // No per-call callbacks: this click routinely happens after the component holding the
+            // hook has unmounted, which is exactly when those are dropped. The toast id goes in the
+            // variables instead so the mutation-level handlers can replace this toast in place.
+            addFileToDataLake.mutate({ dataLakeId: removedLakeId, fabFileId, toastId });
+          },
+        },
+      });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to remove file from data lake');
+      // Same extraction as the restore door above: these two fire from the same confirmation
+      // dialog, so leaving this one bare would give Undo the server's reason and Remove a status
+      // code. `Only the creator can remove files from this data lake` is exactly the text a
+      // curator needs here.
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to remove file from data lake');
     },
   });
 }

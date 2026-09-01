@@ -85,6 +85,8 @@ export interface ReplyContainerProps {
   attachmentList?: IChatHistoryItem['attachmentList'];
   /** Navigation intents from navigate_view tool (inline action buttons) */
   navigationIntents?: IChatHistoryItem['navigationIntents'];
+  /** Per-file warnings for attachments that did not arrive intact (also stated to the model) */
+  attachmentNotices?: IChatHistoryItem['attachmentNotices'];
   /** Generalized UI side-effects from tool results */
   uiSideEffects?: IChatHistoryItem['uiSideEffects'];
   /** Jupyter notebook execution state and content */

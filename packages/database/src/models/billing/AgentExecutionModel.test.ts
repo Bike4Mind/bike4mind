@@ -1328,4 +1328,48 @@ describe('AgentExecutionRepository', () => {
       expect(rows).toHaveLength(1);
     });
   });
+
+  // Mongoose's default `minimize` strips empty objects on the read boundary (`toObject()`), which
+  // silently deleted `input: {}` from a checkpointed zero-argument tool call. The resumed run then
+  // replayed a `tool_use` block with no `input` and Anthropic rejected the request with
+  // "messages.N.content.0.tool_use.input: Field required".
+  describe('empty-object preservation on Mixed payloads', () => {
+    it('reads back a checkpointed zero-argument tool_use with its empty input intact', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+      const checkpoint = {
+        iteration: 1,
+        messages: [
+          { role: 'user', content: 'what time is it?' },
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'toolu_1', name: 'current_datetime', input: {} }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Saturday' }],
+          },
+        ],
+      };
+
+      await agentExecutionRepository.updateCheckpoint(execution.id, checkpoint);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+
+      const restored = reloaded?.checkpoint as typeof checkpoint;
+      const toolUse = (restored.messages[1].content as Array<Record<string, unknown>>)[0];
+      expect(toolUse).toHaveProperty('input');
+      expect(toolUse.input).toEqual({});
+    });
+
+    it('reads back a pending permission for a zero-argument tool with its empty toolInput intact', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { toolName: 'current_datetime', toolInput: {}, requestedAt: new Date() },
+      });
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+
+      expect(reloaded?.pendingPermission).toHaveProperty('toolInput');
+      expect(reloaded?.pendingPermission?.toolInput).toEqual({});
+    });
+  });
 });

@@ -42,6 +42,7 @@ export * from './constants/forcedRetrieval';
 export * from './constants/knowledgeBaseSearch';
 export * from './constants/publish';
 export * from './constants/artifactElision';
+export * from './constants/retrievalCoverage';
 export * from './schemas/openai';
 export * from './schemas/bfl';
 export * from './schemas/xai';

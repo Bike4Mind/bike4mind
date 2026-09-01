@@ -1092,9 +1092,8 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       );
     }
 
-    // 'blocked' is not a valid SubQuestStatus in the type system.
-    // SubQuestStatus allows: 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted'
-    // Tasks with status 'not_started' or 'deleted' will proceed to processing here.
+    // No 'blocked' arm below: SubQuestStatus has no such value, so every status
+    // other than the in_progress case above just falls through to processing.
 
     this.logger.log(
       `Started sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} in QuestMaster plan ${questMaster.questMasterPlanId}`
@@ -1550,6 +1549,14 @@ interface ForcedRetrievalCoverage {
   chunksSkippedDimMismatch: number;
   filesWithDimMismatch: number;
   stoppedByChunkBudget: boolean;
+  /**
+   * The within-batch cursor failed to advance, so paging stopped before the batch was drained.
+   * Unlike stoppedByChunkBudget this is not a configured limit being reached - it means the chunk
+   * reader returned rows that cannot produce a forward cursor, so an unknown remainder of the
+   * batch was never scanned. Distinct field because the remedy differs: a budget stop is tuning,
+   * a stall is a defect in the reader or the data.
+   */
+  stoppedByCursorStall: boolean;
   /** Batches that needed more than one read. Informational only - they are paged to completion. */
   partiallyReadBatches: number;
 }
@@ -1657,6 +1664,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const partial =
       coverage.moreFilesBeyondCap ||
       coverage.stoppedByChunkBudget ||
+      coverage.stoppedByCursorStall ||
       anyMismatch ||
       coverage.filesWithheldReindexing > 0;
     if (!partial) return false;
@@ -1669,6 +1677,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     if (coverage.stoppedByChunkBudget) {
       reasons.push(`the ${FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS}-chunk per-turn scan budget was reached`);
+    }
+    if (coverage.stoppedByCursorStall) {
+      reasons.push('the passage reader stopped advancing, so part of a document batch was never scanned');
     }
     if (coverage.filesExcludedForeignModel > 0) {
       reasons.push(
@@ -1701,6 +1712,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       ...(quest.promptMeta.warnings ?? []),
       `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
     ];
+    // The same signal, structured, because `warnings` is a shared channel: response truncation and
+    // artifact elision append there too, so a reader cannot tell a coverage entry from a sibling's
+    // without matching on prose. The chat banner reads THIS field; the string above stays for the
+    // debug inspector and for anything already grepping the warning text.
+    quest.promptMeta.retrievalCoverage = { partial: true, reasons };
     return true;
   }
 
@@ -1837,16 +1853,38 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       return [];
     }
 
+    // Retrieval is "attempted" from here on - the feature is active, the turn carries a query, and
+    // none of the skips above applied. Every exit below records an outcome so a turn that grounded
+    // on nothing is distinguishable from one where forced retrieval never ran at all (see
+    // RetrievalSummarySchema in promptMeta.ts). Mirrors LakeMemoryFeature's recorder above; the
+    // surface name matches the `forced-retrieval` LakeAccessEvent written on the success path, so
+    // the audit spine and the per-turn summary name this surface identically.
+    // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
+    let attemptedDataLakeTags: string[] = [];
+    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+        attempted: true,
+        outcome,
+        surfaces: ['forced-retrieval'],
+        dataLakeTags,
+      });
+    };
+
     const { db, user } = this.chatCompletion;
     // Fail closed on the projected reader rather than falling back to an unbounded per-file read:
     // a host missing it should ground nothing, not quietly reintroduce the corpus-sized load.
     if (!db.fabfiles || !db.fabfilechunks || typeof db.fabfilechunks.findVectorsByFabFileIds !== 'function') {
+      // 'failed', not 'no_lakes': the corpus may be perfectly healthy - this host cannot read it.
+      // No tags yet; access resolution happens below.
+      recordRetrieval('failed', []);
       this.logger.warn('🔒 Forced retrieval: fabfiles/fabfilechunks repository unavailable — skipping');
       return this.noContextMessages('unavailable');
     }
 
     try {
       const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await this.resolveDataLakeAccess();
+      attemptedDataLakeTags = dataLakeTags;
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
       const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
 
@@ -1867,9 +1905,6 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           dataLakeTagPrefixes, // static-registry (open) prefixes
           scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
           excludeContent: true, // metadata only; chunk text + vectors fetched below
-          // fileName is not unique, so without an _id tiebreaker WHICH files survive the candidate
-          // cap is an arbitrary tie order - the "stable turn to turn" the comment above requires.
-          stableSort: true,
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
           ...this.retrievalFilter,
@@ -1881,6 +1916,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const files = filterRetrievalExcluded(fileResults.data, this.retrievalFilter);
       if (files.length === 0) {
         // No readable documents is an access/config state, not evidence about the topic.
+        // 'no_lakes' is the abstain bucket for "nothing was in scope to search". The stamped tags
+        // are what separate the two shapes this covers: empty tags means no lake was in scope at
+        // all, non-empty means lakes were in scope but held no document this caller may read.
+        recordRetrieval('no_lakes', dataLakeTags);
         this.logger.log('🔒 Forced retrieval: no accessible data-lake files');
         return this.noContextMessages('unavailable');
       }
@@ -1954,6 +1993,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         chunksSkippedDimMismatch: 0,
         filesWithDimMismatch: 0,
         stoppedByChunkBudget: false,
+        stoppedByCursorStall: false,
         partiallyReadBatches: 0,
       };
       const pool: ForcedRetrievalCandidate[] = [];
@@ -2021,6 +2061,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
           const nextCursor = usable[usable.length - 1]?.id;
           if (nextCursor === undefined || (cursor !== undefined && nextCursor <= cursor)) {
+            // Recorded, not just logged: this abandons an unknown remainder of the batch, so the
+            // turn is grounded on a partial scan and must say so rather than letting the resulting
+            // thin (or empty) result read as "the library has nothing on this".
+            coverage.stoppedByCursorStall = true;
             this.logger.warn('🔒 Forced retrieval: chunk cursor did not advance - stopping the batch');
             break;
           }
@@ -2046,6 +2090,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         }
         // Zero chunks SCORED, so no comparison against the query ever happened - whether the cause
         // is an unvectorized corpus or a wholly mismatched one, the library was not searched.
+        // 'failed' rather than 'ok' for exactly that reason: nothing threw, but recall did not
+        // complete, and this is an actionable pipeline/config defect that must outrank a genuine
+        // topical zero in the merge severity order rather than reading as "nothing on this topic".
+        recordRetrieval('failed', dataLakeTags);
         return this.noContextMessages('unavailable');
       }
       const scored = pool.sort(compareForcedRetrievalCandidates);
@@ -2097,10 +2145,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // misleading outcome there is, because it reads as "the library has nothing on this". The
         // return value is what keeps the abstention block from making exactly that claim.
         const partial = this.reportCoverage(quest, coverage, embeddingModel);
+        // The legitimate zero: the corpus WAS scanned and compared, nothing was similar enough.
+        // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
+        // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.
+        recordRetrieval('ok', dataLakeTags);
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
+      // Recorded here, before the remaining awaits, so the success outcome is stamped the moment
+      // grounding is decided rather than depending on the lake-prompt and audit steps below.
+      recordRetrieval('ok', dataLakeTags);
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
@@ -2262,6 +2317,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // same reason an empty one does - silently answering from parametric knowledge is the failure.
       // 'unavailable', not 'no_match': an outage must never be reported to the user as a gap in the
       // library's coverage.
+      // Recorded before the swallow, with whichever lakes were resolved (possibly none, if access
+      // resolution itself is what threw) - a retrieval that threw must not look identical to one
+      // that never ran.
+      recordRetrieval('failed', attemptedDataLakeTags);
       this.logger.error('🔒 Forced retrieval failed:', error);
       return this.noContextMessages('unavailable');
     }
