@@ -123,6 +123,11 @@ export const satisfiesMembershipScope = (
   if (!file) return false;
   const tagNames = (file.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
   if (tagNames.includes(scope.datalakeTag)) return true;
+  // A REGISTRY lake's prefix arm carries no ownership conjunct - its prefix is compile-time config,
+  // not user input - so it matches on the tag alone. Mirrors buildDataLakeMembershipFilter's
+  // `scope.kind === 'registry'` branch; `prefixArmTagNames` applies the same reserved/empty-prefix
+  // drop that branch sits behind.
+  if (scope.kind === 'registry') return prefixArmTagNames(tagNames, scope.fileTagPrefix).length > 0;
   // Fails closed to the meta arm alone when there is no creator to anchor the prefix arm to,
   // matching buildDataLakeMembershipFilter's `!scope.creatorUserId` branch.
   if (!scope.creatorUserId || file.userId !== scope.creatorUserId) return false;

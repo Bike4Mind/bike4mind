@@ -23,6 +23,7 @@ describe('buildDataLakeMembershipFilter', () => {
       ['reserved namespace with a suffix', 'datalake:other:'],
     ])('%s', (_label, fileTagPrefix) => {
       const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
         datalakeTag: TAG,
         fileTagPrefix,
         creatorUserId: 'creator-1',
@@ -36,6 +37,7 @@ describe('buildDataLakeMembershipFilter', () => {
       ['creatorUserId empty', ''],
     ])('drops the prefix arm when %s, so it cannot match unowned files', (_label, creatorUserId) => {
       const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
         datalakeTag: TAG,
         fileTagPrefix: 'acme:',
         creatorUserId,
@@ -44,9 +46,62 @@ describe('buildDataLakeMembershipFilter', () => {
     });
   });
 
+  // A registry lake is a hardcoded DATA_LAKES entry: many contributors, no creator to anchor an
+  // ownership arm to. Its prefix arm is deliberately OPEN, which is only safe because the prefix
+  // is compile-time config. These pin that the two models stay distinct - the bug this union fixed
+  // was the registry model silently collapsing into the owned one's fail-closed branch.
+  describe('registry lakes', () => {
+    it('ORs the meta-tag with an OPEN prefix arm - no ownership conjunct', () => {
+      const filter = buildDataLakeMembershipFilter({ kind: 'registry', datalakeTag: TAG, fileTagPrefix: 'opti:' });
+
+      expect(filter).toEqual({ $or: [metaOnly, { 'tags.name': { $regex: /^opti:/ } }] });
+    });
+
+    it('matches a member the owned model would miss, which is the under-count this fixed', () => {
+      const registry = buildDataLakeMembershipFilter({
+        kind: 'registry',
+        datalakeTag: TAG,
+        fileTagPrefix: 'opti:',
+      });
+      // Same lake shape, owned model, no creator: the pre-union behaviour.
+      const ownedWithoutCreator = buildDataLakeMembershipFilter({
+        kind: 'owned',
+        datalakeTag: TAG,
+        fileTagPrefix: 'opti:',
+      });
+
+      expect(ownedWithoutCreator).toEqual(metaOnly);
+      expect(registry).not.toEqual(ownedWithoutCreator);
+    });
+
+    it('still fails closed with no usable prefix, so an unprefixed registry lake cannot widen', () => {
+      expect(buildDataLakeMembershipFilter({ kind: 'registry', datalakeTag: TAG })).toEqual(metaOnly);
+      expect(buildDataLakeMembershipFilter({ kind: 'registry', datalakeTag: TAG, fileTagPrefix: '' })).toEqual(
+        metaOnly
+      );
+    });
+
+    it('refuses a reserved-namespace prefix, which would match every other lake meta-tag', () => {
+      expect(buildDataLakeMembershipFilter({ kind: 'registry', datalakeTag: TAG, fileTagPrefix: 'datalake:' })).toEqual(
+        metaOnly
+      );
+    });
+
+    it('escapes regex metacharacters on the open arm too', () => {
+      const filter = buildDataLakeMembershipFilter({
+        kind: 'registry',
+        datalakeTag: TAG,
+        fileTagPrefix: 'a.b*:',
+      });
+
+      expect(filter).toEqual({ $or: [metaOnly, { 'tags.name': { $regex: /^a\.b\*:/ } }] });
+    });
+  });
+
   describe('with a usable prefix and creator', () => {
     it('ORs the meta-tag with a prefix arm ANDed against creator OWNERSHIP', () => {
       const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
         datalakeTag: TAG,
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',
@@ -62,7 +117,12 @@ describe('buildDataLakeMembershipFilter', () => {
       // owner purge a file another user owns and shared with them, and would list it to every
       // visitor of a public lake.
       const serialized = JSON.stringify(
-        buildDataLakeMembershipFilter({ datalakeTag: TAG, fileTagPrefix: 'acme:', creatorUserId: 'creator-1' })
+        buildDataLakeMembershipFilter({
+          kind: 'owned',
+          datalakeTag: TAG,
+          fileTagPrefix: 'acme:',
+          creatorUserId: 'creator-1',
+        })
       );
       expect(serialized).not.toContain('users');
       expect(serialized).not.toContain('groups');
@@ -71,6 +131,7 @@ describe('buildDataLakeMembershipFilter', () => {
 
     it('escapes regex metacharacters so a crafted prefix cannot widen the match', () => {
       const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
         datalakeTag: TAG,
         fileTagPrefix: 'a+b(c).*:',
         creatorUserId: 'creator-1',
@@ -86,6 +147,7 @@ describe('buildDataLakeMembershipFilter', () => {
 
     it('anchors the prefix so a mid-tag occurrence is not a member', () => {
       const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
         datalakeTag: TAG,
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',
@@ -99,6 +161,7 @@ describe('buildDataLakeMembershipFilter', () => {
 
     it('normalizes a padded prefix rather than matching the raw string', () => {
       const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
         datalakeTag: TAG,
         fileTagPrefix: '  acme:  ',
         creatorUserId: 'creator-1',
@@ -118,7 +181,12 @@ describe('buildDataLakeMembershipFilter', () => {
      * pattern this mirrors.
      */
     const membershipRegex = (fileTagPrefix: string): RegExp | null => {
-      const filter = buildDataLakeMembershipFilter({ datalakeTag: TAG, fileTagPrefix, creatorUserId: 'creator-1' });
+      const filter = buildDataLakeMembershipFilter({
+        kind: 'owned',
+        datalakeTag: TAG,
+        fileTagPrefix,
+        creatorUserId: 'creator-1',
+      });
       if (!('$or' in filter)) return null;
       const prefixArm = (filter.$or as Record<string, unknown>[])[1].$and as Record<string, unknown>[];
       return (prefixArm[0]['tags.name'] as { $regex: RegExp }).$regex;
@@ -198,7 +266,12 @@ describe('buildNoOtherLakeMetaTagFilter', () => {
   });
 
   it('composes with the membership filter and the content-prefix filter without a tags-key collision', () => {
-    const membership = buildDataLakeMembershipFilter({ datalakeTag: TAG, fileTagPrefix: 'acme:', creatorUserId: 'c1' });
+    const membership = buildDataLakeMembershipFilter({
+      kind: 'owned',
+      datalakeTag: TAG,
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'c1',
+    });
     const exclusive = buildNoOtherLakeMetaTagFilter(TAG);
     const withMembership = { ...membership, ...exclusive };
     expect(withMembership).toHaveProperty('$or');

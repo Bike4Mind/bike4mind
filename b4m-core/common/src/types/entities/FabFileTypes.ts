@@ -547,21 +547,48 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
- * Identifies a data lake for file-membership matching: a file belongs on an exact `datalakeTag`
- * match OR on a `fileTagPrefix` match against a file the lake's CREATOR OWNS. The predicate itself
- * is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
+ * Identifies a data lake for file-membership matching. The predicate itself is
+ * `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
  * `IFabFileRepository` can name it without the packages depending on each other.
  *
- * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens what
- * the filter selects, so a caller-supplied scope would reach another user's files - and on the
- * lifecycle paths, destroy them.
+ * TWO membership models, both legitimate, discriminated so a consumer cannot silently get the
+ * wrong one:
+ *
+ * - `owned` (DB lake): meta-tag OR (`fileTagPrefix` match AND the file is owned by the lake's
+ *   CREATOR). The prefix is user-chosen and unique only per creator, so the ownership conjunct is
+ *   what stops one lake's prefix from reaching another tenant's files.
+ * - `registry` (hardcoded DATA_LAKES lake): meta-tag OR `fileTagPrefix`, with NO ownership arm.
+ *   Such a lake is a shared knowledge base with many contributors and no creator to anchor to.
+ *   Safe ONLY because the prefix is compile-time config - see the ownership-bypass note on
+ *   `dataLakeTagPrefixes` in fabFileSearchQuery, which this replaces FOR PER-LAKE MEMBERSHIP only.
+ *   That mechanism is still live and must not be removed: the multi-lake retrieval surfaces
+ *   (semantic-search, the knowledge-base tools, ChatCompletionFeatures, and the tag-count prefix
+ *   arms) pass it for a whole SET of lakes at once, which a single-lake scope cannot express.
+ *
+ * A discriminated union rather than an optional `creatorUserId` because the previous shape could
+ * not express the registry model at all: the filter DEGRADED a creator-less scope to meta-tag-only,
+ * which under-counted registry lakes and forced the browse path to hand-roll the correct predicate
+ * at its own call site. The two then disagreed, violating the invariant stated on
+ * `countDataLakeFilesByMembership` below.
+ *
+ * Always build these from the lake DOCUMENT (`owned`) or the hardcoded registry entry
+ * (`registry`), never from request input: the prefix arm widens what the filter selects, and on
+ * the lifecycle paths that means destroying files.
  */
-export interface DataLakeMembershipScope {
-  datalakeTag: string;
-  fileTagPrefix?: string | null;
-  /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
-  creatorUserId?: string | null;
-}
+export type DataLakeMembershipScope =
+  | {
+      kind: 'owned';
+      datalakeTag: string;
+      fileTagPrefix?: string | null;
+      /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
+      creatorUserId?: string | null;
+    }
+  | {
+      kind: 'registry';
+      datalakeTag: string;
+      /** From the hardcoded DATA_LAKES registry ONLY - never a user-supplied prefix. */
+      fileTagPrefix?: string | null;
+    };
 
 /**
  * The model interface for the FabFile model.
