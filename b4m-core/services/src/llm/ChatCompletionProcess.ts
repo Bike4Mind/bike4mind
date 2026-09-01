@@ -790,7 +790,6 @@ export class ChatCompletionProcess {
     | {
         dataLakeTags: string[];
         dataLakeTagPrefixes: string[];
-        scopedTagPrefixes: string[];
         lakes: ResolvedLakeAccess[];
       }
     | undefined;
@@ -924,7 +923,6 @@ export class ChatCompletionProcess {
   private async getAccessibleDataLakeAccess(): Promise<{
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
     lakes: ResolvedLakeAccess[];
   }> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
@@ -942,7 +940,6 @@ export class ChatCompletionProcess {
         this.accessibleDataLakeAccessMemo = {
           dataLakeTags: [],
           dataLakeTagPrefixes: [],
-          scopedTagPrefixes: [],
           lakes: [],
         };
       }

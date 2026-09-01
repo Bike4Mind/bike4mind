@@ -718,7 +718,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[]; // Required when includeShared is true - user's group IDs for org-level sharing
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
-      scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       /**
        * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
@@ -773,7 +772,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]>;
@@ -789,7 +787,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]>;
 
@@ -805,7 +802,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
@@ -821,7 +817,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]>;

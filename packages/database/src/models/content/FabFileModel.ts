@@ -532,7 +532,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
@@ -727,7 +726,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]> {
@@ -789,7 +787,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -846,7 +843,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -956,7 +952,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]> {
