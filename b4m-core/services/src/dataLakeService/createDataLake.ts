@@ -69,9 +69,10 @@ export function isDatalakeTagWellFormed(lake: { datalakeTag: string; slug: strin
  */
 function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
   const suffix = `-${attempt}`;
-  // Room is derived from `suffix.length`, deliberately, NOT hardcoded to 2: raising the attempt cap
-  // into 3-digit territory has to keep fitting with no edit here. Do not "simplify" this to a
-  // literal - every test in this file would still pass, and a 3-digit suffix would then persist 61.
+  // Room is derived from `suffix.length`, deliberately, NOT hardcoded to 2: attempts 10-49 already
+  // carry a 3-char suffix, so a literal would persist 61 today - this is not a hypothetical about
+  // raising the cap. `keeps fitting once the suffix reaches two digits` is the test that catches it;
+  // keep that test if you touch this line.
   const trimmedBase = baseSlug.slice(0, MAX_DATA_LAKE_SLUG_LENGTH - suffix.length).replace(/-+$/, '');
   return `${trimmedBase}${suffix}`;
 }
