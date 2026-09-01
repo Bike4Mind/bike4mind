@@ -47,7 +47,12 @@ const makeRes = () => {
 };
 const logger = { error: vi.fn(), warn: vi.fn() };
 const req = (body: unknown) => ({ method: 'POST', user: { id: 'u1' }, body, logger }) as never;
-/** A syntactically valid 24-char hex ObjectId - failedFileIds is shape-validated at the schema. */
+/**
+ * A syntactically valid 24-char hex ObjectId. NOT enforced by the schema - `failedFileIds` is
+ * `z.array(z.string())`, deliberately unconstrained, and the malformed-id tests below push non-hex
+ * strings straight through it. The shape check is a FILTER in the handler, which is what keeps a bad
+ * id from 422ing the batch into a hang.
+ */
 const FID_A = '0123456789abcdef01234567';
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
 
@@ -198,7 +203,11 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     // residual orphans a clamp used to strand no longer exist.
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
     const { res, json } = makeRes();
-    const tooMany = Array.from({ length: 10001 }, () => FID_A);
+    // Distinct ids, not 10001 copies of one: with identical values the two slice assertions below
+    // would pass for any tiling that happened to have the right lengths, including a loop that
+    // re-sent the same chunk twice. Distinctness is what makes them assert the ORDER and the
+    // boundary.
+    const tooMany = Array.from({ length: 10001 }, (_, i) => i.toString(16).padStart(24, '0'));
     await run({ batchId: 'b1', failedFiles: 1, failedFileIds: tooMany }, res);
 
     // Two calls tiling the list exactly - the second is the one a clamp would have dropped.

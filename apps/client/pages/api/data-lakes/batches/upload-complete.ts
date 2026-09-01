@@ -10,12 +10,15 @@ import { z } from 'zod';
  * How many ids the cleanup below scopes into one $in - a CHUNK SIZE, not a cap on what gets cleaned:
  * the loop keeps going until every well-formed id is covered, so no orphan is left behind.
  *
- * Total work is bounded upstream rather than by this number. The client always sends
- * `failedFileNames` in the same body as `failedFileIds` (dataLakeUploadPipeline.ts:483-484), so at
- * roughly 27 bytes per quoted id plus ~50 per name the 1 MB body cap admits on the order of 13k
- * failed files, not the ~38k an ids-only reading suggests. That makes this at most two iterations in
- * practice - which is why chunking is affordable where refusing is not: everything below this point
- * is what tallies and finalizes the batch, and a 422 here leaves it hanging.
+ * Total work is bounded upstream rather than by this number, by the 1 MB body cap. Two figures, and
+ * they are different questions. TYPICAL: the client always sends `failedFileNames` in the same body
+ * (dataLakeUploadPipeline.ts:483-484), so at ~27 bytes per quoted id plus ~50 per name the cap
+ * admits on the order of 13k failed files - two iterations. WORST CASE: a body carrying ids and no
+ * names admits ~38.8k, so four. Four scoped updateManys against a 60 s function budget
+ * (infra/web.ts) is not a timeout risk, which is what makes chunking affordable where refusing is
+ * not: everything below this point is what tallies and finalizes the batch, and a 422 here leaves it
+ * hanging. Do not "fix" this with a chunk-count bound - that is a clamp under another name, and it
+ * reinstates exactly the stranded residual the loop removes.
  */
 const FAILED_FILE_ID_CHUNK = 10000;
 
@@ -43,9 +46,10 @@ const UploadCompleteInput = z.object({
   failedFileNames: z.array(z.string()).optional(),
   // FabFile ids the failed uploads left behind (created at presign, 0 chunks, no S3
   // object). Removed here so they don't inflate the lake's file count. Deliberately unconstrained
-  // here: both the shape check and the length bound are applied in the handler as a filter and a
-  // clamp, so a malformed or oversized list still tallies and finalizes instead of 422ing the batch
-  // into a three-hour hang. See OBJECT_ID_RE and FAILED_FILE_ID_CHUNK.
+  // here: the shape check is applied in the handler as a filter, and length is handled by chunking
+  // the cleanup rather than bounding the input, so a malformed or oversized list still tallies and
+  // finalizes instead of 422ing the batch into a three-hour hang. See OBJECT_ID_RE and
+  // FAILED_FILE_ID_CHUNK.
   failedFileIds: z.array(z.string()).optional(),
 });
 
@@ -79,8 +83,9 @@ const handler = baseApi()
     // landed), and unreferenced (just created). Scope to files that are BOTH owned by the
     // caller AND stamped with this batch (presign sets FabFile.batchId), so a stale or
     // retried client sending stray ids can never delete the caller's other files.
-    // One scoped updateMany rather than two queries per id: the previous per-id loop ran before the
-    // status flip and finalize below, so a long list timed the request out and left the batch hanging.
+    // Scoped updateManys in chunks rather than two queries per id: the previous per-id loop ran
+    // before the status flip and finalize below, so a long list timed the request out and left the
+    // batch hanging. The chunk count is bounded by the body cap - see FAILED_FILE_ID_CHUNK.
     if (failedFileIds?.length) {
       // Filtered, then chunked - the filter degrades the request rather than refusing it, and the
       // chunking keeps a long list from becoming one oversized $in. Neither refuses, for the same
