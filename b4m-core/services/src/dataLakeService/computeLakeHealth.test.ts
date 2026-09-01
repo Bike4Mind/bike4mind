@@ -275,18 +275,65 @@ describe('computeLakeHealth membership dimension (#2245)', () => {
 });
 
 describe('computeLakeHealth inconsistency surface (#2242)', () => {
-  it('renders the STORED report rather than computing one', async () => {
-    // Detection reads chunk text and this function may not (#1665), so health is a reader here. A
-    // future refactor that ran the detector inline is exactly what this pins against.
-    const report = { findings: [], countsByKind: {}, sampled: false } as never;
-    const computedAt = new Date('2026-06-01T00:00:00Z');
+  const storedReport = {
+    findings: [
+      {
+        kind: 'relationship-conflict',
+        // Lifted verbatim from a member document - an organization name, not a system value.
+        subject: 'northwind logistics',
+        evidence: [
+          { fabFileId: 'f1', fileName: 'deck.pdf', excerpt: 'Northwind Logistics is a customer in production.' },
+          { fabFileId: 'f2', fileName: 'crm.pdf', excerpt: 'Northwind Logistics is a prospect evaluating us.' },
+        ],
+      },
+    ],
+    countsByKind: {
+      'superlative-conflict': 0,
+      'metric-disagreement': 0,
+      'relationship-conflict': 1,
+      'expired-claim': 0,
+    },
+    sampled: true,
+  } as never;
 
-    const result = await computeLakeHealth(
-      { ...lake, inconsistencyReport: report, inconsistencyComputedAt: computedAt } as never,
-      makeAdapters([], []) as never
-    );
+  const withReport = (over: Record<string, unknown> = {}) =>
+    ({
+      ...lake,
+      inconsistencyReport: storedReport,
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+      ...over,
+    }) as never;
 
-    expect(result.inconsistency).toEqual({ report, computedAt });
+  it('carries NO document prose onto the read-gated health response', async () => {
+    // The P0 this fixes. GET /health is read-gated (org and public-lake readers reach it) and applies
+    // no redaction, while the report is manage-only - redactLakeForActor withholds the stored fields
+    // and POST /inconsistencies is write-gated for that reason. Serializing the whole response and
+    // searching it is the assertion that survives someone adding a new prose-bearing field later; a
+    // per-field check would pass while the new field leaked.
+    const result = await computeLakeHealth(withReport(), makeAdapters([], []) as never);
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('Northwind Logistics');
+    expect(serialized).not.toContain('northwind logistics');
+    expect(serialized).not.toContain('deck.pdf');
+    expect(serialized).not.toContain('excerpt');
+    expect(serialized).not.toContain('findings');
+  });
+
+  it('still reports the counts, so the surface can say something happened', async () => {
+    const result = await computeLakeHealth(withReport(), makeAdapters([], []) as never);
+
+    expect(result.inconsistency).toEqual({
+      computedAt: new Date('2026-06-01T00:00:00Z'),
+      sampled: true,
+      findingCount: 1,
+      countsByKind: {
+        'superlative-conflict': 0,
+        'metric-disagreement': 0,
+        'relationship-conflict': 1,
+        'expired-claim': 0,
+      },
+    });
   });
 
   it('reports null when detection has never run, which is NOT the same as clean', async () => {
@@ -296,13 +343,21 @@ describe('computeLakeHealth inconsistency surface (#2242)', () => {
   });
 
   it('carries a stored report with no timestamp as computedAt null rather than dropping it', async () => {
-    const report = { findings: [], countsByKind: {}, sampled: false } as never;
-
     const result = await computeLakeHealth(
-      { ...lake, inconsistencyReport: report, inconsistencyComputedAt: undefined } as never,
+      withReport({ inconsistencyComputedAt: undefined }),
       makeAdapters([], []) as never
     );
 
-    expect(result.inconsistency).toEqual({ report, computedAt: null });
+    expect(result.inconsistency?.computedAt).toBeNull();
+    expect(result.inconsistency?.findingCount).toBe(1);
+  });
+
+  it('reads the STORED report rather than computing one', async () => {
+    // Detection reads chunk text and this function may not (#1665), so health is a reader here.
+    const adapters = makeAdapters([], []);
+
+    await computeLakeHealth(withReport(), adapters as never);
+
+    expect(adapters.db.fabFiles.findDataLakeMembershipMembers).toHaveBeenCalledTimes(1);
   });
 });

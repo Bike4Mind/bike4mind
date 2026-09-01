@@ -1,4 +1,4 @@
-import type { CorpusInconsistencyReport } from './corpusInconsistency';
+import type { InconsistencyKind } from './corpusInconsistency';
 import type { LakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
@@ -403,11 +403,28 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    */
   membership: LakeMembershipReport;
   /**
-   * Last cross-document inconsistency report (#2242), or null when detection has never run for this
-   * lake. Null is NOT "clean" and a surface must not render it as such - detection is an
+   * SUMMARY of the last cross-document inconsistency report (#2242), or null when detection has never
+   * run. Null is NOT "clean" and a surface must not render it as such - detection is an
    * owner-triggered pass, because it reads chunk text and health may not (#1665).
+   *
+   * Counts only. No excerpts, and no `subject`, because both are lifted verbatim from member
+   * documents - a `relationship-conflict` subject IS an organization name taken out of the prose.
+   * GET /health is READ-gated (org and public-lake readers reach it) and applies no redaction, while
+   * the report itself is manage-only: `redactLakeForActor` withholds the stored fields from readers,
+   * and POST /inconsistencies is write-gated for exactly that reason.
+   *
+   * So the shape here carries nothing to redact rather than relying on a caller to redact it. An
+   * actor-conditional payload would put the burden on every future reader of this response; a
+   * structurally prose-free one cannot leak even if someone forgets. The full findings come from
+   * POST /inconsistencies, which is already gated.
    */
-  inconsistency: { report: CorpusInconsistencyReport; computedAt: Date | null } | null;
+  inconsistency: {
+    computedAt: Date | null;
+    /** True when detection sampled rather than read the whole corpus, so counts are a lower bound. */
+    sampled: boolean;
+    findingCount: number;
+    countsByKind: Record<InconsistencyKind, number>;
+  } | null;
 };
 
 function emptyTally(): PredicateTally {

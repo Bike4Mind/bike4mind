@@ -115,13 +115,27 @@ export async function computeLakeHealth(
   };
 }
 
-/** Null means "never run", which a surface must not render as "clean". */
+/**
+ * Project the stored report down to COUNTS for the health response. Null means "never run", which a
+ * surface must not render as "clean".
+ *
+ * Deliberately drops `findings` entirely - both the excerpts and the `subject`, which for a
+ * relationship conflict is an organization name lifted straight out of a member document. GET /health
+ * is read-gated and redacts nothing, so anything prose-shaped attached here reaches every reader of
+ * the lake, including public ones. Projecting rather than redacting means there is nothing for a
+ * future caller to forget to strip.
+ */
 function storedInconsistency(
   lake: Pick<IDataLakeDocument, 'inconsistencyReport' | 'inconsistencyComputedAt'>
 ): LakeHealthApiResponse['inconsistency'] {
-  return lake.inconsistencyReport
-    ? { report: lake.inconsistencyReport, computedAt: lake.inconsistencyComputedAt ?? null }
-    : null;
+  const report = lake.inconsistencyReport;
+  if (!report) return null;
+  return {
+    computedAt: lake.inconsistencyComputedAt ?? null,
+    sampled: report.sampled,
+    findingCount: report.findings.length,
+    countsByKind: report.countsByKind,
+  };
 }
 
 /** The principal the prefix arm is anchored to, carried onto every membership number (#2243). */
