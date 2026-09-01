@@ -116,27 +116,24 @@ export function partitionBySupersession<T extends SupersedableFile>(
   lakeScope: { lakes: readonly AttributableLake[] }
 ): { servable: T[]; superseded: SupersededEntry<T>[] } {
   const lakes = [...lakeScope.lakes];
-  const winners = new Map<string, { file: T; tier: SupersessionTier }>();
-  const keyed: { file: T; key: string | null; tier: SupersessionTier }[] = [];
+  const winners = new Map<string, T>();
+  const keyed: { file: T; identity: { key: string; tier: SupersessionTier } | null }[] = [];
 
   for (const file of files) {
     const lakeIds = attributeFileToLakeIds(file.fileTags ?? [], lakes);
     const identity = lakeIds.length === 1 ? supersessionKeyFor(file, lakeIds[0]) : null;
-    if (!identity) {
-      keyed.push({ file, key: null, tier: 'fileName' });
-      continue;
-    }
-    keyed.push({ file, key: identity.key, tier: identity.tier });
+    keyed.push({ file, identity });
+    if (!identity) continue;
     const incumbent = winners.get(identity.key);
-    if (!incumbent || winsOver(file, incumbent.file)) winners.set(identity.key, { file, tier: identity.tier });
+    if (!incumbent || winsOver(file, incumbent)) winners.set(identity.key, file);
   }
 
   const servable: T[] = [];
   const superseded: SupersededEntry<T>[] = [];
-  for (const { file, key, tier } of keyed) {
-    const winner = key === null ? undefined : winners.get(key);
-    if (!winner || winner.file.id === file.id) servable.push(file);
-    else superseded.push({ file, tier, supersededBy: winner.file.id });
+  for (const { file, identity } of keyed) {
+    const winner = identity && winners.get(identity.key);
+    if (!winner || !identity || winner.id === file.id) servable.push(file);
+    else superseded.push({ file, tier: identity.tier, supersededBy: winner.id });
   }
   return { servable, superseded };
 }
@@ -154,19 +151,27 @@ export function buildSupersessionReport(superseded: readonly SupersededEntry[]):
   };
 }
 
+/**
+ * The named half of every supersession notice, shared so the search prose below and the forced
+ * retrieval coverage in ChatCompletionFeatures stay worded alike. Names ids, not just a count, and
+ * says which signal matched: the bare-filename tier can collapse two genuinely different documents,
+ * and a reader can only tell that from the pair plus the tier.
+ */
+export function formatSupersededSample(sample: SupersessionReport['sample'], count: number): string {
+  const named = sample
+    .map(f => `${f.fileName ?? f.fileId} [${f.fileId}, matched by ${f.tier}, superseded by ${f.supersededBy}]`)
+    .join('; ');
+  return count > sample.length ? `${named}, ...` : named;
+}
+
 /** Prose for the API response, the chat NOTE and the quest warning. Null when nothing was suppressed. */
 export function describeSupersession(report: SupersessionReport | undefined): string | null {
   if (!report?.partial) return null;
-  // Names ids, not just a count, and says which signal matched: the bare-filename tier can collapse
-  // two genuinely different documents, and a reader can only tell that from the pair plus the tier.
-  // The recovery instruction is what makes the weak tier acceptable at all - see the module comment.
-  const named = report.sample
-    .map(f => `${f.fileName ?? f.fileId} [${f.fileId}, matched by ${f.tier}, superseded by ${f.supersededBy}]`)
-    .join('; ');
-  const more = report.count > report.sample.length ? ', ...' : '';
+  // The recovery instruction is what makes the weak file-name tier acceptable at all - see the
+  // module comment.
   return (
     `${report.count} older file version(s) were not ranked because the same data lake holds a newer ` +
-    `version of the same source document: ${named}${more}. They are still in the knowledge base - ` +
-    'retrieve one by id or name if you need the superseded version specifically.'
+    `version of the same source document: ${formatSupersededSample(report.sample, report.count)}. They are still ` +
+    'in the knowledge base - retrieve one by id or name if you need the superseded version specifically.'
   );
 }

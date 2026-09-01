@@ -66,6 +66,7 @@ import {
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
 import {
   buildSupersessionReport,
+  formatSupersededSample,
   partitionBySupersession,
   type SupersessionReport,
 } from '../dataLakeService/supersession';
@@ -1713,13 +1714,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Names the ids and the tier, and says the suppression is recoverable - the same contract
       // describeSupersession states, for the same reason: this collapse can be wrong on the bare
       // file-name tier and the reader is the only one who can tell.
-      const named = coverage.superseded
-        .map(f => `${f.fileName ?? f.fileId} [${f.fileId}, matched by ${f.tier}, superseded by ${f.supersededBy}]`)
-        .join('; ');
-      const more = coverage.filesSupersededCollapsed > coverage.superseded.length ? ', ...' : '';
+      const named = formatSupersededSample(coverage.superseded, coverage.filesSupersededCollapsed);
       reasons.push(
         `${coverage.filesSupersededCollapsed} older document version(s) were not ranked because this lake holds a ` +
-          `newer version of the same source document (${named}${more}) - they are still retrievable by id or name`
+          `newer version of the same source document (${named}) - they are still retrievable by id or name`
       );
     }
     if (coverage.chunksSkippedDimMismatch > 0) {
@@ -1783,16 +1781,6 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   }
 
   /**
-   * Fallback model for the majority vote below: the admin's configured `defaultEmbeddingModel`,
-   * which is what the chunk pipeline actually stamps onto files - not the embedding factory's
-   * credential-derived default, which names whichever provider happens to hold a key on this
-   * deployment. Those can disagree: a self-host corpus built entirely under Ollama still reads
-   * as ada-002 the moment a real OpenAI key is added, which then flips the vote and withholds
-   * every correctly-labeled file. Falls back further to the factory default, with a warn, only
-   * when the setting is unset, unsupported, or unreadable - the symptom there is an empty result,
-   * not an error, so a silent fallback would be a support ticket.
-   */
-  /**
    * Fails CLOSED and never throws, including on a host with no adminSettings adapter wired: a
    * settings outage must not change which documents ground a turn, and this is an opt-in narrowing,
    * so the safe answer under uncertainty is "do not collapse". `=== true` rather than a truthiness
@@ -1808,6 +1796,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
   }
 
+  /**
+   * Fallback model for the majority vote below: the admin's configured `defaultEmbeddingModel`,
+   * which is what the chunk pipeline actually stamps onto files - not the embedding factory's
+   * credential-derived default, which names whichever provider happens to hold a key on this
+   * deployment. Those can disagree: a self-host corpus built entirely under Ollama still reads
+   * as ada-002 the moment a real OpenAI key is added, which then flips the vote and withholds
+   * every correctly-labeled file. Falls back further to the factory default, with a warn, only
+   * when the setting is unset, unsupported, or unreadable - the symptom there is an empty result,
+   * not an error, so a silent fallback would be a support ticket.
+   */
   private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
     const factoryDefault = embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     try {
@@ -2020,15 +2018,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         embeddingModel
       );
 
-      // Collapse superseded generations LAST, after both partitions above. Order is load-bearing in
-      // both directions: a withheld or foreign-model member can never rank, so letting one win a
-      // key would suppress the servable older generation and leave the lake contributing nothing
-      // for that document. Off unless the admin setting says otherwise - the weakest identity tier
-      // is a bare file name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
-      // Fails CLOSED and never throws: a settings outage must not change which documents ground a
-      // turn, and this is an opt-in narrowing - the safe answer under uncertainty is "do not
-      // collapse". `=== true` rather than a truthiness check so a mock/legacy string value cannot
-      // switch a default-off feature on.
+      // Collapse superseded generations LAST, after both partitions above. Order is load-bearing:
+      // a withheld or foreign-model member can never rank, so letting one win a key would suppress
+      // the servable older generation and leave the lake contributing nothing for that document.
+      // Off unless the admin setting says otherwise - the weakest identity tier is a bare file
+      // name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
       const supersessionCollapseEnabled = await this.readSupersessionCollapseSetting();
       const collapse =
         supersessionCollapseEnabled && lakes.length > 0
