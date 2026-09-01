@@ -110,9 +110,11 @@ describe('help id resolution', () => {
    * The corpus is a superset of the index: `build-help-index` drops a title-less
    * article, and `useHelpContent` resolves through the index. So a helpId can name a
    * real file, pass the gate above, and still open an empty panel. Requiring the two
-   * sets to be equal closes that, and the artifacts-drift-from-corpus gap with it -
-   * the only CI check on either, since `.husky/check-help-content.sh` is pre-commit
-   * only and `--no-verify` bypasses it.
+   * sets to be equal closes that, and catches an article added, removed or renamed
+   * without a regenerate - the only check on index-vs-corpus anywhere.
+   *
+   * Slug sets only: an article whose title, description, headings or sidebarPosition
+   * changed without a regenerate still passes this. Tracked in #2172.
    */
   it('the generated index covers exactly the help corpus', async () => {
     const articles = await loadHelpArticles();
