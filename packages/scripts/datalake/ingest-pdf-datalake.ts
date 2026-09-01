@@ -67,7 +67,7 @@ import {
   CONVERGENCE_ORIGIN,
   DATA_LAKES,
   KnowledgeType,
-  isConvergencePausedNote,
+  isChunkStalled,
   shouldHaltConvergence,
 } from '@bike4mind/common';
 import {
@@ -150,13 +150,11 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
  * apps/client/server/worker/chunkScan.ts - including its stale-claim arm (a claim older than
  * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable).
  *
- * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes
- * convergence-pause markers while the kill switch is ON, and this mirror does not. Nor does the
- * reset below honour the switch - it writes `notes: ''`, which erases a pause marker, and
- * re-enqueues with no `origin`, which isConvergenceHalted defaults to 'user' and lets through. So
- * running this script against a lake while convergence is paused re-chunks anyway. That is an
- * operator-run script and closing it properly means teaching it the switch, which is deliberately
- * out of scope here; do not treat this filter as equivalent to the sweep's in the meantime. */
+ * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes a
+ * `chunkStallReason` while the kill switch is ON, and this mirror does not - so --status still
+ * lists a paused file as a straggler, which is why it labels one (see below). --requeue-stragglers
+ * refuses outright while the switch is ON, so nothing is re-chunked behind the switch's back; do
+ * not treat this filter as equivalent to the sweep's in the meantime. */
 const stragglerFilter = (lake: LakeTarget) => ({
   status: 'complete',
   chunkCount: 0,
@@ -230,10 +228,10 @@ async function statusReport(lake: LakeTarget): Promise<number> {
     console.log(`  STALE PENDING (lost S3 event): ${stalePendingCount} - re-run the ingest command to repair`);
   }
 
-  // `notes` is projected so a file the chunk worker parked with CONVERGENCE_PAUSED_CHUNK_NOTE reads
-  // as paused rather than as an ordinary straggler - it still matches stragglerFilter (no `error`,
-  // still 0 chunks), so without the label an operator sees an unchanged list and no reason why.
-  const stragglers = await FabFile.find(stragglerFilter(lake), 'fileName error notes')
+  // `chunkStallReason` is projected so a file the chunk worker parked reads as paused rather than as
+  // an ordinary straggler - it still matches stragglerFilter (no `error`, still 0 chunks), so
+  // without the label an operator sees an unchanged list and no reason why.
+  const stragglers = await FabFile.find(stragglerFilter(lake), 'fileName error chunkStallReason')
     .sort({ createdAt: 1 })
     .limit(20)
     .lean();
@@ -243,7 +241,7 @@ async function statusReport(lake: LakeTarget): Promise<number> {
     for (const s of stragglers) {
       const label = s.error
         ? ` [failed: ${s.error}]`
-        : isConvergencePausedNote(s.notes)
+        : isChunkStalled(s.chunkStallReason)
           ? ' [paused by the convergence kill switch]'
           : '';
       console.log(`    - ${s.fileName} (${s._id})${label}`);
@@ -288,7 +286,7 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
   // Refuse BEFORE touching anything, the same argument as the pre-check in
   // pages/api/data-lakes/[id]/converge.ts: the consumer's halt only fires once the message is off the
   // queue, by which point resetChunkStateByIds has cleared the counts and all four health rollups and
-  // the chunk worker has stamped CONVERGENCE_PAUSED_CHUNK_NOTE. That flips a straggler from silently
+  // the chunk worker has stamped `chunkStallReason`. That flips a straggler from silently
   // invisible to `withheld`, so every search on the lake reports partial results naming files that
   // had no passages to contribute - and with the switch still on, nothing is scheduled to clear it.
   if (shouldHaltConvergence(CONVERGENCE_ORIGIN, await isLakeConvergencePaused(lake))) {
@@ -325,9 +323,10 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
   // in b4m-core/common/src/constants/chunking.ts). It keeps the guarantees the copy existed for:
   // its per-document write is preconditioned on `isChunking: {$ne: true}`, it never touches
   // `chunkClaimedAt`, and it returns only the ids it actually changed, so the enqueue below cannot
-  // overstate the work. Clearing `notes` stays part of that shape, which is what clears the
-  // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
-  // straggler silently no-op at the worker.
+  // overstate the work. Clearing `noExtractableTextAt` and `chunkStallReason` stays part of that
+  // shape: those clear the "no extractable text" and kill-switch guards (fabFileChunk.ts) that
+  // would otherwise make a re-enqueued straggler silently no-op at the worker. `notes` is left
+  // alone - it is the owner's own text.
   const resetIds = new Set(await fabFileRepository.resetChunkStateByIds(files.map(f => String(f._id))));
   let enqueued = 0;
   for (const f of files) {

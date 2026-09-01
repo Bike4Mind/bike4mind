@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import {
   buildFilenameMarkerRegex,
   filterRetrievalExcluded,
   isRetrievalExcluded,
   normalizeExclusionMarkers,
 } from './retrievalExclusion';
+import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
 
 describe('normalizeExclusionMarkers', () => {
   it('trims, lowercases, and drops empties', () => {
@@ -68,13 +68,13 @@ describe('isRetrievalExcluded', () => {
     // It is unvectorized because a halted wave DELETED its passages, not because it is an image or a
     // failed job. Dropping it here runs upstream of partitionByIndexAvailability, so the turn would
     // answer around the hole and report full coverage - the failure the withhold exists to prevent.
-    const stranded = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    const stranded = { fileName: 'Report.pdf', vectorized: false, chunkStallReason: 'rechunkPaused' as const };
     expect(isRetrievalExcluded(stranded, { vectorizedOnly: true })).toBe(false);
     expect(filterRetrievalExcluded([stranded], { vectorizedOnly: true })).toEqual([stranded]);
   });
 
   it('still excludes a stranded file whose NAME the surface excludes - naming it outranks the hole', () => {
-    const marked = { fileName: 'MARK - Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    const marked = { fileName: 'MARK - Report.pdf', vectorized: false, chunkStallReason: 'rechunkPaused' as const };
     expect(isRetrievalExcluded(marked, { vectorizedOnly: true, excludeFilenameMarkers: ['MARK'] })).toBe(true);
   });
 
@@ -84,9 +84,20 @@ describe('isRetrievalExcluded', () => {
     // `vector: {$exists: true, $ne: []}`, so a file with chunks and zero vectors returns nothing while
     // its neighbours are re-ranked into the top-K - the answer confidently contradicted the missing
     // document. Both arms must reach partitionByIndexAvailability to be refused and NAMED.
-    const vectorizePaused = { fileName: 'Report.pdf', vectorized: false, notes: CONVERGENCE_PAUSED_NOTE };
+    const vectorizePaused = { fileName: 'Report.pdf', vectorized: false, chunkStallReason: 'vectorizePaused' as const };
     expect(isRetrievalExcluded(vectorizePaused, { vectorizedOnly: true })).toBe(false);
     expect(filterRetrievalExcluded([vectorizePaused], { vectorizedOnly: true })).toEqual([vectorizePaused]);
+  });
+
+  it('keeps a PRE-MIGRATION stranded file, whose marker is still legacy prose in notes', () => {
+    // The queue stack does not wait on #2016's migrator, and a code rollback does not revert the
+    // data, so both windows can hand this reader a row with the marker only in `notes`. Without the
+    // transitional arm it is dropped here - upstream of the withhold - and the hole goes unreported.
+    const legacy = { fileName: 'Report.pdf', vectorized: false, notes: CHUNK_STALL_NOTICES.rechunkPaused };
+    expect(isRetrievalExcluded(legacy, { vectorizedOnly: true })).toBe(false);
+    // The owner's own prose is not a marker; only the exact handler wording is.
+    const owner = { fileName: 'Report.pdf', vectorized: false, notes: 'paused, I think?' };
+    expect(isRetrievalExcluded(owner, { vectorizedOnly: true })).toBe(true);
   });
 
   // #1939, and the wider hole of the three: the reset writes `vectorized: false` and clears `notes`

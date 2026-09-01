@@ -1,6 +1,7 @@
 import {
+  CHUNK_STALL_REASONS,
   CODE_FILE_MIME_TYPES,
-  CONVERGENCE_PAUSED_NOTES,
+  LEGACY_CHUNK_STALL_NOTES,
   normalizeTagPrefix,
   type DataLakeMembershipScope,
 } from '@bike4mind/common';
@@ -510,18 +511,23 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     // too, or the file is dropped by the DB before the authoritative post-filter can spare it. A
     // member the convergence kill switch stalled is unvectorized because its content was taken away;
     // it must reach `partitionByIndexAvailability` to be withheld and REPORTED rather than silently
-    // absent. `$in` over CONVERGENCE_PAUSED_NOTES so this covers EITHER arm and cannot drift from
-    // `isConvergencePausedNote`, which the in-memory arm now calls. Keep the two in sync.
+    // absent. `$in` over CHUNK_STALL_REASONS so this covers EITHER arm and cannot drift from
+    // `isChunkStalled`, which the in-memory arm now calls. Keep the two in sync.
     //
     // Third arm: a REQUESTED-but-uncommitted rebuild (#1939). The reset writes `vectorized: false`
-    // and clears `notes` together, so between it and the consumer's marker there is no note for the
-    // arm above to match and the row was dropped here, before the post-filter or the withhold could
-    // report it. `$ne: null` also excludes a missing field, so this matches only rows carrying a
+    // and clears the stall reason together, so between it and the consumer's marker there is nothing
+    // for the arm above to match and the row was dropped here, before the post-filter or the withhold
+    // could report it. `$ne: null` also excludes a missing field, so this matches only rows carrying a
     // real stamp.
     andConditions.push({
       $or: [
         { vectorized: true },
-        { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } },
+        { chunkStallReason: { $in: [...CHUNK_STALL_REASONS] } },
+        // Transitional fourth arm, the Mongo mirror of `isChunkStalledFile`: rows #2016's migration
+        // has not reached yet still carry the marker as prose in `notes` and no `chunkStallReason`.
+        // The queue stack does not wait on the migrator, so it can run this query against them.
+        // Delete with the in-memory arm, one release after the migration has landed everywhere.
+        { notes: { $in: [...LEGACY_CHUNK_STALL_NOTES] } },
         { chunkRebuildRequestedAt: { $ne: null } },
       ],
     });

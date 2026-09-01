@@ -1,6 +1,7 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
   CitableSource,
+  describePipelineStall,
   getEmbeddingModelCost,
   IFabFileDocument,
   isSupportedEmbeddingModel,
@@ -766,11 +767,15 @@ function formatSearchResults(files: IFabFileDocument[]): string {
     const tags = toContentLabel(file.tags?.map(t => t.name).join(', ') || 'none');
     const notes = file.notes ? `\n   Notes: ${defangRetrievedContent(file.notes)}` : '';
     const fileType = file.type || 'FILE';
+    // Machine state, not owner text, so it stays out of the defanged half: without it a
+    // zero-chunk or paused file lists clean and the model reports it as readable.
+    const stall = describePipelineStall(file);
+    const pipeline = stall ? `\n   Pipeline: ${stall}` : '';
 
     return (
       `${index + 1}. **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
       `   Type: ${fileType} | MIME: ${file.mimeType}\n` +
-      `   Tags: ${tags}${notes}`
+      `   Tags: ${tags}${pipeline}${notes}`
     );
   });
 
