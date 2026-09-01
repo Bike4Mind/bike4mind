@@ -193,7 +193,8 @@ export const buildFabFileChunkScanFilter = (
  * mechanism predates this stamp, but a `batchId`-less media file never reached the halt branch
  * before it did - so the one-way door is reachable here because of this function, and calling it
  * pre-existing would be wrong. Closing it means readmitting a paused media file to the filter,
- * which has to be reconciled with any change that excludes paused files from selection.
+ * which now has to be reconciled with the switch-ON `notes` exclusion above as well - the two would
+ * be pulling the same file in opposite directions. Tracked in #2224.
  *
  * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
  * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).
