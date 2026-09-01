@@ -88,6 +88,13 @@ export interface SemanticChunkResult {
   fileTags: string[];
   chunkText: string;
   score: number;
+  /**
+   * The parent document's `createdAt`, for the passage header (#2236) - see formatDocumentDate.
+   * Required, not optional, so every producer (this module's scan, annVectorSearch) has to supply
+   * it: a producer that omitted it would serve dateless passages from one retrieval backend and
+   * dated ones from another, and nothing would fail. `null` when the parent carries no date.
+   */
+  fileCreatedAt: Date | string | null;
 }
 
 /** Tuning + hard limits. All optional; the module defaults apply when omitted. */
@@ -267,6 +274,8 @@ export interface SemanticDataLakeSearchAdapters {
 interface RankableFile {
   fileName: string;
   fileTags: string[];
+  /** Parent-document date for the passage header (#2236). Both builders below must carry it. */
+  createdAt?: Date | string | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -463,6 +472,7 @@ async function scanAndRank(args: {
           fileTags: file.fileTags,
           chunkText: chunk.text ?? '',
           score,
+          fileCreatedAt: file.createdAt ?? null,
         });
       }
 
@@ -1011,6 +1021,7 @@ export async function semanticDataLakeSearch(
       {
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
+        createdAt: f.createdAt,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1108,6 +1119,7 @@ export async function fileScopedSemanticSearch(
       {
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
+        createdAt: f.createdAt,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,

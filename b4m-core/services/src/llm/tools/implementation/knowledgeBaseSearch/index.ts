@@ -21,6 +21,7 @@ import { lakeMembershipsFrom } from '../../../../dataLakeService/getDynamicDataL
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -98,8 +99,13 @@ function formatSemanticResults(
     const { text, clipped } = servedPassageText(r, maxChunkChars);
     if (clipped) clippedCount++;
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
-    // crafted name carries a newline plus a forged marker into the label line.
-    return `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (relevance ${r.score.toFixed(2)})\n` + text;
+    // crafted name carries a newline plus a forged marker into the label line. The date needs no
+    // such wrap - documentDateClause emits digits and separators only.
+    return (
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (relevance ${r.score.toFixed(2)})` +
+      `${documentDateClause(r.fileCreatedAt)}\n` +
+      text
+    );
   });
   // One line per call, not per passage: this runs on the hot chat path up to MAX_SEARCHES times a
   // turn. Silence here was the reason a lake could deliver a fraction of its content indefinitely
