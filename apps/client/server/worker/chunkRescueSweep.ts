@@ -115,8 +115,10 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
  * both. Same split, and same reason, as runChunkRescueSweep and its hosted twin above.
  */
 export async function runStrandedVectorizeRescue(runLogger: Logger): Promise<number> {
-  const cutoff = new Date(Date.now() - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
-  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff))
+  const now = Date.now();
+  const cutoff = new Date(now - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
+  const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
+  const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff, staleClaimBefore))
     .select('_id userId batchId')
     .limit(CHUNK_SCAN_BATCH)
     .lean();

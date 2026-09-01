@@ -7,7 +7,10 @@ const h = vi.hoisted(() => ({
   // Spied (not a bare stub) so a test can assert the sweep passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
-  buildStrandedFilter: vi.fn((cutoff: Date) => ({ vectorizeEnqueueFailedAt: { $lt: cutoff } })),
+  // Spied so a test can assert the sweep passes BOTH cutoffs, matching buildScanFilter above.
+  buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({
+    vectorizeEnqueueFailedAt: { $lt: cutoff },
+  })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -18,7 +21,7 @@ vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('./chunkScan', () => ({
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
-  buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date])),
+  buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
   CHUNK_SCAN_BATCH: 50,
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
   CHUNK_CLAIM_STALE_MS: 30 * 60_000,
@@ -198,7 +201,10 @@ describe('runStrandedVectorizeRescue (self-host stranded-vectorize pass)', () =>
     await runRescue();
 
     expect(h.buildStrandedFilter).toHaveBeenCalledTimes(1);
-    expect(h.buildStrandedFilter.mock.calls[0][0]).toBeInstanceOf(Date);
+    const [cutoff, staleClaimBefore] = h.buildStrandedFilter.mock.calls[0];
+    expect(cutoff).toBeInstanceOf(Date);
+    expect(staleClaimBefore).toBeInstanceOf(Date);
+    expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
     expect(limitSpy).toHaveBeenCalledWith(50);
   });
 

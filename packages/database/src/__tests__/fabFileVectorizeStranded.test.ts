@@ -76,6 +76,97 @@ describe('stranded vectorize hand-off recovery', () => {
       expect(winning).not.toContain('"stage":"COLLSCAN"');
     });
 
+    it('still uses the index when the sweep carries its stale-claim $or', async () => {
+      // The stale-claim recovery arm (buildStrandedVectorizeScanFilter) adds a three-way $or on
+      // isChunking, which is exactly the shape that can tip the planner into subplanning and a
+      // collection scan. The stamp predicate has to stay the one leading the plan.
+      await FabFile.create([
+        {
+          userId: 'u1',
+          fileName: 'stranded.pdf',
+          type: 'FILE',
+          chunked: true,
+          vectorizeEnqueueFailedAt: new Date('2026-01-01'),
+        },
+        { userId: 'u1', fileName: 'healthy.pdf', type: 'FILE', chunked: true },
+      ]);
+      await FabFile.createIndexes();
+      // Load-bearing, not padding: on a two-document collection every index costs the same and the
+      // planner picks arbitrarily - a real mongod answers this very query from
+      // deletedAt_1_filePath_1 at that size. These unstamped files sit outside the partial index,
+      // which is what makes choosing it the only cheap plan and the assertion below able to fail.
+      await FabFile.collection.insertMany(
+        Array.from({ length: 2000 }, (_, i) => ({
+          userId: 'u1',
+          fileName: `decoy-${i}.pdf`,
+          type: 'FILE',
+          chunked: true,
+          deletedAt: null,
+          vectorizeEnqueueFailedAt: null,
+        }))
+      );
+
+      const plan = await FabFile.collection
+        .find({
+          vectorizeEnqueueFailedAt: { $type: 'date', $lt: new Date('2026-02-01') },
+          chunked: true,
+          deletedAt: null,
+          $or: [
+            { isChunking: { $ne: true } },
+            { isChunking: true, chunkClaimedAt: { $lt: new Date('2026-01-15') } },
+            { isChunking: true, chunkClaimedAt: null },
+          ],
+        })
+        .explain('queryPlanner');
+
+      const winning = JSON.stringify(plan.queryPlanner.winningPlan);
+      // The index NAME, not the field name: the field appears in the residual FETCH filter of any
+      // plan, so a bare substring check on it passes even when another index won.
+      expect(winning).toContain('"indexName":"vectorizeEnqueueFailedAt_1"');
+      expect(winning).not.toContain('"stage":"COLLSCAN"');
+    });
+
+    it('rescues a file whose claim went stale, and leaves a live claim alone', async () => {
+      // The failure the arm exists for: a worker hard-killed inside resumeVectorizeEnqueue leaves
+      // isChunking:true with nothing to clear it, and no other automatic door selects the file.
+      const staleClaimBefore = new Date('2026-01-15');
+      await FabFile.create([
+        {
+          userId: 'u1',
+          fileName: 'stale-claim.pdf',
+          type: 'FILE',
+          chunked: true,
+          isChunking: true,
+          chunkClaimedAt: new Date('2026-01-01'),
+          vectorizeEnqueueFailedAt: new Date('2026-01-01'),
+        },
+        {
+          userId: 'u1',
+          fileName: 'in-flight.pdf',
+          type: 'FILE',
+          chunked: true,
+          isChunking: true,
+          chunkClaimedAt: new Date('2026-01-20'),
+          vectorizeEnqueueFailedAt: new Date('2026-01-01'),
+        },
+      ]);
+
+      const selected = await FabFile.collection
+        .find({
+          vectorizeEnqueueFailedAt: { $type: 'date', $lt: new Date('2026-02-01') },
+          chunked: true,
+          deletedAt: null,
+          $or: [
+            { isChunking: { $ne: true } },
+            { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+            { isChunking: true, chunkClaimedAt: null },
+          ],
+        })
+        .toArray();
+
+      expect(selected.map(f => f.fileName)).toEqual(['stale-claim.pdf']);
+    });
+
     it('selects the stamped file only, never the unstamped default', async () => {
       // The field defaults to null on every file, and null sorts BEFORE any date. What keeps the
       // sweep from selecting the whole collection is that $lt matches within a BSON type bracket

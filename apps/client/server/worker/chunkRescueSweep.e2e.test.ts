@@ -75,7 +75,9 @@ describe('runStrandedVectorizeRescue against real Mongo', () => {
     // Each of these differs from `stranded` in ONE field, so a fixture that starts being swept
     // names the clause that broke rather than just failing a count.
     await seed({ name: 'too-fresh', vectorizeEnqueueFailedAt: new Date() });
-    await seed({ name: 'in-flight', isChunking: true });
+    // chunkClaimedAt recent (not stale, not the null backfill arm), so this stays a genuine
+    // in-flight near-miss under the stale-claim rescue arm too.
+    await seed({ name: 'in-flight', isChunking: true, chunkClaimedAt: new Date() });
     await seed({ name: 'un-chunked', chunked: false });
     // Held out by softDeletePlugin's pre('find') hook (db-core utils/mongo.ts), which injects
     // `deletedAt: null` into every find that did not opt into `includeDeleted` - NOT by the

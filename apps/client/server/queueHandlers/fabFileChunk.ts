@@ -156,6 +156,16 @@ async function accountFileFailure(params: {
       failedFiles: 1,
       processingFailedFiles: 1,
     });
+    // The $inc above is guarded on a non-terminal batch while updateFileStatus is not, so whether
+    // this entry was actually charged has to be recorded ON the entry - revertFileFailure gives
+    // counters back per-entry and must not spend another file's failure. updateFileStatus already
+    // stamped failureCounted: false, so this raise is advisory and must not take the finalize and
+    // the progress push down with it: losing it only leaves the entry uncounted.
+    if (batch) {
+      await dataLakeBatchRepository
+        .markFailureCounted(batchId, fabFileId, true)
+        .catch(markErr => logger.error(`Failed to record the charged failure counters on ${fabFileId}: ${markErr}`));
+    }
     await finalizeBatchIfComplete(batch, logger);
     await sendToClient(userId, Resource.websocket.managementEndpoint, {
       action: 'data_lake_batch_progress',
@@ -212,8 +222,92 @@ async function clearStrandedMarkers(fabFileId: string, ownsError: boolean, logge
 }
 
 /**
+ * The batch-accounting half of the same undo. accountFileFailure wrote three things on the way
+ * down - the FabFile error, the manifest entry ('failed' + the error text), and
+ * failedFiles/processingFailedFiles - and clearStrandedMarkers above reverses only the first, so
+ * a recovered file still reports as a failure on its batch. Worse, 'failed' is not in the
+ * vectorize handler's success-path claim set, so the file could never reach 'complete' and its
+ * vectorizedFiles was lost with it.
+ *
+ * `to` is where the file actually is once the strand is undone: 'complete' when its chunks
+ * already hold every vector (nothing further is coming to claim the entry, so this call also owes
+ * the batch the vectorizedFiles), 'chunking' when a fresh fan-out is about to go out and the
+ * vectorize handler's own claim will finish the job.
+ *
+ * Reopen first, revert second: the counter writes are guarded on a non-terminal batch, and a
+ * strand on the last outstanding file may already have finalized this batch
+ * 'completed_with_errors'. In that order a crash in between leaves the batch merely non-terminal,
+ * which the stuck-batch reconciler re-settles; the reverse would leave it terminal with a tally
+ * that no longer adds up. When the revert then declines - another failure owns the entry, so
+ * there was nothing of ours to revoke - the verdict is put straight back rather than left for the
+ * reconciler: nothing else re-finalizes a reopened batch (finalizeBatchIfComplete only runs off
+ * counter increments, and the still-'failed' entry loses the resumed fan-out's claim too), and the
+ * reopen's own updatedAt bump pushes the reconciler's next look out by hours. The reopen carries
+ * the revert's own eligibility predicate so that round trip stays rare: a resume with no failure of
+ * ours on the entry - a non-final attempt stamps the stranded marker before any accounting is
+ * written - never reopens at all.
+ *
+ * Best-effort, like the marker write it accompanies: a reporting correction must never fail a
+ * delivery whose actual work (the file's vectors) succeeded.
+ */
+async function revertStrandBatchAccounting(params: {
+  batchId: string;
+  fabFileId: string;
+  userId: string;
+  to: 'complete' | 'chunking';
+  logger: Logger;
+}): Promise<void> {
+  const { batchId, fabFileId, userId, to, logger } = params;
+  try {
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batchId, {
+      fabFileId,
+      errorPrefix: VECTORIZE_ENQUEUE_ERROR_PREFIX,
+    });
+    const batch = await dataLakeBatchRepository.revertFileFailure(batchId, fabFileId, to, {
+      errorPrefix: VECTORIZE_ENQUEUE_ERROR_PREFIX,
+      ...(to === 'complete' ? { alsoIncrement: { vectorizedFiles: 1 } } : {}),
+    });
+    if (!batch) {
+      // Nothing of ours to revoke - another failure owns this entry. Re-settle what we reopened.
+      if (reopened) await finalizeBatchIfComplete(reopened, logger);
+      return;
+    }
+
+    await finalizeBatchIfComplete(batch, logger);
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'data_lake_batch_progress',
+      batchId,
+      failedFiles: batch.failedFiles,
+      processingFailedFiles: batch.processingFailedFiles,
+      vectorizedFiles: batch.vectorizedFiles,
+      status: isBatchComplete(batch) ? (batch.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+    });
+  } catch (err) {
+    logger.error(`Error reverting the vectorize-enqueue failure accounting for ${fabFileId}: ${err}`);
+  }
+}
+
+/**
+ * Both halves of the undo in one place: the FabFile markers and the batch accounting must move
+ * together, or a fan-out that fails again leaves one surface reporting a failure the other has
+ * already dropped (see the ordering note at the call site).
+ */
+async function undoStrand(params: {
+  fabFileId: string;
+  batchId: string | undefined;
+  userId: string;
+  to: 'complete' | 'chunking';
+  ownsError: boolean;
+  logger: Logger;
+}): Promise<void> {
+  const { fabFileId, batchId, userId, to, ownsError, logger } = params;
+  await clearStrandedMarkers(fabFileId, ownsError, logger);
+  if (batchId) await revertStrandBatchAccounting({ batchId, fabFileId, userId, to, logger });
+}
+
+/**
  * Re-send the vectorize fan-out for the chunks of an already-chunked file that still hold no
- * vector, and clear the stranded markers when it lands. This is the recovery half of the
+ * vector, undoing everything the strand recorded first. This is the recovery half of the
  * committed-chunks-but-no-vectors state: a plain SQS redelivery reaches it, and so does the
  * stranded-vectorize sweep (buildStrandedVectorizeScanFilter) by re-enqueueing a chunk message.
  * Non-destructive - it sends messages only, and the vectorize handler dedupes.
@@ -253,7 +347,9 @@ async function resumeVectorizeEnqueue(
   const wasStranded = !!fabFile.vectorizeEnqueueFailedAt || ownsError;
 
   if (pendingChunkIds.length === 0) {
-    if (wasStranded) await clearStrandedMarkers(fabFileId, ownsError, logger);
+    if (wasStranded) {
+      await undoStrand({ fabFileId, batchId: fabFile.batchId, userId, to: 'complete', ownsError, logger });
+    }
     return;
   }
 
@@ -261,6 +357,24 @@ async function resumeVectorizeEnqueue(
     fabFile.embeddingModel && isSupportedEmbeddingModel(fabFile.embeddingModel)
       ? fabFile.embeddingModel
       : defaultEmbeddingModel;
+
+  // Undo the strand BEFORE the fan-out, not after. The vectorize handler claims its manifest entry
+  // from ['chunking','uploaded','pending'], so a message that lands while the entry still reads
+  // 'failed' loses that claim and the file is never counted complete - and these messages can be
+  // picked up within milliseconds of the send. Clearing the FabFile markers in the same breath
+  // keeps the two surfaces in step: if the fan-out then fails again on its FINAL delivery attempt,
+  // markFailedIfNotAlready sees an unfailed file and re-records the failure on BOTH the file and
+  // the batch, where a half-undone state would have left the batch permanently short a failure it
+  // still has. On a non-final attempt deferFailureIfRetryable short-circuits that re-record, so
+  // the batch stays a failure short until the last attempt lands - bounded and self-healing.
+  //
+  // The window this opens - markers cleared, hand-off not yet re-recorded - is closed by the
+  // message itself: this path only ever runs on a delivery that is about to either succeed or
+  // throw and be redelivered, and the resume is ungated on `wasStranded` precisely so a
+  // marker-less file still recovers (see this function's doc comment).
+  if (wasStranded) {
+    await undoStrand({ fabFileId, batchId: fabFile.batchId, userId, to: 'chunking', ownsError, logger });
+  }
 
   try {
     const batchCount = await enqueueVectorizeBatches({
@@ -278,8 +392,6 @@ async function resumeVectorizeEnqueue(
     await recordVectorizeEnqueueFailure({ event, logger, fabFileId, batchId: fabFile.batchId, userId, err });
     throw err;
   }
-
-  if (wasStranded) await clearStrandedMarkers(fabFileId, ownsError, logger);
 }
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
