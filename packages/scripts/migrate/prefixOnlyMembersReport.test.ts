@@ -21,8 +21,8 @@ const baseLake = (overrides: Partial<LakeReport>): LakeReport => ({
   reconcileMismatch: false,
   narrowingUpperBound: 0,
   unanchoredCount: null,
-  prefixOnlyFiles: { fileNames: [], truncated: false },
-  narrowingFiles: { fileNames: [], truncated: false },
+  prefixOnlyFiles: { files: [], truncated: false },
+  narrowingFiles: { files: [], truncated: false },
   ...overrides,
 });
 
@@ -39,8 +39,21 @@ describe('classifyDynamicLakeMode', () => {
     expect(classifyDynamicLakeMode({ fileTagPrefix: 'acme', createdByUserId: 'user-1' })).toBe('no-prefix');
   });
 
-  it('classifies a reserved (datalake:) prefix as no-prefix', () => {
-    expect(classifyDynamicLakeMode({ fileTagPrefix: 'datalake:acme:', createdByUserId: 'user-1' })).toBe('no-prefix');
+  it('classifies a reserved (datalake:) prefix as its OWN mode, never no-prefix', () => {
+    // Folding this into no-prefix is the false zero the census exists to catch: retrieval honours
+    // a reserved prefix today and the fix drops it, so the lake loses its whole prefix arm while
+    // "0 (no prefix arm)" claims nothing moves.
+    expect(classifyDynamicLakeMode({ fileTagPrefix: 'datalake:acme:', createdByUserId: 'user-1' })).toBe(
+      'reserved-prefix'
+    );
+  });
+
+  it('prefers reserved-prefix over creator-less when both conditions hold', () => {
+    expect(classifyDynamicLakeMode({ fileTagPrefix: 'datalake:acme:', createdByUserId: '' })).toBe('reserved-prefix');
+  });
+
+  it('still classifies an unusable (colon-less) prefix as no-prefix, not reserved', () => {
+    expect(classifyDynamicLakeMode({ fileTagPrefix: 'datalake', createdByUserId: 'user-1' })).toBe('no-prefix');
   });
 
   it('classifies a missing creator as creator-less', () => {
@@ -91,6 +104,14 @@ describe('isFinding', () => {
     ).toBe(false);
   });
 
+  it('always escalates a reserved-prefix lake, even with a zero unanchored count', () => {
+    expect(
+      isFinding(
+        baseLake({ mode: 'reserved-prefix', prefixOnlyDirect: null, narrowingUpperBound: null, unanchoredCount: 0 })
+      )
+    ).toBe(true);
+  });
+
   it('always escalates a creator-less lake, even with a zero unanchored count', () => {
     expect(
       isFinding(
@@ -107,11 +128,16 @@ describe('renderCensusReport', () => {
     expect(result.findingsCount).toBe(0);
   });
 
-  it('exits 2 and names the lake when a finding exists', () => {
+  it('exits 2 and names the lake IN THE SUMMARY when a finding exists', () => {
     const result = renderCensusReport([baseLake({ prefixOnlyDirect: 3 })], 'dev');
     expect(result.exitCode).toBe(2);
     expect(result.findingsCount).toBe(1);
-    expect(result.lines.some(l => l.includes('Test Lake'))).toBe(true);
+    // Must assert against the summary line specifically. A bare `lines.some(includes('Test Lake'))`
+    // is vacuous: renderLakeLines emits a `Lake "Test Lake" (...)` header for EVERY lake, so it
+    // passes even with the whole summary block deleted.
+    const summary = result.lines.find(l => l.includes('need owner sign-off before'));
+    expect(summary).toBeDefined();
+    expect(summary).toContain('Test Lake');
   });
 
   it('never prints a bare "0" for a creator-less lake', () => {
@@ -147,5 +173,85 @@ describe('renderCensusReport', () => {
     );
     expect(result.lines.some(l => l.startsWith('  RECONCILE:'))).toBe(true);
     expect(result.reconcileMismatchCount).toBe(1);
+  });
+
+  it('tells the operator a RECONCILE mismatch may just be a concurrent write', () => {
+    // The three counts are unsynchronized countDocuments calls, so a mismatch does NOT prove the
+    // queries diverged. Without this the operator reads a hard "do not trust" and stops.
+    const result = renderCensusReport([baseLake({ reconcileMismatch: true })], 'dev');
+    const line = result.lines.find(l => l.startsWith('  RECONCILE:'));
+    expect(line).toMatch(/[Rr]e-run/);
+    expect(line).toMatch(/unsynchronized/);
+  });
+
+  // The next two cover modeColumn branches that no test reached before: both could be replaced
+  // with arbitrary strings and the whole suite stayed green.
+  it('renders a no-prefix lake without escalating it', () => {
+    const result = renderCensusReport(
+      [baseLake({ mode: 'no-prefix', fileTagPrefix: 'acme', prefixOnlyDirect: null, narrowingUpperBound: null })],
+      'dev'
+    );
+    expect(result.lines.find(l => l.includes('prefix-only members:'))).toContain('0 (no prefix arm)');
+    expect(result.exitCode).toBe(0);
+    expect(result.findingsCount).toBe(0);
+  });
+
+  it('renders an open (registry) lake with its unanchored count, without escalating it', () => {
+    const result = renderCensusReport(
+      [
+        baseLake({
+          mode: 'open',
+          prefixOnlyDirect: null,
+          narrowingUpperBound: null,
+          unanchoredCount: 50,
+          total: null,
+          totalExcludingPending: null,
+          metaTagged: null,
+        }),
+      ],
+      'dev'
+    );
+    const memberLine = result.lines.find(l => l.includes('prefix-only members:'));
+    expect(memberLine).toContain('50');
+    expect(memberLine).toContain('OPEN arm');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('escalates a reserved-prefix lake and labels its number over-match, not narrowing', () => {
+    const result = renderCensusReport(
+      [
+        baseLake({
+          mode: 'reserved-prefix',
+          fileTagPrefix: 'datalake:acme:',
+          prefixOnlyDirect: null,
+          narrowingUpperBound: null,
+          unanchoredCount: 900,
+        }),
+      ],
+      'dev'
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.findingsCount).toBe(1);
+    expect(result.lines.some(l => l.includes('ESCALATE') && l.includes('reserved'))).toBe(true);
+    // The figure is inflated by construction (a `datalake:` regex matches other lakes' meta-tags),
+    // so it must never be presented as a narrowing/member count.
+    const memberLine = result.lines.find(l => l.includes('prefix-only members:'));
+    expect(memberLine).toContain('over-match');
+    expect(memberLine).not.toContain('narrowing');
+    expect(result.lines.some(l => l.includes('NOT a member count'))).toBe(true);
+  });
+
+  it('prints fileTagPrefix so a malformed or reserved value is visible', () => {
+    const result = renderCensusReport([baseLake({ fileTagPrefix: 'acme: ' })], 'dev');
+    // JSON-quoted on purpose: bare printing hides the trailing space that made it unusable.
+    expect(result.lines.some(l => l.includes('fileTagPrefix="acme: "'))).toBe(true);
+  });
+
+  it('marks the widening listing as truncated, not just the narrowing one', () => {
+    const result = renderCensusReport(
+      [baseLake({ prefixOnlyDirect: 501, prefixOnlyFiles: { files: [], truncated: true } })],
+      'dev'
+    );
+    expect(result.lines.find(l => l.includes('prefix-only members:'))).toContain('(truncated listing)');
   });
 });
