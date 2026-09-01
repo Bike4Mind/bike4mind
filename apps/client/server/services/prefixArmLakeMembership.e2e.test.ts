@@ -383,3 +383,135 @@ describe('restore after removal (#2248) against real Mongo', () => {
     expect(names).toContain('lk:uncategorized');
   });
 });
+
+/**
+ * The AC regression for #2255: "a lake manager can repair categorization inside a lake they
+ * manage, on a file they do not own, with no removal record present." Against real Mongo for the
+ * same reason as #2248's suite above - only the persisted aggregate proves the write, not that a
+ * mocked repository method was called.
+ */
+describe('setDataLakeFileTags (#2255) against real Mongo', () => {
+  const tagsDb = {
+    dataLakes: dataLakeRepository,
+    fabFiles: fabFileRepository,
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    adminSettings: adminSettingsRepository,
+  };
+
+  it('the AC: a curator grant, a creator-owned member, and NO removal record replaces the tag set', async () => {
+    const lake = await makeLake();
+    const file = await makeFile(['lk:uncategorized']);
+    await dataLakeAccessGrantRepository.upsertGrant({
+      dataLakeId: lake.id as string,
+      principalType: 'user',
+      principalId: curatorId,
+      role: 'curator',
+      grantedByUserId: ownerId,
+    });
+    const curator = { userId: curatorId, isAdmin: false };
+
+    // No LakeMembershipRemoval exists at all - the exact hole #2255 is about, distinct from
+    // #2248's "restore within the TTL" story above.
+    const result = await dataLakeService.setDataLakeFileTags(
+      curator,
+      lake.id as string,
+      file.id as string,
+      ['lk:invoices', 'lk:reports'],
+      { db: tagsDb }
+    );
+
+    expect(result.success).toBe(true);
+    const persisted = await FabFile.findById(file.id);
+    const names = (persisted?.tags ?? []).map(t => t.name);
+    expect(names).toEqual(expect.arrayContaining(['lk:invoices', 'lk:reports']));
+    expect(names).not.toContain('lk:uncategorized');
+    const persistedLake = await DataLakeModel.findById(lake.id);
+    expect(persistedLake?.fileCount).toBe(1);
+  });
+
+  it('on a third-party-owned member, a stale caller-authored tag is retained but the stale placeholder is shed', async () => {
+    const lake = await makeLake();
+    const stranger = await User.create({ username: 'stranger-tags', name: 'Stranger' });
+    const file = await FabFile.create({
+      userId: stranger.id,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      status: 'complete',
+      tags: [
+        { name: 'datalake:lake', strength: 1 },
+        { name: 'lk:stale', strength: 1 },
+        { name: 'lk:uncategorized', strength: 1 },
+      ],
+    });
+    const admin = { userId: ownerId, isAdmin: true };
+
+    const result = await dataLakeService.setDataLakeFileTags(
+      admin,
+      lake.id as string,
+      file.id as string,
+      ['lk:fresh'],
+      {
+        db: tagsDb,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.tags.retained).toEqual(['lk:stale']);
+    expect(result.tags.removed).toEqual(['lk:uncategorized']);
+    const names = ((await FabFile.findById(file.id))?.tags ?? []).map(t => t.name);
+    expect(names).toContain('lk:stale');
+    expect(names).toContain('lk:fresh');
+    expect(names).not.toContain('lk:uncategorized');
+  });
+
+  it('refuses to empty a prefix-only member, leaving its tags unchanged', async () => {
+    const lake = await makeLake();
+    const file = await makeFile(['lk:invoices']);
+    const admin = { userId: ownerId, isAdmin: true };
+
+    await expect(
+      dataLakeService.setDataLakeFileTags(admin, lake.id as string, file.id as string, [], { db: tagsDb })
+    ).rejects.toThrow(/would remove the file from/i);
+
+    const names = ((await FabFile.findById(file.id))?.tags ?? []).map(t => t.name);
+    expect(names).toEqual(['lk:invoices']);
+  });
+
+  it('mints the uncategorized placeholder when a meta-tag member is emptied to nothing', async () => {
+    const lake = await makeLake();
+    const stranger = await User.create({ username: 'stranger-empty', name: 'Stranger' });
+    const file = await FabFile.create({
+      userId: stranger.id,
+      fileName: 'meta-only.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      status: 'complete',
+      tags: [{ name: 'datalake:lake', strength: 1 }],
+    });
+    const admin = { userId: ownerId, isAdmin: true };
+
+    const result = await dataLakeService.setDataLakeFileTags(admin, lake.id as string, file.id as string, [], {
+      db: tagsDb,
+    });
+
+    expect(result.success).toBe(true);
+    const names = ((await FabFile.findById(file.id))?.tags ?? []).map(t => t.name);
+    expect(names).toContain('datalake:lake');
+    expect(names).toContain('lk:uncategorized');
+  });
+
+  it('unsets primaryTag when the tag it names is pulled', async () => {
+    const lake = await makeLake();
+    const file = await makeFile(['lk:stale']);
+    await FabFile.updateOne({ _id: file.id }, { $set: { primaryTag: 'lk:stale' } });
+    const admin = { userId: ownerId, isAdmin: true };
+
+    await dataLakeService.setDataLakeFileTags(admin, lake.id as string, file.id as string, ['lk:fresh'], {
+      db: tagsDb,
+    });
+
+    const persisted = await FabFile.findById(file.id);
+    expect(persisted?.primaryTag).toBeFalsy();
+  });
+});
