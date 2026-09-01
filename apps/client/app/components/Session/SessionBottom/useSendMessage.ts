@@ -992,6 +992,11 @@ export function useSendMessage({
           // dispatchers above send, so agent-mode runs get the same
           // context-window optimization when the user has the feature on.
           enableLattice: isLatticeEnabled,
+          // Artifact parity with chat_completion. Mirrors the
+          // `enableArtifacts: isArtifactsEnabled` payload the chat-completion
+          // dispatchers above send, so an agent run is only told to emit
+          // artifacts when this user's preference actually asks for them.
+          enableArtifacts: isArtifactsEnabled,
           // Propagate provenance so persisted IChatHistoryItem carries the
           // tag the AutoRouteBadge reads.
           routingSource,

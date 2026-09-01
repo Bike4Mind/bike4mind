@@ -21,6 +21,7 @@ import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
 import {
   buildFabFileChunkScanFilter,
   CHUNK_SCAN_BATCH,
@@ -46,7 +47,18 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
   const now = Date.now();
   const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
   const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
+  // Platform flag only: this sweep is global, so there is no single lake to resolve a scoped
+  // override against - a candidate need not be in any lake at all, which is part of what the sweep
+  // exists to catch. Conditional in BOTH directions, and the OFF direction is the load-bearing one:
+  // this sweep is the only automatic exit a paused file has, so excluding unconditionally would
+  // strand it forever and break CONVERGENCE_PAUSED_CHUNK_NOTE's user-visible "rebuilt when
+  // convergence resumes". `=== true` rather than coercion: anything else must fall to sweeping,
+  // because wrongly excluding is the far worse direction. Keep in sync with rescueUnchunkedFiles.
+  const excludeConvergencePaused =
+    (await adminSettingsRepository.getSettingsValue(CONVERGENCE_PAUSE_SETTING_KEY)) === true;
+  const candidates = await FabFile.find(
+    buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused })
+  )
     .select('_id userId batchId')
     .limit(CHUNK_SCAN_BATCH)
     .lean();

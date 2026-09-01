@@ -67,7 +67,10 @@ const VectorizePayload = z.object({
  * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed;
  * this note makes the abandoned set enumerable (query the prefix) and signals a reprocess is needed.
  * `POST /api/files/reprocess` clears it as part of its `notes` reset. Distinct from
- * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which excludes a file from the chunk-rescue sweep; this does not.
+ * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which is terminal and excludes a file from the chunk-rescue sweep
+ * unconditionally: this marker excludes it only while the kill switch is ON (#2120). That
+ * conditionality is what makes the sweep the marker's automatic exit once the switch goes off, rather
+ * than a permanent exclusion - see buildFabFileChunkScanFilter.
  */
 // Re-exported, not defined here: the lake-health evaluator in b4m-core reads this marker to tell a
 // permanently-stalled file from one still indexing, and b4m-core cannot import from apps/client.
@@ -258,26 +261,33 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       const missTexts = cacheMisses.map(m => m.text);
       const missTokenCounts = cacheMisses.map(m => m.tokenCount);
 
-      // COST GOVERNANCE GATE - data-lake work only (batchId present). This is the single
-      // point where a provider embedding call spends money on a lake owner's behalf, so it
-      // sits downstream of the cache (hits are free) and upstream of every embed call. A
+      // COST GOVERNANCE GATE - data-lake work, resolved by MEMBERSHIP rather than by batchId
+      // alone (see resolveIngestSpendScope for why those differ, and why the tag-joined members
+      // a bulk rebuild selects used to slip past this entirely). This is the single point where a
+      // provider embedding call spends a lake owner's money and the platform's provider quota, so
+      // it sits downstream of the cache (hits are free) and upstream of every embed call. A
       // denial throws and rides the existing failure path below: the file is marked failed
       // with the gate's user-safe reason and the batch still reaches a terminal state.
       // Captured for the release-on-failure below: a reservation whose provider call never
       // succeeded must be given back, or provider blips permanently poison the lake's
       // LIFETIME meter (x3 under SQS redelivery, each attempt reserving again).
-      let grantedReservation: { estimatedMicroUsd: number; batchId: string; dataLakeId?: string } | null = null;
-      if (existingFabFile.batchId) {
+      let grantedReservation: { estimatedMicroUsd: number; batchId?: string; dataLakeId?: string } | null = null;
+      const spendScope = await dataLakeService.resolveIngestSpendScope(
+        existingFabFile,
+        { dataLakeBatches: dataLakeBatchRepository, dataLakes: dataLakeRepository },
+        logger
+      );
+      if (spendScope) {
         const missTokens = missTokenCounts.reduce((sum, n) => sum + n, 0);
         // Ceil, never round: a spend meter may overcount a fraction of a micro-USD, not under.
         const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
-        const batch = await dataLakeBatchRepository.findById(existingFabFile.batchId);
         // The gate resolves the lake's cost tier itself (#1675) - it needs the lake's ownership,
         // which only `dataLakeId` can reach, so passing the id is what enables the tier here.
         await dataLakeService.enforceEmbeddingSpendGate({
           estimatedMicroUsd,
-          batchId: existingFabFile.batchId,
-          dataLakeId: batch?.dataLakeId,
+          estimatedTokens: missTokens,
+          batchId: spendScope.batchId,
+          dataLakeId: spendScope.dataLakeId,
           db: {
             adminSettings: adminSettingsRepository,
             cache: cacheRepository,
@@ -287,7 +297,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           logger,
           notify: makeDataLakeSpendNotifier(logger),
         });
-        grantedReservation = { estimatedMicroUsd, batchId: existingFabFile.batchId, dataLakeId: batch?.dataLakeId };
+        grantedReservation = { estimatedMicroUsd, batchId: spendScope.batchId, dataLakeId: spendScope.dataLakeId };
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
       }
 
@@ -325,7 +335,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         if (grantedReservation) {
           const { estimatedMicroUsd, batchId, dataLakeId } = grantedReservation;
           try {
-            const releasedRun = await dataLakeBatchRepository.releaseEmbeddingSpend(batchId, estimatedMicroUsd);
+            // batchId is absent for a tag-joined member: there was no run meter to reserve
+            // from, so there is none to give back either.
+            const releasedRun = batchId
+              ? await dataLakeBatchRepository.releaseEmbeddingSpend(batchId, estimatedMicroUsd)
+              : true;
             const releasedLake = dataLakeId
               ? await dataLakeRepository.releaseEmbeddingSpend(dataLakeId, estimatedMicroUsd)
               : true;
@@ -360,7 +374,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // accepts above, so the ledger and meter at least drift together.
         await recordOperationalUsage(
           {
-            requestId: grantedReservation.batchId,
+            // Correlation id, not a billing key (bypassCreditBilling is set below): a tag-joined
+            // member has no batch to correlate to, so the file itself is the run unit.
+            requestId: grantedReservation.batchId ?? fabFileId,
             user,
             organization,
             dataLakeId: grantedReservation.dataLakeId,
@@ -414,11 +430,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
     }
 
+    const indexesToOpenSearch = selfHostOpenSearchEnabled();
+
     // Write this message's chunk vectors in a transaction.
     await withTransaction(async () => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
           chunk.vector = vectors[index];
+          // Index residency, recorded per MESSAGE and persisted here rather than with the
+          // file-complete `embeddingModel` stamp below - see IFabFileChunk.retrievalIndexModel.
+          // Deliberately written BEFORE the fail-open OpenSearch write it predicts: removing from
+          // an index that holds nothing is a no-op, missing one orphans documents forever.
+          if (indexesToOpenSearch) chunk.retrievalIndexModel = embeddingModel;
           return fabFileChunkRepository.update(chunk);
         })
       );
@@ -427,7 +450,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Self-host OpenSearch dual-write: outside the transaction (an OpenSearch write cannot be
     // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
     // failed - the Mongo write above already succeeded and is the source of truth).
-    if (selfHostOpenSearchEnabled()) {
+    if (indexesToOpenSearch) {
       try {
         // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
         // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
@@ -475,19 +498,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
       );
     } else {
-      await fabFileRepository.update({
-        id: fabFileId,
-        vectorized: true,
-        vectorizedChunkCount,
-        isVectorizing: true,
+      // Guarded, not a plain update: sibling messages for this same file each recompute the
+      // whole-file rollup, so one that finishes late holds a count measured before its peers
+      // committed. Writing that stale rollup over a file another message already stamped
+      // terminal would drag the stored count back below chunkCount, which isMemberIndexingInFlight
+      // reads as forever-indexing and withholds a fully-vectorized file from retrieval.
+      const advanced = await fabFileRepository.advanceVectorizeProgress(fabFileId, vectorizedChunkCount, {
         embeddedChunkCount,
         embeddedCharCount,
       });
+      if (!advanced) {
+        logger.log(
+          `FabFile ${fabFileId} partial rollup ${vectorizedChunkCount} is stale or the file is already settled, skipping write`
+        );
+      }
     }
-    fabFile.vectorizedChunkCount = vectorizedChunkCount;
-    fabFile.embeddedChunkCount = embeddedChunkCount;
-    fabFile.embeddedCharCount = embeddedCharCount;
-    fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
       // Non-fatal: a throw here must never reach the outer catch. This file is ALREADY

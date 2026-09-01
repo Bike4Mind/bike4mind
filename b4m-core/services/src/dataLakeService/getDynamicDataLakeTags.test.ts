@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, type IDataLakeDocument } from '@bike4mind/common';
-import { getDynamicDataLakeAccess, type DataLakeAccessContext } from './getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  type DataLakeAccessContext,
+  type ResolvedLakeAccess,
+} from './getDynamicDataLakeTags';
 
 const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 'id'>): IDataLakeDocument =>
   ({
@@ -316,5 +321,44 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // Asserts the re-add outcome, not what was handed to the query - a raw === against the
     // uncoerced context value would compare an object to a string and silently drop the lake.
     expect(res.dataLakeTags).toEqual(['datalake:mine']);
+  });
+});
+
+// #2243: the membership arms a retrieval query should carry - one per DYNAMIC lake, none for a
+// registry lake (no creator to anchor a prefix arm to).
+describe('lakeMembershipsFrom', () => {
+  const dynamicLake = (id: string, creatorUserId: string): ResolvedLakeAccess => ({
+    id,
+    name: id,
+    slug: id,
+    datalakeTag: `datalake:${id}`,
+    fileTagPrefix: `${id}:`,
+    membership: { datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:`, creatorUserId },
+    source: 'dynamic',
+  });
+  const registryLake = (id: string): ResolvedLakeAccess => ({
+    id,
+    name: id,
+    slug: id,
+    datalakeTag: `datalake:${id}`,
+    fileTagPrefix: `${id}:`,
+    source: 'registry',
+  });
+
+  it('keeps dynamic lakes in order and drops registry ones', () => {
+    const lakes = [registryLake('opti'), dynamicLake('acme', 'creator-1'), dynamicLake('globex', 'creator-2')];
+
+    expect(lakeMembershipsFrom(lakes)).toEqual([
+      dynamicLake('acme', 'creator-1').membership,
+      dynamicLake('globex', 'creator-2').membership,
+    ]);
+  });
+
+  it('returns [] for an all-registry lake set', () => {
+    expect(lakeMembershipsFrom([registryLake('opti'), registryLake('house')])).toEqual([]);
+  });
+
+  it('returns [] for an empty lake set', () => {
+    expect(lakeMembershipsFrom([])).toEqual([]);
   });
 });

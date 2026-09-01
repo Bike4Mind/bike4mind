@@ -1,8 +1,16 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
+  IFabFileRepository,
+  ILakeMembershipRemovalRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { removeFileFromLake, type MembershipActor } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
+
+/** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
+const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
 
 interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
   // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
@@ -14,6 +22,11 @@ interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // REQUIRED, not optional like `dataLakeAccessGrants`: there is exactly one caller (this door),
+    // so there is no blast radius, and an optional adapter would create a silent "Undo does
+    // nothing" mode for #2248's restore - the record this write mints is that restore's entire
+    // authorization (see the load-bearing note on lakeMembership.ts's `!inLake` refusal).
+    lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'upsertRemoval'>;
   };
 }
 
@@ -94,7 +107,31 @@ export const removeFileFromDataLake = async (
     throw new NotFoundError('Data lake not found');
   }
 
-  await removeFileFromLake(actor, lake, fabFileId, { db });
+  const { contentTags } = await removeFileFromLake(actor, lake, fabFileId, { db });
+
+  // The restore (#2248) authorization token: an upsert, so a remove -> undo -> remove cycle
+  // leaves exactly one live row, carrying the LATEST removal's tags. Best-effort - wrapped so a
+  // write failure here can never abort the recompute below and leave `fileCount` stale. Not
+  // fail-quiet: by the time this runs the removal has already committed and is uncompensated, so
+  // throwing would 500 a removal that in fact happened, and the client's retry would then hit this
+  // same door's `!inLake` 404. The honest failure surface is downstream, at a real Undo click.
+  try {
+    const removedAt = new Date();
+    await db.lakeMembershipRemovals.upsertRemoval({
+      dataLakeId: lake.id,
+      fabFileId,
+      actorUserId: actor.userId,
+      contentTags,
+      removedAt,
+      expiresAt: new Date(removedAt.getTime() + REMOVAL_RECORD_TTL_MS),
+    });
+  } catch (err) {
+    logger?.warn?.('[dataLakes] file removed from lake but its restore record failed to write', {
+      dataLakeId: lake.id,
+      fabFileId,
+      err,
+    });
+  }
 
   // `actor` threaded so the draft -> active flip a removal can trigger names the person who
   // removed the file rather than `system`. The rung stays `system` - nothing authorized the flip.

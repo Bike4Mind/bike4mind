@@ -9,9 +9,14 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   scopedTagPrefixes: [],
   lakes: [],
 });
-vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
-  getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
-}));
+// Keep lakeMembershipsFrom real (pure, over `lakes`) - only the DB-backed resolver is stubbed.
+vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', async () => {
+  const actual = await vi.importActual('../../../../dataLakeService/getDynamicDataLakeTags');
+  return {
+    ...actual,
+    getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
+  };
+});
 
 // Semantic entrypoints mocked so the scoped tests can assert WHICH arm the dispatch picked
 // without standing up embeddings; both default to no-hit so the keyword arm runs after.

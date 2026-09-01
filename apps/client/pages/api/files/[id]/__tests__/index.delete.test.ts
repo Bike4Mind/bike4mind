@@ -163,6 +163,7 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
     // The recompute must see the lake's WHOLE membership scope. Asserting the persisted count
     // alone would pass just as well against a meta-tag-only scope writing a different number.
     expect(h.computeDataLakeStats).toHaveBeenCalledWith({
+      kind: 'owned',
       datalakeTag: LAKE.datalakeTag,
       fileTagPrefix: LAKE.fileTagPrefix,
       creatorUserId: LAKE.createdByUserId,

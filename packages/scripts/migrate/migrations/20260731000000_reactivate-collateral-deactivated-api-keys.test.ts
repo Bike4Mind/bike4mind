@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 type Filter = Record<string, unknown>;
 
@@ -130,6 +130,19 @@ describe('reactivate-collateral-deactivated-api-keys migration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
+    // `up()` reads the real clock (`selectKeysToReactivate(keys, new Date())`) while these
+    // fixtures date their `expiresAt` off the frozen NOW. Without pinning the clock the suite is
+    // a time bomb: it passed for 30 days and went red at 2026-08-29T00:00:00Z, the instant
+    // `day(30)` fell into the past, because every fixture key then read as expired and the
+    // migration returned before `updateMany`. Nothing in the migration had changed.
+    // `toFake: ['Date']` pins the calendar ONLY - timers and promise scheduling stay real, so the
+    // mocked awaits below resolve normally.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('reads only live keys of owners who hold an inactive one, then reactivates the selection', async () => {

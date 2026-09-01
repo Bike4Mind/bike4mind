@@ -172,15 +172,27 @@ describe('resolveLakeManageRung', () => {
     expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'creator' }), grants)).toBe('grant-curator');
   });
 
-  it('reports the MOST privileged rung when several apply - what actually let them do it', () => {
-    // A platform admin who also owns the lake could have acted either way; the admin rung is the
-    // one worth surfacing, because it is the one with no standing relationship to the lake.
-    const rung = resolveLakeManageRung(lake('creator', 'org-1'), {
-      userId: 'creator',
-      isAdmin: true,
-      administeredOrgIds: ['org-1'],
-    });
-    expect(rung).toBe('platform-admin');
+  // Reverses an earlier rule that reported the MOST privileged applicable rung. That rung feeds a
+  // history surface where `platform-admin` renders as a warning ("changed by somebody outside this
+  // lake's own people"), so it fired on a dual-role account's routine edits to a lake it owns.
+  // `platform-admin` now means what the warning claims: no lake-side relationship authorized this.
+  it("reports the actor's own relationship to the lake, not platform-admin, when both apply", () => {
+    const dualRole: ManageActor = { userId: 'creator', isAdmin: true, administeredOrgIds: ['org-1'] };
+    expect(resolveLakeManageRung(lake('creator', 'org-1'), dualRole)).toBe('creator');
+    expect(
+      resolveLakeManageRung(lake('someoneElse'), { ...dualRole, userId: 'newOwner' }, [
+        grant('user', 'newOwner', 'owner'),
+      ])
+    ).toBe('grant-owner');
+    expect(
+      resolveLakeManageRung(lake('someoneElse'), { ...dualRole, userId: 'cur' }, [grant('user', 'cur', 'curator')])
+    ).toBe('grant-curator');
+    // Only an admin with no relationship of their own to the lake still reports the admin rung.
+    expect(resolveLakeManageRung(lake('creator', 'org-1'), actor({ userId: 'root', isAdmin: true }))).toBe(
+      'platform-admin'
+    );
+    // ...as does an admin acting with no principal at all (a script running under admin rights).
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: '', isAdmin: true }))).toBe('platform-admin');
   });
 
   // The two functions must agree in BOTH directions, or a new rung added to canManageLake without

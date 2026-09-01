@@ -189,7 +189,8 @@ describe('shouldRevokeForTokenVersion — JWT kill switch (legacy-token gap fix)
 
 describe('applyUserPush - merge a users WS push onto the store user (#1632)', () => {
   it('preserves fields absent from the push (the projection-wipe bug)', () => {
-    // A full document from /api/identify, then a push carrying only the projected subset.
+    // A full document from /api/identify, then a push that omits some of its fields (the real
+    // push carries the full user doc minus the server's security exclusions).
     const existing = fakeUser({
       lastNotebookId: 'nb-1',
       blogIntegration: { enabled: true },
@@ -199,9 +200,9 @@ describe('applyUserPush - merge a users WS push onto the store user (#1632)', ()
 
     const merged = applyUserPush(existing, pushed) as unknown as Record<string, unknown>;
 
-    // Projected field updates...
+    // Pushed field updates...
     expect(merged.currentCredits).toBe(42);
-    // ...while every non-projected field survives instead of being wiped to undefined.
+    // ...while every field absent from the push survives instead of being wiped to undefined.
     expect(merged.lastNotebookId).toBe('nb-1');
     expect(merged.blogIntegration).toEqual({ enabled: true });
     expect(merged.isBanned).toBe(true);
@@ -209,7 +210,7 @@ describe('applyUserPush - merge a users WS push onto the store user (#1632)', ()
 
   it('lets a field present in the push win, so server-side clears still propagate', () => {
     const existing = fakeUser({ lastNotebookId: 'nb-1' } as Partial<IUserDocument>);
-    // The field is in the projection and was cleared server-side: present-as-null overwrites.
+    // The field is present in the push and was cleared server-side: present-as-null overwrites.
     const pushed = { id: 'u1', lastNotebookId: null } as unknown as IUserDocument;
 
     const merged = applyUserPush(existing, pushed) as unknown as Record<string, unknown>;
@@ -226,7 +227,7 @@ describe('applyUserPush - merge a users WS push onto the store user (#1632)', ()
   });
 
   it('keeps store-derived flags (isBanned/isModerated) intact when the push omits them', () => {
-    // The blast-radius trap: these flags are not in the projection, so a replace reset them to
+    // The blast-radius trap: these flags are absent from the push, so a replace reset them to
     // false. Fed through setCurrentUser, the merged object must keep the real values.
     useUser.setState({ currentUser: null, isHydrated: false });
     const existing = fakeUser({ isBanned: true, isModerated: true } as Partial<IUserDocument>);

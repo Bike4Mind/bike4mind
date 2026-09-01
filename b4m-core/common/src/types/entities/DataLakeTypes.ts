@@ -311,6 +311,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
+  /**
+   * Batched `findByDatalakeTag`, for callers holding a whole lake set (the tag-count surface):
+   * one read instead of one per lake. Lakes with no document are simply absent from the result,
+   * so the caller must key by `datalakeTag` rather than assume a positional match.
+   */
+  findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Entitlement-aware variant of `findActiveByUserTags`: active lakes the user can reach by
@@ -345,18 +351,26 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   /**
-   * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
-   * independent of any caller identity (the catalog is the same for everyone). Only gate-less
-   * lakes qualify - a lake that acquired a `requiredUserTag`/`requiredEntitlement` after being
-   * published is no longer open to all, so it must not surface in a browse-everyone view (this
-   * mirrors the both-blank requirement arm on the retrieval/list paths). `search` matches name
-   * or description case-insensitively. Returns one page plus the unpaged `total` for the UI.
+   * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
+   * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
+   * `findAccessible`'s public arm, so a lake that acquired a `requiredUserTag`/
+   * `requiredEntitlement` after being published is hidden from callers who lack the gate but
+   * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
+   * Without that, an entitled user could open such a lake from their own lake list while discover
+   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
+   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * per-caller too. `search` matches name or description case-insensitively. Returns one page
+   * plus the unpaged `total` for the UI.
    */
-  findPublicLakes(opts?: {
-    search?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
+  findPublicLakes(
+    viewer: AccessContext,
+    opts?: {
+      search?: string;
+      limit?: number;
+      offset?: number;
+      grantedLakeIds?: string[];
+    }
+  ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(
     id: string,

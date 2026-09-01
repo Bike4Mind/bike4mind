@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   connFindByDriveFolderId: vi.fn(),
   connCreate: vi.fn(),
   connUpdateCredential: vi.fn(),
+  connRelease: vi.fn(),
   getValidUserDriveAccessToken: vi.fn(),
   createDriveClient: vi.fn(),
   getFolderAccess: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       findByDriveFolderId: h.connFindByDriveFolderId,
       create: h.connCreate,
       updateCredential: h.connUpdateCredential,
+      release: h.connRelease,
     },
   };
 });
@@ -67,7 +69,7 @@ const makeRes = () => {
   return { res: { json, status } as never, json, status };
 };
 const makeReq = (body: Record<string, unknown>, user = { id: 'u1', isAdmin: false }) =>
-  ({ method: 'POST', body, user }) as never;
+  ({ method: 'POST', body, user, logger: { error: vi.fn() } }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
 describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
@@ -81,6 +83,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.connFindByDriveFolderId.mockResolvedValue(null);
     h.connCreate.mockResolvedValue({ id: 'conn1' });
     h.connUpdateCredential.mockResolvedValue({ id: 'conn1' });
+    h.connRelease.mockResolvedValue(true);
     h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
     h.createDriveClient.mockReturnValue({});
     h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: true, canRead: true });
@@ -221,6 +224,52 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
 
     expect(status).toHaveBeenCalledWith(409);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('releases the global folder claim it just took when the ingest enqueue fails', async () => {
+    // The row holds the GLOBAL driveFolderId claim; a stranded one locks the folder out for every
+    // org (a disabled row still populates the unique index), so a failed enqueue must hard-delete it.
+    h.sendToQueue.mockRejectedValue(new Error('queue unavailable'));
+    const { res, status } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /could not queue/i
+    );
+
+    expect(h.connRelease).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(status).not.toHaveBeenCalledWith(202);
+  });
+
+  it('does not delete a pre-existing connection when a re-sync enqueue fails', async () => {
+    // The reuse branch did not take the claim - tearing down a working connection over a missed
+    // re-sync would be worse than the missed ingest (the resync poll re-enqueues it).
+    h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
+    h.sendToQueue.mockRejectedValue(new Error('queue unavailable'));
+    const { res, status } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /could not queue/i
+    );
+
+    expect(h.connRelease).not.toHaveBeenCalled();
+    expect(status).not.toHaveBeenCalledWith(202);
+  });
+
+  it('still fails the request when the claim release itself fails', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('queue unavailable'));
+    h.connRelease.mockRejectedValue(new Error('mongo down'));
+    const { res, status } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /could not queue/i
+    );
+    expect(status).not.toHaveBeenCalledWith(202);
+  });
+
+  it('does not leak the underlying enqueue error to the caller', async () => {
+    // An SQS/IAM failure message carries queue urls and account ids - it is log-only.
+    h.sendToQueue.mockRejectedValue(new Error('AccessDenied for arn:aws:sqs:us-east-2:secret'));
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /^Could not queue the Google Drive ingest\. Please try again\.$/
+    );
   });
 
   it('rejects an invalid Drive folder id before any lookup', async () => {
