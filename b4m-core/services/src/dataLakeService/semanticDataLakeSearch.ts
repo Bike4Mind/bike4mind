@@ -89,10 +89,14 @@ export interface SemanticChunkResult {
   chunkText: string;
   score: number;
   /**
-   * The parent document's `createdAt`, for the passage header (#2236) - see formatDocumentDate.
-   * Required, not optional, so every producer (this module's scan, annVectorSearch) has to supply
-   * it: a producer that omitted it would serve dateless passages from one retrieval backend and
-   * dated ones from another, and nothing would fail. `null` when the parent carries no date.
+   * The parent document's `createdAt`, rendered by `documentDateClause` into the passage header
+   * (#2236). Required, not optional, so every producer (this module's scan, annVectorSearch) has
+   * to supply it: a producer that omitted it would serve dateless passages from one retrieval
+   * backend and dated ones from another, and nothing would fail. `null` when the parent carries
+   * no date.
+   *
+   * NOTE: this interface is a public export of @bike4mind/services, so this required field is a
+   * source break for any out-of-repo code that CONSTRUCTS one. Readers are unaffected.
    */
   fileCreatedAt: Date | string | null;
 }
