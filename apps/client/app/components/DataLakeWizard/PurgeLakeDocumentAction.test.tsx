@@ -5,9 +5,9 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
 
-const h = vi.hoisted(() => ({ mutate: vi.fn() }));
+const h = vi.hoisted(() => ({ mutate: vi.fn(), isPending: false }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  usePurgeDataLakeDocument: () => ({ mutate: h.mutate, isPending: false }),
+  usePurgeDataLakeDocument: () => ({ mutate: h.mutate, isPending: h.isPending }),
 }));
 
 import PurgeLakeDocumentAction from './PurgeLakeDocumentAction';
@@ -27,6 +27,8 @@ const RECEIPT: DataLakeDocumentPurgeReceipt = {
   embeddingModels: ['text-embedding-3-small'],
   documentDeleted: true,
   storageObjectDeleted: true,
+  storageObjectsTotal: 1,
+  storageObjectsRemaining: 0,
   retrievalIndexOutcome: 'collocated' as const,
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',
@@ -48,7 +50,10 @@ const renderAction = (onPurged?: () => void, onPurgeComplete?: () => void) =>
   );
 
 describe('PurgeLakeDocumentAction', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.isPending = false;
+  });
 
   it('confirms before destroying anything', async () => {
     const user = userEvent.setup();
@@ -94,7 +99,7 @@ describe('PurgeLakeDocumentAction', () => {
     // The document is gone but the bytes are not, and nothing else can name them any more.
     const user = userEvent.setup();
     h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
-      opts.onSuccess({ ...RECEIPT, storageObjectDeleted: false })
+      opts.onSuccess({ ...RECEIPT, storageObjectDeleted: false, storageObjectsRemaining: 1, verified: false })
     );
     renderAction();
     await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
@@ -149,5 +154,44 @@ describe('PurgeLakeDocumentAction', () => {
 
     await screen.findByTestId('datalake-purgefile-receipt');
     expect(onPurgeComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the trigger while a purge is in flight', async () => {
+    // The only thing stopping a second fire from a single tab, and a double purge is what refunds
+    // the owner's quota twice - so this guard has to be exercised, not assumed.
+    h.isPending = true;
+    renderAction();
+
+    expect(screen.getByTestId('datalake-purgefile-btn-f1')).toBeDisabled();
+  });
+
+  it('disables the confirm button too, so an open dialog cannot fire a second purge', async () => {
+    const user = userEvent.setup();
+    const view = renderAction();
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await screen.findByTestId('datalake-purgefile-confirm');
+
+    h.isPending = true;
+    view.rerender(
+      <TestWrapper>
+        <PurgeLakeDocumentAction file={{ id: 'f1', fileName: 'q3.pdf' } as never} title="Q3" dataLakeId="lake-1" />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-purgefile-confirm-btn')).toBeDisabled();
+  });
+
+  it('renders the receipt timestamp in the reader locale, not as a raw ISO string', async () => {
+    const user = userEvent.setup();
+    h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
+      opts.onSuccess(RECEIPT)
+    );
+    renderAction();
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
+
+    const dialog = await screen.findByTestId('datalake-purgefile-receipt');
+    expect(dialog.textContent).toContain(new Date(RECEIPT.purgedAt).toLocaleString());
+    expect(dialog.textContent).not.toContain(RECEIPT.purgedAt);
   });
 });

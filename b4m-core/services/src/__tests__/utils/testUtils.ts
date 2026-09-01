@@ -113,6 +113,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   softDeleteByDataLakeTag: vi.fn(),
   hardDeleteByDataLakeTag: vi.fn(),
   hardDeleteByIds: vi.fn(),
+  hardDeleteOneById: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),

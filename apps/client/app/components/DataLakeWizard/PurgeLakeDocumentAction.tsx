@@ -25,6 +25,11 @@ interface PurgeLakeDocumentActionProps {
  * safety mechanism here - a surface that words the blast radius differently, or drops the receipt,
  * is the failure mode this action exists to prevent.
  *
+ * The copy is deliberately narrower than "every trace": an embedding of a purged chunk can survive
+ * in the global EmbeddingCache, which is keyed by content hash and model with no file id, so no
+ * delete path (this one or the whole-lake purge) can reach it. What is claimed here is what the
+ * receipt can actually verify.
+ *
  * The receipt dialog is not optional chrome. It is the only thing that tells an owner apart a
  * deletion that ran from one that silently did nothing, and it reports the server's own `verified`
  * verdict rather than assuming a 200 means the content is gone.
@@ -72,9 +77,10 @@ export default function PurgeLakeDocumentAction({
         <ModalDialog data-testid="datalake-purgefile-confirm" role="alertdialog">
           <DialogTitle>Delete &ldquo;{title}&rdquo; permanently?</DialogTitle>
           <DialogContent>
-            This destroys the document, every chunk of it, and the vectors those chunks carry. It is not limited to this
-            data lake: the file also leaves the owner&apos;s Files list, any chat that references it, and any other data lake
-            it belongs to. Nothing restores it. You will get a receipt confirming what was destroyed.
+            This destroys the document, every stored copy of it including earlier versions, every chunk of it, and the
+            vectors those chunks carry. It is not limited to this data lake: the file also leaves the owner&apos;s Files
+            list, any chat that references it, any other data lake it belongs to, and the facts this data lake distilled
+            from it. Nothing restores it. You will get a receipt confirming what was destroyed.
           </DialogContent>
           <DialogActions>
             <Button
@@ -123,12 +129,13 @@ export default function PurgeLakeDocumentAction({
                 data-testid="datalake-purgefile-receipt-storage"
                 sx={{ mt: 0.5, color: 'warning.500' }}
               >
-                The stored copy of the original file could not be removed. The failure has been recorded for an
-                administrator to clean up.
+                {receipt.storageObjectsRemaining} of {receipt.storageObjectsTotal} stored cop
+                {receipt.storageObjectsTotal === 1 ? 'y' : 'ies'} of this file could not be removed, so the document was
+                left intact rather than stranded. The failure has been recorded; retry, or contact support.
               </Typography>
             )}
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.tertiary' }}>
-              Recorded at {receipt?.purgedAt}
+              Recorded at {receipt ? new Date(receipt.purgedAt).toLocaleString() : ''}
             </Typography>
           </DialogContent>
           <DialogActions>

@@ -16,11 +16,28 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { Types } from 'mongoose';
+import { createHash } from 'crypto';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
+import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
+import { memoryLedgerRepository } from '@bike4mind/database';
+import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
+
+/**
+ * The receipt, reduced to what an audit row may keep FOREVER. `logAuditEvent` writes into
+ * CounterLog, which has no TTL, so anything spread in here outlives the destruction it records -
+ * and `fileName` is user-supplied text that can itself be the sensitive fact ("Q3 layoffs -
+ * <name>.docx"). The adjacent lake audit trail forbids exactly this at the schema layer so the
+ * trail cannot become a copy of the corpus. The hash keeps a stable, correlatable handle for the
+ * same document without retaining what it was called.
+ */
+const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
+  const { fileName, ...rest } = receipt;
+  return { ...rest, fileNameHash: createHash('sha256').update(fileName ?? '').digest('hex') };
+};
 
 /**
  * POST /api/data-lakes/:id/files/:fabFileId/purge
@@ -94,10 +111,30 @@ const handler = baseApi()
             {
               userId: ctx.userId,
               action: DataLakeAuditEvents.LAKE_DOCUMENT_PURGED,
-              metadata: { ...receipt, ...resolveAuditPrincipal(req.user!, req.apiKeyInfo) },
+              metadata: { ...auditableReceipt(receipt), ...resolveAuditPrincipal(req.user!, req.apiKeyInfo) },
             },
             req.logger
           );
+        },
+        // Facts the lake-memory extractor distilled from this document are stamped with its
+        // fabFileId in `sources` and keep reaching live system prompts through recallLakeMemory.
+        // The lake's DEK cannot be destroyed here - the lake's other documents need it - so the
+        // shred is scoped to this source instead. Without it a "permanently deleted" document keeps
+        // speaking through the beliefs it produced.
+        shredDocumentMemory: async ({ datalakeTag, ownerUserId, fabFileId: source }) => {
+          const shredded = await shredMemoryFromSource(
+            memoryLedgerRepository,
+            { kind: 'lake', id: datalakeTag },
+            ownerUserId,
+            source
+          );
+          // Logged for the same reason the whole-lake shred is: an unwired adapter and a document
+          // that produced no facts are otherwise indistinguishable from the outside.
+          req.logger.info('[lakeMemory] shredded the facts extracted from a purged lake document', {
+            datalakeTag,
+            fabFileId: source,
+            shredded,
+          });
         },
         onPurged: async ({ ownerUserId, fileSize, tagNames }) => {
           // Return the bytes, mirroring the +size that the upload event added. Every other

@@ -139,4 +139,49 @@ describe('MemoryLedgerRepository', () => {
     const n = await memoryLedgerRepository.markSubjectShredded('user', 'u1', 'u1', 'no-such-subject');
     expect(n).toBe(0);
   });
+
+  it('markSourceShredded shreds every fact from ONE source document, leaving the rest readable', async () => {
+    // What makes permanently deleting a lake document reach the beliefs that document produced: a
+    // lake's key cannot be destroyed for one file, so the scope is the source stamp instead.
+    await memoryLedgerRepository.tryInsert(
+      sealedEvent({ seq: 0, hash: 'h0', subject: 'a', sources: ['doc-1'], factCipher: 'c1', factIv: 'i1', factTag: 't1' })
+    );
+    await memoryLedgerRepository.tryInsert(
+      sealedEvent({
+        seq: 1,
+        hash: 'h1',
+        prevHash: 'h0',
+        subject: 'b',
+        sources: ['doc-1'],
+        factCipher: 'c2',
+        factIv: 'i2',
+        factTag: 't2',
+      })
+    );
+    await memoryLedgerRepository.tryInsert(
+      sealedEvent({
+        seq: 2,
+        hash: 'h2',
+        prevHash: 'h1',
+        subject: 'c',
+        sources: ['doc-2'],
+        factCipher: 'c3',
+        factIv: 'i3',
+        factTag: 't3',
+      })
+    );
+
+    const n = await memoryLedgerRepository.markSourceShredded('user', 'u1', 'u1', 'doc-1');
+    expect(n).toBe(2);
+
+    const chain = await memoryLedgerRepository.listChain('user', 'u1', 'u1');
+    expect(chain.filter(e => e.shredded).map(e => e.subject).sort()).toEqual(['a', 'b']);
+    expect(chain.find(e => e.subject === 'c')?.factCipher).toBe('c3');
+  });
+
+  it('markSourceShredded is a no-op for a document that contributed nothing', async () => {
+    await memoryLedgerRepository.tryInsert(sealedEvent({ seq: 0, hash: 'h0', subject: 'a', sources: ['doc-1'] }));
+    const n = await memoryLedgerRepository.markSourceShredded('user', 'u1', 'u1', 'doc-9');
+    expect(n).toBe(0);
+  });
 });

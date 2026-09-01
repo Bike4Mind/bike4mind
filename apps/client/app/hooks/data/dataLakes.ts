@@ -941,6 +941,11 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       // `filesRoot`, not `filesOf(dataLakeId)`: membership removal is lake-scoped and this is not,
       // so any OTHER lake's cached file list is stale too.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+      // Health is computed from the chunk/vector rollups this purge destroys outright, so the badge
+      // would otherwise keep counting the destroyed document's chunks as reachable content until it
+      // goes stale. Root prefix for the same reason as filesRoot: every lake that held the document
+      // is affected, not just this one.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
@@ -949,7 +954,12 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to permanently delete this file');
+      // Same extraction as the other lake doors: this is the irreversible one, and a mid-sweep
+      // failure is exactly the case where "Request failed with status code 500" is the one message
+      // that cannot tell the owner whether their document is half destroyed. Body key is `error`
+      // (server/middlewares/errorHandler.ts).
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to permanently delete this file');
     },
   });
 }

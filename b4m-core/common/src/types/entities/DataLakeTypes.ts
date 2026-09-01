@@ -833,9 +833,9 @@ export interface SyncDelta {
 /**
  * The evidence a permanent deletion leaves behind: a deletion which silently did nothing and one
  * that destroyed everything must not look the same to the caller. `chunksRemaining` and
- * `documentDeleted` are READ BACK after the writes and are what `verified` is made of;
- * `retrievalIndexOutcome` and `storageObjectDeleted` are not read back, and `verified` makes no
- * claim about either.
+ * `documentDeleted` are READ BACK after the writes; with `storageObjectDeleted` they are what
+ * `verified` is made of. `retrievalIndexOutcome` is not read back, and `verified` makes no claim
+ * about it.
  */
 export interface DataLakeDocumentPurgeReceipt {
   dataLakeId: string;
@@ -854,10 +854,15 @@ export interface DataLakeDocumentPurgeReceipt {
   /** The FabFile row is gone, confirmed by re-reading it. */
   documentDeleted: boolean;
   /**
-   * The stored object was deleted, or the row carried none. False means the bytes are retained and
-   * now unreferenced - the quota refund is withheld in that case rather than counting them back.
+   * EVERY stored object went - the current one and each prior version's, since an AI-edited file
+   * keeps earlier revisions under their own keys. False means bytes are retained, and the sweep
+   * then leaves the row intact so a retry can still name them; the quota refund is withheld.
    */
   storageObjectDeleted: boolean;
+  /** How many stored objects the document had (current revision plus every prior version). */
+  storageObjectsTotal: number;
+  /** How many of them the object store refused. 0 whenever `storageObjectDeleted` is true. */
+  storageObjectsRemaining: number;
   /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.
    * `purged`: a wired index accepted the removal without throwing. `collocated`: this deployment
@@ -865,7 +870,11 @@ export interface DataLakeDocumentPurgeReceipt {
    * neither, which means this door was left unwired and vectors may survive.
    */
   retrievalIndexOutcome: 'purged' | 'collocated' | 'unwired';
-  /** documentDeleted AND no chunks left. The single claim a caller may repeat back to a user. */
+  /**
+   * documentDeleted AND no chunks left AND every stored object gone. The single claim a caller may
+   * repeat back to a user. It does not cover the global EmbeddingCache, which is keyed by content
+   * hash with no file id and so is unreachable from here (shared with the whole-lake purge).
+   */
   verified: boolean;
   purgedAt: string;
   /** The lake's stats after the purge, so a caller can refresh without a second round trip. */

@@ -18,7 +18,7 @@ import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 interface PurgeDataLakeDocumentAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
-    fabFiles: Pick<IFabFileRepository, 'findById' | 'hardDeleteByIds' | 'computeDataLakeStats'>;
+    fabFiles: Pick<IFabFileRepository, 'findById' | 'hardDeleteOneById' | 'computeDataLakeStats'>;
     fabFileChunks: Pick<
       IFabFileChunkRepository,
       'countByFabFileId' | 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'
@@ -46,6 +46,19 @@ interface PurgeDataLakeDocumentAdapters {
    * the object afterwards - it is deleted here or it is orphaned forever.
    */
   storage: { delete: (path: string) => Promise<unknown> };
+  /**
+   * Crypto-shred the facts this document contributed to the lake's memory ledger. Optional only
+   * because the service cannot reach the ledger repository itself; a host that leaves it unwired
+   * keeps recalling beliefs distilled from a document it told the owner was destroyed. Called once,
+   * after the destruction converged, with the lake principal the extractor wrote under.
+   */
+  shredDocumentMemory?: (args: {
+    datalakeTag: string;
+    /** The lake principal's owner - the lake's creator, matching the whole-lake shred. */
+    ownerUserId: string;
+    /** The `sources` entry every extracted fact carries. */
+    fabFileId: string;
+  }) => Promise<void>;
   /**
    * Called with the finished receipt BEFORE `onPurged`, so the durable record is filed while the
    * only thing left to do is best-effort bookkeeping. A throw propagates.
@@ -87,11 +100,16 @@ interface PurgeDataLakeDocumentAdapters {
  * index goes first and strictly, so a throw there costs no progress and leaves nothing stranded
  * pointing at a row that no longer exists. See `strictIndexRemove` in ports.ts.
  *
- * `chunksRemaining` and `documentDeleted` are READ BACK after the writes, and they are what
- * `verified` is made of. `retrievalIndexOutcome` is not: the port has no read operation, so it
- * reports that a wired index accepted the removal without a throw, or which of the two reasons
- * there was no port - `verified` makes no claim about the index. `storageObjectDeleted` is the
- * object store's own answer, not a read-back either.
+ * `chunksRemaining` and `documentDeleted` are READ BACK after the writes; together with
+ * `storageObjectDeleted` they are what `verified` is made of. `retrievalIndexOutcome` is not: the
+ * port has no read operation, so it reports that a wired index accepted the removal without a
+ * throw, or which of the two reasons there was no port - `verified` makes no claim about the index.
+ * `storageObjectDeleted` is the object store's own answer over EVERY stored key (the current one
+ * and every prior version's), not a read-back either.
+ *
+ * The one survivor `verified` does not cover: an embedding of a purged chunk can persist in the
+ * global EmbeddingCache, which is keyed by content hash and model with no file id, so nothing here
+ * can reach it. Shared with `cleanupDeletedDataLake`; the copy is worded to match.
  *
  * A failure to fully converge does NOT throw. It returns `verified: false` with the counts that
  * say where it stopped, and logs at error level - a caller must be able to tell a partial sweep
@@ -110,7 +128,16 @@ export const purgeDataLakeDocument = async (
   actor: ManageActor,
   dataLakeId: string,
   fabFileId: string,
-  { db, retrievalIndex, vectorsCollocated, storage, onReceipt, onPurged, logger }: PurgeDataLakeDocumentAdapters
+  {
+    db,
+    retrievalIndex,
+    vectorsCollocated,
+    storage,
+    shredDocumentMemory,
+    onReceipt,
+    onPurged,
+    logger,
+  }: PurgeDataLakeDocumentAdapters
 ): Promise<DataLakeDocumentPurgeReceipt> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -146,36 +173,56 @@ export const purgeDataLakeDocument = async (
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] });
 
   await db.fabFileChunks.deleteManyByFabFileId(file.id);
-  await db.fabFiles.hardDeleteByIds([file.id]);
 
-  // After the row, because `filePath` only lives on it: once it is gone nothing can find the
-  // object again, so a failure here is an orphan nobody can name. Recorded rather than thrown, and
-  // the quota refund below is withheld unless it succeeded - refunding retained bytes drifts the
-  // owner's quota permissively with only an admin recalculate to undo it.
-  let storageObjectDeleted = true;
-  if (file.filePath) {
+  // EVERY stored key, not just the current one. An AI-edited file keeps its earlier revisions in
+  // `versions[]`, each under its own object key (see appendEditedVersion), and `filePath` names only
+  // the newest - so deleting that alone leaves the original document's bytes behind while the
+  // receipt claims the file is gone.
+  const storageKeys = Array.from(
+    new Set(
+      [file.filePath, ...(file.versions ?? []).map(version => version?.filePath)].filter(
+        (path): path is string => typeof path === 'string' && path.length > 0
+      )
+    )
+  );
+
+  // BEFORE the row, which is the only thing naming these keys: if the object store refuses, the row
+  // survives, the sweep reports `verified: false`, and a retry can still find the bytes. Deleting
+  // the row first would strand them permanently with nothing left that could name them.
+  const storageKeysUnreached: string[] = [];
+  for (const path of storageKeys) {
     try {
-      await storage.delete(file.filePath);
+      await storage.delete(path);
     } catch (error) {
-      storageObjectDeleted = false;
-      // filePath is the only handle left: the row carrying it is already gone, so without it here
-      // the orphaned object cannot be named, let alone cleaned up.
-      logger?.error('[dataLake] permanent deletion could not remove the stored object', {
+      storageKeysUnreached.push(path);
+      logger?.error('[dataLake] permanent deletion could not remove a stored object', {
         fabFileId: file.id,
-        filePath: file.filePath,
+        filePath: path,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
+  const storageObjectDeleted = storageKeysUnreached.length === 0;
 
-  // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would otherwise
-  // keep pointing at a row that no longer exists, and the confirmation copy promises otherwise.
-  const linkedSessions = await db.sessions.findAllWithKnowledgeId(file.id);
-  for (const session of linkedSessions) {
-    await db.sessions.update({
-      id: session.id,
-      knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
-    });
+  // The destructive steps that cost the retry its handle are gated on the bytes having gone. A
+  // document whose objects are still stored stays intact and addressable rather than becoming an
+  // unnameable orphan; the receipt says so and the caller retries.
+  let deletedByThisCall = false;
+  if (storageObjectDeleted) {
+    // Atomic, and it answers whether THIS call removed the row. Two concurrent purges both find the
+    // gates open and both see the object-store delete succeed (deleting an absent key is a no-op),
+    // so without this claim both would refund the owner's quota for the same bytes.
+    deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+
+    // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would otherwise
+    // keep pointing at a row that no longer exists, and the confirmation copy promises otherwise.
+    const linkedSessions = await db.sessions.findAllWithKnowledgeId(file.id);
+    for (const session of linkedSessions) {
+      await db.sessions.update({
+        id: session.id,
+        knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
+      });
+    }
   }
 
   // Read back rather than trusting the writes: this pair IS the verification. Truthiness, not
@@ -183,7 +230,7 @@ export const purgeDataLakeDocument = async (
   // `T | null` cast, so an equality check here can never see the row as gone.
   const chunksRemaining = await db.fabFileChunks.countByFabFileId(file.id);
   const documentDeleted = !(await db.fabFiles.findById(file.id));
-  const verified = documentDeleted && chunksRemaining === 0;
+  const verified = documentDeleted && chunksRemaining === 0 && storageObjectDeleted;
 
   // The purged lake only. Every OTHER lake the document belonged to is the caller's to rebuild
   // through `onPurged` - resolving a tag back to its lake needs repositories this service does
@@ -200,6 +247,8 @@ export const purgeDataLakeDocument = async (
     embeddingModels,
     documentDeleted,
     storageObjectDeleted,
+    storageObjectsTotal: storageKeys.length,
+    storageObjectsRemaining: storageKeysUnreached.length,
     retrievalIndexOutcome: retrievalIndex ? 'purged' : vectorsCollocated ? 'collocated' : 'unwired',
     verified,
     purgedAt: new Date().toISOString(),
@@ -215,10 +264,22 @@ export const purgeDataLakeDocument = async (
 
   await onReceipt?.(receipt);
 
+  // Only once the document is genuinely gone: shredding the beliefs of a document that survived a
+  // failed sweep would destroy recall for content still in the lake.
+  if (verified && lake.datalakeTag && lake.createdByUserId) {
+    await shredDocumentMemory?.({
+      datalakeTag: lake.datalakeTag,
+      ownerUserId: lake.createdByUserId,
+      fabFileId: file.id,
+    });
+  }
+
   await onPurged?.({
     ownerUserId: file.userId,
-    fileSize:
-      storageObjectDeleted && file.filePath && typeof file.fileSize === 'number' ? file.fileSize : 0,
+    // Gated on this call having removed the row, not merely on the object delete succeeding:
+    // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
+    // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
+    fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
     tagNames: (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string'),
   });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'crypto';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
@@ -13,6 +14,7 @@ const h = vi.hoisted(() => ({
   userSave: vi.fn(async () => {}),
   userFindById: vi.fn(),
   storageDelete: vi.fn(async () => {}),
+  shredMemoryFromSource: vi.fn(async () => 2),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,6 +42,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   sessionRepository: {},
+  memoryLedgerRepository: {},
   changeStorageSize: h.changeStorageSize,
   withTransaction: (fn: (session: unknown) => unknown) => fn({}),
   User: { findById: h.userFindById },
@@ -55,6 +58,7 @@ vi.mock('@server/utils/auditLog', () => ({
 vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
+vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
 
 import handler from '../purge';
 
@@ -72,6 +76,8 @@ const RECEIPT = {
   embeddingModels: ['text-embedding-3-small'],
   documentDeleted: true,
   storageObjectDeleted: true,
+  storageObjectsTotal: 1,
+  storageObjectsRemaining: 0,
   retrievalIndexOutcome: 'collocated',
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',
@@ -366,5 +372,32 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     const { res } = makeRes();
     await expect(call(req({ id: 'nope', fabFileId: FILE_ID }), res)).rejects.toThrow('Data lake not found');
     expect(h.purgeDataLakeDocument).not.toHaveBeenCalled();
+  });
+  it('keeps the destroyed file name out of the audit row, which is retained forever', async () => {
+    // CounterLog has no TTL, so anything spread into the metadata outlives the destruction it
+    // records - and a file name can itself be the sensitive fact. The hash keeps the row
+    // correlatable without retaining what the document was called.
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+
+    const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
+    expect(metadata).not.toHaveProperty('fileName');
+    expect(metadata.fileNameHash).toBe(createHash('sha256').update('q3.pdf').digest('hex'));
+    expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
+  });
+
+  it('shreds the facts the lake distilled from the purged document', async () => {
+    // Extracted beliefs keep reaching live system prompts through recallLakeMemory, so a document
+    // reported permanently deleted would otherwise go on speaking through them.
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+
+    await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
+      datalakeTag: 'datalake:sales',
+      ownerUserId: 'owner-1',
+      fabFileId: FILE_ID,
+    });
+
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith({}, { kind: 'lake', id: 'datalake:sales' }, 'owner-1', FILE_ID);
   });
 });

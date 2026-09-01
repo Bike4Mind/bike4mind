@@ -1991,6 +1991,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
+  async hardDeleteOneById(fabFileId: string): Promise<boolean> {
+    // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
+    // concurrent purges of the same document exactly one is told it did the deleting.
+    const doc = await this.fabFileModel
+      .findOneAndDelete({ _id: fabFileId }, { hardDelete: true } as Record<string, unknown>)
+      .setOptions({ includeDeleted: true });
+    return !!doc;
+  }
+
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     // Include soft-deleted files: the phase-2 sweep must purge every member.
     const docs = await this.fabFileModel

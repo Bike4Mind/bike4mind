@@ -1206,6 +1206,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * malformed one throws a CastError partway through the delete.
    */
   hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * Hard-delete ONE file, atomically, answering whether THIS call is the one that removed it.
+   *
+   * The single-document sibling of `hardDeleteByIds`, and the difference is the whole point: a
+   * `deleteMany` cannot say which of two concurrent callers actually removed the row, so a caller
+   * that owes a side effect per destruction (returning the owner's storage quota, say) would pay
+   * it twice. `false` means the row was already gone.
+   */
+  hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }
