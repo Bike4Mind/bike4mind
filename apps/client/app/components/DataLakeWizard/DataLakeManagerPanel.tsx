@@ -64,6 +64,7 @@ import {
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
+  type DataLakeMemberFile,
 } from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -75,7 +76,7 @@ import type { EditableLake } from './DataLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
-import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
+import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
@@ -134,10 +135,17 @@ export default function DataLakeManagerPanel() {
     (lake: ManagerLake): number | undefined => tagCountsData?.lakeFileCounts?.[lake.datalakeTag],
     [tagCountsData]
   );
+  // The two DISJOINT membership arms: a file is a member via the lake's `datalake:*`
+  // meta-tag, or via a `fileTagPrefix` content tag on a file the lake's CREATOR owns - and the
+  // two arms are invisible from a single combined count. See buildDataLakeMembershipFilter.
+  const lakeArmCounts = useCallback(
+    (lake: ManagerLake) => tagCountsData?.lakeArmCounts?.[lake.datalakeTag],
+    [tagCountsData]
+  );
 
   const [lakeId, setLakeId] = useState<string | null>(null);
   const [path, setPath] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
+  const [selectedFile, setSelectedFile] = useState<DataLakeMemberFile | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
@@ -242,6 +250,7 @@ export default function DataLakeManagerPanel() {
           <LakeInfoPanel
             lake={activeLake}
             fileCount={lakeCount(activeLake)}
+            armCounts={lakeArmCounts(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
             onReviewTaxonomy={setReviewingBatchId}
@@ -291,7 +300,7 @@ interface ManagerNavProps {
   onSelectLake: (lake: ManagerLake) => void;
   onNavigate: (path: string[]) => void;
   onExitLake: () => void;
-  onSelectFile: (file: IFabFileDocument) => void;
+  onSelectFile: (file: DataLakeMemberFile) => void;
   onCreateLake: () => void;
   /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
   isDiscovering: boolean;
@@ -994,6 +1003,7 @@ function NavLifecycleSection({
 function LakeInfoPanel({
   lake,
   fileCount,
+  armCounts,
   taxonomyBatch,
   onOpenSettings,
   onReviewTaxonomy,
@@ -1001,6 +1011,8 @@ function LakeInfoPanel({
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
+  /** Membership split by arm - meta-tagged vs prefix-only. See lakeArmCounts. */
+  armCounts: { metaCount: number; prefixOnlyCount: number } | undefined;
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
@@ -1091,8 +1103,28 @@ function LakeInfoPanel({
             {visibility}
           </Chip>
           {typeof fileCount === 'number' && (
-            <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
-              {fileCount} {fileCount === 1 ? 'file' : 'files'}
+            <Tooltip
+              title={
+                armCounts
+                  ? `${armCounts.metaCount} by lake tag, ${armCounts.prefixOnlyCount} by content prefix only - counted as the lake's creator would see it`
+                  : "Counted as the lake's creator would see it"
+              }
+              size="sm"
+            >
+              <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
+                {fileCount} {fileCount === 1 ? 'file' : 'files'} (as creator)
+              </Chip>
+            </Tooltip>
+          )}
+          {armCounts && armCounts.prefixOnlyCount > 0 && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-armcounts-chip-${lake.id}`}
+            >
+              {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
             </Chip>
           )}
           {/* Background AI-tag suggestion progress - an independent clock from ingest, so this

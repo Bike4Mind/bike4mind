@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 interface TagCountsResponse {
   tagCounts: { tag: string; count: number }[];
@@ -108,13 +109,16 @@ export const useDeleteFileTag = () => {
   });
 };
 
+/** A toggled file, plus the lakes it joined solely via a content-prefix tag. */
+type ToggledFile = IFabFileDocument & { prefixArmJoinedLakes?: { lakeId: string; datalakeTag: string }[] };
+
 export function useToggleTagToFiles() {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
   return useMutation({
     mutationFn: async (params: { ids: string[]; tags: IFileTag[] }) => {
-      const response = await api.post<IFabFileDocument[]>(`/api/files/tags/toggle`, {
+      const response = await api.post<ToggledFile[]>(`/api/files/tags/toggle`, {
         ids: params.ids,
         tags: params.tags.map(tag => tag.name),
       });
@@ -122,8 +126,20 @@ export function useToggleTagToFiles() {
     },
     onSuccess: data => {
       toast.success(t('file_actions.add_tag', { count: data.length }));
+      // The trap to defuse: a plain content tag can also be a lake's ONLY
+      // membership signal for a file, with no `datalake:*` meta-tag ever applied. Silence here is
+      // what let that state go unnoticed for months, so a caller who just hit it is told
+      // explicitly rather than seeing an ordinary "tag added" toast and nothing else.
+      const joinedLakeCount = new Set(data.flatMap(f => f.prefixArmJoinedLakes?.map(j => j.lakeId) ?? [])).size;
+      if (joinedLakeCount > 0) {
+        toast.info(
+          `That tag also made ${data.length === 1 ? 'this file' : 'some of these files'} a member of ${joinedLakeCount === 1 ? 'a data lake' : `${joinedLakeCount} data lakes`} by content prefix only - no lake tag was applied. Open the lake's manager to add the lake tag too.`,
+          { duration: 8000 }
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      if (joinedLakeCount > 0) queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
     },
     onError: () => {
       toast.error(t('file_actions.failed_to_add_tag'));

@@ -30,11 +30,13 @@ import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 import DataLakeTreeView, {
   UNCATEGORIZED_KEY,
   type DataLakeTreeChrome,
 } from '@client/app/components/datalake/DataLakeTreeView';
+import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 
 // Utilities
 
@@ -76,7 +78,7 @@ export default function DataLakeViewer({
   onAskAbout,
 }: DataLakeViewerProps) {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
+  const [selectedFile, setSelectedFile] = useState<DataLakeMemberFile | null>(null);
 
   const { data: filesResult, isLoading, isError } = useDataLakeFiles(dataLakeId);
   const articles = filesResult?.data ?? [];
@@ -101,7 +103,7 @@ export default function DataLakeViewer({
     setSelectedFile(null);
   }, []);
 
-  const handleSelectFile = useCallback((file: IFabFileDocument) => {
+  const handleSelectFile = useCallback((file: DataLakeMemberFile) => {
     setSelectedFile(file);
   }, []);
 
@@ -159,12 +161,12 @@ export default function DataLakeViewer({
 
 interface TreeSidebarProps {
   tree: ReturnType<typeof buildTagTree>;
-  articles: IFabFileDocument[];
+  articles: DataLakeMemberFile[];
   tagPrefix: string;
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
   selectedFileId: string | null;
-  onSelectFile: (file: IFabFileDocument) => void;
+  onSelectFile: (file: DataLakeMemberFile) => void;
   isLoading: boolean;
   isError?: boolean;
 }
@@ -329,7 +331,7 @@ function ArticlePanel({
   canManage,
   onRemoved,
 }: {
-  file: IFabFileDocument | null;
+  file: DataLakeMemberFile | null;
   onAskAbout?: (prompt: string) => void;
   dataLakeId: string;
   canManage?: boolean;
@@ -420,8 +422,9 @@ function ArticlePanel({
             ⚠️ {file.notes}
           </Typography>
         )}
-        {tags.length > 0 && (
+        {(tags.length > 0 || file.membershipArm) && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            <MembershipArmBadge arm={file.membershipArm} />
             {tags.map(tag => (
               <Chip key={tag} size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
                 {tag}

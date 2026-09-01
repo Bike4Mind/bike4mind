@@ -94,6 +94,33 @@ export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix:
   prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
 
 /**
+ * Which membership signal(s) a file carries for a lake: the `datalake:*` meta-tag ('meta'),
+ * a `fileTagPrefix` content tag on a file the lake's creator owns ('prefix'), both, or neither
+ * (null - not a member). Exact JS mirror of `buildDataLakeMembershipFilter`
+ * (`@bike4mind/database`) so a UI badge and the read/lifecycle predicate can never disagree about
+ * why a file is a member.
+ *
+ * This closes a visibility gap: the two arms behave differently (the prefix
+ * arm requires creator ownership; the meta-tag does not) but neither Files nor the lake manager UI
+ * previously surfaced which one applied.
+ */
+export type DataLakeMembershipArm = 'meta' | 'prefix' | 'both';
+
+export function getFileMembershipArm(
+  file: { userId: string; tags?: readonly { name?: unknown }[] },
+  scope: { datalakeTag: string; fileTagPrefix?: string | null; creatorUserId?: string | null }
+): DataLakeMembershipArm | null {
+  const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
+  const hasMeta = tagNames.includes(scope.datalakeTag);
+  const hasPrefix =
+    !!scope.creatorUserId && file.userId === scope.creatorUserId && matchesTagPrefixArm(tagNames, scope.fileTagPrefix);
+  if (hasMeta && hasPrefix) return 'both';
+  if (hasMeta) return 'meta';
+  if (hasPrefix) return 'prefix';
+  return null;
+}
+
+/**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
  * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
  * deleting either would take files the other holds.

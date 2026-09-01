@@ -12,6 +12,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { getFileMembershipArm, type DataLakeMembershipArm, type IFabFileDocument } from '@bike4mind/common';
 
 interface ArticlesQuery {
   id: string;
@@ -111,7 +112,22 @@ const handler = baseApi()
       }
     );
 
-    return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });
+    // Per-file membership arm: which signal makes this file a member, since the two
+    // arms behave differently (the prefix arm requires the lake's creator to own the file) and
+    // neither the lake manager nor the article panel previously said which one applied. A
+    // fallback/registry lake has no creator to anchor the prefix arm to, so its files are typed
+    // by the OR-membership tag alone: the meta-tag when present, the (ownership-free) prefix
+    // otherwise - there is no 'both' case for a fallback lake.
+    const data: (IFabFileDocument & { membershipArm?: DataLakeMembershipArm })[] = result.data.map(file => {
+      const membershipArm = isFallback
+        ? (file.tags ?? []).some(t => t.name === datalakeTag)
+          ? 'meta'
+          : 'prefix'
+        : (getFileMembershipArm(file, lakeMembership!) ?? undefined);
+      return { ...file, membershipArm };
+    });
+
+    return res.json({ data, total: result.total, hasMore: result.hasMore });
   });
 
 export const config = {

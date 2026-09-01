@@ -523,6 +523,8 @@
     "drop_files_here": "Drop files here",
     "tagging": "Tagging...",
     "tag_files": "Tag Files",
+    "adding_to_lake": "Adding...",
+    "add_to_lake": "Add to lake",
     "select_all": "Select All",
     "unselect_all": "Unselect All",
     "add_files": "Add Files",

@@ -245,9 +245,15 @@ export async function queryDataLakeTagCounts(
   tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>>;
   uniqueArticleCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeUniqueFilesByPrefix>>;
   lakeFileCounts: Record<string, number>;
+  /**
+   * Same lakes as `lakeFileCounts`, split into the two disjoint membership arms - meta-tagged vs
+   * prefix-only. Lets the lake manager say "48 by lake tag, 37 by content prefix" instead of a
+   * single opaque count that hides which arm a member belongs by.
+   */
+  lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
 }> {
   if (lakes.length === 0) {
-    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} }, lakeFileCounts: {} };
+    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} }, lakeFileCounts: {}, lakeArmCounts: {} };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
   const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
@@ -278,11 +284,12 @@ export async function queryDataLakeTagCounts(
     creatorUserId: lakeDocs[i]?.createdByUserId,
   }));
 
-  const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
+  const [tagCounts, uniqueArticleCounts, lakeFileCounts, lakeArmCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
+    fabFileRepository.countDataLakeFilesByMembershipArm(membershipScopes),
   ]);
 
-  return { tagCounts, uniqueArticleCounts, lakeFileCounts };
+  return { tagCounts, uniqueArticleCounts, lakeFileCounts, lakeArmCounts };
 }

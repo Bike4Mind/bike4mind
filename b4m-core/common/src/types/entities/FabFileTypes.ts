@@ -688,6 +688,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * carry only the membership tag and over-counts multi-tagged ones.
    */
   countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
+  /**
+   * The same live-member count as `countDataLakeFilesByMembership`, split into the two DISJOINT
+   * arms that make up membership: `metaCount` (carries the `datalake:*` tag) and
+   * `prefixOnlyCount` (a member solely via a `fileTagPrefix` tag on a file the creator owns, with
+   * no meta-tag). `metaCount + prefixOnlyCount` always equals the combined count - see
+   * `buildDataLakePrefixOnlyMembershipFilter`. Powers the lake-manager's per-arm visibility.
+   */
+  countDataLakeFilesByMembershipArm(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, { metaCount: number; prefixOnlyCount: number }>>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a

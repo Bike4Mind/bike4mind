@@ -13,6 +13,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { useGetFileTags, useToggleTagToFiles, useCreateFileTag } from '@client/app/hooks/data/tag';
+import { useAddFilesToLake, useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -128,6 +129,11 @@ const FileBrowserContent = () => {
 
   const { mutateAsync: toggleTagToFiles } = useToggleTagToFiles();
   const { data: fileTags } = useGetFileTags();
+  // Only lakes the caller can manage are valid "Add to lake" targets - the same gate the
+  // toggle-tag write enforces server-side (see assertCanWriteDataLakeTags).
+  const { data: dataLakes } = useGetDataLakes(isAdminFeatureEnabled('EnableDataLakes'));
+  const manageableLakes = useMemo(() => dataLakes?.filter(l => l.canManage) ?? [], [dataLakes]);
+  const { mutateAsync: addFilesToLake } = useAddFilesToLake();
   const { mutateAsync: deleteFiles } = useBulkDeleteFiles();
 
   const availableOptions = fileTags?.filter(tag => !filter.filters?.tags?.includes(tag.name)) || [];
@@ -841,6 +847,10 @@ const FileBrowserContent = () => {
                 ids: Array.from(selectedIds),
                 tags: [tag],
               });
+            }}
+            lakes={manageableLakes}
+            onAddToLake={async lake => {
+              await addFilesToLake({ fileIds: Array.from(selectedIds), lake });
             }}
             hasSelectedAll={selectedIds.size === selectableFiles.length}
             selectedCount={selectedIds.size}

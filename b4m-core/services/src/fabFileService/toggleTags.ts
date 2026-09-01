@@ -44,6 +44,16 @@ const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
 const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DATALAKE_TAG_PREFIX);
 
 /**
+ * A file this call joined to a lake solely by a `fileTagPrefix` content tag, with no
+ * `datalake:*` meta-tag ever applied - the trap this type exists to surface. Present only on a file
+ * that just joined a lake this way; consumers should show the caller what happened and offer the
+ * meta-tag join, since nothing else in the response distinguishes this from an ordinary tag edit.
+ */
+export type ToggledFabFile = IFabFileDocument & {
+  prefixArmJoinedLakes?: { lakeId: string; datalakeTag: string }[];
+};
+
+/**
  * The one toggle decision `toggleOrdinaryTag` (the real write) and `predictToggleResult` (its
  * speculative fold, used only to decide the prefix-arm gate) must never disagree on: which stored
  * spellings of `tag` are already present, matched case-insensitively. Both derive from this
@@ -75,7 +85,11 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
  * are not transactional: if one file fails mid-batch, the files already written stay written.
  * Every write is idempotent, so retrying the same call converges rather than double-applying.
  */
-export const toggleTags = async (userId: string, params: unknown, { db, logger }: FabFileToggleTagsAdapters) => {
+export const toggleTags = async (
+  userId: string,
+  params: unknown,
+  { db, logger }: FabFileToggleTagsAdapters
+): Promise<ToggledFabFile[]> => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
   // Toggling one tag twice in a request is meaningless, and acting on it twice is harmful: the
@@ -325,5 +339,18 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   // Re-read: the writes above are element-level, so the documents loaded earlier no longer
   // reflect what is stored.
-  return db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+  const freshFiles = await db.fabFiles.shareable.findAllAccessibleByIds(user, ids);
+
+  // Surfaces the trap: a content-prefix tag can join a file to a lake with no
+  // `datalake:*` meta-tag ever applied, and the caller who reached for an ordinary tag has no way
+  // to know that happened. Attached per-file rather than returned as a separate list, since the
+  // route's response shape is an `IFabFileDocument[]` other callers already depend on - this rides
+  // along as an extra property on the documents they already receive instead of changing it.
+  return freshFiles.map(file => {
+    const joins = prefixJoinsByFile.get(file.id);
+    if (!joins || joins.length === 0) return file;
+    return Object.assign(file, {
+      prefixArmJoinedLakes: joins.map(({ lake }) => ({ lakeId: lake.id, datalakeTag: lake.datalakeTag })),
+    });
+  });
 };

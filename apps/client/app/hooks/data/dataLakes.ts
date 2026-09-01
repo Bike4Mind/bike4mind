@@ -1,6 +1,7 @@
 import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
+  DataLakeMembershipArm,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IFabFileDocument,
@@ -377,6 +378,13 @@ export function useDismissTaxonomy(batchId: string) {
 // ── Per-lake files ──────────────────────────────────────────────────────────
 
 /**
+ * A lake member as this browse returns it: the file plus which membership arm made it one -
+ * `meta` (the lake's `datalake:*` tag), `prefix` (a `fileTagPrefix` content tag on a file the
+ * creator owns, no meta-tag), or `both`. Undefined only if the server predates this field.
+ */
+export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMembershipArm };
+
+/**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
  * query; see useGetDataLakeArticles.
@@ -385,7 +393,7 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
+      const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
         { params: { limit: params?.limit ?? 100 } }
       );
@@ -455,6 +463,35 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   });
 }
 
+/**
+ * Hook: Attach existing files to a data lake by toggling on its `datalake:*` meta-tag, through
+ * the same `/api/files/tags/toggle` write every other membership join uses (see toggleTags) -
+ * there is no separate "add to lake" write path. Lets an owner add a file they already uploaded
+ * without re-uploading it through the wizard.
+ */
+export function useAddFilesToLake() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ fileIds, lake }: { fileIds: string[]; lake: { id: string; datalakeTag: string } }) => {
+      const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
+        ids: fileIds,
+        tags: [lake.datalakeTag],
+      });
+      return { files: res.data, lake };
+    },
+    onSuccess: ({ files, lake }) => {
+      toast.success(`Added ${files.length} file${files.length === 1 ? '' : 's'} to the lake.`);
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(lake.id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to add files to the data lake');
+    },
+  });
+}
+
 // ── Browse surfaces (tag tree / articles / tickers) ──────────────────────────
 
 export interface DataLakeArticlesParams {
@@ -480,6 +517,13 @@ export interface DataLakeTagCountsResponse {
    * tree's branches.
    */
   lakeFileCounts: Record<string, number>;
+  /**
+   * Same lakes as `lakeFileCounts`, split into the two membership arms so the manager can say
+   * whose signal made a file a member: `metaCount` carries the lake's `datalake:*` tag,
+   * `prefixOnlyCount` is a member solely via a `fileTagPrefix` content tag (no meta-tag). The two
+   * are disjoint and sum to `lakeFileCounts[datalakeTag]`.
+   */
+  lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
 }
 
 /**

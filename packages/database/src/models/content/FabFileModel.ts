@@ -16,7 +16,10 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
-import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+import {
+  buildDataLakeMembershipFilter,
+  buildDataLakePrefixOnlyMembershipFilter,
+} from '../../queries/dataLakeLifecycleScope';
 
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
@@ -915,6 +918,42 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           status: { $ne: 'pending' },
         })
       )
+    );
+    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
+  }
+
+  /**
+   * Per-lake membership split into its two disjoint arms. `metaCount` reuses the plain meta-tag
+   * arm; `prefixOnlyCount` reuses `buildDataLakePrefixOnlyMembershipFilter`, which already
+   * excludes files also carrying the meta-tag, so the two never double-count a file. A lake with
+   * no usable prefix arm (fallback/registry lakes, or one with no creator to anchor to) reports
+   * `prefixOnlyCount: 0` rather than running a query with nothing to match.
+   */
+  async countDataLakeFilesByMembershipArm(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, { metaCount: number; prefixOnlyCount: number }>> {
+    if (scopes.length === 0) return {};
+    const counts = await Promise.all(
+      scopes.map(async scope => {
+        const prefixOnlyFilter = buildDataLakePrefixOnlyMembershipFilter(scope);
+        const [metaCount, prefixOnlyCount] = await Promise.all([
+          this.fabFileModel.countDocuments({
+            'tags.name': scope.datalakeTag,
+            deletedAt: null,
+            archivedAt: null,
+            status: { $ne: 'pending' },
+          }),
+          prefixOnlyFilter
+            ? this.fabFileModel.countDocuments({
+                ...prefixOnlyFilter,
+                deletedAt: null,
+                archivedAt: null,
+                status: { $ne: 'pending' },
+              })
+            : 0,
+        ]);
+        return { metaCount, prefixOnlyCount };
+      })
     );
     return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
   }

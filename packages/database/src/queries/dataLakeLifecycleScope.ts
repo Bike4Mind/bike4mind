@@ -54,6 +54,32 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
 }
 
 /**
+ * Prefix-arm membership with the meta-tag arm subtracted out - the datastore mirror of
+ * `getFileMembershipArm` returning `'prefix'` rather than `'both'`. Paired with a plain
+ * `{ 'tags.name': scope.datalakeTag }` count, this partitions a lake's members into two
+ * DISJOINT counts that sum to the same total `buildDataLakeMembershipFilter` would report,
+ * which is what lets a lake header read "48 by lake tag, 37 by content prefix" without the
+ * two numbers double-counting a file that carries both signals.
+ *
+ * Returns null under the same fail-closed conditions as the prefix arm above (no usable
+ * prefix, a reserved namespace, or no creator to anchor it to) - there is no prefix-only
+ * membership to count in that case.
+ */
+export function buildDataLakePrefixOnlyMembershipFilter(
+  scope: DataLakeMembershipScope
+): Record<string, unknown> | null {
+  const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix) || !scope.creatorUserId) return null;
+  return {
+    $and: [
+      { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } },
+      { userId: scope.creatorUserId },
+      { 'tags.name': { $ne: scope.datalakeTag } },
+    ],
+  };
+}
+
+/**
  * Datastore mirror of `satisfiesTagPrefix`, NEGATED: matches files carrying no tag that places
  * them under `prefix`. What the backfill migration selects, so it stamps exactly the files the
  * write-door reconciler would have. A parity test asserts the two agree; change them together.
