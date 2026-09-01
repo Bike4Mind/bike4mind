@@ -1,7 +1,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { connectDB, DataLakeModel, FabFile, buildDataLakeMembershipQuery, mongoose } from '@bike4mind/database';
+import {
+  connectDB,
+  DataLakeModel,
+  FabFile,
+  buildDataLakeMembershipQuery,
+  whenCatalogSeeded,
+  mongoose,
+} from '@bike4mind/database';
 import { DATA_LAKES, normalizeTagPrefix, isReservedTagPrefix } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import pLimit from 'p-limit';
@@ -68,6 +75,13 @@ import {
  * owner sign-off (not an error), 1 the census itself failed (including a RECONCILE mismatch,
  * which means the two widening queries disagree and the output cannot be trusted). Never merge on
  * a 1 - an unrun census reads the same as a clean one.
+ *
+ * BUT DO NOT READ $? THROUGH THE INVOCATION BELOW. Measured 2026-09-01 against stage production:
+ * `sst shell` collapses every non-zero child code to 1 (0 survives), so a findings run (2) and a
+ * crashed run (1) are indistinguishable from the shell - the exact confusion the codes exist to
+ * prevent. `pnpm --filter` collapses them too, one layer earlier. The AUTHORITATIVE signal is the
+ * `exitCode` field in the JSON artifact, and the CENSUS RESULT line printed last on stdout. Read
+ * one of those, not `$?`, until something reads this process's code directly.
  *
  * Usage:
  *   ./for-env <env> pnpm sst shell --stage <stage> -- pnpm --filter scripts datalake:check-prefix-only-members
@@ -289,6 +303,13 @@ async function main() {
     );
   }
 
+  // Printed last and stated in words because `$?` cannot carry it: see the exit-code note above.
+  console.log(
+    `\nCENSUS RESULT: exitCode=${exitCode} - ${
+      exitCode === 0 ? 'CLEAN, no lake needs owner sign-off' : `${findingsCount} lake(s) NEED OWNER SIGN-OFF`
+    }. The shell will report 1 for any non-zero; trust this line and the artifact, not $?.`
+  );
+
   return exitCode;
 }
 
@@ -307,6 +328,10 @@ void (async () => {
     console.error(e);
     process.exitCode = 1;
   } finally {
+    // connectDB (priceCatalogBootstrap) kicks off a fire-and-forget catalog seed. Disconnecting
+    // under it throws MongoExpiredSessionError and dumps a stack trace AFTER the report - burying
+    // the very lines this exit path exists to preserve. whenCatalogSeeded never rejects.
+    await whenCatalogSeeded().catch(() => {});
     await mongoose.disconnect().catch(() => {});
   }
 })();
