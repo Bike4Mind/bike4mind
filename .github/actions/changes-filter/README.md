@@ -5,7 +5,8 @@ and (independently) whether it touched the **docs site**. Use it to skip the
 expensive test + deploy pipeline on docs-only / config-only changes. The
 `docs-changed` output originally gated a Docusaurus build-verification job;
 that job is removed for now (this repo tracks only docs-site markdown, not
-the site scaffolding), so `docs-changed` is currently unconsumed.
+the site scaffolding). It now gates the `help-docs` job in `ci.yml`, which runs
+the help guards that a docs-only (non-deployable) run would otherwise skip.
 
 Ported from `MillionOnMars/polaris` (PRs #4204 + #4540), adapted for lumina5:
 docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
@@ -16,7 +17,7 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 | Output | Meaning |
 |---|---|
 | `deployable` | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved. |
-| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Currently unconsumed. |
+| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
 
 The two are orthogonal: a docs-only PR is `deployable=false, docs-changed=true`;
 a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
@@ -60,6 +61,11 @@ jobs:
   core-build:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
+    ...
+
+  help-docs:
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true'
     ...
 
 ```

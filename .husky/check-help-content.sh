@@ -36,35 +36,65 @@ fi
 INDEX_FILE="apps/client/app/generated/help-index.json"
 EMBEDDINGS_FILE="apps/client/app/generated/help-embeddings.json"
 
-if [ -f "$INDEX_FILE" ] && [ -f "$EMBEDDINGS_FILE" ]; then
-  # Extract slugs from both files and compare
-  # Uses node since jq may not be installed
-  MISSING=$(node -e "
+# Both artifacts are git-tracked, so absence means someone deleted one - fail rather
+# than skip. This block used to be wrapped in `if [ -f ] && [ -f ]`, which turned a
+# deleted artifact into a silent pass.
+if [ ! -f "$INDEX_FILE" ] || [ ! -f "$EMBEDDINGS_FILE" ]; then
+  echo ""
+  echo "❌ A generated help artifact is missing:"
+  [ -f "$INDEX_FILE" ] || echo "   • $INDEX_FILE"
+  [ -f "$EMBEDDINGS_FILE" ] || echo "   • $EMBEDDINGS_FILE"
+  echo ""
+  echo "   Both are git-tracked. Restore the file, or regenerate:"
+  echo "     pnpm --filter @bike4mind/scripts help:regenerate"
+  echo ""
+  exit 1
+fi
+
+# `if ! MISSING=$(...)` so a throw fails the check. This was `2>/dev/null || true`,
+# which collapsed a corrupt artifact, a missing `chunks` key, or an unreadable file
+# into an empty MISSING - read downstream as "nothing missing" - so the gate passed
+# silently on exactly the inputs it exists to catch. Nothing else would have caught it
+# either: apps/client/server/help/retrieval.ts reads this same file at RUNTIME and
+# fails quiet in the same shape (catch -> warn -> keyword fallback), and it is not a
+# build-time import, so a truncated artifact does not redden the build. stderr is left
+# unredirected so node's own parse error is what the reader sees.
+# Uses node since jq may not be installed.
+if ! MISSING=$(node -e "
     const idx = JSON.parse(require('fs').readFileSync('$INDEX_FILE','utf-8'));
     const emb = JSON.parse(require('fs').readFileSync('$EMBEDDINGS_FILE','utf-8'));
+    if (!Array.isArray(idx.entries) || !Array.isArray(emb.chunks)) {
+      throw new Error('unexpected artifact shape: expected idx.entries[] and emb.chunks[]');
+    }
     const embSlugs = new Set(emb.chunks.map(c => c.slug));
     const missing = idx.entries.filter(e => !embSlugs.has(e.slug)).map(e => e.slug);
     if (missing.length) {
       console.log(missing.join('\n'));
     }
-  " 2>/dev/null || true)
+  "); then
+  echo ""
+  echo "❌ Could not compare the help index against the embeddings (see the error above)."
+  echo "   The artifact is unreadable or malformed - regenerate it:"
+  echo "     pnpm --filter @bike4mind/scripts help:regenerate"
+  echo ""
+  exit 1
+fi
 
-  if [ -n "$MISSING" ]; then
-    echo ""
-    echo "❌ Help index has articles with no embeddings — the Help AI chat won't be able to answer questions about them:"
-    echo "$MISSING" | while read -r slug; do
-      echo "   • $slug"
-    done
-    echo ""
-    echo "   To fix, run:"
-    echo "     pnpm --filter @bike4mind/scripts help:bundle-content"
-    echo "     OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize"
-    echo "   Then stage help-embeddings.json and commit again."
-    echo ""
-    # exit, not return: the pre-commit hook invokes this as a subprocess, so `return` at
-    # top level is an error and the non-zero status would be lost.
-    exit 1
-  fi
+if [ -n "$MISSING" ]; then
+  echo ""
+  echo "❌ Help index has articles with no embeddings — the Help AI chat won't be able to answer questions about them:"
+  echo "$MISSING" | while read -r slug; do
+    echo "   • $slug"
+  done
+  echo ""
+  echo "   To fix, run:"
+  echo "     pnpm --filter @bike4mind/scripts help:bundle-content"
+  echo "     OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize"
+  echo "   Then stage help-embeddings.json and commit again."
+  echo ""
+  # exit, not return: the pre-commit hook invokes this as a subprocess, so `return` at
+  # top level is an error and the non-zero status would be lost.
+  exit 1
 fi
 
 exit 0

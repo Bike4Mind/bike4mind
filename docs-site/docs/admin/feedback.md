@@ -1,13 +1,13 @@
 ---
-title: Feedbacks
+title: Feedback
 description: Managing user feedback submissions in the Bike4Mind admin panel
 sidebar_position: 4
 tags: [admin, feedback, support]
 ---
 
-# Feedbacks
+# Feedback
 
-The Feedbacks tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by status and organization, update feedback status, delete entries, and export data to CSV.
+The Feedback tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by status and organization, update feedback status, delete entries, and export data to CSV.
 
 ## Control Panel
 
