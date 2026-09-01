@@ -2356,7 +2356,10 @@ describe('ChatCompletionProcess', () => {
           knowledgeIds: ['f1'],
           files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
           fabPromptMessages: [
-            { role: 'user', content: `Here is the content from the attached file "context.md" for context:\n\n${body}` },
+            {
+              role: 'user',
+              content: `Here is the content from the attached file "context.md" for context:\n\n${body}`,
+            },
           ],
         });
 
@@ -3248,6 +3251,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3262,6 +3266,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3278,6 +3283,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3299,6 +3305,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'no_lakes',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
       });

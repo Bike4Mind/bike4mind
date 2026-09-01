@@ -703,6 +703,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        // Both recorders run only under forced retrieval, so they can label the turn themselves.
+        // Redundant with the seed in ChatCompletionProcess on the normal path, but the agent-mode
+        // runner reaches these features without passing that site.
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags,
       });
@@ -1822,6 +1826,29 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return [{ role: 'system' as const, content: forcedRetrievalNoContextPrompt(finding) }];
   }
 
+  /**
+   * Record that forced retrieval was enabled for this turn but a rule suppressed it (#1394).
+   *
+   * `attempted: false` on purpose - nothing ran, so there is no outcome to report and this must
+   * not read as a zero-recall retrieval. What it does say is that the model was left on the
+   * optional tool path DESPITE the session being configured for forced retrieval, which is
+   * otherwise unrecoverable from the stored turn: the skips below return before the recorder, so
+   * these turns used to look exactly like turns that were never forced.
+   */
+  private recordForcedSkip(
+    quest: IChatHistoryItemDocument,
+    forcedSkipReason: NonNullable<RetrievalSummary['forcedSkipReason']>
+  ): void {
+    quest.promptMeta = quest.promptMeta ?? {};
+    quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+      attempted: false,
+      mode: 'forced',
+      forcedSkipReason,
+      surfaces: [],
+      dataLakeTags: [],
+    });
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
@@ -1837,6 +1864,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // itself if it genuinely needs the library alongside the attachment.
     if (quest.fabFileIds && quest.fabFileIds.length > 0) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
+      this.recordForcedSkip(quest, 'attached_files');
       return [];
     }
 
@@ -1850,6 +1878,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // retrieve_knowledge_content(file_id) for an unowned lake doc is denied too.
     if (this.chatCompletion.personalCorpusOnly) {
       this.logger.log('🔒 Forced retrieval: skipped (session corpus is personal files, not lake content)');
+      this.recordForcedSkip(quest, 'personal_corpus');
       return [];
     }
 
@@ -1866,6 +1895,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        mode: 'forced',
         surfaces: ['forced-retrieval'],
         dataLakeTags,
       });

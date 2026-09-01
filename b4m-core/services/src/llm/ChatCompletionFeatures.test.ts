@@ -9,6 +9,7 @@ import {
   LakeMemoryFeature,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -1968,7 +1969,14 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
   const retrievalOf = (quest: IChatHistoryItemDocument) =>
     (
       quest.promptMeta as {
-        retrieval?: { attempted: boolean; outcome: string; surfaces: string[]; dataLakeTags: string[] };
+        retrieval?: {
+          attempted: boolean;
+          outcome?: string;
+          mode?: string;
+          forcedSkipReason?: string;
+          surfaces: string[];
+          dataLakeTags: string[];
+        };
       }
     )?.retrieval;
 
@@ -1978,6 +1986,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval).toEqual({
       attempted: true,
       outcome: 'failed',
+      mode: 'forced',
       surfaces: ['forced-retrieval'],
       dataLakeTags: [],
     });
@@ -1997,6 +2006,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval).toEqual({
       attempted: true,
       outcome: 'no_lakes',
+      mode: 'forced',
       surfaces: ['forced-retrieval'],
       dataLakeTags: [],
     });
@@ -2042,27 +2052,92 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval?.attempted).toBe(true);
   });
 
-  it('leaves no record on the three pre-attempt skips - never-ran must stay distinguishable', async () => {
+  it('leaves no record when there is no question to retrieve for', async () => {
+    // The one pre-attempt exit that stays silent: an empty message is not a turn that declined to
+    // retrieve, it is a turn with nothing to retrieve about, so it is not part of any denominator.
     const feature = new KnowledgeRetrievalFeature(
       makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
-    const factory = embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1];
-
     const blank = makeQuest();
-    await feature.getContextMessages(blank, factory, '   ');
-    expect(retrievalOf(blank)).toBeUndefined();
-
-    const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
-    await feature.getContextMessages(withFiles, factory, 'summarize the attached figure');
-    expect(retrievalOf(withFiles)).toBeUndefined();
-
-    const personalCtx = { ...makeCtx(), personalCorpusOnly: true };
-    const personalFeature = new KnowledgeRetrievalFeature(
-      personalCtx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    await feature.getContextMessages(
+      blank,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      '   '
     );
-    const personal = makeQuest();
-    await personalFeature.getContextMessages(personal, factory, 'what about my own upload');
-    expect(retrievalOf(personal)).toBeUndefined();
+    expect(retrievalOf(blank)).toBeUndefined();
+  });
+
+  describe('suppression skips (#1394)', () => {
+    // These two exits return before the recorder, so the turn used to look identical to one where
+    // forced retrieval was never configured - while actually being the case the routing question
+    // is about: forced retrieval is ON, a rule suppressed it, and the model is left on the
+    // optional tool path. `attempted` stays false; only the reason is new.
+    it('records the attached-files skip without claiming retrieval ran', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await feature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'attached_files',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('records the personal-corpus skip without claiming retrieval ran', async () => {
+      const personalFeature = new KnowledgeRetrievalFeature({
+        ...makeCtx(),
+        personalCorpusOnly: true,
+      } as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]);
+      const personal = makeQuest();
+      await personalFeature.getContextMessages(
+        personal,
+        embeddingFactory as unknown as Parameters<typeof personalFeature.getContextMessages>[1],
+        'what about my own upload'
+      );
+      expect(retrievalOf(personal)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'personal_corpus',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('does not let the skip record mask a tool retrieval later in the same turn', async () => {
+      // The whole point of the measurement: the model fell back to search_knowledge_base and it
+      // worked. The turn must read as attempted AND still say forced retrieval was suppressed.
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      quest.promptMeta!.retrieval = mergeRetrievalSummary(quest.promptMeta!.retrieval, {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['knowledgeBaseSearch'],
+        dataLakeTags: ['datalake:x'],
+      });
+
+      expect(retrievalOf(quest)).toMatchObject({
+        attempted: true,
+        outcome: 'ok',
+        mode: 'forced',
+        forcedSkipReason: 'attached_files',
+        surfaces: ['knowledgeBaseSearch'],
+      });
+    });
   });
 
   it('merges with another surface in the same turn rather than overwriting it', async () => {

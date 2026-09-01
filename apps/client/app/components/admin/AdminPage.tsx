@@ -92,6 +92,7 @@ const SlackMetricsPage = dynamic(() => import('./SlackMetrics'), { ssr: false })
 const GitHubConnectionTab = dynamic(() => import('./GitHubConnectionTab'), { ssr: false });
 const HelpAnalyticsTab = dynamic(() => import('./HelpAnalyticsTab'), { ssr: false });
 const ContextInspectorTab = dynamic(() => import('./ContextInspectorTab'), { ssr: false });
+const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: false });
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
@@ -527,6 +528,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
+                {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
               </TabPanel>
               <TabPanel value={AdminTab.EventMetrics}>
                 {activeTab === AdminTab.EventMetrics && <EventMetricsTab />}

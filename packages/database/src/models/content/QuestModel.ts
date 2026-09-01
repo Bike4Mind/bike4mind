@@ -44,14 +44,17 @@ const LakeMemorySchema = subSchema({
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
-// re-parse since `attempted`/`outcome` are required). Top-level on promptMeta, not nested under
+// re-parse since `attempted` is required). Top-level on promptMeta, not nested under
 // `context` - see the field's own comment in QuestModel.ts and in promptMeta.ts for why a
 // one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
 const RetrievalSummarySchema = subSchema({
   attempted: { type: Boolean, required: true },
   // No enum -- see the file header on why this schema's job is to not lose the value, not
   // to validate it. Zod (RetrievalSummarySchema, promptMeta.ts) remains the contract.
-  outcome: { type: String, required: true },
+  // Optional because it is present iff `attempted`: the seeded not-attempted turn has no outcome.
+  outcome: { type: String, required: false },
+  mode: { type: String, required: false },
+  forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
 });
