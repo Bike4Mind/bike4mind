@@ -109,6 +109,9 @@ vi.mock('@bike4mind/services', async () => ({
     recordLakeAccessEvent: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
     ).recordLakeAccessEvent,
+    lakeMembershipsFrom: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/getDynamicDataLakeTags')
+    ).lakeMembershipsFrom,
     resolveSearchBudgets: mockResolveSearchBudgets,
     // A distinct, identifiable value (not a real adapter) so a test can assert reference
     // equality without depending on openSearchChunkAdapter's own implementation.
@@ -139,11 +142,23 @@ import handler from '@pages/api/data-lakes/semantic-search';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
 
+const ACME_MEMBERSHIP = { datalakeTag: 'datalake:acme-handbook', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+
 const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
   dataLakeTagPrefixes: ['opti:'],
   scopedTagPrefixes: ['acme:'],
-  lakes: [{ id: 'lake-acme', name: 'Acme Handbook', slug: 'acme-handbook', datalakeTag: 'datalake:acme-handbook' }],
+  lakes: [
+    {
+      id: 'lake-acme',
+      name: 'Acme Handbook',
+      slug: 'acme-handbook',
+      datalakeTag: 'datalake:acme-handbook',
+      fileTagPrefix: 'acme:',
+      membership: ACME_MEMBERSHIP,
+      source: 'dynamic' as const,
+    },
+  ],
 };
 
 const FULL_SCAN = {
@@ -293,26 +308,30 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
-  it('forwards all three lake buckets to the search service verbatim', async () => {
+  it('forwards the meta/OPEN buckets verbatim and derives lakeMemberships from lakes', async () => {
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
     expect(searchParams()).toMatchObject({
       dataLakeTags: DYNAMIC_SCOPE.dataLakeTags,
       dataLakeTagPrefixes: DYNAMIC_SCOPE.dataLakeTagPrefixes,
-      scopedTagPrefixes: DYNAMIC_SCOPE.scopedTagPrefixes,
+      lakeMemberships: [ACME_MEMBERSHIP],
     });
+    expect(searchParams()).not.toHaveProperty('scopedTagPrefixes');
   });
 
-  it('forwards an EMPTY scopedTagPrefixes rather than omitting it', async () => {
+  it('forwards an EMPTY lakeMemberships rather than omitting it, for a lake with no membership scope', async () => {
     // The service defaults the field to [], so omission is invisible unless the empty case is
     // asserted for presence rather than truthiness.
-    mockResolveScope.mockResolvedValue({ ...DYNAMIC_SCOPE, scopedTagPrefixes: [] });
+    mockResolveScope.mockResolvedValue({
+      ...DYNAMIC_SCOPE,
+      lakes: [{ ...DYNAMIC_SCOPE.lakes[0], membership: undefined }],
+    });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
-    expect(searchParams()).toHaveProperty('scopedTagPrefixes');
-    expect(searchParams().scopedTagPrefixes).toEqual([]);
+    expect(searchParams()).toHaveProperty('lakeMemberships');
+    expect(searchParams().lakeMemberships).toEqual([]);
   });
 
   it('hands the live request to the scope resolver, preserving its entitlement memo', async () => {
@@ -327,7 +346,8 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(searchParams().dataLakeTagPrefixes).not.toContain('acme:');
-    expect(searchParams().scopedTagPrefixes).toContain('acme:');
+    // The dynamic lake's prefix arm travels only inside its creator-anchored membership scope.
+    expect(JSON.stringify(searchParams().lakeMemberships)).toContain('acme:');
   });
 
   it('proceeds when the caller holds only dynamic lakes (no open prefixes)', async () => {
@@ -399,7 +419,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }, { id: 'admin', tags: [], isAdmin: true }), makeRes());
 
     expect(mockResolveScope).toHaveBeenCalledTimes(1);
-    expect(searchParams()).toMatchObject({ scopedTagPrefixes: DYNAMIC_SCOPE.scopedTagPrefixes });
+    expect(searchParams()).toMatchObject({ lakeMemberships: [ACME_MEMBERSHIP] });
   });
 
   it('maps chunk results onto the response contract the RLM loopback consumes', async () => {

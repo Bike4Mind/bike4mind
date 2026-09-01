@@ -94,7 +94,11 @@ import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
-import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  type ResolvedLakeAccess,
+} from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -782,7 +786,13 @@ export class ChatCompletionProcess {
    * the two can never disagree - it is the SAME access the knowledge tool resolves with.
    */
   private accessibleDataLakeAccessMemo:
-    { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
+    | {
+        dataLakeTags: string[];
+        dataLakeTagPrefixes: string[];
+        scopedTagPrefixes: string[];
+        lakes: ResolvedLakeAccess[];
+      }
+    | undefined;
   /**
    * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
    * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
@@ -914,6 +924,7 @@ export class ChatCompletionProcess {
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
     scopedTagPrefixes: string[];
+    lakes: ResolvedLakeAccess[];
   }> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
@@ -927,7 +938,12 @@ export class ChatCompletionProcess {
         this.logger.warn(
           `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
         );
-        this.accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] };
+        this.accessibleDataLakeAccessMemo = {
+          dataLakeTags: [],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [],
+        };
       }
     }
     return this.accessibleDataLakeAccessMemo;
@@ -965,7 +981,18 @@ export class ChatCompletionProcess {
           userGroups: this.user.groups || [],
           dataLakeTags: access.dataLakeTags,
           dataLakeTagPrefixes: access.dataLakeTagPrefixes,
-          scopedTagPrefixes: access.scopedTagPrefixes,
+          // Anchored to each lake's CREATOR rather than the caller (#2243): a creator-owned
+          // prefix-only member now counts as lake-reachable for every member, not only its
+          // creator. The one call site in the repo where this swap changes what matches at all,
+          // because restrictToDataLake drops the broad owner/shared arms. BOTH directions fire
+          // here, for different callers:
+          //   NARROWS for everyone - the caller's own file carrying a merely colliding prefix no
+          //   longer counts, since the arm now requires the lake creator's userId.
+          //   WIDENS only where the attachment is readable by a route buildOwnershipConditions'
+          //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
+          //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
+          //   full-resolution guard first, so this count is never reached at all.
+          lakeMemberships: lakeMembershipsFrom(access.lakes),
           restrictToDataLake: true,
           excludeContent: true,
         }

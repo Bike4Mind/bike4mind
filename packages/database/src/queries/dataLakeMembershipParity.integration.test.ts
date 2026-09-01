@@ -111,7 +111,7 @@ const browseFilter = (scope: Parameters<typeof buildDataLakeMembershipFilter>[0]
     filters: { tags: [], shared: false },
     pagination: { page: 1, limit: 100 },
     order: { by: 'fileName', direction: 'asc' },
-    options: { lakeMembership: scope, restrictToDataLake: true, includeShared: true, userGroups: [] },
+    options: { lakeMemberships: [scope], restrictToDataLake: true, includeShared: true, userGroups: [] },
   }).filter;
 
 describe('stats and browse resolve the same membership', () => {

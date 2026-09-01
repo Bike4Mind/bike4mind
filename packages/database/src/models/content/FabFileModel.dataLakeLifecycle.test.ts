@@ -212,7 +212,7 @@ describe('FabFile data lake lifecycle membership', () => {
   // computeDataLakeStats above about who is a member - a file only reached through a share or a
   // group grant is excluded from the listing itself, not merely from the count, so it can never
   // be "listed but unremovable".
-  describe('search under a single-lake browse scope (lakeMembership)', () => {
+  describe('search under a single-lake browse scope (lakeMemberships)', () => {
     const pagination = { page: 1, limit: 20 };
     const order = { by: 'fileName', direction: 'asc' } as const;
 
@@ -222,7 +222,7 @@ describe('FabFile data lake lifecycle membership', () => {
       const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
         includeShared: true,
         userGroups: [CREATOR_GROUP],
-        lakeMembership: scope,
+        lakeMemberships: [scope],
         restrictToDataLake: true,
       });
 
@@ -231,6 +231,157 @@ describe('FabFile data lake lifecycle membership', () => {
       for (const id of rows.strangerIds) {
         expect(listedIds).not.toContain(id);
       }
+    });
+  });
+
+  // #2243: retrieval must resolve a dynamic lake's prefix arm against THAT LAKE'S CREATOR, exactly
+  // as membership does - never against the caller, and never as a bare prefix. These drive the
+  // real query (not just inspect a filter object), because only the executed search proves the
+  // tenancy boundary through casting and executeSearch.
+  describe('lakeMemberships parity with buildDataLakeMembershipFilter (#2243)', () => {
+    const pagination = { page: 1, limit: 20 };
+    const order = { by: 'fileName', direction: 'asc' } as const;
+    const VIEWER = 'u-viewer-not-creator';
+
+    it('a non-creator VIEWER reaches the prefix-only member only once lakeMemberships replaces the caller-anchored arm', async () => {
+      await seedLakeRows();
+
+      // Old shape: the caller-anchored SCOPED prefix arm. Must ALSO carry dataLakeTags, or the
+      // scoped arm - a strict subset of base access with none of the viewer's own files in scope -
+      // returns zero rows rather than showing the meta-tagged member; only the prefix arm differs
+      // between "before" and "after" here.
+      const before = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        scopedTagPrefixes: ['acme:'],
+      });
+      expect(before.data.map(f => f.fileName).sort()).toEqual(['meta.txt']);
+
+      // New shape: the creator-anchored membership arm reaches the prefix-only member too.
+      const after = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+      expect(after.data.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+    });
+
+    it("a VIEWER's search total equals the single-lake browse's own total for the same lake and caller", async () => {
+      await seedLakeRows();
+
+      const browse = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        userGroups: [CREATOR_GROUP],
+        lakeMemberships: [scope],
+        restrictToDataLake: true,
+      });
+      const viewerRetrieval = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+
+      // Precondition this equality relies on: seedLakeRows() seeds no pending and no
+      // session-scoped row, so buildFabFileSearchQuery's (status-blind) filter and
+      // computeDataLakeStats's ($ne: 'pending') filter would otherwise disagree - see
+      // dataLakeLifecycle's own note on why an unqualified fileCount comparison is unsound.
+      expect(viewerRetrieval.total).toBe(browse.total);
+      expect(viewerRetrieval.data.map(f => f.fileName).sort()).toEqual(browse.data.map(f => f.fileName).sort());
+    });
+
+    it('two lakes sharing a prefix under DIFFERENT creators never cross - each caller sees only their own creator arm', async () => {
+      await seedLakeRows();
+      const otherCreator = 'u-other-creator';
+      const otherTag = 'datalake:org2:globex-docs';
+      await makeFile({
+        fileName: 'other-meta.txt',
+        userId: otherCreator,
+        tags: [{ name: otherTag }],
+      });
+      const otherPrefixOwned = await makeFile({
+        fileName: 'other-prefix-owned.txt',
+        userId: otherCreator,
+        tags: [{ name: 'acme:other-report' }], // SAME prefix as `scope`, different creator
+      });
+      const otherScope: DataLakeMembershipScope = {
+        datalakeTag: otherTag,
+        fileTagPrefix: 'acme:',
+        creatorUserId: otherCreator,
+      };
+
+      const asOriginalCreatorViewer = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+      expect(asOriginalCreatorViewer.data.map(f => f.fileName)).not.toContain('other-prefix-owned.txt');
+
+      const asOtherCreatorViewer = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [otherTag],
+        lakeMemberships: [otherScope],
+      });
+      expect(asOtherCreatorViewer.data.map(f => f.fileName)).not.toContain('prefix-owned.txt');
+      expect(asOtherCreatorViewer.data.map(f => f.fileName)).not.toContain('unrelated.txt');
+      const otherIds = asOtherCreatorViewer.data.map(f => f.id);
+      expect(otherIds).toContain(otherPrefixOwned._id.toString());
+    });
+
+    it('a file matching both a caller membership arm and their own ownership is returned once', async () => {
+      await seedLakeRows();
+      // The creator IS the searching viewer here, so prefix-owned.txt matches both the bare
+      // {userId} base-access arm AND the membership arm - dedupe must collapse it to one row.
+      const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+      const names = result.data.map(f => f.fileName);
+      expect(names.filter(n => n === 'prefix-owned.txt')).toHaveLength(1);
+      expect(result.total).toBe(names.length);
+    });
+
+    it("an empty creatorUserId under restrictToDataLake matches meta-tagged only, never the caller's own colliding-prefix file", async () => {
+      await seedLakeRows();
+      // The CREATOR's own file is prefix-owned.txt (tag acme:report) - if the empty-creator scope
+      // fell through to matching the caller, this would wrongly include it.
+      const creatorlessScope: DataLakeMembershipScope = {
+        datalakeTag: DATALAKE_TAG,
+        fileTagPrefix: 'acme:',
+        creatorUserId: '',
+      };
+      const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        lakeMemberships: [creatorlessScope],
+        restrictToDataLake: true,
+      });
+      expect(result.data.map(f => f.fileName)).toEqual(['meta.txt']);
+    });
+
+    it('a prefix carrying regex metacharacters matches literally, not as a pattern', async () => {
+      const weirdCreator = 'u-weird-creator';
+      const weirdTag = 'datalake:org1:weird';
+      await makeFile({
+        fileName: 'weird-owned.txt',
+        userId: weirdCreator,
+        tags: [{ name: 'a.b+c:report' }],
+      });
+      await makeFile({
+        fileName: 'weird-not-a-match.txt',
+        userId: weirdCreator,
+        tags: [{ name: 'aXbYc:report' }], // would match the UNESCAPED `.` and `+` as regex metachars
+      });
+      const weirdScope: DataLakeMembershipScope = {
+        datalakeTag: weirdTag,
+        fileTagPrefix: 'a.b+c:',
+        creatorUserId: weirdCreator,
+      };
+      const result = await fabFileRepository.search(weirdCreator, '', {}, pagination, order, {
+        includeShared: true,
+        lakeMemberships: [weirdScope],
+        restrictToDataLake: true,
+      });
+      expect(result.data.map(f => f.fileName)).toEqual(['weird-owned.txt']);
     });
   });
 
