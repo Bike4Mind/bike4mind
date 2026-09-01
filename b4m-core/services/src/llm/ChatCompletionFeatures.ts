@@ -54,9 +54,11 @@ import {
   buildLakeMemoryContext,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  DATALAKE_TAG_PREFIX,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess, lakeMembershipsFrom } from '../dataLakeService/getDynamicDataLakeTags';
+import { narrowLakeAccessToSession } from '../dataLakeService/narrowLakeAccessToSession';
 import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
   classifyLoadedChunk,
@@ -1628,12 +1630,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * the IDENTICAL entitlement-aware access rule - no drift between two copies. Entitlement
    * keys are resolved once on the process and passed through.
    */
-  private async resolveDataLakeAccess(): Promise<{
-    dataLakeTags: string[];
-    dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
-    lakes: Awaited<ReturnType<typeof getDynamicDataLakeAccess>>['lakes'];
-  }> {
+  // Return type intentionally left as whatever getDynamicDataLakeAccess returns (rather than a
+  // hand-narrowed shape): narrowLakeAccessToSession's parameter type requires every field the
+  // resolver declares (including `scopedTagPrefixes`, kept there for other consumers - see #2243's
+  // Key Decision 9), so re-declaring a narrower local type here would need to grow back to match it.
+  private async resolveDataLakeAccess(): ReturnType<typeof getDynamicDataLakeAccess> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
     return getDynamicDataLakeAccess({ db, user, entitlementKeys });
@@ -1883,10 +1884,27 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     try {
-      const { dataLakeTags, dataLakeTagPrefixes, lakes } = await this.resolveDataLakeAccess();
+      // Narrowed to the SESSION's lake(s), not just the caller's owner-wide access, and paired
+      // with `restrictToDataLake` below so the candidate pool is exactly that scope's membership -
+      // never the caller's whole library. Neither half alone is safe: dropping restrictToDataLake
+      // widens forced grounding to everything the caller owns (this was the only thing scoping the
+      // query to one lake); narrowing without restrictToDataLake still leaks the personal library
+      // through the own/shared/group base arms.
+      const access = narrowLakeAccessToSession(await this.resolveDataLakeAccess(), this.retrievalTags);
+      const { dataLakeTags, dataLakeTagPrefixes, lakes } = access;
+      const lakeMemberships = lakeMembershipsFrom(lakes);
       attemptedDataLakeTags = dataLakeTags;
+
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
       const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
+
+      // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
+      // `retrievalTags` to) names the SESSION's lake, which is already applied above via
+      // narrowLakeAccessToSession + restrictToDataLake below. Left in `tags` - an AND'ed conjunct,
+      // not part of the ownership $or - it would require every candidate to carry that exact
+      // meta-tag and shut out exactly the prefix-only member this fix exists to admit. A non-lake
+      // content tag is a legitimate scope (narrowLakeAccessToSession's own doc) and survives.
+      const nonLakeRetrievalTags = this.retrievalTags.filter(tag => !tag.startsWith(DATALAKE_TAG_PREFIX));
 
       // 1. List the lake-accessible files (empty query -> all accessible). Ranking is by semantic
       //    similarity below, but the ORDER still matters: on a lake larger than the candidate cap
@@ -1894,12 +1912,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
-        // `tags` is an AND'ed conjunct (fabFileSearchQuery's filters.tags), not part of the ownership
-        // $or below: on a lake-created session retrievalTags is [lake.datalakeTag], so every candidate
-        // must carry that meta-tag and the creator-anchored lakeMemberships arm cannot admit a
-        // prefix-only member. Scoping here the way the KB tools do (resolveSessionLakeAccess narrows
-        // the lake arms) would also need restrictToDataLake - this call resolves lake access owner-wide.
-        { tags: this.retrievalTags, shared: false },
+        { tags: nonLakeRetrievalTags, shared: false },
         { page: 1, limit: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES },
         { by: 'fileName', direction: 'asc' },
         {
@@ -1908,7 +1921,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           userGroups: user.groups || [],
           dataLakeTags,
           dataLakeTagPrefixes, // static-registry (open) prefixes
-          lakeMemberships: lakeMembershipsFrom(lakes), // dynamic-lake arms, each anchored to that lake's creator
+          lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+          restrictToDataLake: true, // scope to the resolved lake(s) only, never the caller's whole library
           excludeContent: true, // metadata only; chunk text + vectors fetched below
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
