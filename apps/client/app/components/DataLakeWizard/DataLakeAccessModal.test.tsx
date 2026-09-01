@@ -65,6 +65,11 @@ const fullView: LakeAccessView = {
   ],
   historyTruncated: true,
   windowStartsAt: new Date('2026-08-01T00:00:00.000Z'),
+  candidateCapPressure: {
+    turnsWithSignal: 9,
+    turnsAtCap: 4,
+    lastAtCapAt: new Date('2026-08-10T00:00:00.000Z'),
+  },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
@@ -119,6 +124,37 @@ describe('DataLakeAccessModal', () => {
     // Must NOT tell the reader the CSV is the complete record - it is the same truncated window.
     expect(alert).toHaveTextContent(/same window/i);
     expect(alert).not.toHaveTextContent(/complete retained window/i);
+  });
+
+  it('reports candidate-cap pressure with both counts, qualified as window-scoped', () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    const line = screen.getByTestId('datalake-access-cap-pressure');
+    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every read.
+    expect(line).toHaveTextContent(/4 of 9 reported read/i);
+    expect(line).toHaveTextContent(/in this window/i);
+    // Attribution wording: the cap is a property of the turn's whole candidate listing.
+    expect(line).toHaveTextContent(/not reads this lake caused/i);
+  });
+
+  it('says not reported, rather than cap-free, when no read measured the cap', () => {
+    viewState = loaded({ ...fullView, candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 } });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
+  });
+
+  it('degrades to not-reported when the view carries no pressure object at all', () => {
+    // A cached response from before the field, or an older server: rendering blank would read as
+    // "measured, nothing to report".
+    const { candidateCapPressure: _omitted, ...withoutPressure } = fullView;
+    viewState = loaded(withoutPressure as LakeAccessView);
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
+  });
+
+  it('drops the window qualification when the history was not truncated', () => {
+    viewState = loaded({ ...fullView, historyTruncated: false, windowStartsAt: undefined });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-cap-pressure')).not.toHaveTextContent(/in this window/i);
   });
 
   it('flags that the channels compose conjunctively when a prerequisite narrows access', () => {
