@@ -61,9 +61,9 @@ const describeCapPressure = (view: LakeAccessView): string => {
   const lastRead = pressure.lastAtCapAt ? `, most recently ${fmtDateTime(pressure.lastAtCapAt)}` : '';
   return (
     `Candidate-cap pressure: ${pressure.turnsAtCap} of ${pressure.turnsWithSignal} reported read(s)${windowScope} ` +
-    `hit the forced-retrieval candidate cap${lastRead}. A capped read considers only part of the readable library. ` +
-    'The cap applies to the whole candidate listing for a turn, so this counts turns that read this lake, not reads ' +
-    'this lake caused.'
+    `hit the forced-retrieval candidate cap${lastRead} - a capped read considers only part of the readable library. ` +
+    'The cap applies to the whole candidate listing for a turn, so this counts reads of this lake that hit it, not ' +
+    'caps this lake caused.'
   );
 };
 

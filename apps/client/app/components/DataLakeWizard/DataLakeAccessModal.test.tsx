@@ -132,8 +132,9 @@ describe('DataLakeAccessModal', () => {
     // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every read.
     expect(line).toHaveTextContent(/4 of 9 reported read/i);
     expect(line).toHaveTextContent(/in this window/i);
-    // Attribution wording: the cap is a property of the turn's whole candidate listing.
-    expect(line).toHaveTextContent(/not reads this lake caused/i);
+    // Attribution wording: the cap is a property of the turn's whole candidate listing, so the
+    // contrast is with caps this lake caused - never with reads, which it plainly did cause.
+    expect(line).toHaveTextContent(/not caps this lake caused/i);
   });
 
   it('says not reported, rather than cap-free, when no read measured the cap', () => {
