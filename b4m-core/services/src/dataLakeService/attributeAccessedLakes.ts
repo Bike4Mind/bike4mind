@@ -32,6 +32,31 @@ export interface AttributeAccessedLakeIdsOptions {
 }
 
 /**
+ * Per-file half of the attribution below: the lake ids ONE file's tags can be reversed to, with no
+ * fallback of any kind. Both arms live here so the tag->lake rule has exactly one home; the
+ * inconclusive-attribution policy stays in the callers, which is what lets `supersession.ts` treat
+ * "no recoverable tag" as "groups only with itself" while the audit trail treats it as "the whole
+ * scope" (see `allowFullScopeFallback`).
+ */
+export function attributeFileToLakeIds(tags: string[], lakes: AttributableLake[]): string[] {
+  const ids = new Set<string>();
+  for (const tag of datalakeTagsFrom(tags)) {
+    const lake = lakes.find(l => l.datalakeTag === tag);
+    if (lake) ids.add(lake.id);
+  }
+  // A static-registry lake's files structurally cannot carry its meta-tag (no write path
+  // stamps one for a fallback lake), so without this arm every retrieval of registry content
+  // would fall through as "inconclusive" - not an edge case, the NORMAL shape of a read there.
+  // A dynamic lake's prefix is user-controlled and excluded by `openLakeTagPrefix` itself, so it is
+  // never a standalone attribution signal.
+  for (const lake of lakes) {
+    const prefix = openLakeTagPrefix(lake);
+    if (prefix && tags.some(t => t.startsWith(prefix))) ids.add(lake.id);
+  }
+  return [...ids];
+}
+
+/**
  * Best-effort lake attribution for `LakeAccessEvent.resolvedLakeIds`: map each returned
  * file's tags back to the lake(s) whose `datalake:<slug>` meta-tag it carries. Only the
  * tag-matched arm is recoverable this way - a content-tag-PREFIX match never identified a single
@@ -50,25 +75,9 @@ export function attributeAccessedLakeIds(
   options: AttributeAccessedLakeIdsOptions = {}
 ): string[] {
   const { allowFullScopeFallback = true } = options;
-  const tagToId = new Map(lakes.map(lake => [lake.datalakeTag, lake.id]));
-  // Open (static-registry) prefixes, reversible the same way `grantingLakes` does for a single
-  // file - a dynamic lake's prefix is user-controlled and excluded by `openLakeTagPrefix` itself,
-  // so it is never a standalone attribution signal here either.
-  const openPrefixes = lakes
-    .map(lake => ({ id: lake.id, prefix: openLakeTagPrefix(lake) }))
-    .filter((entry): entry is { id: string; prefix: string } => !!entry.prefix);
   const ids = new Set<string>();
   for (const tags of fileTagLists) {
-    for (const tag of datalakeTagsFrom(tags)) {
-      const id = tagToId.get(tag);
-      if (id) ids.add(id);
-    }
-    // A static-registry lake's files structurally cannot carry its meta-tag (no write path
-    // stamps one for a fallback lake), so without this arm every retrieval of registry content
-    // would fall through as "inconclusive" - not an edge case, the NORMAL shape of a read there.
-    for (const { id, prefix } of openPrefixes) {
-      if (tags.some(t => t.startsWith(prefix))) ids.add(id);
-    }
+    for (const id of attributeFileToLakeIds(tags, lakes)) ids.add(id);
   }
   if (ids.size > 0) return [...ids];
   // The fallback is bounded by `lakes`, not a global "log everything" - a caller with no scope to

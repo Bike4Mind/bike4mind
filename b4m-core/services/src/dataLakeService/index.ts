@@ -53,6 +53,7 @@ export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
+export * from './supersession';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
 export * from './boundedTopK';
