@@ -45,9 +45,10 @@ export const removeSessions = async (
   // guards skip it, and rejecting left it in the project permanently, warning on every read.
   // The filter below still removes it. A castable id that did not resolve is still an access
   // failure and still a 400.
-  // Compared lowercased: a hex id is accepted in either case and resolves the same row, but
-  // `s.id` is always canonical lowercase, so matching raw strings would reject an uppercase id
-  // that Mongo resolved perfectly well.
+  // Compared canonically - hex folded to lowercase, non-hex left exactly as stored. A hex id is
+  // accepted in either case and resolves the same row, but `s.id` is always canonical lowercase,
+  // so matching raw strings would reject an uppercase id that Mongo resolved perfectly well.
+  // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
   const resolvedIds = new Set(sessions.map(s => canonicalId(String(s.id))));
   const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions').map(canonicalId));
   if (sessionIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {

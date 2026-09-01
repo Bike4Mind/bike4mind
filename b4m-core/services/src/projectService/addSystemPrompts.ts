@@ -39,7 +39,10 @@ export const addSystemPrompts = async (
   // order is the order the prompts compose in (ChatCompletionFeatures).
   const resolvedById = new Map(files.map(f => [canonicalId(f.id), f.id]));
   const resolvedIds = uniq(fileIds.map(id => resolvedById.get(canonicalId(id))).filter((id): id is string => !!id));
-  const newFileIds = resolvedIds.filter(fileId => !project.systemPrompts.some(prompt => prompt.fileId === fileId));
+  // Canonical on both sides: a legacy systemPrompts row stored with an uppercase hex fileId names
+  // the same file, and comparing raw would add a second prompt for it.
+  const existingPromptIds = new Set(project.systemPrompts.map(prompt => canonicalId(prompt.fileId)));
+  const newFileIds = resolvedIds.filter(fileId => !existingPromptIds.has(canonicalId(fileId)));
 
   if (newFileIds.length === 0) {
     throw new BadRequestError('All files are already added as system prompts');
