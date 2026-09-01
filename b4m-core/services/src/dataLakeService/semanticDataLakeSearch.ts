@@ -7,6 +7,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   SupportedEmbeddingModel,
+  type DataLakeMembershipScope,
 } from '@bike4mind/common';
 import {
   computeCosineSimilarity,
@@ -219,8 +220,13 @@ export interface SemanticDataLakeSearchParams {
   ownFilesOnly?: boolean;
   /** OPEN static-registry content-tag prefixes (e.g. 'opti:') - ownership-bypass by design. */
   dataLakeTagPrefixes: string[];
-  /** SCOPED dynamic-lake prefixes - matched only within owner/org access (caller-computed). */
-  scopedTagPrefixes?: string[];
+  /**
+   * One membership arm per SCOPED dynamic lake, each anchored to THAT lake's creator (see
+   * `lakeMembershipsFrom`) - replaces the old caller-anchored `scopedTagPrefixes` prefix match, so
+   * a prefix-only member is reachable by every caller who passes the lake gate, not only its
+   * creator (#2243).
+   */
+  lakeMemberships?: DataLakeMembershipScope[];
   /** Scan limits + paging tuning. Omit for the defaults; callers may source these from settings. */
   budgets?: SemanticSearchBudgets;
   /**
@@ -488,6 +494,11 @@ async function scanAndRank(args: {
 /**
  * Page fabfiles.search up to the file budget. A lake that fits in one page costs exactly one
  * query as before; a larger one is no longer silently cut off at the first page.
+ *
+ * `includeShared: true` is hardcoded below and `restrictToDataLake` is never set, so dropping the
+ * old caller-anchored `scopedTagPrefixes` arm in favour of `lakeMemberships` is lossless here: the
+ * caller's own files stay in scope via the base owner/share/group arms regardless of which lake
+ * arm ran (see semanticDataLakeSearch's Approach property 1).
  */
 async function collectScopedFiles(args: {
   // The repository OBJECT, not a detached `search` reference: FabFileRepository.search calls
@@ -498,7 +509,7 @@ async function collectScopedFiles(args: {
   tags: string[];
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
-  scopedTagPrefixes: string[];
+  lakeMemberships: DataLakeMembershipScope[];
   retrievalFilter: RetrievalExclusionOptions;
   maxFiles: number;
   filePageSize: number;
@@ -533,7 +544,7 @@ async function collectScopedFiles(args: {
         userGroups: args.userGroups,
         dataLakeTags: args.dataLakeTags,
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
-        scopedTagPrefixes: args.scopedTagPrefixes,
+        lakeMemberships: args.lakeMemberships,
         excludeContent: true,
         // Retrieval exclusion (caller-driven) - best-effort DB pre-filter; the authoritative
         // in-memory pass below guarantees excluded files are dropped before any chunk load.
@@ -954,7 +965,7 @@ export async function semanticDataLakeSearch(
     apiKeyTable,
     dataLakeTags,
     dataLakeTagPrefixes,
-    scopedTagPrefixes = [],
+    lakeMemberships = [],
     retrievalFilter = {},
     ownFilesOnly = false,
     logger,
@@ -962,6 +973,9 @@ export async function semanticDataLakeSearch(
 
   const budgets = resolveBudgets(params.budgets);
 
+  // Gate on dataLakeTags, not on membership: it still names every accessible lake, dynamic or
+  // registry, so a caller with only dynamic-lake access (all memberships, no meta-tags reachable
+  // yet) is not mistaken for a lake-less one. Do not swap this for a memberships-based gate.
   if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly)) return emptyResult(embeddingModel, budgets);
 
   // --- Scope the files (metadata only) within the accessible data lakes ---
@@ -972,7 +986,7 @@ export async function semanticDataLakeSearch(
     tags,
     dataLakeTags,
     dataLakeTagPrefixes,
-    scopedTagPrefixes,
+    lakeMemberships,
     retrievalFilter,
     maxFiles: budgets.maxFiles,
     filePageSize: budgets.filePageSize,

@@ -37,8 +37,21 @@ describe('mergeRetrievalSummary', () => {
     expect(mergeRetrievalSummary(base({ outcome: 'no_lakes' }), base({ outcome: 'ok' }))?.outcome).toBe('ok');
   });
 
+  it('ranks not_indexed between ok and failed, so an unsearchable corpus survives a success', () => {
+    // The severity map lives in this module, so its full ordering is pinned here rather than only
+    // where a caller happens to exercise it.
+    expect(mergeRetrievalSummary(base({ outcome: 'ok' }), base({ outcome: 'not_indexed' }))?.outcome).toBe(
+      'not_indexed'
+    );
+    expect(mergeRetrievalSummary(base({ outcome: 'not_indexed' }), base({ outcome: 'failed' }))?.outcome).toBe(
+      'failed'
+    );
+  });
+
   describe('absent outcome (the not-attempted seed)', () => {
     it('never erases a real outcome, in either merge order', () => {
+      // 'no_lakes' is the tightest case: it is the LOWEST real severity, so if absent lost to
+      // anything it would lose to this.
       expect(mergeRetrievalSummary(seed('forced'), base({ outcome: 'no_lakes' }))?.outcome).toBe('no_lakes');
       expect(mergeRetrievalSummary(base({ outcome: 'no_lakes' }), seed('forced'))?.outcome).toBe('no_lakes');
     });

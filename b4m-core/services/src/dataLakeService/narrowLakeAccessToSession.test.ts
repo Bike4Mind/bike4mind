@@ -40,6 +40,22 @@ describe('narrowLakeAccessToSession', () => {
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:beta']);
   });
 
+  // #2243: retrieval derives its membership arms from `lakes` (see lakeMembershipsFrom), so
+  // narrowing must carry a retained lake's membership scope through UNCHANGED - this function
+  // filters `lakes` in place and never rebuilds it, which is what makes that true.
+  it('narrowing to one lake leaves exactly that lake, with its membership scope intact', () => {
+    const membership = { datalakeTag: 'datalake:beta', fileTagPrefix: 'beta:', creatorUserId: 'creator-1' };
+    const withMembership: ResolvedLakeAccessSet = {
+      ...access(),
+      lakes: [lake('alpha', 'registry'), { ...lake('beta', 'dynamic'), membership }] as ResolvedLakeAccessSet['lakes'],
+    };
+
+    const out = narrowLakeAccessToSession(withMembership, ['datalake:beta']);
+
+    expect(out.lakes).toHaveLength(1);
+    expect((out.lakes[0] as { membership?: unknown }).membership).toEqual(membership);
+  });
+
   it('keeps a retained dynamic lake prefix in its own bucket, never the OPEN one', () => {
     const out = narrowLakeAccessToSession(access(), ['datalake:beta']);
     // Only the second assertion carries weight: 'beta:' is never in the OPEN bucket to begin with,

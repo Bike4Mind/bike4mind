@@ -173,6 +173,58 @@ const skipAwareFilesAdapter = (corpus: { id: string; fileName: string; tags?: un
 
 const makeLogger = () => ({ warn: vi.fn(), debug: vi.fn(), error: vi.fn(), log: vi.fn() });
 
+// #2243: retrieval resolves a dynamic lake's prefix arm through `lakeMemberships`, replacing the
+// caller-anchored `scopedTagPrefixes` this module used to forward. Net-new coverage - this module
+// never pinned `scopedTagPrefixes` reaching fabfiles.search at all.
+describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
+  const MEMBERSHIP = { datalakeTag: 'datalake:x', fileTagPrefix: 'x:', creatorUserId: 'creator-1' };
+
+  it('reaches fabfiles.search on EVERY page of the paging walk', async () => {
+    const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const pageTwo = [{ id: 'g0', fileName: 'G0.pdf', tags: [] }];
+    const search = filesAdapter([
+      { data: pageOne, hasMore: true, total: 11 },
+      { data: pageTwo, hasMore: false, total: 11 },
+    ]);
+
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP], budgets: { filePageSize: 10 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect(search).toHaveBeenCalledTimes(2);
+    for (const call of search.mock.calls) {
+      expect((call[5] as { lakeMemberships?: unknown[] }).lakeMemberships).toEqual([MEMBERSHIP]);
+    }
+  });
+
+  it('scopedTagPrefixes is absent from the options object', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search.mock.calls[0][5]).not.toHaveProperty('scopedTagPrefixes');
+  });
+
+  it('ownFilesOnly with no lake tags still sends lakeMemberships: [] + includeShared: true', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    const opts = search.mock.calls[0][5] as { lakeMemberships?: unknown[]; includeShared?: boolean };
+    expect(opts.lakeMemberships).toEqual([]);
+    expect(opts.includeShared).toBe(true);
+  });
+
+  it('the empty-dataLakeTags bail still fires even with non-empty lakeMemberships', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    const result = await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search).not.toHaveBeenCalled();
+    expect(result.results).toEqual([]);
+  });
+});
+
 describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
   const oneFile = [{ id: 'f1', fileName: 'F1.pdf', tags: [] }];
 

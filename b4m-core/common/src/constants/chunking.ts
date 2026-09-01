@@ -140,11 +140,13 @@ export const CONVERGENCE_PAUSED_NOTE =
  * wording has to say so - the producer resets a wave's chunk state BEFORE the messages are handled,
  * so a file halted here has NO chunks at all rather than chunks without vectors.
  *
- * Without a marker this state is invisible to every surface at once, which is the failure it exists
- * to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health
- * drops it from the denominator, convergence grades it `conformant` (its stale stamp still matches),
- * search does not withhold it because it is not "in flight", and the rescue sweep's own filter
- * passes over it. The file's passages are simply gone and nothing reports it.
+ * Without a marker this state is misread by every surface at once, which is the failure it exists to
+ * prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health drops
+ * it from the denominator, convergence grades it `conformant` (its stale stamp still matches), and
+ * search does not withhold it because it is not "in flight". The file's passages are simply gone and
+ * nothing REPORTS it. The rescue sweep is the one exception and deliberately so: an unmarked file
+ * matches its filter and gets re-chunked, which is repair rather than reporting. That is why the
+ * sweep excludes this marker only while the switch is ON - see buildFabFileChunkScanFilter.
  *
  * Same cross-layer reason as the constant above for living here: the queue handler writes it and
  * b4m-core's evaluators read it, and b4m-core cannot import from apps/client.

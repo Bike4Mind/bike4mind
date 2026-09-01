@@ -50,8 +50,9 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-/** The membership scope the `lake()` fixture yields. */
+/** The membership scope the `lake()` fixture yields. A DB lake, so the `owned` model. */
 const lakeScope = {
+  kind: 'owned',
   datalakeTag: 'datalake:lake',
   fileTagPrefix: 'lk:',
   creatorUserId: 'owner',
@@ -1864,6 +1865,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     // Scoped to the meta-tag alone, not the full scope - see the call site's own comment for why
     // the full scope would make this trip on every second archiver in a live collision.
     expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledWith({
+      kind: 'owned',
       datalakeTag: 'datalake:lake',
     });
     expect(adapters.db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
@@ -1905,6 +1907,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
     expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledWith({
+      kind: 'owned',
       datalakeTag: 'datalake:lake',
     });
     expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledTimes(1);
@@ -1920,6 +1923,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
     expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledWith({
+      kind: 'owned',
       datalakeTag: 'datalake:lake',
     });
     expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));

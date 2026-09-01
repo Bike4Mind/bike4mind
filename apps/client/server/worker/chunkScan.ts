@@ -7,6 +7,7 @@
  * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
  * importing either boot graph.
  */
+import { CONVERGENCE_PAUSED_NOTES } from '@bike4mind/common';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -86,12 +87,52 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
-export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
+export interface ChunkScanFilterOptions {
+  /**
+   * Exclude files carrying a convergence pause marker. TRUE only while the convergence kill switch is
+   * ON, and that conditionality is the whole point (see the `notes` clause below) - the caller passes
+   * the resolved flag rather than this being a constant.
+   *
+   * REQUIRED, and so is `opts` itself, deliberately: an omitted flag would default to "do not
+   * exclude", which is the pre-fix behaviour - the sweep would re-select every paused file on every
+   * pass while the switch is ON. Silently reinstating the bug is the wrong default, so a new caller
+   * has to state which side it wants and the compiler asks. Both existing callers resolve it from
+   * the platform setting; a test that does not care passes `false` explicitly.
+   */
+  excludeConvergencePaused: boolean;
+}
+
+export const buildFabFileChunkScanFilter = (
+  cutoff: Date,
+  staleClaimBefore: Date | undefined,
+  opts: ChunkScanFilterOptions
+) => ({
   status: 'complete' as const,
   chunkCount: 0,
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
+  // The no-extractable-text note is this handler's own terminal outcome, so it is always excluded.
+  //
+  // The convergence pause markers are excluded only while the kill switch is ON, and the
+  // conditionality is load-bearing in BOTH directions:
+  //
+  //  - Switch ON: a paused file matches every other clause here (the reset zeroed chunkCount and the
+  //    pause writes no error), so it is re-selected on every pass. That is churn at best, and it
+  //    consumes the rescue cap, starving genuine lost-webhook candidates while the sweep still
+  //    reports a healthy enqueue count.
+  //  - Switch OFF: excluding it would be a REGRESSION. This sweep is the only automatic exit a
+  //    paused file has. The two other recovery paths are human-driven and lake-scoped, so neither
+  //    reaches a file outside every lake - exactly what this sweep exists to catch. And the
+  //    re-enqueue really does rebuild it: the send below stamps `origin` only for a file with a
+  //    batchId, and `isConvergenceHalted` defaults a missing origin to 'user' and returns false, so
+  //    a batchId-less file is genuinely re-chunked rather than bounced. That is what makes
+  //    CONVERGENCE_PAUSED_CHUNK_NOTE's user-visible "rebuilt when convergence resumes" true.
+  //
+  // Via CONVERGENCE_PAUSED_NOTES so this query and `isConvergencePausedNote` cannot drift.
+  notes: {
+    $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`),
+    ...(opts.excludeConvergencePaused ? { $nin: [...CONVERGENCE_PAUSED_NOTES] } : {}),
+  },
   error: { $in: [null, ''] },
   // Both clauses below are `$or`s, so they are nested under ONE `$and` rather than written as
   // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key

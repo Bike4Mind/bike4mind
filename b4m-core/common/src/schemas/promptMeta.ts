@@ -357,22 +357,30 @@ export const RetrievalSummarySchema = z.object({
    *
    * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
    * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
-   * 'failed' - recall did not complete. TWO distinct causes share this value today: it threw, OR
-   *   it ran to completion having compared nothing (a corpus whose passages carry no usable
-   *   vector - unindexed, or embedded with a foreign model - so no chunk was ever scored against
-   *   the query). The second is NOT a mislabel: 'ok' would report an unsearchable library as a
-   *   topical zero, and 'no_lakes' is severity 0, so the worst-of merge below would let any other
-   *   surface's success erase the signal entirely.
-   *   The two causes want different remedies (an outage is acute and retryable; an unindexed
-   *   corpus is chronic and needs re-vectorizing), so alarming on 'failed' rate alone conflates
-   *   them - splitting the second into its own outcome is tracked separately, and should land
-   *   before anything renders this field.
-   * On multiple retrieval calls within one turn, merge priority is failed > ok > no_lakes (see
-   * retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never masked by a later
-   * success or abstain, and a real success on one surface is never masked by another surface's
-   * "no lakes in scope" abstain in the same turn.
+   * 'not_indexed' - ran to completion having compared nothing: the corpus in scope carries no
+   *   usable vector (never indexed, or embedded with a foreign model), so no passage was ever
+   *   scored against the query. Distinct from 'ok' because the library was not searched at all,
+   *   and reporting that as a topical zero ("your documents do not cover this") is exactly the
+   *   confident-wrong-answer this field exists to catch. Distinct from 'failed' because nothing
+   *   broke: the remedy is re-vectorizing, which the corpus owner can do themselves, and a retry
+   *   never helps.
+   *   COVERAGE: only forced retrieval records this today. The same condition is reachable through
+   *   knowledgeBaseSearch's semantic arm, which still records 'ok' when every candidate was
+   *   withheld for having no usable vector - so a turn that used only that surface still
+   *   under-reports. Anything cutting on this field should treat 'ok' as "not proven searched"
+   *   until that arm is corrected.
+   * 'failed' - recall did not complete: it threw, OR the retrieval repository is not wired on
+   *   this host (the guards in ChatCompletionFeatures / knowledgeBaseSearch / knowledgeBaseRetrieve
+   *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
+   *   not the tempo: fix the outage or the host wiring, never re-index content. An unwired host
+   *   reports continuously too, so "chronic" alone does not pick out 'not_indexed'.
+   * On multiple retrieval calls within one turn, merge priority is failed > not_indexed > ok >
+   * no_lakes (see retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never
+   * masked by a later success or abstain, an unsearchable corpus outranks a legitimate zero so a
+   * success on another surface cannot erase it, and a real success is never masked by another
+   * surface's "no lakes in scope" abstain in the same turn.
    */
-  outcome: z.enum(['ok', 'no_lakes', 'failed']).optional(),
+  outcome: z.enum(['ok', 'no_lakes', 'not_indexed', 'failed']).optional(),
   /**
    * Whether forced retrieval was ENABLED for this turn, independent of whether it then ran.
    *
@@ -381,9 +389,12 @@ export const RetrievalSummarySchema = z.object({
    * model was merely OFFERED the knowledge tools, how often did it choose to retrieve - because
    * a forced turn and an optional turn both land as `attempted: true`.
    *
-   * Optional on the schema for pre-existing documents only: every turn written after this field
-   * landed carries it (seeded at the `offeredTools` write site in ChatCompletionProcess), so
-   * absence means "recorded before this field existed", not "optional". Date-bound any rollup.
+   * Optional on the schema, and absence NEVER means 'optional' - it means unclassified. Two
+   * sources, one historical and one ongoing: turns recorded before this field landed, and
+   * agent-mode runs, which write a retrieval summary through `persistRunAsQuest` but never pass
+   * the seed site at the `offeredTools` write in ChatCompletionProcess. So date-bounding a rollup
+   * removes the first source but not the second; count the unclassified bucket rather than
+   * assuming it empties.
    */
   mode: z.enum(['forced', 'optional']).optional(),
   /**

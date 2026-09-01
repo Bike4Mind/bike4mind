@@ -2012,15 +2012,16 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     });
   });
 
-  it('records failed when candidate files carry no usable vector, not a topical zero', async () => {
+  it('records not_indexed when candidate files carry no usable vector, not a topical zero', async () => {
     // Rows exist but every vector is empty, so nothing is ever scored against the query.
     const ctx = makeCtx({
       rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [] })),
     });
     const { retrieval } = await run(ctx);
-    // The regression this guards: an unvectorized corpus reading as "the library has nothing on
-    // this topic". It must outrank a genuine zero in the merge severity order.
-    expect(retrieval?.outcome).toBe('failed');
+    // Two regressions guarded at once: an unvectorized corpus reading as "the library has nothing
+    // on this topic" (so it must outrank 'ok' in the merge severity order), and it collapsing back
+    // into 'failed' (the two have opposite remedies - re-vectorize vs retry).
+    expect(retrieval?.outcome).toBe('not_indexed');
   });
 
   it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
