@@ -57,7 +57,11 @@ import {
   DATALAKE_TAG_PREFIX,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { getDynamicDataLakeAccess, lakeMembershipsFrom } from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+} from '../dataLakeService/getDynamicDataLakeTags';
 import { narrowLakeAccessToSession } from '../dataLakeService/narrowLakeAccessToSession';
 import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
@@ -1893,6 +1897,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const access = narrowLakeAccessToSession(await this.resolveDataLakeAccess(), this.retrievalTags);
       const { dataLakeTags, dataLakeTagPrefixes, lakes } = access;
       const lakeMemberships = lakeMembershipsFrom(lakes);
+      warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
 
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
