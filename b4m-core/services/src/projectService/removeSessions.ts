@@ -44,9 +44,13 @@ export const removeSessions = async (
   // guards skip it, and rejecting left it in the project permanently, warning on every read.
   // The filter below still removes it. A castable id that did not resolve is still an access
   // failure and still a 400.
-  const resolvedIds = new Set(sessions.map(s => s.id));
-  const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions'));
-  if (sessionIds.some(id => addressable.has(id) && !resolvedIds.has(id))) {
+  // Compared lowercased: a hex id is accepted in either case and resolves the same row, but
+  // `s.id` is always canonical lowercase, so matching raw strings would reject an uppercase id
+  // that Mongo resolved perfectly well.
+  const canonical = (id: string) => id.toLowerCase();
+  const resolvedIds = new Set(sessions.map(s => canonical(String(s.id))));
+  const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions').map(canonical));
+  if (sessionIds.some(id => addressable.has(canonical(id)) && !resolvedIds.has(canonical(id)))) {
     throw new BadRequestError('Some sessions are not accessible');
   }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {

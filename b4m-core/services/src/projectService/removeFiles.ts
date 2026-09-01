@@ -48,9 +48,13 @@ export const removeFiles = async (
   // guards skip it, and rejecting left it in the project permanently, warning on every read.
   // The filter below still removes it. A castable id that did not resolve is still an access
   // failure and still a 400.
-  const resolvedIds = new Set(files.map(f => f.id));
-  const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles'));
-  if (fileIds.some(id => addressable.has(id) && !resolvedIds.has(id))) {
+  // Compared lowercased: a hex id is accepted in either case and resolves the same row, but
+  // `f.id` is always canonical lowercase, so matching raw strings would reject an uppercase id
+  // that Mongo resolved perfectly well.
+  const canonical = (id: string) => id.toLowerCase();
+  const resolvedIds = new Set(files.map(f => canonical(String(f.id))));
+  const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles').map(canonical));
+  if (fileIds.some(id => addressable.has(canonical(id)) && !resolvedIds.has(canonical(id)))) {
     throw new BadRequestError('Some files are not accessible');
   }
 

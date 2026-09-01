@@ -19,6 +19,8 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
   const OWNER_ID = 'owner-1';
   const PROJECT_ID = 'project-1';
   const FILE_ID = 'file-1';
+  // A real hex id, needed by the case-normalisation test below.
+  const FILE_ID_HEX = '67dbe18a7f9cf1fa5d968600';
 
   const asUser = (id: string, email?: string) => ({ id, username: 'u', isAdmin: false, email }) as IUserDocument;
 
@@ -61,6 +63,21 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [JUNK_ID] }, { db });
 
     expect(project.fileIds).toEqual([FILE_ID]);
+    expect(db.projects.update).toHaveBeenCalled();
+  });
+
+  it('accepts an uppercase hex id, which resolves the same row', async () => {
+    // isObjectIdOrHexString accepts either case and Mongo resolves both to the same document, but
+    // the resolved doc's `id` is always canonical lowercase. Comparing raw strings rejected a
+    // request that worked before the set comparison landed.
+    const UPPER = FILE_ID_HEX.toUpperCase();
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => [
+      { id: FILE_ID_HEX, userId: OWNER_ID, users: [] },
+    ]);
+
+    await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UPPER] }, { db });
+
     expect(db.projects.update).toHaveBeenCalled();
   });
 
