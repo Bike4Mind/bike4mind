@@ -691,6 +691,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect(warn.mock.calls[0][0]).toContain('candidate cap');
+    // The substance, not just the label: the operator has to be able to tell "we missed some" from
+    // "we will never see those", which is what the alphabetical selection rule actually means.
+    expect(warn.mock.calls[0][0]).toContain('selected alphabetically by file name');
+    expect(warn.mock.calls[0][0]).toContain('every turn');
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
     // The structured twin of that warning - what the chat banner actually reads. `warnings` is a
     // shared channel (truncation and elision append there too), so the banner cannot key on it.
@@ -699,6 +703,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(coverage?.partial).toBe(true);
     expect(coverage?.reasons).toHaveLength(1);
     expect(coverage?.reasons[0]).toContain('candidate cap');
+    expect(coverage?.reasons[0]).toContain('selected alphabetically by file name');
+    expect(coverage?.reasons[0]).toContain('the rest of the library is never reached');
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls
