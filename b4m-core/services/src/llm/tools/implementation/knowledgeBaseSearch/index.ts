@@ -169,6 +169,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
   vectorSearchEnabled: boolean;
+  supersessionCollapseEnabled: boolean;
 } | null> {
   const adminSettings = context.db.adminSettings;
   const apiKeys = context.db.apiKeys;
@@ -203,8 +204,10 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   }
 
   const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
+  const supersessionCollapseEnabled =
+    (await adminSettings.getSettingsValue('EnableRetrievalSupersessionCollapse')) ?? false;
 
-  return { embeddingModel, provider, apiKeyTable, vectorSearchEnabled };
+  return { embeddingModel, provider, apiKeyTable, vectorSearchEnabled, supersessionCollapseEnabled };
 }
 
 /**
@@ -395,7 +398,7 @@ async function trySemanticKbSearch(
   try {
     const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return NO_SEMANTIC_RESULT;
-    const { embeddingModel, provider, apiKeyTable, vectorSearchEnabled } = embedCtx;
+    const { embeddingModel, provider, apiKeyTable, vectorSearchEnabled, supersessionCollapseEnabled } = embedCtx;
 
     // Narrowed to the session's own lake(s) before anything is searched: without this, a session
     // created FOR one lake still ranks passages from every lake its owner can reach. Subtractive
@@ -436,6 +439,10 @@ async function trySemanticKbSearch(
         ownFilesOnly: context.suppressLakeArms === true,
         budgets,
         vectorSearchEnabled,
+        // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never a
+        // second way to resolve access (the scope is still the tags above).
+        lakes,
+        supersessionCollapseEnabled,
         // Retrieval exclusion (opt-in) - agree with the surface's listing predicate. No-op when unset.
         retrievalFilter: context.retrievalFilter,
         logger: context.logger,

@@ -1,5 +1,6 @@
 import { isChunkRebuildPending, isConvergencePausedNote, isMemberIndexingInFlight } from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
+import { describeSupersession, type SupersessionReport } from './supersession';
 
 /**
  * Content that is in scope and authorized but temporarily UNSERVABLE, because it is mid-(re)index.
@@ -229,11 +230,13 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
 export function describeSearchLimitations(search: {
   embeddingMismatch?: EmbeddingMismatchReport;
   retrievalUnavailable?: RetrievalUnavailableReport;
+  supersession?: SupersessionReport;
   embeddingModel: string;
 }): string | null {
   const sentences = [
     describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel),
     describeRetrievalUnavailable(search.retrievalUnavailable),
+    describeSupersession(search.supersession),
   ].filter((s): s is string => s !== null);
   return sentences.length > 0 ? sentences.join(' ') : null;
 }
@@ -242,6 +245,9 @@ export function describeSearchLimitations(search: {
 export function isPartialSearch(search: {
   embeddingMismatch?: EmbeddingMismatchReport;
   retrievalUnavailable?: RetrievalUnavailableReport;
+  supersession?: SupersessionReport;
 }): boolean {
-  return Boolean(search.embeddingMismatch?.partial || search.retrievalUnavailable?.partial);
+  return Boolean(
+    search.embeddingMismatch?.partial || search.retrievalUnavailable?.partial || search.supersession?.partial
+  );
 }

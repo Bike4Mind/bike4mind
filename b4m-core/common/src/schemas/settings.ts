@@ -200,6 +200,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
+  'EnableRetrievalSupersessionCollapse',
   'PauseLakeConvergence',
   'LakeConvergenceBulkChangeSharePct',
   'EnforceLakeReadGrants',
@@ -1969,6 +1970,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableRetrievalSupersessionCollapse: makeBooleanSetting({
+    key: 'EnableRetrievalSupersessionCollapse',
+    name: 'Data Lakes: Collapse superseded members before ranking',
+    defaultValue: false,
+    description:
+      'When a lake holds two generations of the same document (a re-upload, a Drive sync, a migration), rank only the newest and report the suppression. Off by default: the weakest identity tier is a bare file name, so two genuinely different documents sharing a name in one lake would collapse to one - turn this on only after checking the reported collapse counts on real lakes. Suppression is recoverable either way; a collapsed member is still reachable by id or name through retrieve_knowledge_content.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 94,
     dependsOn: 'EnableDataLakes',
   }),
   PauseLakeConvergence: makeBooleanSetting({

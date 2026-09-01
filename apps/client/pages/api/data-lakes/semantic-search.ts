@@ -155,6 +155,22 @@ const toRetrievalUnavailablePayload = (report: dataLakeService.RetrievalUnavaila
   partial: report.partial,
 });
 
+/**
+ * Flatten the supersession report to the wire shape, same always-present contract as the payloads
+ * above. Ids and tiers ride along rather than just a count: the weakest identity tier is a bare file
+ * name, so a caller has to be able to tell WHICH member was suppressed and on what evidence.
+ */
+const toSupersessionPayload = (report: dataLakeService.SupersessionReport) => ({
+  collapsed_files: report.count,
+  collapsed: report.sample.map(f => ({
+    file_id: f.fileId,
+    file_name: f.fileName,
+    tier: f.tier,
+    superseded_by: f.supersededBy,
+  })),
+  partial: report.partial,
+});
+
 const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   truncated: scan.truncated,
   file_budget_hit: scan.fileBudgetHit,
@@ -287,6 +303,7 @@ const handler = baseApi()
           partial_results: false,
           embedding_mismatch: toMismatchPayload(dataLakeService.emptyEmbeddingMismatchReport()),
           retrieval_unavailable: toRetrievalUnavailablePayload(dataLakeService.emptyRetrievalUnavailableReport()),
+          superseded: toSupersessionPayload(dataLakeService.emptySupersessionReport()),
           scan: toScanPayload(dataLakeService.emptyScanAccounting(budgets)),
         });
       }
@@ -418,6 +435,11 @@ const handler = baseApi()
           scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
           budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
           vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
+          // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never
+          // a second way to resolve access (the scope is still the tags above).
+          lakes,
+          supersessionCollapseEnabled:
+            (await adminSettingsRepository.getSettingsValue('EnableRetrievalSupersessionCollapse')) ?? false,
           logger: req.logger,
         },
         {
@@ -542,6 +564,7 @@ const handler = baseApi()
         partial_results: dataLakeService.isPartialSearch(search),
         embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
         retrieval_unavailable: toRetrievalUnavailablePayload(search.retrievalUnavailable),
+        superseded: toSupersessionPayload(search.supersession),
         // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
         // healthy search instead of present-and-undefined.
         ...(warning ? { warning } : {}),
