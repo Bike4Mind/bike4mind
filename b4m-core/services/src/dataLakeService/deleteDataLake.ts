@@ -23,7 +23,10 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find' | 'claimFilesDeletedAt' | 'claimDeleting'>;
+    dataLakes: Pick<
+      IDataLakeRepository,
+      'findById' | 'settleLifecycleStatus' | 'find' | 'claimFilesDeletedAt' | 'claimDeleting'
+    >;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
@@ -79,7 +82,7 @@ export const deleteDataLake = async (
   // top of it. Before this, phase 1 tore down a 'restoring' lake anyway and the in-flight restore's
   // terminal 'active' write landed last, leaving a lake that reads live but holds only soft-deleted
   // files and appears in no deleted list, so nothing could recover it.
-  if (existing.status === 'restoring') {
+  if (existing.status === 'restoring' || existing.status === 'unarchiving') {
     throw new BadRequestError('This data lake is being restored and cannot be deleted right now');
   }
 
@@ -137,10 +140,21 @@ export const deleteDataLake = async (
   // soft-deleted members too and stays stable across re-runs.
   await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
-  // Terminal transition only - see the note on archiveDataLake's settle step.
-  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted', ...lakeConfigWriteStamp(actor) });
+  // Terminal transition only, and conditional on the 'deleting' claimed above - see the note on
+  // archiveDataLake's settle step for why a plain write here lets the loser of an archive-vs-delete
+  // interleaving stamp its status over the winner's file state.
+  const updated = await db.dataLakes.settleLifecycleStatus(dataLakeId, 'deleting', {
+    status: 'deleted',
+    ...lakeConfigWriteStamp(actor),
+  });
   if (!updated) {
-    throw new NotFoundError('Data lake not found after delete');
+    const current = await db.dataLakes.findById(dataLakeId);
+    if (!current) {
+      throw new NotFoundError('Data lake not found after delete');
+    }
+    throw new BadRequestError(
+      `This data lake moved to '${current.status}' while it was being deleted; its files were soft-deleted but the delete did not complete`
+    );
   }
   await recordLakeConfigChange(
     {

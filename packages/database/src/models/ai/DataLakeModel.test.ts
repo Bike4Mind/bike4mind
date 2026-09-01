@@ -1635,10 +1635,13 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
   });
 
-  it('claimUnarchiving enters restoring from archived', async () => {
+  it('claimUnarchiving enters unarchiving from archived', async () => {
+    // The archive axis has its OWN transitional status. Sharing 'restoring' with the delete axis
+    // let both claims succeed on one lake and both settle 'active'; a terminal settle conditional
+    // on the claimed status cannot separate two callers holding the same one.
     const created = await dataLakeRepository.create(baseLake({ slug: 'unarchive-claim', status: 'archived' }));
     expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
-    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('unarchiving');
   });
 
   it('claimUnarchiving loses to a delete that got there first (#2086)', async () => {
@@ -1719,7 +1722,7 @@ describe('DataLakeRepository archive-axis lifecycle claims', () => {
     expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
 
     expect(await dataLakeRepository.claimDeleting(created.id)).toBe(false);
-    expect((await dataLakeRepository.findById(created.id))?.status).toBe('restoring');
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('unarchiving');
   });
 
   it.each(['deleting', 'deleted', 'purging', 'active'] as const)(
@@ -1731,13 +1734,16 @@ describe('DataLakeRepository archive-axis lifecycle claims', () => {
     }
   );
 
-  it.each(['restoring', 'deleted', 'purging'] as const)('claimDeleting refuses a lake in %s status', async status => {
-    const created = await dataLakeRepository.create(baseLake({ slug: `delete-from-${status}`, status }));
-    expect(await dataLakeRepository.claimDeleting(created.id)).toBe(false);
-    expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
-  });
+  it.each(['restoring', 'unarchiving', 'deleted', 'purging'] as const)(
+    'claimDeleting refuses a lake in %s status',
+    async status => {
+      const created = await dataLakeRepository.create(baseLake({ slug: `delete-from-${status}`, status }));
+      expect(await dataLakeRepository.claimDeleting(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  );
 
-  it.each(['archived', 'restoring', 'deleting', 'deleted', 'purging'] as const)(
+  it.each(['archived', 'restoring', 'unarchiving', 'deleting', 'deleted', 'purging'] as const)(
     'claimArchiving refuses a lake in %s status',
     async status => {
       const created = await dataLakeRepository.create(baseLake({ slug: `archive-from-${status}`, status }));
@@ -1769,11 +1775,82 @@ describe('DataLakeRepository archive-axis lifecycle claims', () => {
   it.each([
     ['claimArchiving', 'archiving'],
     ['claimDeleting', 'deleting'],
-    ['claimUnarchiving', 'restoring'],
+    ['claimUnarchiving', 'unarchiving'],
   ] as const)('%s is re-entrant from its own transitional state', async (method, status) => {
     const created = await dataLakeRepository.create(baseLake({ slug: `reentrant-${status}`, status }));
     expect(await dataLakeRepository[method](created.id)).toBe(true);
     expect(await dataLakeRepository[method](created.id)).toBe(true);
+  });
+
+  // The case a conditional TERMINAL settle cannot fix on its own, and the reason the archive axis
+  // got its own status: while both axes landed on 'restoring' and both admitted it for re-entry,
+  // an unarchive and a restore-from-deleted could each hold it and each settle 'active' - with the
+  // unarchive's dedup pass hard-deleting rows the restore was concurrently un-deleting.
+  it('claimUnarchiving and claimRestoring cannot both hold the same lake', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'two-claimants', status: 'deleted' }));
+    expect(await dataLakeRepository.claimRestoring(created.id)).toBe(true);
+
+    // Legacy 'restoring' is still admitted as a SOURCE, so this converts the lake onto the archive
+    // axis rather than stranding it - and that is precisely what demotes the restore holding it.
+    expect(await dataLakeRepository.claimUnarchiving(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('unarchiving');
+
+    // The restore-from-deleted caller no longer holds its hop, so its settle finds nothing.
+    expect(await dataLakeRepository.settleLifecycleStatus(created.id, 'restoring', { status: 'active' })).toBeNull();
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('unarchiving');
+  });
+});
+
+describe('DataLakeRepository.settleLifecycleStatus', () => {
+  setupMongoTest();
+
+  it('settles a lake still holding the claimed transitional status, echoing the merged document', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'settle-wins', status: 'archiving', filesArchivedAt: new Date('2026-05-01') })
+    );
+
+    const settled = await dataLakeRepository.settleLifecycleStatus(created.id, 'archiving', {
+      status: 'archived',
+      lastUpdatedByUserId: 'owner',
+    });
+
+    expect(settled?.status).toBe('archived');
+    expect(settled?.lastUpdatedByUserId).toBe('owner');
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('archived');
+  });
+
+  it('writes NOTHING when the lake moved off the claimed status', async () => {
+    // The archive-vs-delete interleaving: this caller claimed 'archiving' and swept, a teardown
+    // claimed 'deleting' on top of it, and settling 'archived' anyway would leave the lake reading
+    // archived with every one of its files soft-deleted by the other operation.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'settle-loses', status: 'deleting' }));
+
+    expect(await dataLakeRepository.settleLifecycleStatus(created.id, 'archiving', { status: 'archived' })).toBeNull();
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleting');
+  });
+
+  it('clears a spent sweep mark with an explicit null as it settles', async () => {
+    // undefined would be dropped by mongoose and leave the spent stamp in place, which reads
+    // downstream as a batch a later reversal should still be bounded to.
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'settle-clears', status: 'restoring', filesDeletedAt: new Date('2026-05-01') })
+    );
+
+    const settled = await dataLakeRepository.settleLifecycleStatus(created.id, 'restoring', {
+      status: 'active',
+      filesDeletedAt: null,
+    });
+
+    expect(settled?.status).toBe('active');
+    expect(settled?.filesDeletedAt ?? null).toBeNull();
+  });
+
+  it('resolves null for a lake that vanished, the same shape a lost settle returns', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'settle-gone', status: 'deleting' }));
+    const { id } = created;
+    await dataLakeRepository.delete(id);
+
+    expect(await dataLakeRepository.settleLifecycleStatus(id, 'deleting', { status: 'deleted' })).toBeNull();
   });
 });
 
