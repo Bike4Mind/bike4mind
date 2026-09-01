@@ -15,6 +15,7 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
+import { Types } from 'mongoose';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
@@ -30,10 +31,20 @@ import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLa
  * POST rather than DELETE so the two cannot be confused by a client that only varies the method:
  * one unpicks membership, the other destroys the file everywhere.
  */
+// Same local helper the quest-plan routes use. Needed BEFORE the destructive call because
+// `fabFileRepository.findById` hands a malformed id straight to Mongoose, which throws a CastError:
+// not one of the gate errors below, so it would file an unverified-purge audit row for a request
+// that never wrote anything.
+const isValidObjectId = (id: string): boolean =>
+  Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
+
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request<{}, unknown, unknown, { id: string; fabFileId: string }>, res) => {
     const { id, fabFileId } = req.query;
+    if (!isValidObjectId(fabFileId)) {
+      throw new BadRequestError('Invalid file id');
+    }
     const ctx = await toAccessContext(req);
 
     // Grant-aware and org-aware, exactly like the reversible DELETE on this same path: the whole
@@ -44,6 +55,10 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
+    // Distinguishes the two ways a `verified: false` row can be reached: a sweep that threw
+    // part-way (nothing yet filed) from one that completed and then threw in the bookkeeping after
+    // it. Without it an auditor cannot tell a partly-destroyed document from an intact one.
+    let receiptFiled = false;
     try {
       const receipt = await dataLakeService.purgeDataLakeDocument(ctx, lake.id, fabFileId, {
         db: {
@@ -74,6 +89,7 @@ const handler = baseApi()
         // here as well as a session, so the principal is resolved rather than assumed: a
         // key-driven destruction must not be filed as though the key's owner did it by hand.
         onReceipt: async receipt => {
+          receiptFiled = true;
           await logAuditEvent(
             {
               userId: ctx.userId,
@@ -129,6 +145,7 @@ const handler = baseApi()
       // that never did, so file the attempt as unverified before the error propagates. The
       // service's own gates (unknown lake, wrong actor, non-member file) throw these two before
       // anything is written, and an audit row for a refused request would be noise, not evidence.
+      // A malformed id is refused above for the same reason.
       if (error instanceof BadRequestError || error instanceof NotFoundError) {
         throw error;
       }
@@ -140,6 +157,7 @@ const handler = baseApi()
             dataLakeId: lake.id,
             fabFileId,
             verified: false,
+            phase: receiptFiled ? 'post-destruction' : 'sweep',
             error: error instanceof Error ? error.message : 'Unknown error',
             ...resolveAuditPrincipal(req.user!, req.apiKeyInfo),
           },

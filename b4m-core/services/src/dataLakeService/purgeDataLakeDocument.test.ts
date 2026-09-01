@@ -231,6 +231,41 @@ describe('purgeDataLakeDocument', () => {
     });
   });
 
+  it('drops a non-string tag name rather than handing it to the caller', async () => {
+    // `tags` is `[Object]` on FabFileSchema, so Mongoose casts nothing and a malformed name really
+    // can be stored. A truthiness filter would pass it through to a caller that case-folds it, and
+    // that TypeError lands AFTER the document is already destroyed.
+    const db = makeDb();
+    db.fabFiles.findById = vi.fn(async (id: string) =>
+      id === 'file-1'
+        ? ({ ...FILE, tags: [{ name: 'datalake:sales', strength: 1 }, { name: 42, strength: 1 }] } as never)
+        : (undefined as never)
+    );
+    const onPurged = vi.fn(async () => {});
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ tagNames: ['datalake:sales'] }));
+  });
+
+  it('logs the filePath when the stored object cannot be removed, so the orphan can be found', async () => {
+    // The row carrying filePath is destroyed one step earlier; this log line is the only surviving
+    // handle on the object.
+    const db = makeDb();
+    db.fabFiles.findById = vi.fn(async (id: string) =>
+      id === 'file-1' ? ({ ...FILE, filePath: 'uploads/q3.pdf', fileSize: 27707 } as never) : (undefined as never)
+    );
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const storage = { delete: vi.fn(async () => { throw new Error('s3 down'); }) };
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage, logger });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not remove the stored object'),
+      expect.objectContaining({ filePath: 'uploads/q3.pdf' })
+    );
+  });
+
   it('reports no bytes to return for a row that never stored an object', async () => {
     const db = makeDb();
     const onPurged = vi.fn(async () => {});

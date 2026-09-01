@@ -123,7 +123,8 @@ export default function PurgeLakeDocumentAction({
                 data-testid="datalake-purgefile-receipt-storage"
                 sx={{ mt: 0.5, color: 'warning.500' }}
               >
-                The stored copy of the original file could not be removed and has been reported for cleanup.
+                The stored copy of the original file could not be removed. The failure has been recorded for an
+                administrator to clean up.
               </Typography>
             )}
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.tertiary' }}>

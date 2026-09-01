@@ -58,10 +58,14 @@ vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
 
 import handler from '../purge';
 
+// A real ObjectId: the route refuses a malformed file id ahead of the service, so a stub like 'f1'
+// would 400 before any of these cases ran.
+const FILE_ID = '65f0a1b2c3d4e5f6a7b8c9d0';
+
 const RECEIPT = {
   dataLakeId: 'lake-oid-1',
   datalakeTag: 'datalake:sales',
-  fabFileId: 'f1',
+  fabFileId: FILE_ID,
   fileName: 'q3.pdf',
   chunksBefore: 3,
   chunksRemaining: 0,
@@ -109,7 +113,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   /** Drive the service's post-destruction hook the way the service itself would. */
   const runOnPurged = async (purged: { ownerUserId: string; fileSize: number; tagNames: string[] }) => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
     await h.purgeDataLakeDocument.mock.calls[0][3].onPurged(purged);
   };
 
@@ -117,12 +121,12 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // The route accepts an id OR a slug; handing the service the raw query value would address
     // the wrong lake for a slug - and here that means destroying the wrong file.
     const { res, json } = makeRes();
-    await call(req({ id: 'my-lake', fabFileId: 'f1' }), res);
+    await call(req({ id: 'my-lake', fabFileId: FILE_ID }), res);
 
     expect(h.purgeDataLakeDocument).toHaveBeenCalledWith(
       { userId: 'u1', isAdmin: false },
       'lake-oid-1',
-      'f1',
+      FILE_ID,
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith(RECEIPT);
@@ -133,7 +137,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // only, and drop the org-admin rung the service is allowed to apply.
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: ['org-1'] });
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     expect(h.assertLakeAccess.mock.calls[0][2].db.dataLakeAccessGrants).toBeDefined();
     expect(h.purgeDataLakeDocument.mock.calls[0][0]).toEqual({
@@ -184,13 +188,13 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
   it('writes a durable audit event carrying the receipt', async () => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'u1',
         action: 'LAKE_DOCUMENT_PURGED',
-        metadata: expect.objectContaining({ fabFileId: 'f1', verified: true, chunksBefore: 3 }),
+        metadata: expect.objectContaining({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 }),
       }),
       expect.anything()
     );
@@ -201,7 +205,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // in the lake surface. The row is immutable and floor-retained for 450 days: attributing a
     // key-driven destroy to the human as though they did it by hand cannot be corrected later.
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
 
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -217,7 +221,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
   it('names the human on a session-driven destruction', async () => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -235,7 +239,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
       return unverified;
     });
     const { res, json } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: expect.objectContaining({ verified: false, chunksRemaining: 2 }) }),
@@ -246,11 +250,11 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
   it('wires the retrieval index only where vectors live outside the chunk store', async () => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
     expect(h.purgeDataLakeDocument.mock.calls[0][3].retrievalIndex).toBeUndefined();
 
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
     expect(h.purgeDataLakeDocument.mock.calls[1][3].retrievalIndex).toBeDefined();
   });
 
@@ -258,17 +262,17 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // A bare `undefined` cannot distinguish collocated vectors from a door left unwired, and the
     // receipt is persisted into every audit row.
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
     expect(h.purgeDataLakeDocument.mock.calls[0][3].vectorsCollocated).toBe(true);
 
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
     expect(h.purgeDataLakeDocument.mock.calls[1][3].vectorsCollocated).toBe(false);
   });
 
   it('wires the object store, so the refunded bytes are bytes that really went', async () => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
     expect(h.purgeDataLakeDocument.mock.calls[0][3].storage).toBeDefined();
   });
 
@@ -279,7 +283,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     const { res } = makeRes();
 
     await expect(
-      call(req({ id: 'lake-oid-1', fabFileId: 'f1' }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res)
+      call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res)
     ).rejects.toThrow('mongo down');
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -287,7 +291,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
         // The throw path needs the principal as much as the success path - more, since this is the
         // row for a destruction whose extent nobody knows.
         metadata: expect.objectContaining({
-          fabFileId: 'f1',
+          fabFileId: FILE_ID,
           verified: false,
           error: 'mongo down',
           principalKind: 'apiKey',
@@ -304,14 +308,63 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     h.purgeDataLakeDocument.mockRejectedValue(new BadRequestError('Only the owner'));
     const { res } = makeRes();
 
-    await expect(call(req({ id: 'lake-oid-1', fabFileId: 'f1' }), res)).rejects.toThrow('Only the owner');
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res)).rejects.toThrow('Only the owner');
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed file id before the service runs, and files nothing', async () => {
+    // `findById` hands a bad id straight to Mongoose, which throws a CastError - not one of the
+    // gate errors - so without this check the catch would file an unverified-purge row for a
+    // request that never wrote anything.
+    const { res } = makeRes();
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: 'not-an-oid' }), res)).rejects.toThrow('Invalid file id');
+    expect(h.purgeDataLakeDocument).not.toHaveBeenCalled();
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('marks a throw AFTER the receipt as post-destruction, not as a failed sweep', async () => {
+    // Both file `verified: false`, and an auditor has to be able to tell an intact document from
+    // one that is genuinely gone with only the bookkeeping left undone.
+    h.purgeDataLakeDocument.mockImplementation(async (...args: unknown[]) => {
+      const adapters = args[3] as { onReceipt?: (r: unknown) => Promise<void> };
+      await adapters.onReceipt?.(RECEIPT);
+      throw new Error('quota update failed');
+    });
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res)).rejects.toThrow('quota update failed');
+    expect(h.logAuditEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ verified: false, phase: 'post-destruction' }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('marks a throw before the receipt as a failed sweep', async () => {
+    h.purgeDataLakeDocument.mockRejectedValue(new Error('mongo down'));
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res)).rejects.toThrow('mongo down');
+    expect(h.logAuditEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ verified: false, phase: 'sweep' }) }),
+      expect.anything()
+    );
+  });
+
+  it('does not file an audit record for a NotFound refusal either', async () => {
+    const { NotFoundError } = await import('@bike4mind/utils');
+    h.purgeDataLakeDocument.mockRejectedValue(new NotFoundError('File not found in this data lake'));
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res)).rejects.toThrow('File not found');
     expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 
   it('refuses a lake the caller cannot even see, before touching anything', async () => {
     h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
-    await expect(call(req({ id: 'nope', fabFileId: 'f1' }), res)).rejects.toThrow('Data lake not found');
+    await expect(call(req({ id: 'nope', fabFileId: FILE_ID }), res)).rejects.toThrow('Data lake not found');
     expect(h.purgeDataLakeDocument).not.toHaveBeenCalled();
   });
 });

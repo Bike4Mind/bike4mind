@@ -158,8 +158,11 @@ export const purgeDataLakeDocument = async (
       await storage.delete(file.filePath);
     } catch (error) {
       storageObjectDeleted = false;
+      // filePath is the only handle left: the row carrying it is already gone, so without it here
+      // the orphaned object cannot be named, let alone cleaned up.
       logger?.error('[dataLake] permanent deletion could not remove the stored object', {
         fabFileId: file.id,
+        filePath: file.filePath,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
@@ -216,7 +219,7 @@ export const purgeDataLakeDocument = async (
     ownerUserId: file.userId,
     fileSize:
       storageObjectDeleted && file.filePath && typeof file.fileSize === 'number' ? file.fileSize : 0,
-    tagNames: (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => !!name),
+    tagNames: (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string'),
   });
 
   return receipt;
