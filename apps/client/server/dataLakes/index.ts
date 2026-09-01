@@ -32,6 +32,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
+import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
 import { toAccessContext } from './toAccessContext';
 import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
@@ -136,15 +137,23 @@ function splitTagPrefixes(lakes: DataLakeConfig[]): { openTagPrefixes: string[];
  * dropping the lake's key from the result, so an anomaly is visible instead of silently absent.
  *
  * ONE batched read, never one per lake: an admin's lake set is every lake of every tenant, and a
- * per-lake fan-out would issue that many concurrent findOnes against a pool of two.
+ * per-lake fan-out would issue that many concurrent findOnes against a pool of two. The meta-tags
+ * are derived here rather than taken as a parameter: a caller passing a narrower list would drop
+ * those lakes from the lookup, and each would fall to the fail-closed meta-tag-only branch below -
+ * under-retrieval with no signal.
+ *
+ * The arm-count probe lives here, not at the call sites, because these two callers are the only
+ * UNBOUNDED ones (a retrieval site is already narrowed to a session's one-to-few lakes) and this is
+ * where the one-arm-per-lake shape is minted.
  */
 async function buildLakeMembershipScopes(
   lakes: DataLakeConfig[],
-  dataLakeTags: string[]
+  surface: string,
+  logger?: Logger
 ): Promise<DataLakeMembershipScope[]> {
-  const lakeDocs = await dataLakeRepository.findByDatalakeTags(dataLakeTags);
+  const lakeDocs = await dataLakeRepository.findByDatalakeTags(lakes.map(dl => dl.datalakeTag));
   const lakeDocsByTag = new Map(lakeDocs.map(doc => [doc.datalakeTag, doc]));
-  return lakes.map(lake => {
+  const scopes = lakes.map((lake): DataLakeMembershipScope => {
     const doc = lakeDocsByTag.get(lake.datalakeTag);
     if (doc) {
       // `?? lake.fileTagPrefix`: a doc whose own prefix is unset must not silently lose the
@@ -156,15 +165,39 @@ async function buildLakeMembershipScopes(
         creatorUserId: doc.createdByUserId,
       };
     }
-    // POSITIVE evidence of registry-ness, never the absence of a document - see
-    // queryDataLakeTagCounts' identical branch for why (a misclassification here would turn a
-    // dynamic lake's user-chosen prefix into a cross-tenant read arm).
+    // POSITIVE evidence of registry-ness, never the absence of a document: the registry arm drops
+    // the ownership conjunct, so misclassifying a dynamic lake into it would turn that lake's
+    // USER-CHOSEN prefix into a cross-tenant read arm. Before the union, the same doc-less branch
+    // produced `creatorUserId: undefined` and the filter fail-closed it to meta-tag-only, so a
+    // misclassification here was inert - that backstop is gone, and this is what replaces it.
+    //
+    // Safe DESPITE `getDynamicDataLakeTags`' standing warning against `STATIC_LAKE_IDS` for this
+    // decision (a DB row can shadow a registry id and turn its prefix into a bypass): the
+    // doc-present branch above runs FIRST, so a shadowed row is already `owned` and never reaches
+    // here. It is the ordering that makes this safe, not the classifier.
     if (STATIC_LAKE_IDS.has(lake.id)) {
       return dataLakeService.registryMembershipScope(lake);
     }
     return { kind: 'owned', datalakeTag: lake.datalakeTag };
   });
+  dataLakeService.warnIfManyLakeMemberships(scopes, logger, surface);
+  return scopes;
 }
+
+/**
+ * The dynamic-lake subset, for a query that ORs every lake's arm into ONE `$or`.
+ *
+ * A `registry` scope's prefix arm carries no ownership conjunct by design, which is safe only where
+ * each scope is applied on its own. Dropped into a shared cross-lake `$or` it stops being that
+ * lake's arm and becomes an unanchored prefix match on the whole result set - a bypass any of the
+ * OR'd lakes can ride. Registry lakes keep matching through the OPEN `dataLakeTagPrefixes` arm.
+ *
+ * `queryDataLakeTagCounts` deliberately does NOT use this: `countDataLakeFilesByMembership` re-applies
+ * each scope in its own `$facet` branch, so the pipeline's cross-lake `$or` only widens the candidate
+ * pool and never a per-lake count - each number still comes from that lake's own filter.
+ */
+const dynamicMembershipScopesFor = (scopes: DataLakeMembershipScope[]): DataLakeMembershipScope[] =>
+  scopes.filter(scope => scope.kind !== 'registry');
 
 /**
  * Browse articles across the given lakes (resolved by `resolveAccessibleLakes`).
@@ -219,11 +252,11 @@ export async function queryDataLakeArticles(
   const sortDir = query.sortDir === 'desc' ? ('desc' as const) : ('asc' as const);
 
   const user = req.user!;
-  // Dynamic-lake arms, each anchored to that lake's creator (#2243) - never the registry kind,
-  // whose prefix arm is unanchored and unsafe across a multi-lake query like this one. Registry
-  // lakes keep matching through the OPEN `dataLakeTagPrefixes` arm above instead.
-  const membershipScopes = await buildLakeMembershipScopes(lakes, dataLakeTags);
-  const lakeMemberships = membershipScopes.filter(scope => scope.kind !== 'registry');
+  // Dynamic-lake arms, each anchored to that lake's creator (#2243). Registry scopes are dropped
+  // because these all land in one cross-lake `$or` - see dynamicMembershipScopesFor.
+  const lakeMemberships = dynamicMembershipScopesFor(
+    await buildLakeMembershipScopes(lakes, 'data-lake-articles-browse', req.logger)
+  );
   const result = await fabFilesService.search(
     user.id,
     {
@@ -303,7 +336,9 @@ export async function queryDataLakeTagCounts(
   // browse - the browse has always matched the open prefix arm. That is the drift the
   // discriminated scope exists to stop; these counts and GET /api/data-lakes/:id/articles now
   // resolve the same membership for both lake kinds.
-  const membershipScopes = await buildLakeMembershipScopes(lakes, dataLakeTags);
+  // Registry scopes are KEPT here, unlike the browse above: each scope gets its own $facet branch
+  // rather than sharing one $or, so an unanchored prefix arm stays confined to its own lake's count.
+  const membershipScopes = await buildLakeMembershipScopes(lakes, 'data-lake-tag-counts', req.logger);
 
   const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),

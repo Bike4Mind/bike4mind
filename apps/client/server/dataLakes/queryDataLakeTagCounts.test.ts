@@ -28,6 +28,7 @@ vi.mock('@bike4mind/services', () => ({
       datalakeTag: config.datalakeTag,
       fileTagPrefix: config.fileTagPrefix,
     }),
+    warnIfManyLakeMemberships: vi.fn(),
   },
 }));
 
