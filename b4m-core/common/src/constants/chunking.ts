@@ -121,6 +121,17 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
   };
 }
 
+// DO NOT REWORD ANY OF THE THREE MARKERS BELOW. They are stored verbatim in `FabFile.notes` and
+// matched by exact `$in` queries and `Array.includes`, so the text is a datastore key, not prose.
+// Editing one - a typo fix, a tone pass - orphans every row already carrying the old string: those
+// files stop matching `isConvergencePausedNote`, and drop out of the health denominator, the
+// "Rebuild passages" door and the retrieval withhold all at once. That is precisely the invisibility
+// the markers exist to prevent, reached by editing them. A test cannot catch it either, since both
+// sides of every comparison import the constant and move together; `chunking.test.ts` pins the
+// distinguishing phrases instead. Changing the wording means a migration over existing rows.
+//
+// A line comment, not a docblock: this rule governs all three exports below, so attaching it as
+// JSDoc would misattribute it to whichever one happened to follow.
 /**
  * `FabFile.notes` marker written when the data-lake convergence kill switch abandons a vectorize
  * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed, and
@@ -131,16 +142,6 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
  * (constants/lakeHealth.ts) reads it to tell a permanently-stalled file from one still in flight.
  * b4m-core cannot import from apps/client, so a copy there would have to drift silently.
  */
-/**
- * DO NOT REWORD ANY OF THE THREE MARKERS BELOW. They are stored verbatim in `FabFile.notes` and
- * matched by exact `$in` queries and `Array.includes`, so the text is a datastore key, not prose.
- * Editing one - a typo fix, a tone pass - orphans every row already carrying the old string: those
- * files stop matching `isConvergencePausedNote`, and drop out of the health denominator, the
- * "Rebuild passages" door and the retrieval withhold all at once. That is precisely the invisibility
- * the markers exist to prevent, reached by editing them. A test cannot catch it either, since both
- * sides of every comparison import the constant and move together; `chunking.test.ts` pins the
- * distinguishing phrases instead. Changing the wording means a migration over existing rows.
- */
 export const CONVERGENCE_PAUSED_NOTE =
   'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
 
@@ -150,11 +151,13 @@ export const CONVERGENCE_PAUSED_NOTE =
  * wording has to say so - the producer resets a wave's chunk state BEFORE the messages are handled,
  * so a file halted here has NO chunks at all rather than chunks without vectors.
  *
- * Without a marker this state is invisible to every surface at once, which is the failure it exists
- * to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health
- * drops it from the denominator, convergence grades it `conformant` (its stale stamp still matches),
- * search does not withhold it because it is not "in flight", and the rescue sweep's own filter
- * passes over it. The file's passages are simply gone and nothing reports it.
+ * Without a marker this state is misread by every surface at once, which is the failure it exists to
+ * prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health drops
+ * it from the denominator, convergence grades it `conformant` (its stale stamp still matches), and
+ * search does not withhold it because it is not "in flight". The file's passages are simply gone and
+ * nothing REPORTS it. The rescue sweep is the one exception and deliberately so: an unmarked file
+ * matches its filter and gets re-chunked, which is repair rather than reporting. That is why the
+ * sweep excludes this marker only while the switch is ON - see buildFabFileChunkScanFilter.
  *
  * Same cross-layer reason as the constant above for living here: the queue handler writes it and
  * b4m-core's evaluators read it, and b4m-core cannot import from apps/client.

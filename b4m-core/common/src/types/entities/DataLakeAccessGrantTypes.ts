@@ -164,3 +164,55 @@ export interface IDataLakeAccessGrantRepository extends IBaseRepository<IDataLak
    */
   removeAllForLake(dataLakeId: string): Promise<number>;
 }
+
+// ── Lake Membership Removal (restore-authorization record, #2248) ───────────
+//
+// UNRELATED to the AccessGrant relation above (kept here only for proximity to a sibling small
+// lake-relation type): this is a short-TTL record of ONE file's removal from ONE lake, written by
+// the removal door (`removeFileFromDataLake`) and read by the restore door (`addFileToDataLake`).
+//
+// The record's mere PRESENCE for `(dataLakeId, fabFileId)` is the restore's entire authorization -
+// it is what lets the restore admit every removal the actor was able to perform (no ownership
+// test), because `removeFileFromLake` refuses a non-member, so a record can never be minted for a
+// file this lake never held. It is NOT a durable, discoverable "recently removed" panel: nothing
+// lists it, and it expires in 30 minutes (see the model's TTL index).
+
+/** One prefix-arm content tag a lake held on a file, as captured at removal for later restore. */
+export const LakeMembershipRemovalContentTag = z.object({
+  name: z.string(),
+  strength: z.number(),
+});
+export type ILakeMembershipRemovalContentTag = z.infer<typeof LakeMembershipRemovalContentTag>;
+
+export const LakeMembershipRemoval = z.object({
+  dataLakeId: z.string(),
+  fabFileId: z.string(),
+  /** The principal who performed the removal - audit only, never a restore authorization input. */
+  actorUserId: z.string(),
+  /** The lake's prefix-arm tags the file carried, captured by `lakeMembershipSignals`. May be
+   *  empty - a meta-tag-only member and a non-creator-owned file both removed with no content
+   *  tags to restore, which is a complete and legitimate answer, not "nothing to record". */
+  contentTags: z.array(LakeMembershipRemovalContentTag),
+  removedAt: z.date(),
+  expiresAt: z.date(),
+});
+export type ILakeMembershipRemoval = z.infer<typeof LakeMembershipRemoval>;
+
+export interface ILakeMembershipRemovalDocument extends ILakeMembershipRemoval, IMongoDocument {}
+
+export interface ILakeMembershipRemovalRepository extends IBaseRepository<ILakeMembershipRemovalDocument> {
+  /**
+   * Create the removal record for (dataLakeId, fabFileId), or overwrite the existing one in place.
+   * Idempotent on that natural key (enforced by a unique index - see the model), so a
+   * remove -> undo -> remove cycle leaves exactly one live row, carrying the LATEST removal's
+   * tags and timestamps.
+   */
+  upsertRemoval(input: ILakeMembershipRemoval): Promise<ILakeMembershipRemovalDocument>;
+  /**
+   * The live (unexpired as of `asOf`, default now) removal record for (dataLakeId, fabFileId), or
+   * null. Filters `expiresAt` in the query itself - Mongo's TTL monitor runs on roughly a
+   * one-minute cycle, so an expired row can still be READABLE for a window after it expires; the
+   * sweeper is storage hygiene, this query is the authorization boundary.
+   */
+  findLive(dataLakeId: string, fabFileId: string, asOf?: Date): Promise<ILakeMembershipRemovalDocument | null>;
+}

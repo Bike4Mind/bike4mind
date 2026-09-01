@@ -73,6 +73,23 @@ export interface IFabFileChunk {
    * an Atlas `$vectorSearch` index lookup keys on - not FabFile.embeddingModel.
    */
   embeddingModel?: string;
+  /**
+   * Which per-model retrieval index this chunk's document was written to, for a retrieval store
+   * that lives OUTSIDE Mongo (self-host OpenSearch; undefined on Atlas, whose vector index is on
+   * this collection itself and so is removed with the row).
+   *
+   * Deliberately NOT `embeddingModel`. That field is a READINESS stamp: fabFileVectorize writes it
+   * only once the whole file finishes, so the Atlas cutover read path can never treat a
+   * still-vectorizing file as ready. But OpenSearch documents are written per vectorize MESSAGE,
+   * long before that - so a file whose vectorize never finishes (spend-gate denial, exhausted SQS
+   * retries, a purge landing mid-flight) has live documents and no stamp, and every removal path
+   * resolves its index from the stamp. Recording index residency separately is what lets a removal
+   * find those documents.
+   *
+   * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
+   * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   */
+  retrievalIndexModel?: string;
 }
 
 /**
@@ -431,19 +448,21 @@ export interface FabFileChunkVector {
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
   deleteManyByFabFileId(fabFileId: string): Promise<void>;
   /**
-   * Every DISTINCT embeddingModel actually used by chunks of the given files - not
-   * FabFile.embeddingModel, which is only the file's current/latest model (see
-   * IFabFileChunk.embeddingModel: chunks can outlive a re-embed). A retrieval index keyed
-   * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
+   * Every DISTINCT per-model retrieval index the given files' chunks can have documents in - the
+   * union of `IFabFileChunk.retrievalIndexModel` (index residency, recorded per vectorize message)
+   * and `IFabFileChunk.embeddingModel` (the file-complete readiness stamp). Both are needed:
+   * residency alone misses chunks indexed before that field existed, and the stamp alone misses
+   * every file whose vectorize never finished. Neither is FabFile.embeddingModel, which is only the
+   * file's current/latest model and misses an index left by an earlier embed.
    */
-  distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
+  distinctRetrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   /**
    * The same fact as above, but resolved PER FILE: `{ [fabFileId]: models }`, omitting any file with
    * no model-bearing chunks. A per-model retrieval index needs the pairing, not the union - pairing
    * every file with every model seen across the batch issues one request per (file, model) cell, so
    * a two-model lake doubles its removal traffic and most of it matches nothing.
    */
-  embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
+  retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -528,21 +547,48 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
- * Identifies a data lake for file-membership matching: a file belongs on an exact `datalakeTag`
- * match OR on a `fileTagPrefix` match against a file the lake's CREATOR OWNS. The predicate itself
- * is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
+ * Identifies a data lake for file-membership matching. The predicate itself is
+ * `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
  * `IFabFileRepository` can name it without the packages depending on each other.
  *
- * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens what
- * the filter selects, so a caller-supplied scope would reach another user's files - and on the
- * lifecycle paths, destroy them.
+ * TWO membership models, both legitimate, discriminated so a consumer cannot silently get the
+ * wrong one:
+ *
+ * - `owned` (DB lake): meta-tag OR (`fileTagPrefix` match AND the file is owned by the lake's
+ *   CREATOR). The prefix is user-chosen and unique only per creator, so the ownership conjunct is
+ *   what stops one lake's prefix from reaching another tenant's files.
+ * - `registry` (hardcoded DATA_LAKES lake): meta-tag OR `fileTagPrefix`, with NO ownership arm.
+ *   Such a lake is a shared knowledge base with many contributors and no creator to anchor to.
+ *   Safe ONLY because the prefix is compile-time config - see the ownership-bypass note on
+ *   `dataLakeTagPrefixes` in fabFileSearchQuery, which this replaces FOR PER-LAKE MEMBERSHIP only.
+ *   That mechanism is still live and must not be removed: the multi-lake retrieval surfaces
+ *   (semantic-search, the knowledge-base tools, ChatCompletionFeatures, and the tag-count prefix
+ *   arms) pass it for a whole SET of lakes at once, which a single-lake scope cannot express.
+ *
+ * A discriminated union rather than an optional `creatorUserId` because the previous shape could
+ * not express the registry model at all: the filter DEGRADED a creator-less scope to meta-tag-only,
+ * which under-counted registry lakes and forced the browse path to hand-roll the correct predicate
+ * at its own call site. The two then disagreed, violating the invariant stated on
+ * `countDataLakeFilesByMembership` below.
+ *
+ * Always build these from the lake DOCUMENT (`owned`) or the hardcoded registry entry
+ * (`registry`), never from request input: the prefix arm widens what the filter selects, and on
+ * the lifecycle paths that means destroying files.
  */
-export interface DataLakeMembershipScope {
-  datalakeTag: string;
-  fileTagPrefix?: string | null;
-  /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
-  creatorUserId?: string | null;
-}
+export type DataLakeMembershipScope =
+  | {
+      kind: 'owned';
+      datalakeTag: string;
+      fileTagPrefix?: string | null;
+      /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
+      creatorUserId?: string | null;
+    }
+  | {
+      kind: 'registry';
+      datalakeTag: string;
+      /** From the hardcoded DATA_LAKES registry ONLY - never a user-supplied prefix. */
+      fileTagPrefix?: string | null;
+    };
 
 /**
  * The model interface for the FabFile model.
@@ -675,16 +721,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       /**
-       * One lake's membership scope, matching the whole-lake writes exactly. Server-supplied
-       * only: it names the creator whose OWNED files the prefix arm matches, so it must never be
-       * read from request input.
+       * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
+       * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
+       * it must never be read from request input.
        */
-      lakeMembership?: DataLakeMembershipScope;
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean; // Allow-list-as-authority: skip the ownership predicate; ignored unless restrictToFileIds is present
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
-      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -938,6 +983,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
+  /**
+   * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
+   * stored count is not already higher and the file has not been stamped terminal, so a stale
+   * rollup can never regress a count or reopen `isVectorizing` on a settled file. Returns true
+   * if this call advanced the file.
+   */
+  advanceVectorizeProgress(
+    fabFileId: string,
+    vectorizedChunkCount: number,
+    rollup?: { embeddedChunkCount: number; embeddedCharCount: number }
+  ): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
   // fileTagPrefix match on a file the lake's creator OWNS. See buildDataLakeMembershipFilter
@@ -1016,6 +1072,19 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       chunkedPassageTokenTarget: number | null;
     }>
   >;
+  /**
+   * One page of a lake's LIVE members for the lake-memory extraction producer, ascending by `_id`,
+   * projecting only the three fields that producer reads. Live-only and bounded in the database, unlike
+   * `findIdsByDataLakeTag` above, which reports every member the lake ever had.
+   *
+   * `after` is a keyset boundary, and an unparseable one is ignored rather than throwing. Ask for one
+   * row past the cap to tell "the lake continues" from "the slice filled exactly" without a count
+   * query. See the implementation for why each of those is load-bearing.
+   */
+  findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>>;
   /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.

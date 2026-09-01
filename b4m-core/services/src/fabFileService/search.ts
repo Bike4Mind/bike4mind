@@ -57,8 +57,9 @@ const DEFAULT_PAGE_LIMIT = 20;
  * `dataLakeTagPrefixes` in particular is an un-ANDed bypass arm that must only ever come from the
  * hardcoded DATA_LAKES registry. A separate argument keeps the whole set un-forgeable.
  *
- * `lakeMembership` additionally names the user whose OWNED files the lake's prefix arm matches, so
- * a forged value would name any user; `restrictToDataLake` DROPS the ownership arms entirely.
+ * `lakeMemberships` additionally names, per lake, the user whose OWNED files that lake's prefix arm
+ * matches, so a forged value would name any user; `restrictToDataLake` DROPS the ownership arms
+ * entirely.
  */
 export interface SearchFabFilesServerOptions {
   includeShared?: boolean;
@@ -67,7 +68,7 @@ export interface SearchFabFilesServerOptions {
   dataLakeTagPrefixes?: string[];
   scopedTagPrefixes?: string[];
   restrictToDataLake?: boolean;
-  lakeMembership?: DataLakeMembershipScope;
+  lakeMemberships?: DataLakeMembershipScope[];
 }
 
 export const search = async (
@@ -116,7 +117,7 @@ export const search = async (
       dataLakeTagPrefixes: serverOptions?.dataLakeTagPrefixes,
       scopedTagPrefixes: serverOptions?.scopedTagPrefixes,
       restrictToDataLake: serverOptions?.restrictToDataLake,
-      lakeMembership: serverOptions?.lakeMembership,
+      lakeMemberships: serverOptions?.lakeMemberships,
     }
   );
 

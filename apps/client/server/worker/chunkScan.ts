@@ -7,8 +7,7 @@
  * dataLakeBatchReconcile cron. The selection filter and the queue payload both live here so both
  * drivers share one producer, and so both are unit-testable without importing either boot graph.
  */
-
-import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
+import { CONVERGENCE_ORIGIN, CONVERGENCE_PAUSED_NOTES } from '@bike4mind/common';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -88,20 +87,54 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
-/**
- * ORDERING WARNING for anyone adding a `notes` exclusion here: a file the convergence kill switch
- * parked stays selectable by this filter ON PURPOSE, and that re-selection is the only thing that
- * ever rebuilds it - nothing else re-drives a paused file once the switch clears. Excluding the
- * paused markers (tempting, since a paused file is re-swept every pass while the switch is on)
- * strands every one of them permanently unless a resume path lands in the same change.
- * `chunkScan.test.ts` pins this; see buildChunkScanQueuePayload below for the other half.
- */
-export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
+export interface ChunkScanFilterOptions {
+  /**
+   * Exclude files carrying a convergence pause marker. TRUE only while the convergence kill switch is
+   * ON, and that conditionality is the whole point (see the `notes` clause below) - the caller passes
+   * the resolved flag rather than this being a constant.
+   *
+   * REQUIRED, and so is `opts` itself, deliberately: an omitted flag would default to "do not
+   * exclude", which is the pre-fix behaviour - the sweep would re-select every paused file on every
+   * pass while the switch is ON. Silently reinstating the bug is the wrong default, so a new caller
+   * has to state which side it wants and the compiler asks. Both existing callers resolve it from
+   * the platform setting; a test that does not care passes `false` explicitly.
+   */
+  excludeConvergencePaused: boolean;
+}
+
+export const buildFabFileChunkScanFilter = (
+  cutoff: Date,
+  staleClaimBefore: Date | undefined,
+  opts: ChunkScanFilterOptions
+) => ({
   status: 'complete' as const,
   chunkCount: 0,
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
+  // The no-extractable-text note is this handler's own terminal outcome, so it is always excluded.
+  //
+  // The convergence pause markers are excluded only while the kill switch is ON, and the
+  // conditionality is load-bearing in BOTH directions:
+  //
+  //  - Switch ON: a paused file matches every other clause here (the reset zeroed chunkCount and the
+  //    pause writes no error), so it is re-selected on every pass. That is churn at best, and it
+  //    consumes the rescue cap, starving genuine lost-webhook candidates while the sweep still
+  //    reports a healthy enqueue count.
+  //  - Switch OFF: excluding it would be a REGRESSION. This sweep is the only automatic exit a
+  //    paused file has. The two other recovery paths are human-driven and lake-scoped, so neither
+  //    reaches a file outside every lake - exactly what this sweep exists to catch. And the
+  //    re-enqueue really does rebuild it: `isConvergenceHalted` returns false whenever the switch is
+  //    off, whatever `origin` says, so the file is genuinely re-chunked rather than bounced. That is
+  //    what makes CONVERGENCE_PAUSED_CHUNK_NOTE's user-visible "rebuilt when convergence resumes"
+  //    true. Note this no longer turns on the file lacking a batchId: buildChunkScanQueuePayload
+  //    stamps `origin` unconditionally, so with the switch ON every sweep message is haltable - which
+  //    is why the exclusion above only has to spare the queue a round-trip, not prevent a re-chunk.
+  //
+  // Via CONVERGENCE_PAUSED_NOTES so this query and `isConvergencePausedNote` cannot drift.
+  notes: {
+    $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`),
+    ...(opts.excludeConvergencePaused ? { $nin: [...CONVERGENCE_PAUSED_NOTES] } : {}),
+  },
   error: { $in: [null, ''] },
   // Both clauses below are `$or`s, so they are nested under ONE `$and` rather than written as
   // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key
@@ -148,9 +181,11 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
  * fails soft to `user`) and chunked anyway - spending exactly the budget the switch was set to stop.
  * The tradeoff, which is the switch working as designed: while it is on, the sweep rescues nothing,
  * including a genuinely stranded non-lake file. What brings such a file back is RE-SELECTION, not a
- * resume path: the paused note is not excluded by the filter above, so the first sweep after the
- * switch clears rebuilds it (pinned in chunkScan.test.ts, because it is the only thing making this
- * tradeoff acceptable).
+ * resume path: the filter above excludes the paused markers only while the switch is on, so the
+ * first sweep after it clears re-admits the file and rebuilds it (pinned in chunkScan.test.ts,
+ * because it is the only thing making this tradeoff acceptable). Belt and braces, deliberately -
+ * the exclusion decides SELECTION from a flag read once per pass, this stamp decides what the
+ * CONSUMER does with a message already in flight when the switch flips.
  *
  * One shape does NOT come back, and stamping unconditionally is what routes it there: a MEDIA file
  * is admitted by the filter above only through `chunkRebuildRequestedAt`, and the halt write nulls

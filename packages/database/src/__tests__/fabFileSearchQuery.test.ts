@@ -7,6 +7,7 @@ import {
   getMimeTypeFilter,
   FabFileSearchParams,
 } from '../queries/fabFileSearchQuery';
+import { buildDataLakeMembershipFilter } from '../queries/dataLakeLifecycleScope';
 
 function makeParams(overrides: Partial<FabFileSearchParams> = {}): FabFileSearchParams {
   return {
@@ -375,19 +376,21 @@ describe('buildFabFileSearchQuery', () => {
       });
 
       // Regression guard for a dropped hand-off: buildFabFileSearchQuery forwards its options to
-      // buildOwnershipConditions by naming each one, so omitting lakeMembership there left the
+      // buildOwnershipConditions by naming each one, so omitting lakeMemberships there left the
       // single-lake browse with no arm at all and threw on every request. The route-level test
       // could not see it - it mocks the search service - so this drives the real builder with
       // exactly the option set that route sends.
-      it('forwards lakeMembership, the only lake arm the single-lake browse sends', () => {
+      it('forwards lakeMemberships, the only lake arm the single-lake browse sends', () => {
         const result = buildFabFileSearchQuery(
           makeParams({
             options: {
               // The single-lake browse's exact option set: includeShared is what reaches the
-              // ownership branch at all, and lakeMembership is its only lake arm.
+              // ownership branch at all, and lakeMemberships is its only lake arm.
               includeShared: true,
               restrictToDataLake: true,
-              lakeMembership: { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+              lakeMemberships: [
+                { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+              ],
             },
           })
         );
@@ -407,12 +410,75 @@ describe('buildFabFileSearchQuery', () => {
         // Dropping the broad arms with no lake arm would build `{ $or: [] }`, which MongoDB
         // rejects at query time. Fail fast with a descriptive error instead.
         expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true })).toThrow(
-          /requires lakeMembership, dataLakeTags or scopedTagPrefixes/
+          /requires lakeMemberships, dataLakeTags or scopedTagPrefixes/
         );
         // An empty-string prefix doesn't count (validPrefixes filters it), so still throws.
         expect(() =>
           buildOwnershipConditions('user1', { restrictToDataLake: true, scopedTagPrefixes: [''] })
         ).toThrow();
+        // An empty lakeMemberships array is likewise not an arm - same failure, named field.
+        expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true, lakeMemberships: [] })).toThrow(
+          /requires lakeMemberships, dataLakeTags or scopedTagPrefixes/
+        );
+      });
+
+      it('restrictToDataLake + a single lakeMemberships scope alone: one arm, no throw', () => {
+        const conditions = buildOwnershipConditions('user1', {
+          restrictToDataLake: true,
+          lakeMemberships: [{ datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' }],
+        });
+        expect(conditions).toHaveLength(1);
+        expect(conditions.some(c => 'userId' in (c as Record<string, unknown>))).toBe(false);
+      });
+    });
+
+    // ── Membership arms (#2243) ────────────────────────────
+    // buildDataLakeMembershipFilter is the ONE predicate the browse, health, archive and
+    // permanent delete already run on; these pin that buildOwnershipConditions's lakeMemberships
+    // arm reuses it verbatim rather than re-deriving a second, driftable copy.
+    describe('lakeMemberships', () => {
+      const SCOPE_A = { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+      const SCOPE_B = { datalakeTag: 'datalake:org1:globex', fileTagPrefix: 'globex:', creatorUserId: 'creator-2' };
+
+      it('a single-element array is byte-identical to the pre-plural singular arm (Step 1 inertness)', () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
+        // [owned, shared, membership] - same shape a single `lakeMembership` option produced.
+        expect(conditions).toHaveLength(3);
+        expect(conditions[2]).toEqual(buildDataLakeMembershipFilter(SCOPE_A));
+      });
+
+      it('two scopes produce two arms, in input order, each identical to calling the builder directly', () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A, SCOPE_B] });
+        expect(conditions).toHaveLength(4); // owned, shared, membership A, membership B
+        expect(conditions[2]).toEqual(buildDataLakeMembershipFilter(SCOPE_A));
+        expect(conditions[3]).toEqual(buildDataLakeMembershipFilter(SCOPE_B));
+      });
+
+      it('with lakeMemberships and no scopedTagPrefixes, no arm conjoins a prefix regex with base access', () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
+        // The old caller-anchored SCOPED arm ANDs a prefix regex with `{ $or: baseAccess }` - the
+        // membership arm never does; it ANDs the prefix with the LAKE'S creator instead.
+        for (const c of conditions) {
+          const asAnd = (c as { $and?: unknown[] }).$and;
+          if (!asAnd) continue;
+          const hasBaseAccessOr = asAnd.some(
+            arm => typeof arm === 'object' && arm !== null && '$or' in (arm as Record<string, unknown>)
+          );
+          expect(hasBaseAccessOr).toBe(false);
+        }
+      });
+
+      it("the caller's own id appears in no membership arm", () => {
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
+        const membershipArm = conditions[2];
+        expect(JSON.stringify(membershipArm)).not.toContain('"user1"');
+      });
+
+      it('a creator-less scope contributes only its meta arm (no $regex)', () => {
+        const creatorless = { datalakeTag: 'datalake:org1:orphan', fileTagPrefix: 'orphan:', creatorUserId: '' };
+        const conditions = buildOwnershipConditions('user1', { lakeMemberships: [creatorless] });
+        expect(conditions[2]).toEqual({ 'tags.name': 'datalake:org1:orphan' });
+        expect(JSON.stringify(conditions[2])).not.toContain('$regex');
       });
     });
   });
@@ -445,7 +511,7 @@ describe('buildFabFileSearchQuery', () => {
           useDocumentDB: true,
         })
       );
-      expect(result.sort).toEqual({ fileNameLower: 1 });
+      expect(result.sort).toEqual({ fileNameLower: 1, _id: 1 });
       expect(result.collation).toBeNull();
     });
   });
@@ -459,60 +525,53 @@ describe('buildFabFileSearchQuery', () => {
           useDocumentDB: false,
         })
       );
-      expect(result.sort).toEqual({ fileName: 1 });
+      expect(result.sort).toEqual({ fileName: 1, _id: 1 });
       expect(result.collation).toEqual({ locale: 'en' });
     });
   });
 
-  // ── 11b. stableSort tiebreaker (opt-in) ───────────────────────────
-  describe('stableSort tiebreaker', () => {
-    it('is off by default, so existing callers keep their exact sort', () => {
-      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'asc' } }));
-      expect(result.sort).toEqual({ fileName: 1 });
-    });
-
-    it('adds an _id tiebreaker to a fileName sort when requested', () => {
+  // ── 11b. fileName _id tiebreaker (unconditional) ───────────────────
+  describe('fileName _id tiebreaker', () => {
+    it('adds an _id tiebreaker to a fileName sort', () => {
       // fileName is not unique (duplicate uploads are normal), so a caller paging past page 1
       // needs a total order or a file can fall between pages.
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'fileName', direction: 'asc' }, options: { stableSort: true } })
-      );
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'asc' } }));
       expect(result.sort).toEqual({ fileName: 1, _id: 1 });
     });
 
     it('matches the tiebreaker direction to the primary key', () => {
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'fileName', direction: 'desc' }, options: { stableSort: true } })
-      );
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'desc' } }));
       expect(result.sort).toEqual({ fileName: -1, _id: -1 });
     });
 
-    it('applies to the DocumentDB fileNameLower branch too', () => {
+    // The asc case is covered by the DocumentDB sort block above; this is the desc branch.
+    it('applies to the DocumentDB fileNameLower branch too, in either direction', () => {
       const result = buildFabFileSearchQuery(
         makeParams({
-          order: { by: 'fileName', direction: 'asc' },
+          order: { by: 'fileName', direction: 'desc' },
           useDocumentDB: true,
-          options: { stableSort: true },
         })
       );
-      expect(result.sort).toEqual({ fileNameLower: 1, _id: 1 });
+      expect(result.sort).toEqual({ fileNameLower: -1, _id: -1 });
     });
 
-    it('leaves a createdAt sort alone even when requested', () => {
-      // Deliberate: createdAt IS indexed, and appending _id turns the file browser's indexed
-      // scan into a full-collection blocking sort. Only the already-unindexed fileName sorts
-      // can afford the tiebreaker.
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'createdAt', direction: 'desc' }, options: { stableSort: true } })
-      );
+    it('adds an _id tiebreaker to a fileSize sort too', () => {
+      // fileSize ties wherever fileName does - byte-identical duplicate uploads tie on both - and
+      // no index serves a fileSize sort, so the tiebreaker costs nothing on any path.
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'asc' } }));
+      expect(result.sort).toEqual({ fileSize: 1, _id: 1 });
+    });
+
+    it('matches the fileSize tiebreaker direction to the primary key', () => {
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'desc' } }));
+      expect(result.sort).toEqual({ fileSize: -1, _id: -1 });
+    });
+
+    it('leaves a createdAt sort alone - the one excluded key', () => {
+      // Excluded on measurement, not assumption: no lake with tied createdAt is known, and it is
+      // the only sort key with indexes to lose.
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'createdAt', direction: 'desc' } }));
       expect(result.sort).toEqual({ createdAt: -1 });
-    });
-
-    it('leaves a fileSize sort alone even when requested', () => {
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'fileSize', direction: 'asc' }, options: { stableSort: true } })
-      );
-      expect(result.sort).toEqual({ fileSize: 1 });
     });
   });
 

@@ -155,10 +155,12 @@ export function buildOwnershipConditions(
      */
     dataLakeTagPrefixes?: string[];
     /**
-     * SCOPED tag prefixes - DYNAMIC (user-created) lakes. Their `fileTagPrefix` is
-     * user-controlled and unreserved, so two users/orgs can pick the same prefix. A
-     * prefix match here is therefore ANDed with owner/org/shared access so a colliding
-     * prefix can never read another tenant's files.
+     * SCOPED tag prefixes - DYNAMIC (user-created) lakes, anchored to the CALLER rather than the
+     * lake's creator. Affects only a query that also sets `restrictToDataLake`; everywhere else it
+     * is a strict subset of base access and matches nothing new. Retrieval resolves lake
+     * membership through `lakeMemberships` instead - a caller-anchored prefix left a creator-owned
+     * prefix-only member of a lake unretrievable by every OTHER member (#2243). A future retrieval
+     * author reaching for this option is exactly that bug; use `lakeMemberships`.
      */
     scopedTagPrefixes?: string[];
     /**
@@ -171,18 +173,29 @@ export function buildOwnershipConditions(
      */
     restrictToDataLake?: boolean;
     /**
-     * A single lake's membership scope, replacing the `dataLakeTags`/`scopedTagPrefixes` pair
-     * with the SAME predicate the whole-lake writes use, so a single-lake browse lists exactly
-     * what an archive or a permanent delete would act on. Its prefix arm is anchored to the
-     * lake's CREATOR, not the viewer: a viewer's own file that merely happens to carry a
-     * colliding tag prefix is not a member of someone else's lake, and a per-viewer answer could
-     * never agree with the lake's persisted fileCount.
+     * One arm per accessible lake's membership scope - the SAME predicate the whole-lake writes
+     * use, so any caller of this builder (the single-lake browse, and retrieval once it stops
+     * passing `scopedTagPrefixes`) lists/matches exactly what an archive or a permanent delete
+     * would act on. Each arm's prefix is anchored to THAT lake's CREATOR, not the viewer: a
+     * viewer's own file that merely happens to carry a colliding tag prefix is not a member of
+     * someone else's lake, and a per-viewer answer could never agree with the lake's persisted
+     * fileCount.
      *
-     * MUST be built server-side from the lake document. It carries a `creatorUserId` that widens
-     * what the query matches, so a value reaching this from request input would let a caller
-     * name any user and read their files - keep it out of every parsed-input surface.
+     * Server-supplied only, never from request input. An `owned` scope carries a `creatorUserId`
+     * that widens what the query matches, so a value reaching this from request input would let a
+     * caller name any user and read their files - keep it out of every parsed-input surface.
+     *
+     * A `registry` scope's prefix arm carries NO ownership conjunct (see
+     * `buildDataLakeMembershipFilter`), so it is safe ONLY where access is gated upstream and the
+     * query covers ONE lake - today that is the single-lake browse (`data-lakes/[id]/articles.ts`,
+     * gated by `assertLakeAccess`). Never put one in a multi-lake retrieval query: an unanchored
+     * prefix arm beside other lakes' arms is the cross-tenant promotion the SCOPED/OPEN split
+     * forbids. `lakeMembershipsFrom` filters `registry` out for that reason, but it is NOT the only
+     * door - `knowledgeBaseCount` reads `ResolvedLakeAccess.membership` directly. What actually
+     * holds the invariant is that `membership` is only ever attached to dynamic lakes; the filter
+     * is the second guard, not the first.
      */
-    lakeMembership?: DataLakeMembershipScope;
+    lakeMemberships?: DataLakeMembershipScope[];
     /**
      * Drop the "shared 1:1 with this user" arm from base access, keeping owned + group +
      * data-lake arms, for the per-user WORKSPACES tag/namespace count only (GET
@@ -239,8 +252,13 @@ export function buildOwnershipConditions(
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
 
-  if (options?.lakeMembership) {
-    conditions.push(buildDataLakeMembershipFilter(options.lakeMembership));
+  // One arm per lake. An `owned` scope ANDs THAT lake's prefix with THAT lake's creator, never the
+  // caller's, so a colliding prefix can't cross a tenant boundary; a `registry` scope's prefix arm
+  // is unanchored by design and is only ever supplied on the access-gated single-lake browse (see
+  // the `lakeMemberships` docblock). Same predicate the browse, health, archive and permanent
+  // delete run on - drift between them is what #2243 was.
+  for (const scope of options?.lakeMemberships ?? []) {
+    conditions.push(buildDataLakeMembershipFilter(scope));
   }
 
   // Shared with the single-file removal write path (see normalizeTagPrefix): the prefixes
@@ -293,7 +311,7 @@ export function buildOwnershipConditions(
   // ($or must be a non-empty array). Fail fast here with a descriptive error instead.
   if (options?.restrictToDataLake && conditions.length === 0) {
     throw new Error(
-      'buildOwnershipConditions: restrictToDataLake requires lakeMembership, dataLakeTags or scopedTagPrefixes'
+      'buildOwnershipConditions: restrictToDataLake requires lakeMemberships, dataLakeTags or scopedTagPrefixes'
     );
   }
 
@@ -331,9 +349,9 @@ export interface FabFileSearchParams {
     dataLakeTagPrefixes?: string[];
     /** Dynamic (owner/org-scoped) lake prefixes - see buildOwnershipConditions. */
     scopedTagPrefixes?: string[];
+    /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+    lakeMemberships?: DataLakeMembershipScope[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
-    /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
-    lakeMembership?: DataLakeMembershipScope;
     restrictToDataLake?: boolean;
     /**
      * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
@@ -354,12 +372,6 @@ export interface FabFileSearchParams {
     excludeFilenameMarkers?: string[];
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
-    /**
-     * When true, append an `_id` tiebreaker to a `fileName` sort so it becomes a total order.
-     * Required by callers that skip-paginate past page 1, because `fileName` is not unique.
-     * Ignored for other sort fields - see the sort block below for why.
-     */
-    stableSort?: boolean;
   };
   useDocumentDB?: boolean;
 }
@@ -465,7 +477,7 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
       scopedTagPrefixes: options.scopedTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
-      lakeMembership: options.lakeMembership,
+      lakeMemberships: options.lakeMemberships,
     });
     andConditions.push({ $or: ownershipConds });
   } else {
@@ -534,13 +546,19 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   } else {
     sort = { [order.by]: direction };
   }
-  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating a
-  // fileName sort can drop or repeat a file at a page boundary. Callers that walk more than one
-  // page opt in to an `_id` tiebreaker, which makes the sort a total order.
-  // Deliberately restricted to the fileName branches: they already require an in-memory sort
-  // (no usable collated fileName index), so the tiebreaker is free there, whereas adding it to
-  // `createdAt` would turn an indexed 21-document scan into a full-collection blocking sort.
-  if (options?.stableSort && (order.by === 'fileName' || sort.fileNameLower !== undefined)) {
+  // Neither `fileName` nor `fileSize` is unique - a lake legitimately holds duplicate uploads, and
+  // byte-identical ones tie on both - so skip-paginating either can drop or repeat a file at a page
+  // boundary. The `_id` tiebreaker makes them a total order. Unconditional rather than opt-in: this
+  // was an opt-in and four listing callers silently did not take it.
+  // Free on every path for these two: FabFileSchema declares no `fileName` and no `fileSize` index,
+  // so each is already an unavoidable blocking sort. The one real cost is `fileName` on the
+  // DocumentDB branch, which gives up the addLowercaseField plugin's `{fileNameLower: 1}` index -
+  // taken deliberately, since this find path sets no allowDiskUse (FabFileModel.executeSearch) and
+  // a silently short page is worse than a costly one.
+  // `createdAt` is the third key this builder accepts and is deliberately EXCLUDED, on measurement
+  // rather than assumption: no lake with tied values is known, and it is the only sort key with
+  // indexes to lose. If a tied population is ever demonstrated, the remedy is this same line.
+  if (order.by === 'fileName' || order.by === 'fileSize') {
     sort._id = direction;
   }
 

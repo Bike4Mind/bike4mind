@@ -17,8 +17,12 @@ const h = vi.hoisted(() => ({
   // per-file catch produces. Unexposed, deleting that logger.error call is undetectable.
   loggerError: vi.fn(),
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
-  // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
-  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
+  // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
+  // parameter is here for the same reason - dropping it silently strands paused files (#2120).
+  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date, _opts?: unknown) => ({
+    chunkCount: 0,
+    createdAt: { $lt: cutoff },
+  })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -64,7 +68,7 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 // these tests pin the provenance the sweep actually sends.
 vi.mock('@server/worker/chunkScan', async importActual => ({
   ...(await importActual<typeof import('@server/worker/chunkScan')>()),
-  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
+  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
@@ -347,6 +351,44 @@ describe('dataLakeBatchReconcile cron handler', () => {
       await handler();
       expect(h.fabFileFind).not.toHaveBeenCalled();
       expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    describe('convergence-paused exclusion is resolved per run (#2120)', () => {
+      // One getSettingsValue mock serves both keys, so route by name. enableAutoChunk must stay ON
+      // or rescueUnchunkedFiles returns before it ever reads the pause flag, and the assertion below
+      // would pass against a sweep that never ran.
+      const withPauseFlag = (pauseFlag: unknown) =>
+        h.getSettingsValue.mockImplementation(async (key: string) => (key === 'enableAutoChunk' ? true : pauseFlag));
+
+      it.each([
+        ['ON - paused files must not consume the rescue cap', true, true],
+        ['OFF - paused files must be swept back in and rebuilt', false, false],
+      ])('kill switch %s', async (_label, pauseFlag, expected) => {
+        withPauseFlag(pauseFlag);
+
+        await handler();
+
+        // Pinned as the third ARGUMENT, not as an outcome of the filter: the filter itself is mocked
+        // here, so this is the only place the caller's wiring is observable. Dropping the argument or
+        // hardcoding it to a constant - the two ways this regresses - both fail one of these rows.
+        expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+        expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: expected });
+      });
+
+      it('treats a missing or non-boolean setting as OFF, never as ON', async () => {
+        // The caller compares `=== true` rather than coercing, and that strictness is deliberate: a
+        // truthy-but-not-true value (an unset setting, a legacy string) must fall to the sweeping
+        // behaviour, because wrongly excluding is the far worse direction - it strands every paused
+        // file with no automatic rebuild at all.
+        for (const raw of [undefined, null, 'true', 1]) {
+          h.buildScanFilter.mockClear();
+          withPauseFlag(raw);
+
+          await handler();
+
+          expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: false });
+        }
+      });
     });
 
     it('a rescue failure is isolated: the run still heartbeats and reports 0', async () => {

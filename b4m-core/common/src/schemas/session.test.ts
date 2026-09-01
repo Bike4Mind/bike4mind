@@ -8,9 +8,25 @@ describe('SessionUpdateRequestSchema', () => {
 
   it('accepts knowledgeIds + forceKnowledgeRetrieval together (the grounded-retrieval call)', () => {
     const result = SessionUpdateRequestSchema.safeParse({
-      knowledgeIds: ['fab_1', 'fab_2'],
+      knowledgeIds: ['507f1f77bcf86cd799439011', '507f191e810c19729de860ea'],
       forceKnowledgeRetrieval: true,
     });
+    expect(result.success).toBe(true);
+  });
+
+  it('still accepts a non-ObjectId artifactId', () => {
+    const result = SessionUpdateRequestSchema.safeParse({ artifactIds: ['artifact_1756000000_ab12cd'] });
+    expect(result.success).toBe(true);
+  });
+
+  /**
+   * Deliberately permissive. Rename PUTs `{ ...session, name }` and tagging PUTs
+   * `{ ...session, tags }`, so a session already holding an unusable knowledge id would become
+   * impossible to rename or tag if this rejected. updateSession drops such entries instead -
+   * see sessionService/update.test.ts.
+   */
+  it('accepts an unusable knowledgeId rather than blocking a rename that echoes the stored list', () => {
+    const result = SessionUpdateRequestSchema.safeParse({ knowledgeIds: ['legacy-uuid-not-an-objectid'] });
     expect(result.success).toBe(true);
   });
 

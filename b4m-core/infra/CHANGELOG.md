@@ -1,5 +1,17 @@
 # @bike4mind/infra
 
+## 0.10.0
+
+### Minor Changes
+
+- [#1776](https://github.com/Bike4Mind/bike4mind/pull/1776) [`0e33727`](https://github.com/Bike4Mind/bike4mind/commit/0e33727cd5a086a9d730d35462af72e48f34ac9b) Thanks [@onoya](https://github.com/onoya)! - admission contract for every ingestion door ([#1679](https://github.com/Bike4Mind/bike4mind/issues/1679))
+
+- [#1782](https://github.com/Bike4Mind/bike4mind/pull/1782) [`c4b7962`](https://github.com/Bike4Mind/bike4mind/commit/c4b7962f5fbd52b283548cafc775ea065c5f85b0) Thanks [@onoya](https://github.com/onoya)! - derived retrievability health, report-only ([#1666](https://github.com/Bike4Mind/bike4mind/issues/1666))
+
+- [#1928](https://github.com/Bike4Mind/bike4mind/pull/1928) [`1a19d8f`](https://github.com/Bike4Mind/bike4mind/commit/1a19d8f089fbe9075c6129abe6954bb693258374) Thanks [@onoya](https://github.com/onoya)! - proposal queue with review and approval
+
+- [#1956](https://github.com/Bike4Mind/bike4mind/pull/1956) [`dd89fbd`](https://github.com/Bike4Mind/bike4mind/commit/dd89fbda84834bb9fe341fd051402978e312b547) Thanks [@poysama](https://github.com/poysama)! - alarm when an ECS service has no running tasks
+
 ## 0.9.0
 
 ### Minor Changes

@@ -1,42 +1,66 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTES } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
 import { provenancePayloadShape, shouldHaltConvergence } from '@server/queueHandlers/convergenceProvenance';
 import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
 type Doc = Record<string, unknown>;
+const MODELLED_OPERATORS = new Set(['$ne', '$lt', '$not', '$in', '$nin']);
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
     if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
     if (key === '$and') return (cond as Record<string, unknown>[]).every(sub => matches(doc, sub));
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
-    if (cond && typeof cond === 'object' && '$ne' in cond) {
-      const ne = (cond as { $ne: unknown }).$ne;
-      // Mongo treats a MISSING field as null, so `{$ne: null}` does not match one - which is the
-      // whole reason the stamped-file arm below can be written as `$ne: null` without matching every
-      // legacy row. Other `$ne` values (e.g. `isChunking: {$ne: true}`) do match a missing field.
-      if (ne === null) return value !== null && value !== undefined;
-      return value !== ne;
-    }
-    if (cond && typeof cond === 'object' && '$lt' in cond) return (value as Date) < (cond as { $lt: Date }).$lt;
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
-    if (cond && typeof cond === 'object' && '$not' in cond)
-      return !matches({ [key]: value }, { [key]: (cond as { $not: unknown }).$not });
-    // Mongo $in with null also matches a missing field.
-    if (cond && typeof cond === 'object' && '$in' in cond)
-      return (cond as { $in: unknown[] }).$in.some(v =>
-        v === null ? value === null || value === undefined : value === v
-      );
+    if (cond && typeof cond === 'object') {
+      // EVERY operator in the condition, not just the first one found: `notes` carries both a
+      // `$not` and a `$nin`, and a first-match-wins evaluator would silently ignore one of them -
+      // passing the tests while the real query behaved differently.
+      const ops = cond as Record<string, unknown>;
+      const checks: boolean[] = [];
+      if ('$ne' in ops) {
+        const ne = ops.$ne;
+        // Mongo treats a MISSING field as null, so `{$ne: null}` does not match one - which is the
+        // whole reason the stamped-file arm below can be written as `$ne: null` without matching every
+        // legacy row. Other `$ne` values (e.g. `isChunking: {$ne: true}`) do match a missing field.
+        checks.push(ne === null ? value !== null && value !== undefined : value !== ne);
+      }
+      // Type-bracketed, like Mongo: a comparison only ever matches a value of the SAME BSON type, so
+      // a missing field or a wrong-typed one never matches `$lt: <Date>`. Written as a JS `<` it
+      // would coerce instead, agreeing with Mongo by luck on the fixtures here and diverging on any
+      // fixture that ever carries a non-Date.
+      if ('$lt' in ops) checks.push(value instanceof Date && ops.$lt instanceof Date && value < ops.$lt);
+      if ('$not' in ops) checks.push(!matches({ [key]: value }, { [key]: ops.$not }));
+      // Mongo $in with null also matches a missing field.
+      if ('$in' in ops)
+        checks.push(
+          (ops.$in as unknown[]).some(v => (v === null ? value === null || value === undefined : value === v))
+        );
+      // $nin is the negation, and it MATCHES a missing field (null is not in a list of note strings).
+      if ('$nin' in ops)
+        checks.push(
+          !(ops.$nin as unknown[]).some(v => (v === null ? value === null || value === undefined : value === v))
+        );
+      // Loud on drift. An operator this model does not implement used to fall through to the
+      // `value === cond` below, which is false for any object - so a filter that grew a new operator
+      // would keep every `toBe(false)` assertion passing while asserting nothing, and the
+      // `toBe(true)` ones would fail somewhere unrelated. Throwing names the gap instead.
+      const unmodelled = Object.keys(ops).filter(k => k.startsWith('$') && !MODELLED_OPERATORS.has(k));
+      if (unmodelled.length > 0) {
+        throw new Error(`chunkScan.test matches(): unmodelled Mongo operator(s) ${unmodelled.join(', ')} on '${key}'`);
+      }
+      if (checks.length > 0) return checks.every(Boolean);
+    }
     return value === cond;
   });
 
 describe('buildFabFileChunkScanFilter', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const old = new Date('2025-12-31T00:00:00Z'); // before cutoff
-  const filter = buildFabFileChunkScanFilter(cutoff);
+  const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
 
   it("requires status 'complete' so a never-completed upload is skipped", () => {
     expect(filter.status).toBe('complete');
@@ -106,16 +130,6 @@ describe('buildFabFileChunkScanFilter', () => {
     chunkRebuildRequestedAt: null,
     notes,
   });
-
-  it.each(CONVERGENCE_PAUSED_CHUNK_NOTES)(
-    'still selects a file the kill switch paused - re-selection is the only way it ever resumes (%s)',
-    note => {
-      // Neither paused marker is excluded here, deliberately: nothing else re-drives a paused file,
-      // so adding them to the notes exclusion (tempting, to stop the re-sweep churn) strands every
-      // paused file permanently. Any change that does exclude them has to bring a resume path.
-      expect(matches(halted(note), filter)).toBe(true);
-    }
-  );
 
   it('KNOWN STRAND: does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
     // Known one-way door, documented on buildChunkScanQueuePayload: a media file reaches this filter
@@ -188,11 +202,86 @@ describe('buildFabFileChunkScanFilter', () => {
   });
 });
 
+describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', () => {
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const old = new Date('2025-12-31T00:00:00Z');
+  // chunkRebuildRequestedAt is left UNSET rather than null: only the chunk-handler path clears it,
+  // the vectorize path (fabFileVectorize.ts) writes its marker without touching it, so a fixture
+  // that pins it to null would only reproduce one of the two marker paths.
+  const paused = (note: string) => ({
+    status: 'complete',
+    chunkCount: 0,
+    isChunking: false,
+    createdAt: old,
+    deletedAt: null,
+    notes: note,
+  });
+
+  describe('while the kill switch is ON', () => {
+    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: true });
+
+    it.each([
+      ['the chunk-handler marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
+      ['the vectorize marker', CONVERGENCE_PAUSED_NOTE],
+    ])('skips a paused file - %s', (_label, note) => {
+      // A paused file matches every OTHER clause (the reset zeroed chunkCount, the pause writes no
+      // error), so without the exclusion it is re-selected every pass and consumes the rescue cap,
+      // starving genuine lost-webhook candidates while the sweep still reports a healthy count.
+      expect(matches(paused(note), filter)).toBe(false);
+    });
+
+    it('still selects an ordinary un-chunked file, so the exclusion is not over-broad', () => {
+      expect(matches({ ...paused('quarterly report for the board deck') }, filter)).toBe(true);
+    });
+
+    it('still selects a file with no notes at all', () => {
+      const { notes, ...noNotes } = paused('x');
+      expect(matches(noNotes, filter)).toBe(true);
+    });
+
+    it('still selects a file whose notes are explicitly null', () => {
+      // $nin matches a null/missing field (null is not in a list of note strings). Pinned because
+      // getting this wrong would silently drop every un-noted file from the sweep - the opposite,
+      // and far worse, failure than the churn this exclusion fixes.
+      expect(matches({ ...paused('x'), notes: null }, filter)).toBe(true);
+    });
+  });
+
+  describe('while the kill switch is OFF', () => {
+    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
+
+    it.each([
+      ['the chunk-handler marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
+      ['the vectorize marker', CONVERGENCE_PAUSED_NOTE],
+    ])('SELECTS a paused file so it is rebuilt - %s', (_label, note) => {
+      // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a paused
+      // file has: the other two recovery paths are human-driven and lake-scoped, so neither reaches a
+      // file outside every lake - exactly what the sweep exists to catch. And the re-enqueue really
+      // does rebuild it: isConvergenceHalted returns false whenever the switch is off, whatever the
+      // message's `origin` says, so the file is genuinely re-chunked rather than bounced. Excluding
+      // it unconditionally would break the marker's user-visible promise that passages are "rebuilt
+      // when convergence resumes".
+      expect(matches(paused(note), filter)).toBe(true);
+    });
+
+    it('still excludes the no-extractable-text note, which is terminal either way', () => {
+      expect(matches(paused(`${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image`), filter)).toBe(false);
+    });
+  });
+
+  it('defaults to NOT excluding when no options are passed', () => {
+    // The safer default: a caller that forgets the flag keeps the pre-existing rescue behaviour
+    // rather than silently stranding paused files.
+    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
+    expect(matches(paused(CONVERGENCE_PAUSED_CHUNK_NOTE), filter)).toBe(true);
+  });
+});
+
 describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const staleClaimBefore = new Date('2026-01-01T00:00:00Z'); // a claim older than this is stranded
   const old = new Date('2025-12-31T00:00:00Z'); // before both cutoffs
-  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore);
+  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: false });
   const base = { status: 'complete', chunkCount: 0, createdAt: old, deletedAt: null };
 
   it('still selects a normal not-in-progress file', () => {
@@ -211,8 +300,11 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
   it('RESCUES an isChunking:true claim with no timestamp - the backfill for files stuck before chunkClaimedAt existed', () => {
     // Every code path that sets isChunking:true now stamps chunkClaimedAt in the same write, so a
     // null/missing stamp on an in-flight file can only be a pre-migration straggler - which would
-    // otherwise stay claimed and unrescuable forever. The sweep re-claims it via a CAS before
-    // enqueue, so a still-running (not crashed) file isn't double-processed.
+    // otherwise stay claimed and unrescuable forever. Note what protects a straggler that is in fact
+    // still running: NOT a producer-side claim - the sweep does not re-claim before enqueue, it sends
+    // exactly what this filter selected. The mutual exclusion is the chunk worker's own
+    // compare-and-set (fabFileChunk.ts), which the duplicate delivery loses, returning without
+    // re-chunking.
     expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
     expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
   });

@@ -10,7 +10,7 @@ import {
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { isEncrypted } from '@server/security/secretEncryption';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -107,6 +107,7 @@ const handler = baseApi()
     // (both enforced by unique indexes). Resolve to a connection id or reject the conflict clearly.
     const byFolder = await orgGoogleDriveConnectionRepository.findByDriveFolderId(driveFolderId);
     let connectionId: string;
+    let claimedByThisRequest = false;
 
     if (byFolder) {
       if (byFolder.targetDataLakeId !== dataLakeId) {
@@ -142,6 +143,7 @@ const handler = baseApi()
           connectedAt: new Date(),
         });
         connectionId = created.id;
+        claimedByThisRequest = true;
       } catch (e) {
         // Unique targetDataLakeId: the lake is already connected to a different folder.
         const message = e instanceof Error ? e.message : String(e);
@@ -152,7 +154,35 @@ const handler = baseApi()
       }
     }
 
-    await sendToQueue(Resource.driveLakeIngestQueue.url, { connectionId });
+    try {
+      await sendToQueue(Resource.driveLakeIngestQueue.url, { connectionId });
+    } catch (e) {
+      // The connection row is what holds the GLOBAL driveFolderId claim, so an enqueue that fails
+      // after we created it (SQS unavailable/throttled, an IAM denial, an unregistered queue) would
+      // take the folder out of circulation for EVERY org until someone deleted the row by hand -
+      // disabling it does not help, a disabled row still populates the unique index. Release the
+      // claim and fail, so the folder stays re-claimable and the UI never reads Connected for a
+      // folder whose ingest was never accepted.
+      //
+      // Only a claim THIS request took is released: on the reuse branch the connection pre-existed,
+      // and tearing down a working connection because a re-sync could not be enqueued would be far
+      // worse than the missed ingest (the resync poll re-enqueues it anyway).
+      let released = false;
+      if (claimedByThisRequest) {
+        released = await orgGoogleDriveConnectionRepository
+          .release(connectionId, lake.organizationId)
+          .catch(() => false);
+      }
+      // The raw error is log-only: an SQS/IAM failure message carries queue urls and account ids.
+      req.logger.error('Google Drive ingest enqueue failed', {
+        connectionId,
+        driveFolderId,
+        claimedByThisRequest,
+        released,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      throw new InternalServerError('Could not queue the Google Drive ingest. Please try again.');
+    }
 
     return res.status(202).json({ connectionId, status: 'queued' });
   });
