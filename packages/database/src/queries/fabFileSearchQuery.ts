@@ -181,12 +181,19 @@ export function buildOwnershipConditions(
      * someone else's lake, and a per-viewer answer could never agree with the lake's persisted
      * fileCount.
      *
-     * Server-supplied only, never from request input. Each scope carries a `creatorUserId` that
-     * widens what the query matches, so a value reaching this from request input would let a
-     * caller name any user and read their files - keep it out of every parsed-input surface. If
-     * `DataLakeMembershipScope` ever gains a `kind: 'owned' | 'registry'` discriminant, a
-     * `registry` scope's prefix arm would carry NO ownership conjunct - see
-     * `lakeMembershipsFrom`'s invariant, which is what keeps that variant out of this array today.
+     * Server-supplied only, never from request input. An `owned` scope carries a `creatorUserId`
+     * that widens what the query matches, so a value reaching this from request input would let a
+     * caller name any user and read their files - keep it out of every parsed-input surface.
+     *
+     * A `registry` scope's prefix arm carries NO ownership conjunct (see
+     * `buildDataLakeMembershipFilter`), so it is safe ONLY where access is gated upstream and the
+     * query covers ONE lake - today that is the single-lake browse (`data-lakes/[id]/articles.ts`,
+     * gated by `assertLakeAccess`). Never put one in a multi-lake retrieval query: an unanchored
+     * prefix arm beside other lakes' arms is the cross-tenant promotion the SCOPED/OPEN split
+     * forbids. `lakeMembershipsFrom` filters `registry` out for that reason, but it is NOT the only
+     * door - `knowledgeBaseCount` reads `ResolvedLakeAccess.membership` directly. What actually
+     * holds the invariant is that `membership` is only ever attached to dynamic lakes; the filter
+     * is the second guard, not the first.
      */
     lakeMemberships?: DataLakeMembershipScope[];
     /**
@@ -245,9 +252,11 @@ export function buildOwnershipConditions(
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
 
-  // One arm per lake: each ANDs THAT lake's prefix with THAT lake's creator, never the caller's,
-  // so a colliding prefix can't cross a tenant boundary. Same predicate the browse, health,
-  // archive and permanent delete run on - drift between them is what #2243 was.
+  // One arm per lake. An `owned` scope ANDs THAT lake's prefix with THAT lake's creator, never the
+  // caller's, so a colliding prefix can't cross a tenant boundary; a `registry` scope's prefix arm
+  // is unanchored by design and is only ever supplied on the access-gated single-lake browse (see
+  // the `lakeMemberships` docblock). Same predicate the browse, health, archive and permanent
+  // delete run on - drift between them is what #2243 was.
   for (const scope of options?.lakeMemberships ?? []) {
     conditions.push(buildDataLakeMembershipFilter(scope));
   }

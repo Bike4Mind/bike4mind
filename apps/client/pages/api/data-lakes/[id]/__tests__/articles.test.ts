@@ -81,6 +81,7 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.isFallbackLake.mockReturnValue(false);
   h.lakeMembershipScope.mockReturnValue({
+    kind: 'owned',
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
     creatorUserId: LAKE.createdByUserId,
@@ -100,6 +101,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     // the lake's persisted fileCount.
     expect(serverOptions.lakeMemberships).toEqual([
       {
+        kind: 'owned',
         datalakeTag: 'datalake:org1:acme-docs',
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',

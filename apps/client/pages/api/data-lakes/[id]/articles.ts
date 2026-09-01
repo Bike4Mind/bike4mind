@@ -106,7 +106,9 @@ const handler = baseApi()
         },
       },
       {
-        ...(lakeMembership ? { lakeMemberships: [lakeMembership] } : {}),
+        // Both arms of the selection above return a scope, so this is never empty - which is
+        // what keeps buildOwnershipConditions' restrictToDataLake-with-no-lake-arm throw unreachable.
+        lakeMemberships: [lakeMembership],
         includeShared: true,
         userGroups: req.user.groups ?? [],
         // Single-lake browser: only this lake's files.
