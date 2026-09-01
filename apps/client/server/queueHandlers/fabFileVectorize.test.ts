@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
+  advanceVectorizeProgress: vi.fn(async () => true),
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
@@ -31,6 +32,12 @@ const h = vi.hoisted(() => ({
   indexChunks: vi.fn(),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   enforceEmbeddingSpendGate: vi.fn(async () => undefined),
+  // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
+  // tag-joined members are both lake work, everything else is not. Its own decision table is
+  // pinned in resolveIngestSpendScope.test.ts.
+  resolveIngestSpendScope: vi.fn(async (file: { batchId?: string }) =>
+    file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+  ),
   batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
   batchReleaseSpend: vi.fn(async () => true),
   lakeReleaseSpend: vi.fn(async () => true),
@@ -66,6 +73,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
+    advanceVectorizeProgress: h.advanceVectorizeProgress,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -80,6 +88,7 @@ vi.mock('@bike4mind/services', () => ({
   recordOperationalUsage: h.recordOperationalUsage,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
+    resolveIngestSpendScope: h.resolveIngestSpendScope,
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
     EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
       retryable: boolean;
@@ -348,20 +357,37 @@ describe('fabFileVectorize handler - spend gate', () => {
     // clearAllMocks resets calls but not replaced implementations - re-grant so a
     // denial mocked in one test can never leak into later describes.
     h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.resolveIngestSpendScope.mockImplementation(async (file: { batchId?: string }) =>
+      file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+    );
   });
 
-  it('runs the gate for a data-lake file before any provider call', async () => {
+  it('runs the gate for a data-lake file before any provider call, metering its tokens', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
-      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1' })
+      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1', estimatedTokens: 5 })
     );
   });
 
-  it('skips the gate entirely for a turn-attached file (no batchId)', async () => {
+  it('runs the gate for a tag-joined lake member that carries NO batchId', async () => {
+    // The population a bulk rebuild is largest for: membership is by tag, so batchId is absent and
+    // the pre-#1743 gate skipped these files entirely - unthrottled and unmetered.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.resolveIngestSpendScope.mockResolvedValue({ dataLakeId: 'lake-9' });
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
+      expect.objectContaining({ batchId: undefined, dataLakeId: 'lake-9', estimatedTokens: 5 })
+    );
+  });
+
+  it('skips the gate entirely for a file that belongs to no lake', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 
@@ -843,5 +869,63 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.chunkUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
     );
+  });
+});
+
+describe('fabFileVectorize handler - partial rollup write is guarded', () => {
+  // Two messages for one file. The one that finishes last stamps the terminal state; the other
+  // is still holding the smaller rollup it measured earlier. That late write must not land as a
+  // plain update, or the file sits below chunkCount with isVectorizing on and drops out of
+  // retrieval permanently.
+  const partialFile = () => ({
+    id: 'ff1',
+    vectorized: false,
+    chunkCount: 10,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.findAccessibleById.mockResolvedValue(partialFile());
+  });
+
+  it('routes a not-complete rollup through the guarded advance, never a plain update', async () => {
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 8,
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    h.advanceVectorizeProgress.mockResolvedValue(true);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.advanceVectorizeProgress).toHaveBeenCalledWith('ff1', 8, {
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ isVectorizing: true }));
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+
+  it('completes normally when the guard rejects the stale rollup', async () => {
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 8,
+      embeddedChunkCount: 8,
+      embeddedCharCount: 80,
+    });
+    h.advanceVectorizeProgress.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
   });
 });

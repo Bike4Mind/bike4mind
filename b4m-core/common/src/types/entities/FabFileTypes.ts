@@ -703,7 +703,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
-      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -966,6 +965,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findDriveFileIdsByBatchId(batchId: string): Promise<string[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
+  /**
+   * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
+   * stored count is not already higher and the file has not been stamped terminal, so a stale
+   * rollup can never regress a count or reopen `isVectorizing` on a settled file. Returns true
+   * if this call advanced the file.
+   */
+  advanceVectorizeProgress(
+    fabFileId: string,
+    vectorizedChunkCount: number,
+    rollup?: { embeddedChunkCount: number; embeddedCharCount: number }
+  ): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
   // fileTagPrefix match on a file the lake's creator OWNS. See buildDataLakeMembershipFilter

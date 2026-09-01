@@ -13,9 +13,12 @@ const mockEncode = vi.fn(() => {
   throw new Error('The text contains a special token that is not allowed: <|endoftext|>');
 });
 
+const mockDecode = vi.fn();
+
 const mockEncoder = {
   encode: mockEncode,
   encode_ordinary: mockEncodeOrdinary,
+  decode: mockDecode,
   free: mockFree,
 };
 
@@ -174,6 +177,31 @@ describe('TiktokenTokenizer', () => {
       await tokenizer.encodeTokens('test', 'gpt-4');
 
       expect(mockEncodingForModel).toHaveBeenCalledWith('gpt-4');
+    });
+  });
+
+  describe('decodeTokens', () => {
+    it('decodes the UTF-8 bytes tiktoken returns back into a string', async () => {
+      mockDecode.mockReturnValue(new TextEncoder().encode('Hello world'));
+
+      const result = await tokenizer.decodeTokens([1, 2, 3]);
+
+      expect(result).toBe('Hello world');
+      expect(mockDecode).toHaveBeenCalledWith(new Uint32Array([1, 2, 3]));
+    });
+
+    it('decodes through the same model-specific encoder encodeTokens uses', async () => {
+      mockDecode.mockReturnValue(new TextEncoder().encode('test'));
+
+      await tokenizer.decodeTokens([1], 'gpt-4');
+
+      expect(mockEncodingForModel).toHaveBeenCalledWith('gpt-4');
+    });
+
+    it('refuses to decode once shutting down', async () => {
+      tokenizer.clearCache();
+
+      await expect(tokenizer.decodeTokens([1])).rejects.toThrow('TiktokenTokenizer is shutting down');
     });
   });
 

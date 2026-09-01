@@ -678,6 +678,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(content).not.toContain('Coverage note');
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
+    // Absence is half the banner's contract: the client shows it on presence, so a stamp written
+    // unconditionally would banner every fully-covered grounded turn in the product.
+    expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
   });
 
   it('more documents beyond the candidate cap warns, records a promptMeta warning, and hedges the prompt', async () => {
@@ -689,6 +692,13 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect(warn.mock.calls[0][0]).toContain('candidate cap');
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
+    // The structured twin of that warning - what the chat banner actually reads. `warnings` is a
+    // shared channel (truncation and elision append there too), so the banner cannot key on it.
+    const coverage = (quest.promptMeta as { retrievalCoverage?: { partial: boolean; reasons: string[] } })
+      .retrievalCoverage;
+    expect(coverage?.partial).toBe(true);
+    expect(coverage?.reasons).toHaveLength(1);
+    expect(coverage?.reasons[0]).toContain('candidate cap');
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls
@@ -1859,5 +1869,272 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
     // returns [] (no entitled tags to resolve), so asserting the empty result alone would pass
     // whether or not the skip fired - which is exactly the vacuity this assertion replaces.
     expect(ctx.logger.log).toHaveBeenCalledWith(expect.stringContaining('[lakeMemory] skipped'));
+  });
+});
+
+/**
+ * Per-turn retrieval summary for the FORCED-retrieval surface. LakeMemoryFeature records its own
+ * summary already; this locks the far higher-traffic reader, whose abstain exits used to write
+ * nothing at all - a forced-retrieval session with lake memory off carried zero retrieval
+ * telemetry, so "grounded on nothing" and "never ran" were byte-identical on the quest.
+ *
+ * The mapping under test, and why each exit lands where it does:
+ *   deps unwired      -> failed   (this host cannot read the corpus; the corpus may be fine)
+ *   no readable files -> no_lakes (nothing was in scope to search)
+ *   zero chunks scored-> failed   (no comparison happened; actionable pipeline/config defect)
+ *   nothing over floor-> ok       (the legitimate zero: scanned, compared, nothing similar)
+ *   grounded          -> ok
+ *   threw             -> failed
+ */
+describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const LAKE = {
+    id: 'lakeX',
+    slug: 'x',
+    name: 'Lake X',
+    fileTagPrefix: 'x:',
+    datalakeTag: 'datalake:x',
+    createdByUserId: 'u1',
+    status: 'active',
+  };
+
+  const makeCtx = (
+    opts: {
+      files?: Array<{ id: string; fileName: string; tags?: unknown[]; vectorizedChunkCount?: number }>;
+      /** Chunk rows per requested file id. Default: one perfectly-matching vector, so the turn grounds. */
+      rows?: (ids: string[]) => unknown[];
+      searchThrows?: boolean;
+      /** Drop the projected chunk reader, i.e. the fail-closed deps check. */
+      noChunkReader?: boolean;
+      /** Lakes the dynamic resolver returns; drives the stamped dataLakeTags. */
+      lakes?: Array<Record<string, unknown>>;
+    } = {}
+  ) => {
+    const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [], vectorizedChunkCount: 1 }];
+    const findVectorsByFabFileIds = vi.fn((ids: string[], o?: { limit?: number; afterChunkId?: string }) => {
+      const all = opts.rows
+        ? opts.rows(ids)
+        : ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [1, 0] }));
+      const rows = (all as { id: string }[])
+        .filter(r => (o?.afterChunkId ? r.id > o.afterChunkId : true))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, o?.limit ?? 10_000);
+      return Promise.resolve(rows);
+    });
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: opts.searchThrows
+            ? vi.fn().mockRejectedValue(new Error('search backend down'))
+            : vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }),
+        },
+        fabfilechunks: opts.noChunkReader
+          ? { findByFabFileId: vi.fn() }
+          : { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+        ...(opts.lakes
+          ? {
+              dataLakes: {
+                findActiveByUserTags: vi.fn(),
+                findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(opts.lakes),
+              },
+            }
+          : {}),
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the library say about X'
+    );
+    return { quest, messages, retrieval: retrievalOf(quest) };
+  };
+
+  const retrievalOf = (quest: IChatHistoryItemDocument) =>
+    (
+      quest.promptMeta as {
+        retrieval?: { attempted: boolean; outcome: string; surfaces: string[]; dataLakeTags: string[] };
+      }
+    )?.retrieval;
+
+  it('records failed when the projected chunk reader is not wired on this host', async () => {
+    const { retrieval } = await run(makeCtx({ noChunkReader: true }));
+    // Not no_lakes: the corpus may be perfectly healthy - this deployment cannot read it.
+    expect(retrieval).toEqual({
+      attempted: true,
+      outcome: 'failed',
+      surfaces: ['forced-retrieval'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records no_lakes with the resolved tags when lakes are in scope but hold no readable document', async () => {
+    const { retrieval } = await run(makeCtx({ files: [], lakes: [LAKE] }));
+    expect(retrieval?.outcome).toBe('no_lakes');
+    expect(retrieval?.attempted).toBe(true);
+    // The stamped tags are what separate this from "no lake in scope at all" - without them both
+    // shapes collapse to the same record and the panel cannot tell an access gap from an empty lake.
+    expect(retrieval?.dataLakeTags).toContain('datalake:x');
+  });
+
+  it('records no_lakes with empty tags when no lake resolves at all', async () => {
+    const { retrieval } = await run(makeCtx({ files: [] }));
+    expect(retrieval).toEqual({
+      attempted: true,
+      outcome: 'no_lakes',
+      surfaces: ['forced-retrieval'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('records failed when candidate files carry no usable vector, not a topical zero', async () => {
+    // Rows exist but every vector is empty, so nothing is ever scored against the query.
+    const ctx = makeCtx({
+      rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [] })),
+    });
+    const { retrieval } = await run(ctx);
+    // The regression this guards: an unvectorized corpus reading as "the library has nothing on
+    // this topic". It must outrank a genuine zero in the merge severity order.
+    expect(retrieval?.outcome).toBe('failed');
+  });
+
+  it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
+    // Orthogonal to the [1,0] query, so it scores 0 and falls under the floor - but it WAS compared.
+    const ctx = makeCtx({
+      rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+    });
+    const { retrieval, messages } = await run(ctx);
+    expect(retrieval?.outcome).toBe('ok');
+    expect(retrieval?.attempted).toBe(true);
+    // Still abstains to the user; 'ok' describes the retrieval, not the answer.
+    expect(messages[0]?.content).toContain('does not cover this');
+  });
+
+  it('records ok stamped with the resolved lake scope when the turn actually retrieves', async () => {
+    const { retrieval, messages } = await run(makeCtx({ lakes: [LAKE] }));
+    expect(retrieval?.outcome).toBe('ok');
+    expect(retrieval?.surfaces).toEqual(['forced-retrieval']);
+    // Per RetrievalSummarySchema this field is the scope resolved when retrieval ran, NOT the
+    // lakes the answer ended up grounded on - that narrower attribution is the LakeAccessEvent's
+    // job (it derives from sourceFileIds and deliberately refuses a full-scope fallback).
+    expect(retrieval?.dataLakeTags).toContain('datalake:x');
+    expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
+  });
+
+  it('records failed when the search throws, so an outage is not silence', async () => {
+    const { retrieval } = await run(makeCtx({ searchThrows: true }));
+    expect(retrieval?.outcome).toBe('failed');
+    expect(retrieval?.attempted).toBe(true);
+  });
+
+  it('leaves no record on the three pre-attempt skips - never-ran must stay distinguishable', async () => {
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const factory = embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1];
+
+    const blank = makeQuest();
+    await feature.getContextMessages(blank, factory, '   ');
+    expect(retrievalOf(blank)).toBeUndefined();
+
+    const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+    await feature.getContextMessages(withFiles, factory, 'summarize the attached figure');
+    expect(retrievalOf(withFiles)).toBeUndefined();
+
+    const personalCtx = { ...makeCtx(), personalCorpusOnly: true };
+    const personalFeature = new KnowledgeRetrievalFeature(
+      personalCtx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const personal = makeQuest();
+    await personalFeature.getContextMessages(personal, factory, 'what about my own upload');
+    expect(retrievalOf(personal)).toBeUndefined();
+  });
+
+  it('merges with another surface in the same turn rather than overwriting it', async () => {
+    // A turn where lake memory already recorded a clean run and forced retrieval then failed:
+    // the failure must win the outcome and both surfaces must survive.
+    const quest = makeQuest();
+    quest.promptMeta = {
+      retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['datalake:y'] },
+    } as IChatHistoryItemDocument['promptMeta'];
+
+    const { retrieval } = await run(makeCtx({ searchThrows: true }), quest);
+    expect(retrieval?.outcome).toBe('failed');
+    expect(retrieval?.surfaces).toEqual(expect.arrayContaining(['lake-memory', 'forced-retrieval']));
+    expect(retrieval?.dataLakeTags).toContain('datalake:y');
+  });
+});
+
+describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  it('reports a stalled cursor as partial coverage instead of abandoning the batch silently', async () => {
+    // A reader that keeps returning the same trailing id: the cursor cannot advance, so an unknown
+    // remainder of the batch is never scanned. Always returns limit+1 rows so `moreExist` stays
+    // true and the loop would page forever if the stall guard did not fire.
+    const findVectorsByFabFileIds = vi.fn((_ids: string[], o?: { limit?: number }) =>
+      Promise.resolve(
+        Array.from({ length: o?.limit ?? 2 }, (_unused, i) => ({
+          id: i === (o?.limit ?? 2) - 1 ? 'ch-stuck' : `ch-a${i}`,
+          fabFileId: 'fileA',
+          text: 'text',
+          vector: [1, 0],
+        }))
+      )
+    );
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+    const ctx = {
+      logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'fileA', fileName: 'A.pdf', tags: [], vectorizedChunkCount: 5 }],
+            hasMore: false,
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const quest = makeQuest();
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the library say about X'
+    );
+
+    const warn = logger.warn as unknown as ReturnType<typeof vi.fn>;
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cursor did not advance'));
+    // The point of the change: the stall now reaches reportCoverage, so the turn tells the reader
+    // its scan was incomplete rather than presenting a partial result as a complete one.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
+    expect((quest.promptMeta as { warnings?: string[] }).warnings?.join(' ')).toContain('stopped advancing');
   });
 });

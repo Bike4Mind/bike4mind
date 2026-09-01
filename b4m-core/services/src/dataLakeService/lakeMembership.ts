@@ -53,6 +53,16 @@ export interface LakeMembershipSignals {
    * OTHER lakes.
    */
   tagsToPull: string[];
+  /**
+   * The prefix-arm tags this lake holds on the file, with their stored strengths - `tagsToPull`
+   * minus the lake's own meta-tag. This is what a restore (#2248) pushes back so a removed member
+   * regains its real folder grouping instead of a placeholder; see `removeFileFromDataLake`.
+   *
+   * Legitimately EMPTY for a meta-tag-only member (a lake admin added a stranger's file - see
+   * `ownsFile` below) and for any file the lake's creator does not own. Neither case means "no
+   * removal": both are ordinary populations this restore must still cover.
+   */
+  contentTags: { name: string; strength: number }[];
 }
 
 /**
@@ -77,12 +87,18 @@ export const lakeMembershipSignals = (
   lake: MembershipLake,
   file: SignalSourceFile | null | undefined
 ): LakeMembershipSignals => {
-  const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
+  const tags = file?.tags ?? [];
+  const tagNames = tags.map(t => t.name).filter((name): name is string => typeof name === 'string');
   const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
   const prefixedTags = ownsFile ? prefixArmTagNames(tagNames, lake.fileTagPrefix) : [];
+  const contentTagNames = prefixedTags.filter(name => !name.startsWith(DATALAKE_TAG_PREFIX));
   return {
     inLake: !!file && (tagNames.includes(lake.datalakeTag) || prefixedTags.length > 0),
-    tagsToPull: [lake.datalakeTag, ...prefixedTags.filter(name => !name.startsWith(DATALAKE_TAG_PREFIX))],
+    tagsToPull: [lake.datalakeTag, ...contentTagNames],
+    contentTags: contentTagNames.map(name => ({
+      name,
+      strength: tags.find(t => t.name === name)?.strength ?? 0,
+    })),
   };
 };
 
@@ -96,13 +112,17 @@ export const lakeMembershipSignals = (
  * Split out so a batch caller can remove several files and recompute the lake's stats ONCE at
  * the end instead of re-running the aggregate per file. A caller that skips the recompute owns
  * running it: until it does, `fileCount`/`totalSizeBytes` are stale.
+ *
+ * Returns the pulled `contentTags` (widened from `void` for #2248) so a caller with an Undo
+ * affordance can capture what a restore should push back; a caller that ignores the return value
+ * keeps compiling. See `removeFileFromDataLake` for the one caller that acts on it.
  */
 export const removeFileFromLake = async (
   actor: MembershipActor,
   lake: MembershipLake,
   fabFileId: string,
   { db }: RemoveMembershipAdapters
-): Promise<void> => {
+): Promise<{ contentTags: { name: string; strength: number }[] }> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to remove files from this data lake');
   }
@@ -114,14 +134,22 @@ export const removeFileFromLake = async (
   // `lakeMembershipSignals`. Other lake readers (the aggregate browse, semantic search, chat KB
   // tools) still match the prefix within the VIEWER's own access - that is ownership of the file,
   // not membership in this lake, and unaffected by this write.
-  const { inLake, tagsToPull } = lakeMembershipSignals(lake, file);
+  const { inLake, tagsToPull, contentTags } = lakeMembershipSignals(lake, file);
   if (!file || !inLake) {
+    // LOAD-BEARING for #2248's restore door: this refusal is the entire reason a removal record
+    // (see removeFileFromDataLake) can never be minted for a file this lake never held - there is
+    // no way to bootstrap one, since the only paths that make a file `inLake` in the first place
+    // are the ownership-gated cold-add or the per-file-ACL-gated toggleTags. If this refusal is
+    // ever softened (e.g. to make a retry "quietly" tolerate a non-member), the restore path's
+    // absent ownership test becomes an unbounded add door. Do not soften it without re-deriving
+    // that authorization from scratch.
     throw new NotFoundError('File not found in this data lake');
   }
 
   // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
   // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
   await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+  return { contentTags };
 };
 
 /**
