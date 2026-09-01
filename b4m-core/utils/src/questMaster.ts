@@ -333,7 +333,7 @@ export class QuestMaster {
             subQuests: quest.subQuests.map((sub, subIndex) => ({
               id: sanitizeId(sub.id, `${questId}-sub-${subIndex + 1}`),
               title: sub.title,
-              status: sub.status as 'not_started' | 'in_progress' | 'completed' | 'deleted',
+              status: sub.status,
               // questId intentionally omitted - will be set when task is started and linked to a chat message
             })),
           };

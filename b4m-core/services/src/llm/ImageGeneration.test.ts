@@ -372,6 +372,72 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
   });
 });
 
+describe('ImageGenerationService.process (prompt truncation)', () => {
+  // Regression: a catalog row reporting max_tokens: 0 made every prompt look over-cap, and the
+  // truncation branch stringified the token id array - so the provider was asked to draw
+  // "64 2579 24149" and dutifully rendered those numbers instead of an apple.
+  const imageModelInfo = (max_tokens: number) =>
+    ({
+      id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      type: 'image',
+      name: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      backend: ModelBackend.Gemini,
+      contextWindow: 10000,
+      max_tokens,
+      supportsImageVariation: false,
+      pricing: { 1: { input: 0, output: 0 } },
+    }) as unknown as ModelInfo;
+
+  const runWithCap = async (max_tokens: number, prompt: string) => {
+    vi.mocked(getAvailableModels).mockResolvedValue([imageModelInfo(max_tokens)]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]);
+
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAllInIds: vi.fn(async () => []) },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt,
+        model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      } as any,
+      logger: silentLogger,
+    });
+
+    return mockGeminiGenerate.mock.calls[0][0] as string;
+  };
+
+  it('sends a short prompt verbatim when the catalog row reports max_tokens: 0', async () => {
+    expect(await runWithCap(0, 'a red apple')).toBe('a red apple');
+  });
+
+  it('sends a short prompt verbatim under a sane cap', async () => {
+    expect(await runWithCap(10000, 'a red apple')).toBe('a red apple');
+  });
+
+  it('sends real text, not token ids, when a genuinely long prompt is trimmed', async () => {
+    const sent = await runWithCap(10000, 'a red apple on a wooden table '.repeat(2000));
+    expect(sent).toContain('a red apple');
+    // The old code emitted a space-separated list of token ids.
+    expect(sent).not.toMatch(/(^|\s)\d+(\s|$)/);
+  });
+});
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;

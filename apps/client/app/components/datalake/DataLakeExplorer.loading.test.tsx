@@ -46,6 +46,10 @@ vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () =>
 vi.mock('@client/app/components/layouts/Notebook', () => ({
   useNotebookLayout: (sel: (s: { openSideNav: boolean }) => unknown) => sel({ openSideNav: true }),
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector?: (s: { currentUser: { id: string } }) => unknown) =>
+    selector ? selector({ currentUser: { id: 'u1' } }) : { currentUser: { id: 'u1' } },
+}));
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }));
 
 // Surface the isLoading prop the Explorer computes so the fix can be asserted directly.

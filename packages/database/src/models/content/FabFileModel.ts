@@ -69,26 +69,50 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     await this.fabFileChunkModel.deleteMany({ fabFileId });
   }
 
-  async distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
+  async distinctRetrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
-    // Uses the { fabFileId: 1, _id: 1 } compound index below for the filter half of the scan.
-    return this.fabFileChunkModel.distinct('embeddingModel', {
-      fabFileId: { $in: fabFileIds },
-      embeddingModel: { $ne: null },
-    });
+    // Both fields, not just the readiness stamp - see IFabFileChunk.retrievalIndexModel. Two
+    // `distinct` calls rather than one aggregate so each still rides the { fabFileId: 1, _id: 1 }
+    // compound index below for the filter half of the scan.
+    const [indexed, stamped] = await Promise.all([
+      this.fabFileChunkModel.distinct('retrievalIndexModel', {
+        fabFileId: { $in: fabFileIds },
+        retrievalIndexModel: { $ne: null },
+      }),
+      this.fabFileChunkModel.distinct('embeddingModel', {
+        fabFileId: { $in: fabFileIds },
+        embeddingModel: { $ne: null },
+      }),
+    ]);
+    return [...new Set([...indexed, ...stamped])];
   }
 
-  async embeddingModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>> {
+  async retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>> {
     if (fabFileIds.length === 0) return {};
-    // Same filter as distinctEmbeddingModelsByFabFileIds (so it rides the same
-    // { fabFileId: 1, _id: 1 } index), grouped instead of flattened. `$addToSet` dedupes per file,
-    // matching `distinct`'s semantics within each group.
-    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; models: string[] }>([
-      { $match: { fabFileId: { $in: fabFileIds }, embeddingModel: { $ne: null } } },
-      { $group: { _id: '$fabFileId', models: { $addToSet: '$embeddingModel' } } },
+    // Same fields as distinctRetrievalIndexModelsByFabFileIds, grouped instead of flattened.
+    // `$addToSet` dedupes per file, matching `distinct`'s semantics within each group; it skips a
+    // MISSING field but keeps an explicit null, hence the filter when the two sets are merged.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; models: (string | null)[] }>([
+      {
+        $match: {
+          fabFileId: { $in: fabFileIds },
+          $or: [{ retrievalIndexModel: { $ne: null } }, { embeddingModel: { $ne: null } }],
+        },
+      },
+      {
+        $group: {
+          _id: '$fabFileId',
+          models: { $addToSet: '$retrievalIndexModel' },
+          stampedModels: { $addToSet: '$embeddingModel' },
+        },
+      },
+      { $project: { models: { $setUnion: ['$models', '$stampedModels'] } } },
     ]);
     const byFile: Record<string, string[]> = {};
-    for (const row of rows) byFile[String(row._id)] = row.models;
+    for (const row of rows) {
+      const models = row.models.filter((model): model is string => typeof model === 'string');
+      if (models.length > 0) byFile[String(row._id)] = models;
+    }
     return byFile;
   }
 
@@ -394,6 +418,9 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
     charLength: { type: Number, required: false },
     vector: { type: [Number], required: false },
     embeddingModel: { type: String, required: false },
+    // Index residency, NOT readiness - see IFabFileChunk.retrievalIndexModel for why the two
+    // cannot be the same field.
+    retrievalIndexModel: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -513,7 +540,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;
-      stableSort?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
@@ -1084,6 +1110,71 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  /**
+   * Advance a file's partial vectorize progress WITHOUT ever regressing it or reopening a
+   * settled file. A file's chunks fan out across several vectorize messages, each of which
+   * recomputes the whole-file rollup; a message that finishes late still holds the count it
+   * measured before its peers committed theirs. An unguarded write of that stale rollup lands
+   * after the last message stamped the terminal state and leaves the stored count below
+   * chunkCount - which isMemberIndexingInFlight (lakeConvergence.ts) reads as forever-indexing,
+   * silently withholding a fully-vectorized file from every semantic read with no path back.
+   *
+   * Two conditions, both load-bearing. The count may only move up. And the file must not already
+   * be settled: either `chunkEmbeddingModelStampedAt` is still unset, or the stamp is there but
+   * the stored count is still short of `chunkCount` - a file only a stale terminal write could
+   * have left in, and one a later message must still be able to repair. The stamp (not
+   * `vectorized`/`isVectorizing`) is the terminal marker because `vectorized: true` +
+   * `isVectorizing: false` is also the state chunking leaves behind at count 0 (see
+   * fabFileService/chunk.ts), and re-chunking clears the stamp for the next round.
+   *
+   * The lake-health rollups move with the count, so they ride the same guarded write.
+   *
+   * Sets `vectorized: true` when it advances, and derives `isVectorizing` from whether the new
+   * count is still short of `chunkCount`; the terminal state itself is stamped by
+   * stampChunkEmbeddingModel.
+   *
+   * Returns true if this call advanced the file.
+   */
+  async advanceVectorizeProgress(
+    fabFileId: string,
+    vectorizedChunkCount: number,
+    rollup?: { embeddedChunkCount: number; embeddedCharCount: number }
+  ): Promise<boolean> {
+    const result = await this.fabFileModel.findOneAndUpdate(
+      {
+        _id: fabFileId,
+        $and: [
+          {
+            $or: [
+              // Matches an unset stamp as well as an explicitly null one.
+              { chunkEmbeddingModelStampedAt: null },
+              // A stamped file still short of its own chunkCount is the wedge a stale terminal
+              // write leaves behind; refusing it here would make that state unrepairable.
+              { $expr: { $lt: ['$vectorizedChunkCount', '$chunkCount'] } },
+            ],
+          },
+          // $lte alone would exclude a file whose count has never been written.
+          { $or: [{ vectorizedChunkCount: { $lte: vectorizedChunkCount } }, { vectorizedChunkCount: null }] },
+        ],
+      },
+      [
+        {
+          $set: {
+            vectorized: true,
+            vectorizedChunkCount,
+            // Derived, not a literal true: a repair landing the count exactly on chunkCount would
+            // otherwise leave a settled file flagged as vectorizing, which the guard above then
+            // refuses to advance again and the UI reprocess controls refuse to reset.
+            isVectorizing: { $lt: [vectorizedChunkCount, { $ifNull: ['$chunkCount', 0] }] },
+            ...rollup,
+          },
+        },
+      ],
+      { new: false }
+    );
+    return result !== null;
+  }
+
   async confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean> {
     // The WRITE succeeding or not is the signal (#1802 Phase 2), not any field it changes - but the
     // write must ACTUALLY be a write, not a no-op MongoDB is free to elide. A bare
@@ -1426,6 +1517,64 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           chunkRebuildRequestedAt: { $ifNull: ['$chunkRebuildRequestedAt', null] },
           maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
           chunkedPassageTokenTarget: { $ifNull: ['$chunkedPassageTokenTarget', null] },
+        },
+      },
+    ]);
+  }
+
+  /**
+   * One page of a lake's live members for the lake-memory extraction producer
+   * (`extractLakeMemoryForBatch`), ascending by `_id`.
+   *
+   * Deliberately NOT `findIdsByDataLakeTag` + `findAllByIds`, which is what this replaced. That pair
+   * returned every id the lake had ever held (tombstones included, by design - lifecycle sweeps need
+   * them) and then hydrated all of them UNPROJECTED, so `content`, `chunks` and `vector` all landed in
+   * the Lambda before the producer's own per-run cap applied. A lake of a few thousand ~1MB documents
+   * pulled GBs into one invocation and was killed before the deadline guard could yield, and every SQS
+   * redelivery was killed the same way until the message reached the DLQ.
+   *
+   * So the liveness filter, the ordering and the bound all run in the DATABASE, and the projection is
+   * an inclusion list of exactly the three fields the producer reads: the id to fetch chunks by and to
+   * persist as its continuation cursor, the file name as the extractor's doc title, and the tag names
+   * that decide the evidence tier. The document text comes separately from `fabFileChunkRepository`, so
+   * none of the heavy fields are wanted here at all.
+   *
+   * `after` is a KEYSET boundary, not an offset: ObjectId order is creation order, so a document
+   * uploaded mid-scan sorts after the cursor and is picked up by a later run rather than shifting the
+   * window under an in-progress one. An `after` that is not a valid ObjectId is ignored (the page
+   * starts from the top) rather than throwing a cast error - the producer's ledger append de-dups, so
+   * an over-broad re-scan is merely wasteful, whereas a throw would fail the run into the DLQ.
+   *
+   * `limit` is the caller's bound verbatim; the producer asks for one row past its cap and uses that
+   * probe row to tell "the lake continues" from "the slice happened to fill exactly", which is cheaper
+   * than a second count query.
+   */
+  async findLakeMemoryExtractionMembers(
+    scope: DataLakeMembershipScope,
+    options: { after?: string | null; limit: number }
+  ): Promise<Array<{ fabFileId: string; fileName?: string; tags: { name: string }[] }>> {
+    const after = options.after && mongoose.Types.ObjectId.isValid(options.after) ? convertId(options.after) : null;
+    return this.fabFileModel.aggregate([
+      {
+        // buildDataLakeMembershipQuery, NOT a spread - see findDataLakeHealthMembers. An aggregate is
+        // outside the soft-delete plugin's query middleware, so `deletedAt` is filtered here
+        // explicitly rather than by default.
+        $match: buildDataLakeMembershipQuery(scope, {
+          deletedAt: null,
+          archivedAt: null,
+          ...(after ? { _id: { $gt: after } } : {}),
+        }),
+      },
+      { $sort: { _id: 1 } },
+      { $limit: options.limit },
+      {
+        $project: {
+          _id: 0,
+          fabFileId: { $toString: '$_id' },
+          fileName: 1,
+          // Only the tag NAME, as in findLakeConvergenceMembers: a lake member can carry many tags and
+          // the tier decision reads nothing else off them.
+          tags: { $map: { input: { $ifNull: ['$tags', []] }, as: 't', in: { name: '$$t.name' } } },
         },
       },
     ]);
@@ -2096,7 +2245,9 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
     // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
-    // IFabFile.notes. Enum-validated so a typo in a writer fails loudly instead of producing a value
+    // IFabFile.notes. The enum documents the allowed values but does NOT enforce them at runtime:
+    // mongoose skips validators on update paths unless the caller passes `runValidators: true`, and
+    // no writer here does. TypeScript is what actually stops a typo producing a value
     // `isChunkStalled` silently reads as "not stalled".
     chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
     noExtractableTextAt: { type: Date, default: null },
@@ -2213,6 +2364,13 @@ FabFileSchema.index({ batchId: 1 });
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
+// No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
+// Two things to know before adding one: (a) any future `fileName` sort index would need
+// `collation: {locale: 'en'}` to be usable at all - buildFabFileSearchQuery sets that collation
+// on every non-DocumentDB query, and a simple-collation index cannot bound or sort a string key
+// under a different collation (same reason as email_ci/username_ci in UserModel.ts:911-926); and
+// (b) the plugin's `{fileNameLower: 1}` index below stops serving the DocumentDB-branch sort once
+// `_id` is appended to it, since that index has no `_id` key of its own.
 FabFileSchema.plugin(addLowercaseField, { fields: ['fileName'] });
 
 export const FabFile =

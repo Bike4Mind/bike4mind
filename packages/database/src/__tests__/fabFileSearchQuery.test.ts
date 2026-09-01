@@ -445,7 +445,7 @@ describe('buildFabFileSearchQuery', () => {
           useDocumentDB: true,
         })
       );
-      expect(result.sort).toEqual({ fileNameLower: 1 });
+      expect(result.sort).toEqual({ fileNameLower: 1, _id: 1 });
       expect(result.collation).toBeNull();
     });
   });
@@ -459,60 +459,53 @@ describe('buildFabFileSearchQuery', () => {
           useDocumentDB: false,
         })
       );
-      expect(result.sort).toEqual({ fileName: 1 });
+      expect(result.sort).toEqual({ fileName: 1, _id: 1 });
       expect(result.collation).toEqual({ locale: 'en' });
     });
   });
 
-  // ── 11b. stableSort tiebreaker (opt-in) ───────────────────────────
-  describe('stableSort tiebreaker', () => {
-    it('is off by default, so existing callers keep their exact sort', () => {
-      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'asc' } }));
-      expect(result.sort).toEqual({ fileName: 1 });
-    });
-
-    it('adds an _id tiebreaker to a fileName sort when requested', () => {
+  // ── 11b. fileName _id tiebreaker (unconditional) ───────────────────
+  describe('fileName _id tiebreaker', () => {
+    it('adds an _id tiebreaker to a fileName sort', () => {
       // fileName is not unique (duplicate uploads are normal), so a caller paging past page 1
       // needs a total order or a file can fall between pages.
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'fileName', direction: 'asc' }, options: { stableSort: true } })
-      );
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'asc' } }));
       expect(result.sort).toEqual({ fileName: 1, _id: 1 });
     });
 
     it('matches the tiebreaker direction to the primary key', () => {
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'fileName', direction: 'desc' }, options: { stableSort: true } })
-      );
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'desc' } }));
       expect(result.sort).toEqual({ fileName: -1, _id: -1 });
     });
 
-    it('applies to the DocumentDB fileNameLower branch too', () => {
+    // The asc case is covered by the DocumentDB sort block above; this is the desc branch.
+    it('applies to the DocumentDB fileNameLower branch too, in either direction', () => {
       const result = buildFabFileSearchQuery(
         makeParams({
-          order: { by: 'fileName', direction: 'asc' },
+          order: { by: 'fileName', direction: 'desc' },
           useDocumentDB: true,
-          options: { stableSort: true },
         })
       );
-      expect(result.sort).toEqual({ fileNameLower: 1, _id: 1 });
+      expect(result.sort).toEqual({ fileNameLower: -1, _id: -1 });
     });
 
-    it('leaves a createdAt sort alone even when requested', () => {
-      // Deliberate: createdAt IS indexed, and appending _id turns the file browser's indexed
-      // scan into a full-collection blocking sort. Only the already-unindexed fileName sorts
-      // can afford the tiebreaker.
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'createdAt', direction: 'desc' }, options: { stableSort: true } })
-      );
+    it('adds an _id tiebreaker to a fileSize sort too', () => {
+      // fileSize ties wherever fileName does - byte-identical duplicate uploads tie on both - and
+      // no index serves a fileSize sort, so the tiebreaker costs nothing on any path.
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'asc' } }));
+      expect(result.sort).toEqual({ fileSize: 1, _id: 1 });
+    });
+
+    it('matches the fileSize tiebreaker direction to the primary key', () => {
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileSize', direction: 'desc' } }));
+      expect(result.sort).toEqual({ fileSize: -1, _id: -1 });
+    });
+
+    it('leaves a createdAt sort alone - the one excluded key', () => {
+      // Excluded on measurement, not assumption: no lake with tied createdAt is known, and it is
+      // the only sort key with indexes to lose.
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'createdAt', direction: 'desc' } }));
       expect(result.sort).toEqual({ createdAt: -1 });
-    });
-
-    it('leaves a fileSize sort alone even when requested', () => {
-      const result = buildFabFileSearchQuery(
-        makeParams({ order: { by: 'fileSize', direction: 'asc' }, options: { stableSort: true } })
-      );
-      expect(result.sort).toEqual({ fileSize: 1 });
     });
   });
 

@@ -169,18 +169,49 @@ export const overwatchProductRepository = {
   },
 
   /**
-   * `postingChannels` is optional on the write path even though it is required on the
-   * document, because reads normalize it to `[]` (see withPostingChannels).
+   * Five fields that are required on the document are optional here: `postingChannels`,
+   * `socialLinks`, `customEvents`, `campaignLinks` and `status`.
    *
-   * Deliberate: adding it as a required member of this parameter would break every
-   * existing caller at compile time - the exact drift that left two overlay routes
-   * uncompilable when core made an adapter field required. Omitting it also leaves any
-   * stored value untouched, since `$set` never sees the key, so a caller that doesn't
-   * know about this field cannot wipe it.
+   * This method issues `findOneAndUpdate(..., { $set: data }, { upsert: true })`, so the
+   * two states a caller can express are not "a value" and "empty" - they are "a value"
+   * and "absent". A key present as `[]` or `'active'` overwrites whatever is stored. A key
+   * absent from `data` is never mentioned by `$set`, so the stored value survives.
+   *
+   * Requiring these fields forces every caller to supply a value for every field on every
+   * write, including fields it knows nothing about. A caller making a partial update has
+   * no correct value to send: it must either invent one, which silently destroys the
+   * stored data and still returns success, or fail to compile. Optional is what lets
+   * omission mean "leave this alone" - the only safe meaning for a field the caller does
+   * not own.
+   *
+   * Safe on insert: the schema defaults all five (`[]` for the four array fields,
+   * `'active'` for `status`), and those defaults apply on the upsert-insert. Reads
+   * normalize `postingChannels` for documents written before that field existed, since
+   * schema defaults never run on them - see withPostingChannels.
+   *
+   * Adding any of these back as required would break every existing caller at compile
+   * time - the same drift that left downstream callers uncompilable when core last made
+   * an established field required.
    */
   async upsertProduct(
-    data: Omit<IOverwatchProductDoc, '_id' | 'createdAt' | 'updatedAt' | 'postingChannels'> & {
+    data: Omit<
+      IOverwatchProductDoc,
+      | '_id'
+      | 'createdAt'
+      | 'updatedAt'
+      | 'postingChannels'
+      | 'socialLinks'
+      | 'customEvents'
+      | 'campaignLinks'
+      | 'status'
+    > & {
       postingChannels?: IPostingChannel[];
+      socialLinks?: ISocialLink[];
+      customEvents?: ICustomEvent[];
+      campaignLinks?: ICampaignLink[];
+      // Indexed off the document type rather than restating the union, so a new status
+      // value cannot be accepted here while being unrepresentable on the document.
+      status?: IOverwatchProductDoc['status'];
     }
   ): Promise<IOverwatchProductDoc> {
     const result = await OverwatchProduct.findOneAndUpdate(

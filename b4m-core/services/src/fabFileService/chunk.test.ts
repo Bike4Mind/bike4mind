@@ -31,7 +31,7 @@ describe('chunkFabfile', () => {
         deleteManyByFabFileId: Mock;
         bulkInsert: Mock;
         update: Mock;
-        distinctEmbeddingModelsByFabFileIds: Mock;
+        distinctRetrievalIndexModelsByFabFileIds: Mock;
       };
       users: { findById: Mock };
     };
@@ -61,7 +61,7 @@ describe('chunkFabfile', () => {
           deleteManyByFabFileId: vi.fn(),
           bulkInsert: vi.fn().mockResolvedValue([]),
           update: vi.fn(),
-          distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
+          distinctRetrievalIndexModelsByFabFileIds: vi.fn().mockResolvedValue([]),
         },
         users: { findById: vi.fn() },
       },
@@ -73,7 +73,7 @@ describe('chunkFabfile', () => {
   it('deletes every OLD model the chunk store actually used, not just FabFile.embeddingModel, and not the new one being written', async () => {
     // A file re-embedded more than once can have chunks under more than one prior model (see
     // IFabFileChunk.embeddingModel) - fabFile.embeddingModel alone is only the CURRENT one.
-    mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([
+    mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds.mockResolvedValue([
       'text-embedding-ada-002',
       'text-embedding-3-small-old',
     ]);
@@ -85,14 +85,14 @@ describe('chunkFabfile', () => {
       mockAdapter as never
     );
 
-    expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).toHaveBeenCalledWith(['file-1']);
+    expect(mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds).toHaveBeenCalledWith(['file-1']);
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledTimes(2);
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith('file-1', 'text-embedding-ada-002');
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith('file-1', 'text-embedding-3-small-old');
   });
 
   it('skips the delete calls when the chunk store has no prior models for this file', async () => {
-    mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([]);
+    mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds.mockResolvedValue([]);
     mockAdapter.searchIndex = { deleteByFabFileId: vi.fn() };
 
     await chunkFabfile(
@@ -111,7 +111,7 @@ describe('chunkFabfile', () => {
       mockAdapter as never
     );
     expect(mockAdapter.db.fabFileChunks.bulkInsert).toHaveBeenCalled();
-    expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds).not.toHaveBeenCalled();
     expect(result).toEqual([]);
   });
 
@@ -387,7 +387,7 @@ describe('prepareFabFileChunks / commitFabFileChunks (#1681)', () => {
         deleteManyByFabFileId: vi.fn(),
         bulkInsert: vi.fn().mockResolvedValue([{ id: 'c1' }]),
         update: vi.fn(),
-        distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
+        distinctRetrievalIndexModelsByFabFileIds: vi.fn().mockResolvedValue([]),
       },
       users: { findById: vi.fn() },
     },

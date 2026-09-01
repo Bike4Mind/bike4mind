@@ -78,10 +78,8 @@ async function countScope(context: ToolContext, scope: CountScope): Promise<Coun
       '',
       filters,
       { page, limit: SCAN_PAGE_SIZE },
-      // Paging a non-total order can repeat or skip rows across pages; stableSort makes the
-      // fileName sort a total order so the walk visits each document exactly once.
       { by: 'fileName', direction: 'asc' },
-      { ...options, stableSort: true }
+      options
     );
     count += filterRetrievalExcluded(result.data, filter).length;
     if (!result.hasMore) return { count, exact: true };

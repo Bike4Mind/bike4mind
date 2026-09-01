@@ -1,20 +1,26 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CHUNK_STALL_NOTICES, NO_EXTRACTABLE_TEXT_NOTICE, type IFabFileDocument } from '@bike4mind/common';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 
-const useGetFabFileContent = vi.fn();
-vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  useGetFabFileContent: (...args: unknown[]) => useGetFabFileContent(...args),
+const { removeFileMutate, currentUserId } = vi.hoisted(() => ({
+  removeFileMutate: vi.fn(),
+  currentUserId: { value: 'owner-1' },
 }));
 
-const mutationStub = () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false });
+vi.mock('@client/app/hooks/data/fabFiles', () => ({
+  useGetFabFileContent: () => ({ data: 'content', isLoading: false }),
+}));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useReprocessFabFile: () => mutationStub(),
-  useRemoveFileFromDataLake: () => mutationStub(),
+  useReprocessFabFile: () => ({ mutate: vi.fn(), isPending: false }),
+  useRemoveFileFromDataLake: () => ({ mutate: removeFileMutate, isPending: false }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector?: (s: { currentUser: { id: string } }) => unknown) =>
+    selector ? selector({ currentUser: { id: currentUserId.value } }) : { currentUser: { id: currentUserId.value } },
 }));
 
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
@@ -26,30 +32,30 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-// Only the fields the panel's header reads; the pipeline fields are what these cases vary.
-const fabFile = (overrides: Partial<IFabFileDocument> = {}) =>
+const file = (overrides: Partial<IFabFileDocument> = {}): IFabFileDocument =>
   ({
-    id: 'ff1',
-    fileName: 'quarterly.pdf',
-    tags: [],
+    id: 'f1',
+    fileName: 'Report.pdf',
+    userId: 'owner-1',
+    tags: [{ name: 'lk:invoices', strength: 1 }],
     ...overrides,
-  }) as unknown as IFabFileDocument;
-
-const renderPanel = (file: IFabFileDocument) =>
-  render(
-    <TestWrapper>
-      <DataLakeArticlePanel file={file} dataLakeId="lk1" />
-    </TestWrapper>
-  );
+  }) as IFabFileDocument;
 
 describe('DataLakeArticlePanel pipeline notice', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useGetFabFileContent.mockReturnValue({ data: 'body', isLoading: false });
+    currentUserId.value = 'owner-1';
   });
 
+  const renderPanel = (f: IFabFileDocument) =>
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={f} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
   it('renders the stall notice and the owner note as two separate lines', () => {
-    renderPanel(fabFile({ chunkStallReason: 'vectorizePaused', notes: 'Ask legal before sharing' }));
+    renderPanel(file({ chunkStallReason: 'vectorizePaused', notes: 'Ask legal before sharing' }));
 
     const notice = screen.getByText(CHUNK_STALL_NOTICES.vectorizePaused, { exact: false });
     const ownerNote = screen.getByText('Ask legal before sharing');
@@ -62,13 +68,13 @@ describe('DataLakeArticlePanel pipeline notice', () => {
   });
 
   it('renders the zero-chunk notice from noExtractableTextAt', () => {
-    renderPanel(fabFile({ noExtractableTextAt: new Date('2026-08-01T00:00:00Z') }));
+    renderPanel(file({ noExtractableTextAt: new Date('2026-08-01T00:00:00Z') }));
 
     expect(screen.getByText(NO_EXTRACTABLE_TEXT_NOTICE, { exact: false })).toBeTruthy();
   });
 
   it('renders the owner note alone when the pipeline has nothing to say', () => {
-    renderPanel(fabFile({ notes: 'Ask legal before sharing' }));
+    renderPanel(file({ notes: 'Ask legal before sharing' }));
 
     expect(screen.getByText('Ask legal before sharing')).toBeTruthy();
     expect(screen.queryByText(CHUNK_STALL_NOTICES.vectorizePaused, { exact: false })).toBeNull();
@@ -76,8 +82,76 @@ describe('DataLakeArticlePanel pipeline notice', () => {
   });
 
   it('renders the stall notice with no owner note present', () => {
-    renderPanel(fabFile({ chunkStallReason: 'rechunkPaused' }));
+    renderPanel(file({ chunkStallReason: 'rechunkPaused' }));
 
     expect(screen.getByText(CHUNK_STALL_NOTICES.rechunkPaused, { exact: false })).toBeTruthy();
+  });
+});
+
+describe('DataLakeArticlePanel - remove-from-lake copy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentUserId.value = 'owner-1';
+  });
+
+  const openConfirm = () => fireEvent.click(screen.getByTestId('datalake-removefile-btn-f1'));
+
+  it('shows the owner copy - stays in Files, restorable with Undo', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file({ userId: 'owner-1' })} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    openConfirm();
+
+    const text = screen.getByTestId('datalake-removefile-confirm').textContent ?? '';
+    expect(text).toMatch(/stays in your Files list/);
+    expect(text).toMatch(/Undo/);
+  });
+
+  it('shows the non-owner copy - only certain post-removal reach, and a TIME-BOUNDED Undo', () => {
+    currentUserId.value = 'curator-1';
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file({ userId: 'owner-1' })} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    openConfirm();
+
+    const text = screen.getByTestId('datalake-removefile-confirm').textContent ?? '';
+    expect(text).not.toMatch(/your Files list/);
+    expect(text).toMatch(/owner's Files list/);
+    expect(text).toMatch(/lose access/);
+    expect(text).toMatch(/Undo/);
+    // A non-owner has NO other way back - no list route, no "recently removed" panel - so the copy
+    // must not promise recoverability open-endedly the way the owner branch fairly can. Promising
+    // an Undo that silently expires is the same defect #2248 was filed about, one layer in.
+    expect(text).toMatch(/gone once the toast closes/);
+    expect(text).not.toMatch(/re-adding it to this lake/);
+  });
+
+  it('fires the removal mutation on confirm', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    openConfirm();
+    fireEvent.click(screen.getByTestId('datalake-removefile-confirm-btn'));
+
+    expect(removeFileMutate).toHaveBeenCalledWith('f1', expect.anything());
+  });
+
+  it('hides the management actions when the caller cannot manage the lake', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage={false} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-removefile-btn-f1')).not.toBeInTheDocument();
   });
 });
