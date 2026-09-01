@@ -19,6 +19,9 @@ const h = vi.hoisted(() => ({
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
+  buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date) => ({
+    vectorizeEnqueueFailedAt: { $lt: cutoff },
+  })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -62,7 +65,7 @@ vi.mock('sst', () => ({
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/worker/chunkScan', () => ({
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
-  buildStrandedVectorizeScanFilter: (cutoff: Date) => ({ vectorizeEnqueueFailedAt: { $lt: cutoff } }),
+  buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
   CHUNK_CLAIM_STALE_MS: 30 * 60_000,
   VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS: 15 * 60_000,
@@ -354,6 +357,13 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff9', userId: 'u9' });
       expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(1);
+
+      // Both cutoffs, same as the un-chunked sweep: a one-arg call drops the stale-claim arm, and a
+      // file left claimed by a worker killed inside resumeVectorizeEnqueue would have no way back.
+      const [cutoff, staleClaimBefore] = h.buildStrandedFilter.mock.calls[0] as [Date, Date];
+      expect(cutoff).toBeInstanceOf(Date);
+      expect(staleClaimBefore).toBeInstanceOf(Date);
+      expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
     });
 
     it('a failed send costs only itself: the candidates behind it still go out', async () => {

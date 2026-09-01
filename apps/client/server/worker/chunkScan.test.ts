@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   buildFabFileChunkScanFilter,
   buildStrandedVectorizeScanFilter,
@@ -228,6 +230,50 @@ describe('buildStrandedVectorizeScanFilter', () => {
     expect(matches(doc, filter)).toBe(false);
   });
 
+  describe('stale-claim arm', () => {
+    // resumeVectorizeEnqueue holds the claim across real work (a vectorless-chunk read plus N
+    // sends), so a hard-killed worker leaves isChunking:true with no finally to clear it. Every
+    // other automatic door is shut on that file - hence the same three arms the un-chunked sweep
+    // carries, with the same chunkClaimedAt cutoff.
+    const claimCutoff = new Date('2026-01-01T00:00:00Z');
+    const withStale = buildStrandedVectorizeScanFilter(cutoff, claimCutoff);
+    const base = { chunked: true, vectorizeEnqueueFailedAt: stale, deletedAt: null };
+
+    it('still selects a file that is not claimed at all', () => {
+      expect(matches({ ...base, isChunking: false }, withStale)).toBe(true);
+    });
+
+    it('selects a claim older than the stale cutoff', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: stale }, withStale)).toBe(true);
+    });
+
+    it('selects an in-flight file with no claim stamp - the pre-chunkClaimedAt backfill', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, withStale)).toBe(true);
+      expect(matches({ ...base, isChunking: true }, withStale)).toBe(true);
+    });
+
+    it('leaves a genuinely in-flight claim alone', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: fresh }, withStale)).toBe(false);
+    });
+
+    it('uses the same claim cutoff the un-chunked sweep does', () => {
+      const claimed = { isChunking: true, chunkClaimedAt: fresh };
+      expect(matches({ ...base, ...claimed }, withStale)).toBe(
+        matches(
+          {
+            status: 'complete',
+            chunkCount: 0,
+            createdAt: stale,
+            deletedAt: null,
+            mimeType: 'application/pdf',
+            ...claimed,
+          },
+          buildFabFileChunkScanFilter(cutoff, claimCutoff)
+        )
+      );
+    });
+  });
+
   it('skips a deleted file', () => {
     const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: new Date() };
     expect(matches(doc, filter)).toBe(false);
@@ -255,4 +301,29 @@ describe('buildStrandedVectorizeScanFilter', () => {
     expect(matches(doc, buildFabFileChunkScanFilter(cutoff))).toBe(false);
     expect(matches(doc, filter)).toBe(true);
   });
+});
+
+describe('production call sites pass the stale-claim cutoff', () => {
+  // Source-shape guard, because the regression is silent: staleClaimBefore is optional (the arm is
+  // opt-in), so dropping it type-checks, passes every other test, and just quietly turns the
+  // recovery arm back off. The cron's call is covered behaviourally in dataLakeBatchReconcile.test.ts;
+  // the self-host worker's is inside an unexported main(), so this is what watches it.
+  const sources = {
+    'server/worker/main.ts': 'main.ts',
+    'server/cron/dataLakeBatchReconcile.ts': '../cron/dataLakeBatchReconcile.ts',
+  } as const;
+
+  for (const [label, rel] of Object.entries(sources)) {
+    it(`${label} calls buildStrandedVectorizeScanFilter with both cutoffs`, async () => {
+      const src = await readFile(resolve(__dirname, rel), 'utf8');
+      const call = src.match(/buildStrandedVectorizeScanFilter\(([^)]*)\)/);
+      expect(call, 'call site vanished - move or delete this guard with it').not.toBeNull();
+      expect(
+        call![1]
+          .split(',')
+          .map(a => a.trim())
+          .filter(Boolean)
+      ).toHaveLength(2);
+    });
+  }
 });
