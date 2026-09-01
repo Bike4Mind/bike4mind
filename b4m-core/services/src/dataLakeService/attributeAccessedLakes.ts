@@ -39,8 +39,13 @@ export interface AttributeAccessedLakeIdsOptions {
  * scope" (see `allowFullScopeFallback`).
  */
 export function attributeFileToLakeIds(tags: string[], lakes: AttributableLake[]): string[] {
+  // `FabFile.tags` is a schema-less `[Object]` array (see FabFileModel), so a legacy row can hold an
+  // entry with no `name` and every caller's `tags.map(t => t.name)` then yields `undefined`. Both
+  // arms below string-inspect these names, so the guard lives here - the one place that does - and
+  // an unnameable tag is simply not an attribution signal.
+  const names = tags.filter((tag): tag is string => typeof tag === 'string');
   const ids = new Set<string>();
-  for (const tag of datalakeTagsFrom(tags)) {
+  for (const tag of datalakeTagsFrom(names)) {
     const lake = lakes.find(l => l.datalakeTag === tag);
     if (lake) ids.add(lake.id);
   }
@@ -51,7 +56,7 @@ export function attributeFileToLakeIds(tags: string[], lakes: AttributableLake[]
   // never a standalone attribution signal.
   for (const lake of lakes) {
     const prefix = openLakeTagPrefix(lake);
-    if (prefix && tags.some(t => t.startsWith(prefix))) ids.add(lake.id);
+    if (prefix && names.some(t => t.startsWith(prefix))) ids.add(lake.id);
   }
   return [...ids];
 }

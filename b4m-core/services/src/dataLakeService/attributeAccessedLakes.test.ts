@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attributeAccessedLakeIds } from './attributeAccessedLakes';
+import { attributeAccessedLakeIds, attributeFileToLakeIds } from './attributeAccessedLakes';
 
 const LAKES = [
   { id: 'lake1', datalakeTag: 'datalake:lake1' },
@@ -90,6 +90,28 @@ describe('attributeAccessedLakeIds', () => {
         allowFullScopeFallback: false,
       });
       expect(ids).toEqual(['opti-knowledge']);
+    });
+  });
+
+  describe('nameless tag entries', () => {
+    const STATIC = { id: 'opti-knowledge', datalakeTag: 'datalake:opti', fileTagPrefix: 'opti:' };
+
+    // FabFile.tags is a schema-less [Object] array, so `tags.map(t => t.name)` on a legacy row can
+    // hand this a list with holes in it. Callers string-inspect nothing themselves, so a throw here
+    // would take down a whole search.
+    it('ignores non-string tag names rather than throwing', () => {
+      const tags = [undefined, null, 'datalake:lake1', 42] as unknown as string[];
+      expect(attributeFileToLakeIds(tags, LAKES)).toEqual(['lake1']);
+    });
+
+    it('ignores non-string tag names on the open-prefix arm too', () => {
+      const tags = [undefined, 'opti:policy'] as unknown as string[];
+      expect(attributeFileToLakeIds(tags, [STATIC])).toEqual(['opti-knowledge']);
+    });
+
+    it('a file whose tags are all unnameable attributes to nothing', () => {
+      const tags = [undefined, null] as unknown as string[];
+      expect(attributeFileToLakeIds(tags, LAKES)).toEqual([]);
     });
   });
 });
