@@ -1751,6 +1751,45 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
     );
   });
 
+  // The audit row is the only lake-attributable record that the candidate listing was truncated:
+  // returnedChunkCount/returnedFileCount describe the post-scoring injection and say nothing about
+  // the candidate stage, so this cannot be recovered later if it is not written here.
+  it('records candidateCapReached: true when the candidate listing hit the cap', async () => {
+    const ctx = makeCtx();
+    const files = [{ id: 'fileA', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:lake1' }], vectorized: true }];
+    ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: files, hasMore: true, total: 585 });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ candidateCapReached: true }));
+  });
+
+  it('records candidateCapReached: false when the whole candidate set was considered', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    // Explicitly false, not omitted: forced retrieval always knows the answer, and an omitted
+    // field means "this surface does not report it" to every consumer downstream.
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ candidateCapReached: false }));
+  });
+
   // Forced retrieval's candidate search is a MIXED corpus (owned + shared + org-shared + data
   // lake, via includeShared:true with no restrictToDataLake) - unlike the route/semantic-arm
   // sites, a grounded file with no recoverable tag might just be the caller's own private file,

@@ -2307,6 +2307,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             fileIds: sourceFileIds,
             chunkIds: injectedChunkIds,
             scores: injectedScores,
+            candidateCapReached: coverage.moreFilesBeyondCap,
             surface: 'forced-retrieval',
             queryText: query,
             questId: quest.id,
