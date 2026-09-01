@@ -18,18 +18,23 @@
             packages = [
               pkgs.nodejs_24
               pkgs.pnpm_10
-              # Required on macOS, not a convenience -- omitting it is a fork bomb.
+              # Required on macOS, not a convenience: without it, `git` in this shell is a
+              # fork bomb.
               #
-              # With no git in this shell, `git` falls through to macOS's /usr/bin/git shim. That
-              # shim finds its real binary via DEVELOPER_DIR, NOT via PATH -- and this shell's own
-              # darwin stdenv sets DEVELOPER_DIR to a nix apple-sdk whose `xcrun` is xcbuild's
-              # reimplementation. xcbuild's xcrun does not do developer-dir tool resolution; it
-              # falls back to PATH, finds /usr/bin/git, and the two call each other with no base
-              # case. Any `git` invocation then forks until the machine is unusable (observed:
-              # 5,000+ processes, terminal emulator pegged, shell startup ~60x slower).
+              # /usr/bin/git is not git. It is one of 78 hard links to a single
+              # com.apple.dt.xcode_select.tool-shim binary, which resolves the real tool through
+              # libxcselect.dylib (see `otool -L /usr/bin/git`). That library ships only inside the
+              # dyld shared cache, so how it reacts to this shell's DEVELOPER_DIR -- pointed at a
+              # nix apple-sdk by the darwin stdenv -- cannot be audited from here, only observed:
+              # every `git` call forks without bound. 5,000+ processes, terminal emulator pegged,
+              # shell startup ~60x slower. Do not reproduce it to check.
               #
-              # Providing git here puts a real git ahead of the shim on PATH, so the shim is never
-              # reached. Do not remove without also clearing DEVELOPER_DIR/SDKROOT in a shellHook.
+              # A real git ahead of the shim on PATH means the shim is never reached. Keep it here.
+              #
+              # This closes one hole, not the class: 48 of those 78 shim names still resolve to
+              # /usr/bin inside this shell (gcc, gnumake, m4, libtool, swift, lldb, yacc). The
+              # names a Node build actually reaches -- cc, clang, make, ld, ar, nm, strip -- come
+              # from stdenv, which is why git is the one that has bitten.
               pkgs.git
               pkgs.mongosh
               pkgs.ollama
