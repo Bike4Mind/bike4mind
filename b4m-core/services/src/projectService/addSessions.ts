@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';
+import { distinctIdCount } from '../utils/objectIds';
 import { updateShareableFiles } from './addFiles';
 
 const addSessionsProjectSchema = z.object({
@@ -42,9 +43,10 @@ export const addSessions = async (
   if (sessions.length === 0) {
     throw new NotFoundError('Sessions not found');
   }
-  // Partial resolve is a 400; all-missing keeps the 404 above. See addFiles. Counted as a Set: the
-  // reader returns distinct rows, so a notebook sent twice is not one that could not be reached.
-  if (sessions.length !== new Set(sessionIds).size) throw new BadRequestError('Some sessions are not accessible');
+  // Partial resolve is a 400; all-missing keeps the 404 above. See addFiles. Counted as DISTINCT
+  // rows ignoring hex case: the reader returns one row per document, so the same notebook sent
+  // twice - or sent as both `abc` and `ABC` - is not one that could not be reached.
+  if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
   if (!project) {

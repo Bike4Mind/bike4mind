@@ -8,6 +8,7 @@ import {
   BadRequestError,
 } from '@bike4mind/common';
 import { z } from 'zod';
+import { canonicalId } from '../utils/objectIds';
 import { usableObjectIds } from '@bike4mind/db-core';
 
 const removeProjectFilesSchema = z.object({
@@ -51,10 +52,9 @@ export const removeFiles = async (
   // Compared lowercased: a hex id is accepted in either case and resolves the same row, but
   // `f.id` is always canonical lowercase, so matching raw strings would reject an uppercase id
   // that Mongo resolved perfectly well.
-  const canonical = (id: string) => id.toLowerCase();
-  const resolvedIds = new Set(files.map(f => canonical(String(f.id))));
-  const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles').map(canonical));
-  if (fileIds.some(id => addressable.has(canonical(id)) && !resolvedIds.has(canonical(id)))) {
+  const resolvedIds = new Set(files.map(f => canonicalId(String(f.id))));
+  const addressable = new Set(usableObjectIds(fileIds, 'projectService.removeFiles').map(canonicalId));
+  if (fileIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {
     throw new BadRequestError('Some files are not accessible');
   }
 
@@ -64,8 +64,8 @@ export const removeFiles = async (
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
-  const removing = new Set(fileIds.map(canonical));
-  project.fileIds = project.fileIds.filter(id => !removing.has(canonical(id)));
+  const removing = new Set(fileIds.map(canonicalId));
+  project.fileIds = project.fileIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
   // Revoke project-derived access to the file, but keep an entry that ALSO has an

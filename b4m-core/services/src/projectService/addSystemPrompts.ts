@@ -3,6 +3,7 @@ import { pushShareable } from '../sharingService';
 import { IFabFileRepository, IProjectRepository, IUserDocument, Permission } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { distinctIdCount } from '../utils/objectIds';
 import uniq from 'lodash/uniq.js';
 
 const addSystemPromptsSchema = z.object({
@@ -30,15 +31,13 @@ export const addSystemPrompts = async (
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
   if (!project) throw new Error('Project not found');
 
-  // Deduped for the count check (see addFiles) and for newFileIds below, where a doubled id would
-  // otherwise push two systemPrompts entries for one file.
-  const requestedIds = uniq(fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, requestedIds);
-  if (files.length !== requestedIds.length) throw new BadRequestError('Some files are not accessible');
-
-  // Filter out files that are already system prompts
-  const newFileIds = requestedIds.filter(fileId => !project.systemPrompts.some(prompt => prompt.fileId === fileId));
+  // Derived from the RESOLVED ids, not the request: a doubled id - or the same id in two hex cases -
+  // would otherwise push two systemPrompts entries for one file.
+  const resolvedIds = uniq(files.map(f => f.id));
+  const newFileIds = resolvedIds.filter(fileId => !project.systemPrompts.some(prompt => prompt.fileId === fileId));
 
   if (newFileIds.length === 0) {
     throw new BadRequestError('All files are already added as system prompts');

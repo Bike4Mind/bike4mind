@@ -130,6 +130,16 @@ describe('addSessions - which ids reach the project', () => {
     expect(project.sessionIds).toEqual([SESSION_ID]);
   });
 
+  it('tolerates the same session id sent in two hex cases, which address one row', async () => {
+    // isObjectIdOrHexString accepts either case and Mongo resolves both to the same document, so
+    // counting them as two distinct ids rejected a request that addresses exactly one notebook.
+    await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID, SESSION_ID.toUpperCase()] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+
+    expect(project.sessionIds).toEqual([SESSION_ID]);
+  });
+
   it('queries the repository with the session raw list, leaving the filtering to the guard', async () => {
     await addSessions(user, { projectId: PROJECT_ID, sessionIds: [SESSION_ID] }, {
       db: { projects, sessions, fabFiles },

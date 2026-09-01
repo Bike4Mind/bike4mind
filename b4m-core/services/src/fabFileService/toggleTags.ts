@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { distinctIdCount } from '../utils/objectIds';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import {
   IAdminSettingsRepository,
@@ -115,7 +116,7 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   // Check if user has permission to update all requested files. Counted as a Set for the same
   // reason `tags` is deduped above: the reader returns distinct rows, so a file sent twice is not
   // one that could not be reached, and every write here is idempotent.
-  if (fabFiles.length !== new Set(ids).size) {
+  if (fabFiles.length !== distinctIdCount(ids)) {
     // BadRequestError, not a bare Error - see projectService/addFiles.
     throw new BadRequestError('Some files are not accessible or you do not have permission to edit them');
   }
