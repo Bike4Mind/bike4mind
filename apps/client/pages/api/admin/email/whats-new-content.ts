@@ -40,13 +40,15 @@ const handler = baseApi().get(async (req, res) => {
   } else {
     // Fetch modals from the last N days
     const daysAgo = parseInt(days, 10);
-    // parseInt yields NaN for a non-numeric value, and setDate(NaN) makes an Invalid Date
-    // that casts against the Date-typed `createdAt` filter below.
-    if (Number.isNaN(daysAgo)) {
-      throw new BadRequestError('Invalid days: must be a number');
-    }
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysAgo);
+    // Assert the constructed date rather than the parsed number: setDate overflows to an
+    // Invalid Date for NaN and for a magnitude past the Date range in EITHER direction, so
+    // there is no single sane bound to clamp to. An Invalid Date here casts against the
+    // Date-typed `createdAt` filter below.
+    if (Number.isNaN(startDate.getTime())) {
+      throw new BadRequestError('Invalid days: must be a number of days within range');
+    }
 
     const queryLimit = limitParam ? parseInt(limitParam, 10) : 20;
     modals = await ModalModel.find({

@@ -5,6 +5,7 @@ import { fromZodError } from 'zod-validation-error';
 const errorHandler = (error: unknown, req: Request, res: Response) => {
   let additionalInfo: Record<string, unknown> | undefined;
   let statusCode = HttpStatus.InternalServerError;
+  let castMessage: string | undefined;
 
   if (typeof error === 'object' && error !== null && 'name' in error) {
     let errorObj = error as { name: string; message?: string };
@@ -16,8 +17,16 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     // (`sub._id` and `subs._id` both arrive as `_id`), so those are indistinguishable from a
     // top-level id and still become a 404. A plain nested object is not a schema and does
     // arrive dotted (`nested._id`), so it falls through to a 500.
-    if (errorObj.name === 'CastError' && (errorObj as { path?: string }).path === '_id') {
-      errorObj = new NotFoundError('Resource not found');
+    if (errorObj.name === 'CastError') {
+      if ((errorObj as { path?: string }).path === '_id') {
+        errorObj = new NotFoundError('Resource not found');
+      } else {
+        // Mongoose's cast message names the model and the schema field (`... at path
+        // 'userId' for model 'Feedback'`). The blanket 404 used to mask those; keep them
+        // off the wire. The log line below still builds from the untouched errorObj.message,
+        // so the alarm loses nothing.
+        castMessage = 'Server Error';
+      }
     }
 
     if (isZodError(error)) {
@@ -47,7 +56,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
       // shadows any `name` an endpoint put in additionalInfo. Documented in the
       // envelope only for the deprecation window; see CONVENTIONS.md section 1.
       name: errorObj.name,
-      error: errorObj.message || 'Server Error',
+      error: castMessage ?? (errorObj.message || 'Server Error'),
       request_id: req.requestId,
     });
     return;

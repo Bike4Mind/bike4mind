@@ -69,6 +69,18 @@ describe('GET /api/security/user-recent - email leak strip', () => {
     expect(repo.getUserFailedLogins).not.toHaveBeenCalled();
   });
 
+  // A large negative hours is finite, so it survives Number.isNaN, but the arithmetic
+  // overflows the Date range. The two-sided clamp is what keeps `since` valid.
+  it('clamps a negative hours rather than building an Invalid Date', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { hours: '-99999999999999' } });
+    (req as any).user = { email: 'me@example.com', username: 'me' };
+    await mockRefs.getHandler!(req, res);
+
+    const since = repo.getUserFailedLogins.mock.calls[0][2] as Date;
+    expect(Number.isNaN(since.getTime())).toBe(false);
+    expect(since.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
   it('still accepts a numeric hours and passes a valid date window down', async () => {
     const { req, res } = createMocks({ method: 'GET', query: { hours: '48' } });
     (req as any).user = { email: 'me@example.com', username: 'me' };

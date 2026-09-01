@@ -10,9 +10,11 @@ import { BadRequestError } from '@server/utils/errors';
  */
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { hours?: string }>(async (req, res) => {
-    const hours = Math.min(parseInt(req.query.hours || '24', 10), 168);
-    // parseInt yields NaN for a non-numeric value, and the NaN propagates through the
-    // arithmetic into an Invalid Date that casts against the Date-typed `createdAt` filter.
+    // Clamp both ends: an unbounded negative is finite (so it survives the NaN check) but
+    // large enough that the arithmetic below overflows into an Invalid Date. NaN survives
+    // the clamp, so a non-numeric value still reaches the guard. Either shape would cast
+    // against the Date-typed `createdAt` filter in getUserFailedLogins.
+    const hours = Math.min(Math.max(parseInt(req.query.hours || '24', 10), 1), 168);
     if (Number.isNaN(hours)) {
       throw new BadRequestError('Invalid hours: must be a number');
     }

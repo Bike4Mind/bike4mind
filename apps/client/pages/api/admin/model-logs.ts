@@ -5,15 +5,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
-
-// A bare z.string() is not date validation: an unparseable value becomes an Invalid Date
-// and throws a Mongoose CastError on the `timestamp` filter, which reaches errorHandler
-// as a 500. Reject it here instead.
-// An empty value is allowed through unchanged: the handler skips a falsy date, and
-// rejecting it here would 422 a request that used to succeed.
-const dateParam = z.string().refine(value => value === '' || !Number.isNaN(Date.parse(value)), {
-  message: 'Must be a parseable date',
-});
+import { dateParam } from '@server/utils/dateParam';
 
 // Query parameter schema
 const querySchema = z.object({

@@ -120,20 +120,33 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     expect(req.logger.warn).not.toHaveBeenCalled();
   });
 
+  it('logs the full cast message even though the wire gets the generic one', () => {
+    const { req, res } = makeReqRes();
+    errorHandler(castError('userId'), req, res);
+    expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('userId'), expect.anything());
+  });
+
   it('does not treat a CastError with no path as a missing resource', () => {
     const { req, res, status } = makeReqRes();
     errorHandler(castError(), req, res);
     expect(status).toHaveBeenCalledWith(500);
   });
 
-  it('adds nothing beyond the envelope for a non-`_id` CastError', () => {
+  it('keeps the schema field and model name out of the 500 body', () => {
     const { req, res, json } = makeReqRes();
     errorHandler(castError('userId'), req, res);
-    // The 500 body deliberately carries the unmapped error through, unlike the 404 above.
-    expect(json.mock.calls[0][0]).toMatchObject({
-      name: 'CastError',
-      error: expect.stringContaining('userId'),
-    });
+    // Mongoose's cast message names the model and the field it failed on. The blanket 404
+    // used to mask those; the narrowing must not put them on a public wire instead.
+    expect(json.mock.calls[0][0]).toMatchObject({ name: 'CastError', error: 'Server Error' });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('userId');
+    for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
+      expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
+    }
+  });
+
+  it('adds nothing beyond the envelope for a CastError with no path', () => {
+    const { req, res, json } = makeReqRes();
+    errorHandler(castError(), req, res);
     for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
       expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
     }

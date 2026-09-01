@@ -24,18 +24,24 @@ const handler = baseApi()
       const body = req.body as { name?: string; url?: string; ticker?: string; type?: string; categoryId?: string };
       const { name, url, ticker, type, categoryId } = body;
 
-      // Update payloads cast too, and casting runs before validators, so runValidators
-      // does not cover this. A junk categoryId would throw rather than answer the caller.
-      // The payload below is built unconditionally, so a falsy-but-present value ('' is what
-      // the edit form sends with no categories loaded) reaches the cast as well; only null
-      // casts cleanly, and it is how a caller clears the field.
-      if (categoryId !== undefined && categoryId !== null && !isValidObjectId(categoryId)) {
+      // Update payloads cast too, and casting runs before validators, so runValidators does
+      // not cover this. The payload below is built unconditionally, so a falsy-but-present
+      // value reaches the cast as well and only null casts cleanly. '' is what the edit form
+      // sends with no categories loaded and means "no category", so normalize it onto null
+      // (the clear-the-field value) rather than rejecting it; anything else non-null must be
+      // a well-formed id or it would throw instead of answering the caller.
+      const normalizedCategoryId = categoryId === '' ? null : categoryId;
+      if (
+        normalizedCategoryId !== undefined &&
+        normalizedCategoryId !== null &&
+        !isValidObjectId(normalizedCategoryId)
+      ) {
         return res.status(400).json({ message: 'Invalid category ID format' });
       }
 
       const link = await ResearchLink.findByIdAndUpdate(
         id,
-        { name, url, ticker, type, categoryId },
+        { name, url, ticker, type, categoryId: normalizedCategoryId },
         { new: true, runValidators: true }
       );
 

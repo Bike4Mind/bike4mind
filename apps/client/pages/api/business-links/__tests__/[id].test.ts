@@ -79,9 +79,8 @@ describe('PUT /api/business-links/[id] - categoryId validation', () => {
   });
 
   // The payload is built unconditionally, so a falsy-but-present value still reaches the
-  // cast even though `if (categoryId && ...)` would skip it. '' is what the edit form sends
-  // when no categories have loaded.
-  it.each([['empty string', ''], ['zero', 0], ['false', false]])(
+  // cast even though `if (categoryId && ...)` would skip it.
+  it.each([['zero', 0], ['false', false]])(
     'rejects a falsy-but-present categoryId (%s)',
     async (_label, value) => {
       const { req, res } = invokePut({ categoryId: value as unknown as string });
@@ -91,6 +90,17 @@ describe('PUT /api/business-links/[id] - categoryId validation', () => {
       expect(mockRefs.updatePayload).toBeUndefined();
     }
   );
+
+  // '' is what the edit form sends when no categories have loaded, and it means "no
+  // category". It casts (so it cannot reach the payload as-is) but null is the clean way to
+  // say the same thing, so it is normalized rather than rejected.
+  it('normalizes an empty categoryId onto null instead of 400ing the edit form', async () => {
+    const { req, res } = invokePut({ categoryId: '' });
+    await mockRefs.putHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.updatePayload).toMatchObject({ categoryId: null });
+  });
 
   it('allows null through, which mongoose casts cleanly to clear the field', async () => {
     const { req, res } = invokePut({ categoryId: null as unknown as string });

@@ -53,6 +53,18 @@ describe('GET /api/admin/email/whats-new-content - days guard', () => {
     expect(mockRefs.findFilter).toBeUndefined();
   });
 
+  // setDate overflows the Date range in either direction, so a finite-but-huge value passes
+  // a Number.isNaN check on the parsed number and still produces an Invalid Date. The guard
+  // asserts the constructed date instead.
+  it.each([['negative', '-99999999999'], ['positive', '99999999999']])(
+    'rejects an out-of-range %s days as a 400 before the query runs',
+    async (_label, days) => {
+      const { req, res } = invoke({ days });
+      await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockRefs.findFilter).toBeUndefined();
+    }
+  );
+
   it('still accepts a numeric days and builds a valid date window', async () => {
     const { req, res } = invoke({ days: '7' });
     await mockRefs.getHandler!(req, res);

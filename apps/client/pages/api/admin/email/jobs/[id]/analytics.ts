@@ -1,7 +1,8 @@
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { EmailSendStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { assertParseableDate } from '@server/utils/dateParam';
 
 const handler = baseApi().get(async (req, res) => {
   if (!req.user?.isAdmin) {
@@ -28,16 +29,8 @@ const handler = baseApi().get(async (req, res) => {
     endDate?: string;
   };
 
-  // An Invalid Date reaches a Date-typed filter downstream and throws a CastError there
-  // rather than answering the caller.
-  for (const [name, value] of [
-    ['startDate', startDate],
-    ['endDate', endDate],
-  ] as const) {
-    if (value && isNaN(new Date(value).getTime())) {
-      throw new BadRequestError(`Invalid ${name}: must be a parseable date`);
-    }
-  }
+  assertParseableDate('startDate', startDate);
+  assertParseableDate('endDate', endDate);
 
   const job = await emailJobRepository.findById(id);
   if (!job) {
