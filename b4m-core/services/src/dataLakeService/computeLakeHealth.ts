@@ -6,7 +6,9 @@ import {
   type IDataLakeDocument,
   type IFabFileRepository,
   type IScopedSettingsRepository,
+  summarizeLakeMembership,
   type LakeHealthApiResponse,
+  type LakeMembershipReport,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { lakeMembershipScope } from './lakeMembershipScope';
@@ -20,10 +22,16 @@ import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSet
 const MEMBER_SCAN_LIMIT = 25_000;
 /** How many failing members the report carries for the drill-down. The count is always exact. */
 const AFFECTED_MEMBERS_RETURNED = 200;
+/**
+ * How many duplicate GROUPS the report carries. The counts are always exact; this bounds the payload
+ * only. Sorted worst-first before the cap (see summarizeLakeMembership), so a truncated list holds
+ * the groups needing a human rather than an arbitrary slice.
+ */
+const DUPLICATE_GROUPS_RETURNED = 100;
 
 export interface ComputeLakeHealthAdapters {
   db: {
-    fabFiles: Pick<IFabFileRepository, 'findDataLakeHealthMembers'>;
+    fabFiles: Pick<IFabFileRepository, 'findDataLakeHealthMembers' | 'findDataLakeMembershipMembers'>;
     adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
@@ -67,7 +75,13 @@ export async function computeLakeHealth(
   // scanning on a null tag. Mirrors the same guard in GET /api/data-lakes/:id/articles.
   if (!lake.datalakeTag) {
     const empty = summarizeLakeHealth([], policy);
-    return { ...empty, affectedMembers: [], affectedMemberCount: 0, scanTruncated: false };
+    return {
+      ...empty,
+      affectedMembers: [],
+      affectedMemberCount: 0,
+      scanTruncated: false,
+      membership: summarizeLakeMembership([], { scope: membershipScopeDisclosure(lake) }),
+    };
   }
 
   const rows = await db.fabFiles.findDataLakeHealthMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
@@ -86,5 +100,38 @@ export async function computeLakeHealth(
     affectedMembers: report.affectedMembers.slice(0, AFFECTED_MEMBERS_RETURNED),
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
+    membership: await computeMembership(lake, db, logger),
   };
+}
+
+/** The principal the prefix arm is anchored to, carried onto every membership number (#2243). */
+function membershipScopeDisclosure(
+  lake: Pick<IDataLakeDocument, 'fileTagPrefix' | 'createdByUserId'>
+): LakeMembershipReport['scope'] {
+  return { creatorUserId: lake.createdByUserId ?? null, fileTagPrefix: lake.fileTagPrefix ?? null };
+}
+
+/**
+ * The membership dimension. A SECOND scan rather than a reuse of the health rows, because the two
+ * admit different populations on purpose: health excludes chunkless members, membership must keep
+ * them (see findDataLakeMembershipMembers).
+ */
+async function computeMembership(
+  lake: Parameters<typeof computeLakeHealth>[0],
+  db: ComputeLakeHealthAdapters['db'],
+  logger?: Logger
+): Promise<LakeMembershipReport> {
+  const rows = await db.fabFiles.findDataLakeMembershipMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
+  const truncated = rows.length > MEMBER_SCAN_LIMIT;
+  if (truncated) {
+    logger?.warn?.(
+      `[lakeHealth] lake ${lake.id} exceeds ${MEMBER_SCAN_LIMIT} members; membership computed over the ` +
+        `first ${MEMBER_SCAN_LIMIT}. Duplicate counts are a lower bound - see membership.scanTruncated.`
+    );
+  }
+  return summarizeLakeMembership(truncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows, {
+    scope: membershipScopeDisclosure(lake),
+    scanTruncated: truncated,
+    maxGroups: DUPLICATE_GROUPS_RETURNED,
+  });
 }

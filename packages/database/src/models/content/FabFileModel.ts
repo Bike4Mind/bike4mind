@@ -9,6 +9,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IFabFileVersion,
+  type MembershipArm,
   FabFileSourceType,
   KnowledgeType,
   REBUILD_PENDING_STALE_MS,
@@ -1445,6 +1446,62 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
           embeddedChunkCount: { $ifNull: ['$embeddedChunkCount', null] },
           embeddedCharCount: { $ifNull: ['$embeddedCharCount', null] },
+        },
+      },
+    ]);
+  }
+
+  /**
+   * Per-member membership facts (#2245). See the interface doc for why this is a third read.
+   *
+   * The `$match` is deliberately WIDER than findDataLakeHealthMembers': no chunk-bearing conjunct,
+   * because a chunkless copy of a document is precisely the duplicate an owner wants to remove.
+   * Filtering it out would report a lake with two generations of the same file as clean.
+   */
+  async findDataLakeMembershipMembers(
+    scope: DataLakeMembershipScope,
+    limit = 25_000
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      fileName?: string;
+      serverTextHash: string | null;
+      fileSize: number | null;
+      createdAt: Date | null;
+      arm: MembershipArm;
+    }>
+  > {
+    return this.fabFileModel.aggregate([
+      {
+        // buildDataLakeMembershipQuery, NOT a spread - the prefix arm is itself a top-level `$or`,
+        // and spreading would drop it and grade every file in the install as a member.
+        $match: buildDataLakeMembershipQuery(scope, {
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        }),
+      },
+      // Deterministic order before the bound, so which members a very large lake reports on is
+      // reproducible across refreshes rather than jittering - a plan an owner reviewed has to be
+      // comparable to the next one.
+      { $sort: { _id: 1 } },
+      { $limit: limit + 1 },
+      {
+        $project: {
+          _id: 0,
+          fabFileId: { $toString: '$_id' },
+          fileName: 1,
+          // $ifNull collapses ABSENT to null here on purpose: at this layer both mean "no
+          // fingerprint", and the pure summarizer refuses to prove identity from either (see
+          // isFingerprint). The tri-state distinction matters in the datastore, not in this report.
+          serverTextHash: { $ifNull: ['$serverTextHash', null] },
+          fileSize: { $ifNull: ['$fileSize', null] },
+          createdAt: { $ifNull: ['$createdAt', null] },
+          // Which arm admitted this member. The meta-tag is authoritative when present; everything
+          // else reaching this $match did so through the prefix arm.
+          arm: {
+            $cond: [{ $in: [scope.datalakeTag, { $ifNull: ['$tags.name', []] }] }, 'meta-tag', 'prefix'],
+          },
         },
       },
     ]);

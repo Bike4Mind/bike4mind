@@ -1,3 +1,4 @@
+import type { LakeMembershipReport } from './lakeMembershipHealth';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -394,6 +395,12 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
   affectedMemberCount: number;
   /** True when the lake exceeded the member scan bound, so every ratio here is partial. */
   scanTruncated: boolean;
+  /**
+   * The MEMBERSHIP dimension (#2245): who is in this lake and whether any document is here twice.
+   * Separate from the predicates above because every one of them can pass on a lake carrying two
+   * upload generations of the same files - each generation genuinely is chunked and vectorized.
+   */
+  membership: LakeMembershipReport;
 };
 
 function emptyTally(): PredicateTally {

@@ -1,3 +1,4 @@
+import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 
@@ -1036,6 +1037,35 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
       embeddedCharCount: number | null;
+    }>
+  >;
+  /**
+   * Per-member MEMBERSHIP facts (#2245): who is in this lake, by which arm, and what identifies them.
+   *
+   * A third read rather than an extension of `findDataLakeHealthMembers`, for the same reason
+   * convergence has its own: it asks a different question and so admits a different population.
+   * Health excludes chunkless members because they carry no retrievable content; membership must
+   * KEEP them - a chunkless copy of a document is exactly the duplicate an owner wants removed, and
+   * excluding it would report the lake as clean.
+   *
+   * `arm` is computed in the pipeline rather than by shipping the whole `tags` array, which on a
+   * large lake is the bulk of the payload and is not otherwise needed.
+   *
+   * `limit` fetches one extra row so the caller can detect overflow instead of silently truncating.
+   */
+  findDataLakeMembershipMembers(
+    scope: DataLakeMembershipScope,
+    limit?: number
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      fileName?: string;
+      // Tri-state is preserved deliberately: `null` ("chunked, no extractable text") must not be
+      // confused with an absent hash, and NEITHER proves identity. See isFingerprint.
+      serverTextHash: string | null;
+      fileSize: number | null;
+      createdAt: Date | null;
+      arm: MembershipArm;
     }>
   >;
   /**
