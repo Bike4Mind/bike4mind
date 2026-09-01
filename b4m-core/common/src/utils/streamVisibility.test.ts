@@ -13,6 +13,12 @@ describe('visibleReplyText', () => {
     expect(visibleReplyText('Here is the answer.')).toBe('Here is the answer.');
   });
 
+  it('passes text through when an open marker appears mid-string with no close', () => {
+    // Deliberate: the transcript shows this, and modelVisibleSlots' startsWith strip relies
+    // on it. "Fixing" it to return '' would silently break the append-mode seed exclusion.
+    expect(visibleReplyText('preamble<think>reasoning')).toBe('preamble<think>reasoning');
+  });
+
   it('hides a thinking block that has only opened', () => {
     // The first chunk of an extended-thinking turn is the bare marker.
     expect(visibleReplyText('<think>')).toBe('');

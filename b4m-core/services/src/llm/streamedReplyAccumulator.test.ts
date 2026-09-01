@@ -1,6 +1,11 @@
 import { hasVisibleReplyText } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { appendStreamedChunk, modelVisibleSlots, type ReplySlots } from './streamedReplyAccumulator';
+import {
+  appendStreamedChunk,
+  modelVisibleSlots,
+  shouldStampFirstVisibleToken,
+  type ReplySlots,
+} from './streamedReplyAccumulator';
 
 /**
  * Feeds a chunk sequence through the accumulator and reports, per chunk, whether the
@@ -133,5 +138,64 @@ describe('modelVisibleSlots', () => {
     const replies: ReplySlots = { 0: 'a rapid reply model text' };
     modelVisibleSlots(replies, 'append', 'a rapid reply');
     expect(replies[0]).toBe('a rapid reply model text');
+  });
+});
+
+describe('shouldStampFirstVisibleToken', () => {
+  /** Drives the real guard over a chunk sequence, reporting when it first fires. */
+  const stampAfterEachChunk = (
+    chunks: Array<{ text: string; index?: number }>,
+    transitionMode = 'replace',
+    rapidReplyContent = ''
+  ) => {
+    const replies: ReplySlots = {};
+    const performance: { firstTokenTime?: number } = {};
+    return chunks.map(({ text, index = 0 }, i) => {
+      appendStreamedChunk(replies, text, index, transitionMode);
+      const stamp = shouldStampFirstVisibleToken(performance, replies, transitionMode, rapidReplyContent);
+      if (stamp) performance.firstTokenTime = i + 1;
+      return stamp;
+    });
+  };
+
+  it('fires exactly once, on the chunk that first renders text', () => {
+    expect(
+      stampAfterEachChunk([
+        { text: '<think>' },
+        { text: 'weighing the options' },
+        { text: '</think>' },
+        { text: 'The answer is 42.' },
+        { text: ' More text.' },
+      ])
+    ).toEqual([false, false, false, true, false]);
+  });
+
+  it('never fires for a turn that only ever streams thinking', () => {
+    expect(stampAfterEachChunk([{ text: '<think>' }, { text: 'planning a tool call' }])).toEqual([false, false]);
+  });
+
+  it('does not fire on the rapid reply the user saw before this model started (append mode)', () => {
+    // Without modelVisibleSlots in the guard, the seeded text reads as visible and this
+    // stamps on chunk 1 - while the model is still only thinking.
+    const replies: ReplySlots = {};
+    appendStreamedChunk(replies, 'a rapid reply ', 0, 'append');
+    const performance: { firstTokenTime?: number } = {};
+
+    appendStreamedChunk(replies, '<think>', 0, 'append');
+    expect(shouldStampFirstVisibleToken(performance, replies, 'append', 'a rapid reply')).toBe(false);
+
+    appendStreamedChunk(replies, 'reasoning', 0, 'append');
+    expect(shouldStampFirstVisibleToken(performance, replies, 'append', 'a rapid reply')).toBe(false);
+
+    appendStreamedChunk(replies, '</think>', 0, 'append');
+    expect(shouldStampFirstVisibleToken(performance, replies, 'append', 'a rapid reply')).toBe(false);
+
+    appendStreamedChunk(replies, 'The answer is 42.', 0, 'append');
+    expect(shouldStampFirstVisibleToken(performance, replies, 'append', 'a rapid reply')).toBe(true);
+  });
+
+  it('refuses to re-stamp once a time is recorded', () => {
+    const replies: ReplySlots = { 0: 'visible text' };
+    expect(shouldStampFirstVisibleToken({ firstTokenTime: 1234 }, replies, 'replace', '')).toBe(false);
   });
 });

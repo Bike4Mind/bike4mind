@@ -5,7 +5,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import dayjs from 'dayjs';
 import { ModelMetric, SortField, SortDirection } from '../types';
-import { formatDuration, formatTtfvt, getDisplayName } from '../utils/formatters';
+import { formatDuration, formatTtfvt, ttfvtColor, getDisplayName } from '../utils/formatters';
 import UsernameText from '@client/app/components/common/UsernameText';
 import StatusTimeline from '@client/app/components/Session/StatusTimeline';
 
@@ -326,7 +326,7 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                           </Typography>
                           <Typography
                             level="body-xs"
-                            sx={{ color: metric.performance?.firstTokenTime ? 'text.secondary' : 'danger.plainColor' }}
+                            color={ttfvtColor(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)}
                           >
                             TTFVT: {formatTtfvt(metric.performance?.firstTokenTime, metric.performance?.firstChunkTime)}
                           </Typography>
@@ -396,7 +396,10 @@ export const RawDataTab: React.FC<RawDataTabProps> = ({
                                     <Typography
                                       level="body-sm"
                                       fontWeight="bold"
-                                      color={metric.performance?.firstTokenTime ? 'success' : 'danger'}
+                                      color={ttfvtColor(
+                                        metric.performance?.firstTokenTime,
+                                        metric.performance?.firstChunkTime
+                                      )}
                                     >
                                       {formatTtfvt(
                                         metric.performance?.firstTokenTime,

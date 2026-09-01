@@ -1,3 +1,5 @@
+import { hasVisibleReplyText, THINK_CLOSE_TAG } from '@bike4mind/common';
+
 /**
  * Reply slots keyed by the provider's content-block index. Object rather than array because
  * indices are assigned by the provider and can skip.
@@ -31,7 +33,7 @@ export function appendStreamedChunk(replies: ReplySlots, text: string, index: nu
   // answer arrives at the SAME index as the thinking block that just closed. Appending it
   // there would bury the answer inside the collapsed reasoning block, so a slot that has
   // just closed its thinking spills into the next one.
-  if (replies[index].endsWith('</think>')) {
+  if (replies[index].endsWith(THINK_CLOSE_TAG)) {
     replies[index + 1] ??= '';
     replies[index + 1] += text;
     return;
@@ -60,4 +62,23 @@ export function modelVisibleSlots(replies: ReplySlots, transitionMode: string, r
     slots[0] = slots[0].slice(seededPrefix.length);
   }
   return slots;
+}
+
+/**
+ * Whether this chunk is the one that first put visible text in front of the user.
+ *
+ * The production stamp condition, extracted so it is executable by a test: inlining it left
+ * the composition untested, and dropping `modelVisibleSlots` here (counting the rapid reply
+ * the user saw before this model started) would not have failed anything.
+ *
+ * @param performance Read-only here; the caller owns the write.
+ */
+export function shouldStampFirstVisibleToken(
+  performance: { firstTokenTime?: number },
+  replies: ReplySlots,
+  transitionMode: string,
+  rapidReplyContent: string
+): boolean {
+  if (performance.firstTokenTime) return false;
+  return hasVisibleReplyText(modelVisibleSlots(replies, transitionMode, rapidReplyContent));
 }

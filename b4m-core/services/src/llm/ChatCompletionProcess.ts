@@ -32,7 +32,6 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
-  hasVisibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -94,7 +93,7 @@ import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
-import { appendStreamedChunk, modelVisibleSlots } from './streamedReplyAccumulator';
+import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
@@ -3551,6 +3550,24 @@ export class ChatCompletionProcess {
       const streamStartTime = Date.now();
       let chunkCount = 0;
 
+      /**
+       * Wipe everything that describes a single streaming attempt, so a retry starts clean.
+       *
+       * The timings reset with the rest of it because a retry discards the reply the user was
+       * shown, and `promptMeta.model` is relabelled to whichever model finally answers. Keeping
+       * a first attempt's fast TTFVT would attribute it to the model that replaced it - the row
+       * would claim sub-second on a turn the user watched freeze.
+       */
+      const resetStreamStateForRetry = () => {
+        for (const key of Object.keys(replies)) {
+          replies[parseInt(key)] = '';
+        }
+        quest.replies = [];
+        chunkCount = 0;
+        quest.promptMeta!.performance!.firstChunkTime = undefined;
+        quest.promptMeta!.performance!.firstTokenTime = undefined;
+      };
+
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Determine reasoning effort: user preference takes precedence over auto-classification
@@ -3980,11 +3997,13 @@ export class ChatCompletionProcess {
                 // each of the five - drift this derivation cannot have.
                 // Deliberately left unset when nothing visible ever streams: absent reads as
                 // "never rendered", where a number would read as fast.
-                // modelVisibleSlots drops the rapid reply pre-seeded in 'append' mode, which the
-                // user saw before this model started and which must not count as its first token.
                 if (
-                  !quest.promptMeta!.performance!.firstTokenTime &&
-                  hasVisibleReplyText(modelVisibleSlots(replies, transitionMode, rapidReplyContent))
+                  shouldStampFirstVisibleToken(
+                    quest.promptMeta!.performance!,
+                    replies,
+                    transitionMode,
+                    rapidReplyContent
+                  )
                 ) {
                   quest.promptMeta!.performance!.firstTokenTime = Date.now() - processStartTime;
                   logger.info(
@@ -4056,12 +4075,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue; // Retry the while loop with cleaned messages
             }
@@ -4096,12 +4110,7 @@ export class ChatCompletionProcess {
 
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
-                // Reset streaming state for clean retry
-                for (const key of Object.keys(replies)) {
-                  replies[parseInt(key)] = '';
-                }
-                quest.replies = [];
-                chunkCount = 0;
+                resetStreamStateForRetry();
 
                 continue; // Re-enter the while loop to retry with the same model
               }
@@ -4126,12 +4135,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4152,12 +4156,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4239,13 +4238,7 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
 
               // Clear previous replies for retry
-              Object.keys(replies).forEach(key => {
-                replies[parseInt(key)] = '';
-              });
-              quest.replies = [];
-
-              // Reset streaming state for retry
-              chunkCount = 0;
+              resetStreamStateForRetry();
               // Continue the loop with the new model
               continue;
             } catch (fallbackError) {

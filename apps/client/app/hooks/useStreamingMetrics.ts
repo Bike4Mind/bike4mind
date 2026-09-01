@@ -1,3 +1,4 @@
+import { hasVisibleReplyText } from '@bike4mind/common';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import perfLogger from '../utils/performanceLogger';
 import { api } from '@client/app/contexts/ApiContext';
@@ -97,8 +98,13 @@ export function useStreamingMetrics() {
   // Calculate time from prompt sent to first token rendered, then report it back
   // to the server. Records once per quest; on failure the quest is un-marked so a
   // later chunk can retry.
+  //
+  // Visibility is judged with the same shared rule the server stamps TTFVT by, so the two
+  // stay comparable: a bare non-empty check counts a hidden <think> marker and makes the
+  // client number land BELOW the server's on any extended-thinking turn, inverting the
+  // gap the admin troubleshooting guide reads as network + render time.
   const recordFirstTokenIfNeeded = useCallback((quest: { id?: string; replies?: (string | null | undefined)[] }) => {
-    const hasFirstToken = quest.replies && quest.replies.some(reply => reply && reply.trim().length > 0);
+    const hasFirstToken = hasVisibleReplyText(quest.replies ?? []);
     if (hasFirstToken && quest.id && !clientFirstTokenRecordedRef.current.has(quest.id)) {
       const clientPromptSentTimeStr = sessionStorage.getItem(`quest-${quest.id}-sent-time`);
       if (clientPromptSentTimeStr) {

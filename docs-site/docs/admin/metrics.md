@@ -55,20 +55,22 @@ answering -- has **no** TTFVT rather than a fast-looking one. The Raw Data tab s
 did respond while the user saw nothing.
 
 Turns recorded before this measurement was corrected keep the old meaning, and there is no way
-to repair them: the data needed to recompute them was never stored. Those rows have a TTFVT but
-no first-chunk time, which is how you spot them. Expect a one-time step in the First Token trend
-when the fix ships -- thinking-heavy models rise toward their true latency and turns that never
-rendered drop out of the average entirely. That step is the measurement changing, not the product
-getting slower, so do not compare across it.
+to repair them: the data needed to recompute them was never stored. They are not distinguishable
+in this dashboard -- they simply show a TTFVT measured under the old rule. Expect a one-time step
+in the First Token trend when the fix ships: thinking-heavy models rise toward their true latency,
+and turns that never rendered drop out of the average entirely. That step is the measurement
+changing, not the product getting slower, so do not compare across it.
 
 #### Troubleshooting: TTFVT looks better than users report
 
 - **`never rendered` rows in Raw Data.** These are frozen turns, and they are the ones users
   complain about. They are excluded from the First Token trend chart rather than averaged into it,
-  so the chart cannot show them -- filter the Raw Data tab instead. A rising count here is the
-  signal, even while the chart looks flat.
-- **TTFVT far below Client First Token Time.** TTFVT stops at the server; the gap is network and
-  client render time. Compare the two before attributing slowness to the model.
+  so the chart cannot show them -- sort or scan the Raw Data tab instead, where they are flagged in
+  red. There is no dedicated filter or counter for them yet; more of them appearing is the signal,
+  even while the chart looks flat.
+- **TTFVT far below Client First Token Time.** Both count the same visible text, so TTFVT stops at
+  the server and the gap is network plus client render time. Compare the two before attributing
+  slowness to the model.
 - **Turns with no TTFVT and no first-chunk time.** The response was not streamed at all. Check the
   model's streaming support rather than reading it as a latency problem.
 

@@ -15,7 +15,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { ModelTraining, Thermostat, Token, Speed, Close, Timer, Code, Warning, ContentCopy } from '@mui/icons-material';
-import { CLIENT_UNLIMITED_HISTORY_VALUE, PromptMeta } from '@bike4mind/common';
+import { CLIENT_UNLIMITED_HISTORY_VALUE, PromptMeta, ttfvtState } from '@bike4mind/common';
 import Draggable from 'react-draggable';
 import type { DraggableEvent, DraggableData } from 'react-draggable';
 
@@ -153,7 +153,12 @@ const PromptMetaInspector = () => {
 - **Context Retrieval**: ${promptMeta.performance?.contextRetrievalTime ?? 'N/A'} ms
 - **Model Inference**: ${promptMeta.performance?.modelInferenceTime ?? 'N/A'} ms
 - **First Visible Token (TTFVT)**: ${
-      promptMeta.performance?.firstTokenTime != null ? `${promptMeta.performance.firstTokenTime} ms` : 'never rendered'
+      {
+        measured: `${promptMeta.performance?.firstTokenTime} ms`,
+        // Only claim this when a first chunk proves the model actually streamed.
+        'never-rendered': 'never rendered',
+        unknown: 'N/A (not streamed)',
+      }[ttfvtState(promptMeta.performance?.firstTokenTime, promptMeta.performance?.firstChunkTime)]
     }
 - **First Chunk (any kind, thinking included)**: ${promptMeta.performance?.firstChunkTime ?? 'N/A'} ms
 
