@@ -142,9 +142,12 @@ describe('findByDriveConnectionIdInDataLake', () => {
   });
 });
 
-// The resume key for a Drive ingest that spans several runs. Unlike every other accessor above it
-// must NOT filter `pending`: the rows a continuation slice has to recognise as already-done are
-// precisely the ones its earlier slices uploaded and the pipeline has not vectorized yet.
+// The resume key for a Drive ingest that spans several runs. It excludes `pending` - unlike every
+// other accessor above, not because pending rows are throwaway, but because 'pending' is exactly
+// what a row minted by createFabFile and never confirmed by storage.upload looks like, and that row
+// must NOT be mistaken for "already ingested" (it would then never be retried, and no bytes would
+// ever land for its driveFileId). markUploaded is what flips a genuinely-uploaded row out of
+// 'pending' synchronously, ahead of the async S3 objectCreated event.
 describe('findDriveFileIdsByBatchId', () => {
   const batchId = 'batch-resume';
 
@@ -160,13 +163,46 @@ describe('findDriveFileIdsByBatchId', () => {
     ...over,
   });
 
-  it('includes the still-pending rows an earlier slice uploaded, and ignores other batches', async () => {
+  it('excludes a row still pending (upload never confirmed) and ignores other batches', async () => {
     await FabFile.create(makeFile({ driveFileId: 'd1', status: 'pending' }));
     await FabFile.create(makeFile({ driveFileId: 'd2' }));
     await FabFile.create(makeFile({ driveFileId: 'd-other', batchId: 'batch-elsewhere' }));
     await FabFile.create(makeFile({}));
 
     const result = await fabFileRepository.findDriveFileIdsByBatchId(batchId);
-    expect(result.sort()).toEqual(['d1', 'd2']);
+    expect(result).toEqual(['d2']);
+  });
+
+  it('includes a row markUploaded confirmed even though its FabFile.status has not vectorized yet', async () => {
+    // A dedicated batch id: deleteMany's soft-delete leaves the previous test's rows queryable (this
+    // accessor has no deletedAt filter - see its own doc comment), so reusing `batchId` would leak them in.
+    const confirmedBatchId = 'batch-resume-confirmed';
+    const created = await FabFile.create(makeFile({ batchId: confirmedBatchId, driveFileId: 'd1', status: 'pending' }));
+    await fabFileRepository.markUploaded(created.id);
+
+    const result = await fabFileRepository.findDriveFileIdsByBatchId(confirmedBatchId);
+    expect(result).toEqual(['d1']);
+  });
+});
+
+describe('markUploaded', () => {
+  it('flips a pending row to complete, and is a no-op once already complete', async () => {
+    const created = await FabFile.create({
+      userId: 'u-resume',
+      fileName: 'f.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'f.txt',
+      status: 'pending',
+      sourceType: FabFileSourceType.GOOGLE_DRIVE,
+      driveFileId: 'd1',
+    });
+
+    await fabFileRepository.markUploaded(created.id);
+    expect((await FabFile.findById(created.id))?.status).toBe('complete');
+
+    // Idempotent - the async S3 objectCreated handler may also try this same transition later.
+    await fabFileRepository.markUploaded(created.id);
+    expect((await FabFile.findById(created.id))?.status).toBe('complete');
   });
 });

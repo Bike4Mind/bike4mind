@@ -6,6 +6,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { randomUUID } from 'crypto';
 
 const MAX_LAST_ERROR_LEN = 500;
 
@@ -80,8 +81,12 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     lastPolledAt: { type: Date },
     // When the current 'syncing' claim was taken; a stale one is reclaimable (see claimForSync).
     syncClaimedAt: { type: Date },
-    // The batch a sliced ingest chain is filling; the token a continuation presents to adoptSyncClaim.
+    // The batch a sliced ingest chain is filling; the id a continuation presents to adoptSyncClaim.
     activeIngestBatchId: { type: String },
+    // The one-time-use token a continuation must ALSO present to adoptSyncClaim, minted fresh by
+    // each renewSyncClaim/adoptSyncClaim call and never reused - see adoptSyncClaim's doc comment for
+    // why activeIngestBatchId alone (unchanged for a whole chain) cannot serve as this CAS token.
+    ingestClaimToken: { type: String },
 
     // Incremental-sync resumption (Drive changes pageToken)
     syncCursor: { type: String },
@@ -253,8 +258,8 @@ class OrgGoogleDriveConnectionRepository
     // and its predictable caller is a raw provider err.message - see redactLastError).
     set.lastError = update.lastError ? redactLastError(update.lastError) : null;
     // Every caller here moves the connection OUT of 'syncing' (the success release, a credential
-    // failure, a disconnect), so any ingest-chain token goes with it - see releaseSyncClaim.
-    const unset = update.status === 'syncing' ? undefined : { activeIngestBatchId: '' };
+    // failure, a disconnect), so any ingest-chain id/token goes with it - see releaseSyncClaim.
+    const unset = update.status === 'syncing' ? undefined : { activeIngestBatchId: '', ingestClaimToken: '' };
     return this.model.findByIdAndUpdate(id, { $set: set, ...(unset && { $unset: unset }) }, { new: true });
   }
 
@@ -301,44 +306,62 @@ class OrgGoogleDriveConnectionRepository
           },
         ],
       },
-      // A fresh claim starts no chain, so any continuation token left by a dead one is cleared here -
-      // otherwise a stale message could still present it to adoptSyncClaim and join a chain that is
-      // no longer running.
-      { $set: { status: 'syncing', syncClaimedAt: new Date() }, $unset: { activeIngestBatchId: '' } }
+      // A fresh claim starts no chain, so any continuation id/token left by a dead one is cleared
+      // here - otherwise a stale message could still present it to adoptSyncClaim and join a chain
+      // that is no longer running.
+      {
+        $set: { status: 'syncing', syncClaimedAt: new Date() },
+        $unset: { activeIngestBatchId: '', ingestClaimToken: '' },
+      }
     );
     return claimed !== null;
   }
 
   /**
-   * Continuation-only take-over of a live claim (see the type docs): matches on the batch token this
-   * chain's previous slice wrote, so only that chain's own next slice can pick the claim up. The claim
-   * therefore never returns to 'connected' between slices, which is what keeps the re-sync poll from
-   * starting a competing walk mid-chain.
+   * Continuation-only take-over of a live claim (see the type docs): matches on the batch id AND the
+   * one-time token this chain's previous slice minted (renewSyncClaim), so only that chain's own next
+   * slice can pick the claim up. The claim therefore never returns to 'connected' between slices, which
+   * is what keeps the re-sync poll from starting a competing walk mid-chain.
+   *
+   * The match is on `activeIngestBatchId` (unchanged for a whole chain, since it also names the batch
+   * document to resume) AND `ingestClaimToken` (rotated to a fresh value on every successful adopt).
+   * The batch id alone cannot be the CAS token: two deliveries of the SAME continuation message would
+   * both match it and both win, since matching it doesn't consume it. Rotating a second field the
+   * update also changes is what makes a redelivered duplicate lose - Mongo applies findOneAndUpdate
+   * atomically, so only the first of two concurrent callers can observe the pre-rotation value.
+   * Returns the freshly-minted token on success (for the caller to carry forward if it defers again),
+   * or null if the take-over lost.
    */
-  async adoptSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean> {
+  async adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null> {
+    const rotatedToken = randomUUID();
     const adopted = await this.model.findOneAndUpdate(
-      { _id: id, status: 'syncing', activeIngestBatchId },
-      { $set: { syncClaimedAt: new Date() } }
+      { _id: id, status: 'syncing', activeIngestBatchId, ingestClaimToken: claimToken },
+      { $set: { syncClaimedAt: new Date(), ingestClaimToken: rotatedToken } }
     );
-    return adopted !== null;
+    return adopted !== null ? rotatedToken : null;
   }
 
   /**
    * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one,
-   * and - like adoptSyncClaim - a compare-and-set on the token: it writes only over its OWN chain's id
-   * or over no chain at all (the first slice, which claimed fresh). Without that conjunct a slow slice
-   * renewing after its claim was reclaimed would re-point the token at a chain nobody is running.
+   * and - like adoptSyncClaim - a compare-and-set on the batch id: it writes only over its OWN chain's
+   * id or over no chain at all (the first slice, which claimed fresh). Without that conjunct a slow
+   * slice renewing after its claim was reclaimed would re-point the id at a chain nobody is running.
+   *
+   * Always mints a fresh `ingestClaimToken` (there is only ever one caller of this per slice, run
+   * sequentially, so there is no concurrent-renewal race to CAS against) and returns it - the caller
+   * carries it into the next slice's continuation payload for adoptSyncClaim to present.
    */
-  async renewSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean> {
+  async renewSyncClaim(id: string, activeIngestBatchId: string): Promise<string | null> {
+    const rotatedToken = randomUUID();
     const renewed = await this.model.findOneAndUpdate(
       {
         _id: id,
         status: 'syncing',
         $or: [{ activeIngestBatchId }, { activeIngestBatchId: { $in: [null] } }],
       },
-      { $set: { syncClaimedAt: new Date(), activeIngestBatchId } }
+      { $set: { syncClaimedAt: new Date(), activeIngestBatchId, ingestClaimToken: rotatedToken } }
     );
-    return renewed !== null;
+    return renewed !== null ? rotatedToken : null;
   }
 
   /**
@@ -364,11 +387,11 @@ class OrgGoogleDriveConnectionRepository
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     const set: Record<string, unknown> = { status: 'connected', lastPolledAt: new Date() };
     if (lastError) set.lastError = redactLastError(lastError);
-    // The chain (if any) is over once the claim goes; leaving the token would let an in-flight
+    // The chain (if any) is over once the claim goes; leaving the id/token would let an in-flight
     // continuation message adopt a claim nobody holds.
     return this.model.findOneAndUpdate(
       { _id: id, status: 'syncing' },
-      { $set: set, $unset: { activeIngestBatchId: '' } },
+      { $set: set, $unset: { activeIngestBatchId: '', ingestClaimToken: '' } },
       { new: true }
     );
   }

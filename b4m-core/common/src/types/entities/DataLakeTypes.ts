@@ -555,6 +555,13 @@ export interface IDataLakeBatch {
    * schema comment on this field for why it's tracked separately. */
   processingFailedFiles: number;
   skippedFiles: number;
+  /**
+   * Drive-ingest-only: driveFileIds skip() has already counted into `skippedFiles` for THIS batch.
+   * A skip mints no FabFile, so it is invisible to the ordinary alreadyIngested subtraction
+   * (findDriveFileIdsByBatchId) - without recording it here, a chain re-diffing the same
+   * permanently-unsupported file on every slice would re-fetch and re-count it once per slice.
+   */
+  skippedDriveFileIds?: string[];
 
   // Size tracking
   totalSizeBytes: number;
@@ -635,6 +642,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and
+   * increment `skippedFiles`, gated on that driveFileId not already being recorded - so a chain
+   * re-diffing the same permanently-unsupported file across several slices counts and subtracts it
+   * exactly once. Returns false (a no-op, not an error) when it was already recorded.
+   */
+  recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean>;
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
    * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
   tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;

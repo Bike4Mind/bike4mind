@@ -956,14 +956,26 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
   /**
-   * The Drive file ids a given ingest batch has already minted a FabFile for. Deliberately NOT
-   * status-filtered, unlike every other Drive accessor here: this is what a resumed ingest slice
-   * subtracts from its fresh walk, and the rows it must recognise are precisely the `pending` ones
-   * the earlier slices uploaded but the pipeline has not vectorized yet. Without it a continuation
-   * re-ingests its own tail as duplicates - the walk cannot tell an already-uploaded file apart from
-   * a brand-new one once its superseded copy has been retired.
+   * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
+   * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
+   * actually landed - `status: 'pending'` alone does not prove that (every fresh row is minted
+   * pending and stays that way until an S3 objectCreated event, or the ingester's own markUploaded
+   * call, confirms the upload; see the model comment). Without the exclusion, a throw between
+   * minting the FabFile and finishing `storage.upload` would strand that driveFileId as
+   * permanently "already ingested" - invisible to every future slice's walk - with no bytes ever
+   * uploaded for it. A brand-new file's superseded copy is excluded the same way a vectorized one
+   * is included: both signal the SAME thing, that this driveFileId's current attempt is durable.
    */
   findDriveFileIdsByBatchId(batchId: string): Promise<string[]>;
+  /**
+   * Confirm a FabFile's bytes have landed, synchronously from the uploader itself - the same
+   * `pending` -> `complete` transition the S3 objectCreated handler makes asynchronously off the
+   * bucket event, done here instead so a resumed ingest slice's findDriveFileIdsByBatchId does not
+   * have to race that event to tell "uploaded" apart from "row minted, never uploaded". Idempotent
+   * with objectCreated's own transition (both guard on `status !== 'complete'`), so it is harmless
+   * if the S3 event flips it first or flips it again after.
+   */
+  markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
   /**
    * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the

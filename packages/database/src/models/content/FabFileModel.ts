@@ -1307,11 +1307,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
-    // No status filter on purpose - the rows a resumed slice must recognise are the `pending` ones
-    // its own earlier slices uploaded (see the interface docs). `distinct` keeps this a projection
+    // Excludes 'pending' - a row this slice's own createFabFile minted but whose storage.upload
+    // never confirmed (see the interface docs and markUploaded). `distinct` keeps this a projection
     // over the { batchId: 1 } index rather than loading a whole slice's documents.
-    const ids = await this.fabFileModel.distinct('driveFileId', { batchId, driveFileId: { $ne: null } });
+    const ids = await this.fabFileModel.distinct('driveFileId', {
+      batchId,
+      driveFileId: { $ne: null },
+      status: { $ne: 'pending' },
+    });
     return ids.filter((id): id is string => typeof id === 'string');
+  }
+
+  async markUploaded(fabFileId: string): Promise<void> {
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId, status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
   }
 
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter

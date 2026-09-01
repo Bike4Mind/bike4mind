@@ -42,10 +42,13 @@ import { z, ZodError } from 'zod';
 const Payload = z.object({
   connectionId: z.string(),
   redriveCount: z.number().int().min(0).default(0),
-  // Set only on a self-re-enqueued continuation: the batch the previous slice was filling, which is
-  // both the claim token (adoptSyncClaim) and the record of what has already been ingested. Absent on
-  // every externally-triggered sync, so those always start a fresh chain.
+  // Set only on a self-re-enqueued continuation: the batch the previous slice was filling, and the
+  // record of what has already been ingested. Absent on every externally-triggered sync, so those
+  // always start a fresh chain.
   resumeBatchId: z.string().optional(),
+  // The one-time CAS token adoptSyncClaim must present alongside resumeBatchId - see
+  // OrgGoogleDriveConnection.ingestClaimToken. Always set together with resumeBatchId.
+  claimToken: z.string().optional(),
   // Continuation depth, incremented per self-re-enqueue and bounded by MAX_INGEST_SLICES.
   slice: z.number().int().min(0).default(0),
 });
@@ -93,6 +96,12 @@ export const MAX_INGEST_SLICES = 20;
 // complete inside one invocation before any file is touched. Enforced up front, before any membership
 // write, so an over-cap folder is refused with nothing changed. Beyond it the folder should be split
 // into subfolders connected separately.
+//
+// Also, indirectly, a bound on the size of ONE batch document: every candidate a chain ingests gets a
+// manifest entry in `files[]` on this same DataLakeBatch doc, and both claimFileStatus's positional
+// update and every finalize check read the whole document. Raising this constant further raises that
+// document's worst-case size (and, with failedFileNames also accumulating, moves it closer to the 16MB
+// BSON ceiling) as well as the walk+diff cost the comment above is about.
 export const MAX_INGEST_CANDIDATES = 20000;
 
 /**
@@ -196,16 +205,20 @@ export function hasDriveFileChanged(
  * carrying the batch it was filling. Three things make that converge where a plain SQS retry did not:
  *
  *   - The next slice ADOPTS the batch instead of creating one, and subtracts the Drive ids that batch
- *     has already minted FabFiles for (findDriveFileIdsByBatchId) from its own fresh walk. That
- *     subtraction is load-bearing and cannot be replaced by the ordinary diff: a file an earlier slice
- *     uploaded is still `pending` (so invisible to findByDriveConnectionIdInDataLake) and its
- *     superseded copy has already been retired, which makes it look like a brand-new ADD. Re-ingesting
- *     it is exactly the duplicate-tail spiral this chain exists to avoid.
+ *     has already UPLOADED or permanently skipped a FabFile for (findDriveFileIdsByBatchId,
+ *     skippedDriveFileIds) from its own fresh walk. That subtraction is load-bearing and cannot be
+ *     replaced by the ordinary diff: a file an earlier slice uploaded is still `pending` (so invisible
+ *     to findByDriveConnectionIdInDataLake) and its superseded copy has already been retired, which
+ *     makes it look like a brand-new ADD. Re-ingesting it is exactly the duplicate-tail spiral this
+ *     chain exists to avoid.
  *   - The `syncing` claim is HANDED from slice to slice (renewSyncClaim -> adoptSyncClaim) and never
  *     returns to 'connected' in between, so the re-sync poll cannot slip in and start a competing walk
- *     mid-chain. The batch id is the token: only this chain's own next slice can adopt it, and it is
- *     also what tells claimForSync's staleness arm to hold a chained claim for much longer than an
- *     unchained one - a continuation's un-refreshed interval is its queue wait, not its run length.
+ *     mid-chain. The batch id names WHICH chain, but the actual CAS is a one-time `ingestClaimToken`
+ *     rotated on every hand-off - the batch id alone cannot be consumed (it has to stay fixed for the
+ *     whole chain to keep naming the same batch), so two deliveries of one continuation message would
+ *     otherwise both match it and both adopt. The batch id is also what tells claimForSync's staleness
+ *     arm to hold a chained claim for much longer than an unchained one - a continuation's un-refreshed
+ *     interval is its queue wait, not its run length.
  *   - `totalFiles` is re-planned as the chain goes (raised when a later walk finds more, set exactly
  *     when the chain ends), so the finalize gate is still reached exactly and the batch never settles
  *     mid-chain or strands in `processing` afterwards.
@@ -227,6 +240,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const { redriveCount, resumeBatchId, slice } = payload;
     logger.updateMetadata({ handler: 'driveLakeIngest', connectionId });
 
+    // The CAS token this run currently holds for the chain, if any - reassigned to the freshly
+    // rotated value on a successful adopt, and again on every renewSyncClaim before a continuation
+    // is enqueued. See OrgGoogleDriveConnection.ingestClaimToken for why the batch id alone can't
+    // serve as this token.
+    let ingestClaimToken = payload.claimToken;
+
     // `?? ` alone is not enough: a non-finite reading is not nullish and every comparison against it
     // is false, which would disable the deadline guard silently rather than fall back to the budget.
     const runStartedAt = Date.now();
@@ -247,12 +266,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // both walk and both create a full set of FabFiles otherwise, since the driveFileId dedup can't
     // help while the first run's rows are still `pending`. The loser here is a cheap no-op.
     // A continuation takes over the claim its own previous slice is still holding, matched on the
-    // batch token, so the connection never passes through 'connected' mid-chain. Falling back to a
-    // fresh claim covers the one case where the chain's claim is genuinely gone: the previous slice
-    // threw, released, and SQS redelivered its message.
-    claimed = resumeBatchId
-      ? await orgGoogleDriveConnectionRepository.adoptSyncClaim(connectionId, resumeBatchId)
-      : false;
+    // batch id AND its one-time claim token, so the connection never passes through 'connected'
+    // mid-chain, and a redelivered duplicate of THIS SAME continuation message (which presents the
+    // same already-consumed token) loses rather than racing this run. Falling back to a fresh claim
+    // covers the one case where the chain's claim is genuinely gone: the previous slice threw,
+    // released, and SQS redelivered its message.
+    claimed = false;
+    if (resumeBatchId && ingestClaimToken) {
+      const adopted = await orgGoogleDriveConnectionRepository.adoptSyncClaim(
+        connectionId,
+        resumeBatchId,
+        ingestClaimToken
+      );
+      if (adopted) {
+        claimed = true;
+        ingestClaimToken = adopted;
+      }
+    }
     if (!claimed) claimed = await orgGoogleDriveConnectionRepository.claimForSync(connectionId);
     if (!claimed) {
       // Someone else holds the claim. If a real ingest is in flight ('syncing'), DEFER this run by
@@ -263,12 +293,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       if (current?.status === 'syncing' && redriveCount < MAX_INGEST_REDRIVES) {
         await sendToQueue(
           Resource.driveLakeIngestQueue.url,
-          { connectionId, redriveCount: redriveCount + 1 },
+          {
+            connectionId,
+            redriveCount: redriveCount + 1,
+            // Forward the continuation's own identity, if this run had one: a continuation that
+            // loses this race must not come back as a FRESH first-slice sync, which would carry no
+            // resumeBatchId, subtract nothing, and re-ingest the chain's already-`pending` tail as
+            // duplicate ADDs - the exact spiral chaining exists to prevent.
+            ...(resumeBatchId && { resumeBatchId, slice, claimToken: payload.claimToken }),
+          },
           INGEST_REDRIVE_DELAY_SECONDS
         );
         logger.info('[driveLakeIngest] another sync in flight; deferred', {
           connectionId,
           redriveCount: redriveCount + 1,
+          resumeBatchId,
         });
       } else {
         logger.info('[driveLakeIngest] could not claim (not syncing or redrive exhausted); skipping', {
@@ -386,12 +425,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Adds and edited files both ingest fresh; an edited file's stale copy is retired in the loop
     // below, only after its replacement is uploaded (never up front - see the header for why).
     //
-    // On a continuation, subtract what the adopted batch has ALREADY minted a FabFile for. Those files
-    // are invisible to the diff above (still `pending`, and their superseded copies already retired),
-    // so without this every one of them reads as a fresh ADD and the chain would duplicate its own
-    // tail - see the header.
+    // On a continuation, subtract every driveFileId the adopted batch has already DEALT WITH - either
+    // uploaded (still `pending`, its superseded copy already retired, so invisible to the diff above)
+    // or permanently skipped (skip() mints no FabFile at all, so it is invisible the same way). Without
+    // this every one of them reads as a fresh ADD and the chain would duplicate its own tail, or
+    // re-fetch-and-re-skip a file that can never succeed - see the header and skip()'s own comment.
     const alreadyIngested = adoptedBatch
-      ? new Set(await fabFileRepository.findDriveFileIdsByBatchId(adoptedBatch.id))
+      ? new Set([
+          ...(await fabFileRepository.findDriveFileIdsByBatchId(adoptedBatch.id)),
+          ...(adoptedBatch.skippedDriveFileIds ?? []),
+        ])
       : new Set<string>();
     const candidates = [...pureAdds, ...changed].filter(f => !alreadyIngested.has(f.id));
 
@@ -656,6 +699,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         candidates: candidates.length,
         cap: MAX_INGEST_CANDIDATES,
       });
+      // A folder that grew past the cap mid-chain still owes its adopted batch a settlement - the
+      // same exit this cap refusal shares with the zero-candidate and admission-refusal returns below.
+      if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
         lastPolledAt: new Date(),
@@ -787,7 +833,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }));
 
       if (adoptedBatch) {
-        const planned = alreadyIngested.size + (adoptedBatch.skippedFiles ?? 0) + candidates.length;
+        // alreadyIngested already includes every driveFileId this chain has uploaded OR permanently
+        // skipped (see how it's built above), so it alone covers what earlier slices produced -
+        // adding adoptedBatch.skippedFiles on top would double-count them.
+        const planned = alreadyIngested.size + candidates.length;
         if (planned > adoptedBatch.totalFiles) {
           await dataLakeBatchRepository.setTotalFilesIfActive(adoptedBatch.id, planned);
         }
@@ -801,10 +850,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let uploaded = 0;
       let skipped = 0;
 
+      // Idempotent per driveFileId within this chain (recordSkippedDriveFile), so a file that keeps
+      // failing the same deterministic gate on every slice (see skip()'s own callers) is counted and
+      // subtracted exactly once instead of once per slice.
       const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
-        skipped++;
-        await dataLakeBatchRepository.incrementCounter(batch.id, 'skippedFiles');
-        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, ...extra });
+        const recorded = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, driveFileId);
+        if (recorded) skipped++;
+        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, recorded, ...extra });
       };
 
       // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
@@ -880,6 +932,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         await storage.upload(bytes, fileKey, { ContentType: mimeType });
         uploaded++;
 
+        // Confirm the upload SYNCHRONOUSLY, right here - not left to the async S3 objectCreated
+        // event. findDriveFileIdsByBatchId (what a resumed slice subtracts) excludes 'pending' rows
+        // precisely so a FabFile whose storage.upload threw is not mistaken for an uploaded one; a
+        // continuation enqueued moments after this call cannot be trusted to race that event first.
+        await fabFileRepository.markUploaded(fabFile.id);
+
         // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
         // (see retireSupersededCopy, and the header for the invariants it keeps). Done PER-FILE right
         // after the upload, not batched at the end: a later file throwing then leaves every
@@ -912,12 +970,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       //    no poll can start a competing walk in the gap, and the batch stays open so the next slice
       //    appends to it instead of starting a second one.
       if (deferred > 0 && slice + 1 < MAX_INGEST_SLICES) {
-        const renewed = await orgGoogleDriveConnectionRepository.renewSyncClaim(connectionId, batch.id);
-        if (renewed) {
+        const renewedToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(connectionId, batch.id);
+        if (renewedToken) {
           await sendToQueue(Resource.driveLakeIngestQueue.url, {
             connectionId,
             resumeBatchId: batch.id,
             slice: slice + 1,
+            claimToken: renewedToken,
           });
           logger.info('[driveLakeIngest] out of time; enqueued continuation slice', {
             connectionId,

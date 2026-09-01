@@ -1002,6 +1002,50 @@ describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', 
   });
 });
 
+describe('DataLakeBatchRepository.recordSkippedDriveFile - idempotent per driveFileId', () => {
+  setupMongoTest();
+
+  // A Drive ingest chain re-diffs the same permanently-unsupported file on every slice (skip() mints
+  // no FabFile, so it is invisible to the ordinary alreadyIngested subtraction) - without the gate,
+  // that would double-count skippedFiles once per slice for the same file.
+  it('increments skippedFiles and records the id on the first call, no-ops on a repeat', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+
+    const first = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, 'd1');
+    expect(first).toBe(true);
+    const after1 = await dataLakeBatchRepository.findById(batch.id);
+    expect(after1?.skippedFiles).toBe(1);
+    expect(after1?.skippedDriveFileIds).toEqual(['d1']);
+
+    const second = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, 'd1');
+    expect(second).toBe(false);
+    const after2 = await dataLakeBatchRepository.findById(batch.id);
+    expect(after2?.skippedFiles).toBe(1);
+    expect(after2?.skippedDriveFileIds).toEqual(['d1']);
+  });
+
+  it('tracks distinct driveFileIds independently', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+
+    await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, 'd1');
+    await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, 'd2');
+
+    const after = await dataLakeBatchRepository.findById(batch.id);
+    expect(after?.skippedFiles).toBe(2);
+    expect(after?.skippedDriveFileIds?.sort()).toEqual(['d1', 'd2']);
+  });
+
+  it('is a no-op on an already-terminal batch, so a late-arriving skip cannot reopen it', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const result = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, 'd1');
+    expect(result).toBe(false);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.skippedFiles).toBe(0);
+  });
+});
+
 describe('DataLakeBatchRepository.incrementCounters - atomic multi-field increment', () => {
   setupMongoTest();
 

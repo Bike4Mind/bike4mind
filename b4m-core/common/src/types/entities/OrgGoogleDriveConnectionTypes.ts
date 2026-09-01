@@ -95,6 +95,15 @@ export interface IOrgGoogleDriveConnection {
    */
   activeIngestBatchId?: string;
 
+  /**
+   * One-time-use companion to `activeIngestBatchId`: the CAS value each slice's adoptSyncClaim call
+   * must present, rotated to a fresh value on every successful adopt/renew. `activeIngestBatchId`
+   * cannot itself serve as that CAS value - it stays fixed for the whole chain (it also names the
+   * batch document to resume) - so two deliveries of one continuation message would otherwise both
+   * match it and both win. Only meaningful while status === 'syncing'.
+   */
+  ingestClaimToken?: string;
+
   // === Incremental sync ===
 
   /**
@@ -238,19 +247,24 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
 
   /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
-   * for THIS `activeIngestBatchId`. A sliced ingest hands the claim from one run to the next without
-   * ever passing through 'connected', so a scheduled poll cannot slip in between slices and start a
-   * competing walk (which would re-create the un-uploaded tail as duplicates, the whole failure this
-   * chain exists to avoid). Returns whether the take-over succeeded.
+   * for THIS `activeIngestBatchId` AND still presents `claimToken` (the value the previous slice's
+   * renewSyncClaim/adoptSyncClaim minted). A sliced ingest hands the claim from one run to the next
+   * without ever passing through 'connected', so a scheduled poll cannot slip in between slices and
+   * start a competing walk (which would re-create the un-uploaded tail as duplicates, the whole
+   * failure this chain exists to avoid). The token match is what makes this a REAL compare-and-set: it
+   * is rotated on success, so a second delivery of the same continuation message presents a token that
+   * has already been consumed and loses. Returns the freshly-rotated token on success (to carry into
+   * the next slice's payload), or null if the take-over lost.
    */
-  adoptSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean>;
+  adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null>;
 
   /**
    * Hold the claim across a slice boundary: re-stamps `syncClaimedAt` (so the stale-claim window never
-   * elapses mid-chain) and records the batch the next slice must present to adopt it. Guarded on
-   * 'syncing', so it no-ops rather than resurrecting a claim something else already released.
+   * elapses mid-chain), records the batch the next slice must present to adopt it, and mints a fresh
+   * `ingestClaimToken` for that same slice to present. Guarded on 'syncing', so it no-ops rather than
+   * resurrecting a claim something else already released. Returns the minted token on success, or null.
    */
-  renewSyncClaim(id: string, activeIngestBatchId: string): Promise<boolean>;
+  renewSyncClaim(id: string, activeIngestBatchId: string): Promise<string | null>;
 
   /**
    * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'

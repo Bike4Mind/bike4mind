@@ -33,7 +33,9 @@ const h = vi.hoisted(() => ({
   appendFiles: vi.fn(),
   incrementCounter: vi.fn(),
   setTotalFilesIfActive: vi.fn(),
+  recordSkippedDriveFile: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
+  markUploaded: vi.fn(),
   adoptSyncClaim: vi.fn(),
   renewSyncClaim: vi.fn(),
   createFabFile: vi.fn(),
@@ -66,12 +68,14 @@ vi.mock('@bike4mind/database', () => ({
     appendFiles: h.appendFiles,
     incrementCounter: h.incrementCounter,
     setTotalFilesIfActive: h.setTotalFilesIfActive,
+    recordSkippedDriveFile: h.recordSkippedDriveFile,
   },
   fabFileRepository: {
     findByDriveConnectionIdInDataLake: h.findByDriveConnectionIdInDataLake,
     findById: h.fabFileFindById,
     pushTagsByFabFileId: h.pushTagsByFabFileId,
     findDriveFileIdsByBatchId: h.findDriveFileIdsByBatchId,
+    markUploaded: h.markUploaded,
   },
   fabFileChunkRepository: {},
   sessionRepository: { findAllWithKnowledgeId: h.sessionsWithKnowledgeId, update: h.sessionUpdate },
@@ -162,10 +166,14 @@ describe('driveLakeIngest consumer', () => {
       driveFolderId: 'FOLDER',
     });
     h.claimForSync.mockResolvedValue(true);
-    h.adoptSyncClaim.mockResolvedValue(true);
-    h.renewSyncClaim.mockResolvedValue(true);
+    // adoptSyncClaim/renewSyncClaim now return the freshly-rotated token (or null on failure) rather
+    // than a bare boolean - see OrgGoogleDriveConnection.ingestClaimToken.
+    h.adoptSyncClaim.mockResolvedValue('token-adopt');
+    h.renewSyncClaim.mockResolvedValue('token-renew');
     h.findDriveFileIdsByBatchId.mockResolvedValue([]);
+    h.markUploaded.mockResolvedValue(undefined);
     h.setTotalFilesIfActive.mockResolvedValue(null);
+    h.recordSkippedDriveFile.mockResolvedValue(true);
     h.releaseSyncClaim.mockResolvedValue(null);
     h.updateHealth.mockResolvedValue(null);
     h.lakeFindById.mockResolvedValue({
@@ -292,7 +300,7 @@ describe('driveLakeIngest consumer', () => {
     // The oversized candidate is never downloaded, but it IS accounted so totalFiles stays reachable.
     expect(h.fetchDriveFileContent).toHaveBeenCalledTimes(1);
     expect(h.fetchDriveFileContent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'ok' }));
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch1', 'skippedFiles');
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'big');
     expect(h.upload).toHaveBeenCalledTimes(1);
   });
 
@@ -615,7 +623,7 @@ describe('driveLakeIngest consumer', () => {
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.removeFileFromLake).not.toHaveBeenCalled();
     expect(h.recomputeLakeStats).not.toHaveBeenCalled();
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch1', 'skippedFiles');
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'd1');
   });
 
   it('refuses an over-cap folder BEFORE any removal, so an edit-heavy over-cap run evicts nothing', async () => {
@@ -732,6 +740,7 @@ describe('driveLakeIngest consumer', () => {
         connectionId: 'conn1',
         resumeBatchId: 'batch1',
         slice: 1,
+        claimToken: 'token-renew',
       });
       // The batch belongs to the chain until it ends, so this slice must not settle it.
       expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
@@ -759,9 +768,9 @@ describe('driveLakeIngest consumer', () => {
       });
       h.findDriveFileIdsByBatchId.mockResolvedValue(['d1']);
 
-      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1 });
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
 
-      expect(h.adoptSyncClaim).toHaveBeenCalledWith('conn1', 'batch1');
+      expect(h.adoptSyncClaim).toHaveBeenCalledWith('conn1', 'batch1', 'tok0');
       expect(h.claimForSync).not.toHaveBeenCalled();
       // One batch for the whole sync, and exactly one new FabFile - d1 is NOT re-ingested.
       expect(h.batchCreate).not.toHaveBeenCalled();
@@ -845,7 +854,7 @@ describe('driveLakeIngest consumer', () => {
       // would release a claim this run no longer holds, letting a second walk run alongside theirs.
       h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
       h.fetchDriveFileContent.mockResolvedValue(okBytes());
-      h.renewSyncClaim.mockResolvedValue(false);
+      h.renewSyncClaim.mockResolvedValue(null);
 
       await run({ connectionId: 'conn1' }, contextAllowingFiles(1));
 
@@ -857,7 +866,7 @@ describe('driveLakeIngest consumer', () => {
     it('falls back to a fresh claim when a continuation finds its chain claim already gone', async () => {
       // The previous slice threw and released; SQS redelivered its message. The batch is still
       // adoptable, so the retry resumes the chain rather than re-creating the tail.
-      h.adoptSyncClaim.mockResolvedValue(false);
+      h.adoptSyncClaim.mockResolvedValue(null);
       h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
       h.fetchDriveFileContent.mockResolvedValue(okBytes());
       h.findDriveFileIdsByBatchId.mockResolvedValue(['d1']);
@@ -872,12 +881,102 @@ describe('driveLakeIngest consumer', () => {
         failedFiles: 0,
       });
 
-      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1 });
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
 
+      expect(h.adoptSyncClaim).toHaveBeenCalledWith('conn1', 'batch1', 'tok0');
       expect(h.claimForSync).toHaveBeenCalledWith('conn1');
       expect(h.batchCreate).not.toHaveBeenCalled();
       expect(h.createFabFile).toHaveBeenCalledTimes(1);
       expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ driveFileId: 'd2' });
+    });
+
+    it('does not re-fetch a driveFileId the chain has already permanently skipped', async () => {
+      // skip() mints no FabFile, so a permanently-unsupported file is invisible to
+      // findDriveFileIdsByBatchId - without subtracting skippedDriveFileIds too, a chain would
+      // re-fetch (and re-count) the same failing file on every slice.
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2'));
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+      h.findDriveFileIdsByBatchId.mockResolvedValue([]);
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 2,
+        skippedFiles: 1,
+        skippedDriveFileIds: ['d1'],
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
+
+      expect(h.fetchDriveFileContent).toHaveBeenCalledTimes(1);
+      expect(h.fetchDriveFileContent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'd2' }));
+      // Without the skippedDriveFileIds subtraction, d1 would still be a candidate: the pre-loop
+      // re-plan would compute alreadyIngested(0) + adoptedBatch.skippedFiles(1) + candidates.length(2)
+      // = 3, over-raising totalFiles past what the chain can ever actually produce (2).
+      expect(h.setTotalFilesIfActive).not.toHaveBeenCalledWith('batch1', 3);
+    });
+
+    it('settles an adopted batch when a later slice pushes the folder over the candidate cap', async () => {
+      const tooMany = Array.from({ length: MAX_INGEST_CANDIDATES + 1 }, (_, i) => ({
+        id: `d${i}`,
+        name: `f${i}.txt`,
+        mimeType: 'text/plain',
+        relativePath: `f${i}.txt`,
+      }));
+      h.walkFolder.mockResolvedValue(tooMany);
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 5,
+        skippedFiles: 0,
+        files: [{ fabFileId: 'ff-prev' }],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
+
+      // Re-planned to what the chain actually produced (1 manifest entry) and nudged toward finalize,
+      // instead of being left open with no owner once the cap refusal returns.
+      expect(h.setTotalFilesIfActive).toHaveBeenCalledWith('batch1', 1);
+      expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      expect(h.createFabFile).not.toHaveBeenCalled();
+    });
+
+    it('forwards the chain identity when a continuation loses the claim race and must defer', async () => {
+      // A continuation that cannot re-adopt or freshly claim must not come back as a brand-new
+      // first-slice sync on its deferred retry - that would carry no resumeBatchId, subtract
+      // nothing, and re-ingest the still-`pending` tail as duplicate ADDs.
+      h.adoptSyncClaim.mockResolvedValue(null);
+      h.claimForSync.mockResolvedValue(false);
+      h.connFindById.mockResolvedValue({
+        id: 'conn1',
+        status: 'syncing',
+        targetDataLakeId: 'lake1',
+        connectedBy: 'user1',
+        organizationId: 'org1',
+        driveFolderId: 'FOLDER',
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 2, claimToken: 'tok0' });
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        {
+          connectionId: 'conn1',
+          redriveCount: 1,
+          resumeBatchId: 'batch1',
+          slice: 2,
+          claimToken: 'tok0',
+        },
+        expect.any(Number)
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
     });
   });
 
