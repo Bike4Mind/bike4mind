@@ -591,6 +591,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           failedFiles: 1,
           processingFailedFiles: 1,
         });
+        // updateFileStatus stamped failureCounted: false with the status; raise it only once the
+        // guarded $inc above has actually landed, so revertFileFailure can attribute a decrement to
+        // this entry rather than spending another file's failure. Advisory - see fabFileChunk.ts.
+        if (batch) {
+          await dataLakeBatchRepository
+            .markFailureCounted(existingFabFile.batchId, fabFileId, true)
+            .catch(markErr =>
+              logger.error(`Failed to record the charged failure counters on ${fabFileId}: ${markErr}`)
+            );
+        }
         await finalizeBatchIfComplete(batch, logger);
 
         const isComplete = isBatchComplete(batch);
