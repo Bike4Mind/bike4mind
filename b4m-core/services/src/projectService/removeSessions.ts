@@ -57,7 +57,10 @@ export const removeSessions = async (
     throw new Error('You are not authorized to remove sessions from this project');
   }
 
-  project.sessionIds = project.sessionIds.filter(id => !sessionIds.includes(id));
+  // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
+  // would match nothing and the call would answer 200 having removed nothing at all.
+  const removing = new Set(sessionIds.map(canonical));
+  project.sessionIds = project.sessionIds.filter(id => !removing.has(canonical(id)));
   project.updatedAt = new Date();
 
   // Revoke all project users access to the session

@@ -78,6 +78,9 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UPPER] }, { db });
 
+    // Asserting the file is GONE, not merely that the call returned: a case-sensitive filter
+    // answered 200 having removed nothing, which a status-only assertion happily accepts.
+    expect(project.fileIds).toEqual([]);
     expect(db.projects.update).toHaveBeenCalled();
   });
 
