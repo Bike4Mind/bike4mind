@@ -117,7 +117,7 @@ describe('buildFabFileChunkScanFilter', () => {
     }
   );
 
-  it('does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
+  it('KNOWN STRAND: does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
     // Known one-way door, documented on buildChunkScanQueuePayload: a media file reaches this filter
     // only through chunkRebuildRequestedAt, and the halt write nulls it in the same statement as the
     // marker. Asserted rather than left implicit so the strand is visible to whoever closes it.

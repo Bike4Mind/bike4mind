@@ -1046,12 +1046,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
-   * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
-   * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
+   * The lake's files the kill switch left without passages, as {id, userId}. Chunkless with no
+   * error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
    * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to
    * "Rebuild passages", the one affordance an owner would actually reach for to repair them. They
-   * are identified by CONVERGENCE_PAUSED_CHUNK_NOTE, the same marker health, convergence and the
-   * retrieval withhold key on, OR by a `chunkRebuildRequestedAt` stamp older than
+   * are identified by any marker in CONVERGENCE_PAUSED_NOTES - a wave that deleted their passages,
+   * a rescue sweep halted before it built any, or an abandoned vectorize - OR by a
+   * `chunkRebuildRequestedAt` stamp older than
    * REBUILD_PENDING_STALE_MS - a rebuild nothing ever committed, which is what a producer killed
    * between the reset and the sends leaves behind (#1939). Same in-flight exclusion as
    * `findChunkedFilesByScope`.

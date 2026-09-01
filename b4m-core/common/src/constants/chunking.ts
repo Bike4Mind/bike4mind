@@ -131,6 +131,16 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
  * (constants/lakeHealth.ts) reads it to tell a permanently-stalled file from one still in flight.
  * b4m-core cannot import from apps/client, so a copy there would have to drift silently.
  */
+/**
+ * DO NOT REWORD ANY OF THE THREE MARKERS BELOW. They are stored verbatim in `FabFile.notes` and
+ * matched by exact `$in` queries and `Array.includes`, so the text is a datastore key, not prose.
+ * Editing one - a typo fix, a tone pass - orphans every row already carrying the old string: those
+ * files stop matching `isConvergencePausedNote`, and drop out of the health denominator, the
+ * "Rebuild passages" door and the retrieval withhold all at once. That is precisely the invisibility
+ * the markers exist to prevent, reached by editing them. A test cannot catch it either, since both
+ * sides of every comparison import the constant and move together; `chunking.test.ts` pins the
+ * distinguishing phrases instead. Changing the wording means a migration over existing rows.
+ */
 export const CONVERGENCE_PAUSED_NOTE =
   'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
 
@@ -219,24 +229,26 @@ export function isChunkRebuildPending(requestedAt?: Date | string | null): boole
 export const REBUILD_PENDING_STALE_MS = 2 * 60 * 60_000;
 
 /**
- * Whether a file's `notes` marks it as stalled by the convergence kill switch, by either arm.
- * THE predicate every reader uses, so adding a third stall marker reaches health, convergence and
- * retrieval without three separate string comparisons drifting apart.
+ * Whether a file's `notes` marks it as stalled by the convergence kill switch, by ANY arm - the
+ * vectorize marker included. THE predicate every reader uses, so adding a stall marker reaches
+ * health, convergence and retrieval without separate string comparisons drifting apart.
+ *
+ * Pick between this and `isConvergenceChunkPausedNote` by the question you are asking. This one:
+ * "is this file stalled by the switch at all?" The chunk-arm one: "is this file WITHOUT PASSAGES
+ * because the switch stopped the work that would have built them?" A vectorize-paused file answers
+ * yes here and no there, because it still has its chunks. Choosing wrong in a Mongo `$in` fails
+ * silently - it just selects the wrong set - which is why both are predicates rather than inline
+ * arrays.
  */
 export function isConvergencePausedNote(notes?: string | null): boolean {
   return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
 }
 
 /**
- * Datastore mirror of `isConvergencePausedNote`, for a Mongo `notes: { $in: [...] }`. Exported so a
- * query and the in-memory predicate cannot drift: adding a third stall marker to this array reaches
- * both. Declared after the two constants it names so the function above can close over it.
- */
-/**
  * The CHUNK arm's markers, as distinct from the vectorize arm's. A reader that means "this file has
  * no passages because the kill switch stopped the work that would have built them" keys on THIS,
  * not on CONVERGENCE_PAUSED_NOTES: a vectorize-paused file still has its passages, so folding the
- * two together would grade it as chunkless. That distinction is why the sites below were written
+ * two together would grade it as chunkless. That distinction is why those sites were written
  * against the bare `CONVERGENCE_PAUSED_CHUNK_NOTE` in the first place; this is the same predicate
  * widened to the second chunk-arm marker rather than a new one.
  */
@@ -250,6 +262,11 @@ export function isConvergenceChunkPausedNote(notes?: string | null): boolean {
   return CONVERGENCE_PAUSED_CHUNK_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_CHUNK_NOTES)[number]);
 }
 
+/**
+ * Datastore mirror of `isConvergencePausedNote`, for a Mongo `notes: { $in: [...] }`. Exported so a
+ * query and the in-memory predicate cannot drift: adding a stall marker to this array reaches both.
+ * Declared after the constants it names so the predicate above can close over it.
+ */
 export const CONVERGENCE_PAUSED_NOTES = [
   CONVERGENCE_PAUSED_NOTE,
   CONVERGENCE_PAUSED_CHUNK_NOTE,

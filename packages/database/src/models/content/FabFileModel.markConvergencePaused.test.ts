@@ -76,13 +76,34 @@ describe('markConvergencePaused', () => {
     expect(await notesOf(String(file._id))).toBe(CONVERGENCE_PAUSED_CHUNK_NOTE);
   });
 
-  it("replaces the vectorize arm's marker, which describes a different state", async () => {
-    // CONVERGENCE_PAUSED_NOTE means "has chunks, no vectors". It is not one of the chunk-arm
-    // markers, so it must not be treated as already-marked and preserved.
-    const file = await makeFile({ notes: CONVERGENCE_PAUSED_NOTE, chunkRebuildRequestedAt: null });
+  it("does not preserve the vectorize arm's marker - only chunk-arm markers count as already-paused", async () => {
+    // CONVERGENCE_PAUSED_NOTE means "has chunks, no vectors", so the fixture has chunks. The
+    // assertion is only that the marker is REPLACED rather than kept by the idempotence guard: no
+    // producer routes a chunk-bearing file into the halt branch today, so which chunk-arm wording
+    // would be right for that state is not a question this pins.
+    const file = await makeFile({
+      notes: CONVERGENCE_PAUSED_NOTE,
+      chunkCount: 4,
+      chunkRebuildRequestedAt: null,
+    });
 
     await fabFileRepository.markConvergencePaused(String(file._id));
 
-    expect(await notesOf(String(file._id))).toBe(CONVERGENCE_PAUSED_UNCHUNKED_NOTE);
+    expect(await notesOf(String(file._id))).not.toBe(CONVERGENCE_PAUSED_NOTE);
+  });
+
+  it('still bumps updatedAt, as the object-form write it replaced did', async () => {
+    // A pipeline-form update is not obviously timestamped - mongoose handles the two forms in
+    // different code paths. It does: applyTimestampsToUpdate pushes its own `$set` stage onto the
+    // pipeline (mongoose 8.x). Pinned because a silent stop would reorder the owner's file list,
+    // which sorts on updatedAt.
+    const file = await makeFile({ chunkRebuildRequestedAt: null });
+    const before = (await FabFile.findById(file._id).lean())?.updatedAt;
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await fabFileRepository.markConvergencePaused(String(file._id));
+
+    const after = (await FabFile.findById(file._id).lean())?.updatedAt;
+    expect(after!.getTime()).toBeGreaterThan(before!.getTime());
   });
 });

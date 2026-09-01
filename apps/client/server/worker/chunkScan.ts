@@ -162,6 +162,7 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
  *
  * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
  * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).
+ * Known and owned rather than introduced here: #2157 and #2251 both track that gap.
  */
 export const buildChunkScanQueuePayload = ({ fabFileId, userId }: { fabFileId: string; userId: string }) => ({
   fabFileId,
