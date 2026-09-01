@@ -1894,6 +1894,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
+        // `tags` is an AND'ed conjunct (fabFileSearchQuery's filters.tags), not part of the ownership
+        // $or below: on a lake-created session retrievalTags is [lake.datalakeTag], so every candidate
+        // must carry that meta-tag and the creator-anchored lakeMemberships arm cannot admit a
+        // prefix-only member. Scoping here the way the KB tools do (resolveSessionLakeAccess narrows
+        // the lake arms) would also need restrictToDataLake - this call resolves lake access owner-wide.
         { tags: this.retrievalTags, shared: false },
         { page: 1, limit: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES },
         { by: 'fileName', direction: 'asc' },
