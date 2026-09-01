@@ -62,7 +62,11 @@ import {
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
 } from '../dataLakeService/getDynamicDataLakeTags';
-import { narrowLakeAccessToSession } from '../dataLakeService/narrowLakeAccessToSession';
+import {
+  narrowLakeAccessToSession,
+  sessionNamesALake,
+  type ResolvedLakeAccessSet,
+} from '../dataLakeService/narrowLakeAccessToSession';
 import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
   classifyLoadedChunk,
@@ -1634,11 +1638,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * the IDENTICAL entitlement-aware access rule - no drift between two copies. Entitlement
    * keys are resolved once on the process and passed through.
    */
-  // Return type intentionally left as whatever getDynamicDataLakeAccess returns (rather than a
-  // hand-narrowed shape): narrowLakeAccessToSession's parameter type requires every field the
-  // resolver declares (including `scopedTagPrefixes`, kept there for other consumers - see #2243's
-  // Key Decision 9), so re-declaring a narrower local type here would need to grow back to match it.
-  private async resolveDataLakeAccess(): ReturnType<typeof getDynamicDataLakeAccess> {
+  // Returns the resolver's own shape (`ResolvedLakeAccessSet`) rather than a hand-narrowed one:
+  // narrowLakeAccessToSession takes the full set, so a narrower local type would have to grow back
+  // to match it. `scopedTagPrefixes` is part of that shape and is carried, not consumed - nothing
+  // in this repo reads it as a query input; it is produced by getDynamicDataLakeAccess, filtered by
+  // the narrowing and forwarded by resolveRetrievalLakeScope, and it stays because the
+  // resolved-access shape is a contract, not because a live caller needs it.
+  private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
     return getDynamicDataLakeAccess({ db, user, entitlementKeys });
@@ -1894,11 +1900,33 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // widens forced grounding to everything the caller owns (this was the only thing scoping the
       // query to one lake); narrowing without restrictToDataLake still leaks the personal library
       // through the own/shared/group base arms.
-      const access = narrowLakeAccessToSession(await this.resolveDataLakeAccess(), this.retrievalTags);
+      //
+      // Both halves are gated on `lakeScoped`, NOT applied unconditionally. The narrowing no-ops
+      // for a session whose tags name no lake (see sessionNamesALake), and pairing that no-op with
+      // restrictToDataLake would drop the base arms for a session that never asked to be
+      // lake-scoped - silently confining its grounding to lake content and losing the caller's own
+      // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      const resolvedAccess = await this.resolveDataLakeAccess();
+      const lakeScoped = sessionNamesALake(resolvedAccess, this.retrievalTags);
+      const access = narrowLakeAccessToSession(resolvedAccess, this.retrievalTags);
       const { dataLakeTags, dataLakeTagPrefixes, lakes } = access;
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
+
+      // The session named a lake and narrowing retained none of it: a revoked grant, an archived
+      // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
+      // to search, which is exactly the `no_lakes` abstain below - NOT an outage. Without this,
+      // buildOwnershipConditions' restrictToDataLake fail-fast throws into the outer catch and
+      // stamps `failed` at error level on EVERY turn of that session, indefinitely, reporting a
+      // benign access state as a retrieval failure to logs and to the retrieval-rate metric.
+      // Only reachable while `lakeScoped` - with it false the base arms survive, so `conditions`
+      // is never empty and the fail-fast cannot fire.
+      if (lakeScoped && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+        recordRetrieval('no_lakes', []);
+        this.logger.log('🔒 Forced retrieval: session names no lake this caller can reach');
+        return this.noContextMessages('unavailable');
+      }
 
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
       const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
@@ -1927,7 +1955,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           dataLakeTags,
           dataLakeTagPrefixes, // static-registry (open) prefixes
           lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
-          restrictToDataLake: true, // scope to the resolved lake(s) only, never the caller's whole library
+          // Scope to the resolved lake(s) only, never the caller's whole library - but only when
+          // the session actually named a lake; see the `lakeScoped` note above.
+          restrictToDataLake: lakeScoped,
           excludeContent: true, // metadata only; chunk text + vectors fetched below
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.

@@ -1951,31 +1951,74 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
     );
   });
 
-  it('degrades to the abstention block instead of throwing when the session narrows to no lake', async () => {
+  it('abstains as no_lakes - not failed - when the session names a lake this caller cannot reach', async () => {
+    // A revoked grant / archived lake / lapsed entitlement on a session that still names that lake.
+    // Nothing is in scope to search, which is an ACCESS state, not an outage: it must never reach
+    // buildOwnershipConditions' restrictToDataLake fail-fast, whose throw would land in the outer
+    // catch and stamp `failed` at error level on every turn of that session, indefinitely.
     const ctx = makeCtx({ dataLakes: [] });
-    // Mirrors buildOwnershipConditions' real fail-fast (restrictToDataLake with zero lake arms
-    // throws) - this mock never reaches the real query builder, so this reproduces it directly to
-    // prove the feature degrades via its own outer catch instead of letting the throw reach the caller.
-    ctx.db.fabfiles.search = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          'buildOwnershipConditions: restrictToDataLake requires lakeMemberships, dataLakeTags or scopedTagPrefixes'
-        )
-      );
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
-      // Names a lake this caller cannot reach - narrowLakeAccessToSession narrows dataLakeTags/
-      // dataLakeTagPrefixes/lakeMemberships all to [].
       ['datalake:unreachable']
     );
+    const quest = makeQuest();
     const messages = await feature.getContextMessages(
-      makeQuest(),
+      quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'anything'
     );
 
     expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+    expect(ctx.logger.error).not.toHaveBeenCalled();
+    // Returned before the query: a zero-arm restricted search has nothing to ask.
+    expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+  });
+
+  it('leaves the personal base arms alone for a session whose tags name no lake at all', async () => {
+    // `retrievalTags` is not universally lake identity - a curated surface may scope by a content
+    // tag. narrowLakeAccessToSession deliberately no-ops there ("no lake opinion"), so pairing it
+    // with an unconditional restrictToDataLake would drop the own/shared/group arms and silently
+    // confine grounding to lake content, losing the caller's own files carrying that same tag.
+    const ctx = makeCtx({ files: [], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ restrictToDataLake: false })
+    );
+  });
+
+  it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
+    const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+    // A genuine outage on the query itself - distinct from the no_lakes abstain above, and the one
+    // case that SHOULD record `failed` and log at error level.
+    ctx.db.fabfiles.search = vi.fn().mockRejectedValue(new Error('connection reset'));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     expect(ctx.logger.error).toHaveBeenCalled();
   });
 });
