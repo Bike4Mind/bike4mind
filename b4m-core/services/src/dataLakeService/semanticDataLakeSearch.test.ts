@@ -37,6 +37,7 @@ import {
   semanticDataLakeSearch,
   type SemanticDataLakeSearchParams,
 } from './semanticDataLakeSearch';
+import { describeSearchLimitations, isPartialSearch } from './retrievalUnavailable';
 
 beforeEach(() => {
   mockCosine.mockReset();
@@ -576,6 +577,141 @@ describe('semanticDataLakeSearch determinism', () => {
   });
 });
 
+/**
+ * Per-lake supersession collapse at the lake-scoped entrypoint. Both halves of the opt-in are
+ * exercised - the admin flag AND the resolved lakes - because either alone must leave today's
+ * behaviour byte-identical.
+ */
+describe('semanticDataLakeSearch supersession collapse', () => {
+  const LAKES = [{ id: 'lakeX', datalakeTag: 'datalake:x' }];
+
+  // Two generations of one document plus an unrelated file, all in one lake.
+  const twoGenerations = () => [
+    {
+      id: 'old',
+      fileName: 'Protocol.pdf',
+      tags: [{ name: 'datalake:x' }],
+      vectorized: true,
+      createdAt: new Date('2024-01-01'),
+    },
+    {
+      id: 'new',
+      fileName: 'Protocol.pdf',
+      tags: [{ name: 'datalake:x' }],
+      vectorized: true,
+      createdAt: new Date('2025-01-01'),
+    },
+    { id: 'other', fileName: 'Other.pdf', tags: [{ name: 'datalake:x' }], vectorized: true },
+  ];
+
+  const adaptersFor = (files: unknown[], findVectors: ReturnType<typeof vi.fn>) => ({
+    db: {
+      fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+      fabfilechunks: { findVectorsByFabFileIds: findVectors },
+    },
+  });
+
+  const collapseParams = () => ({ ...baseParams(), lakes: LAKES, supersessionCollapseEnabled: true });
+
+  it('drops the older generation BEFORE the chunk scan, so the budget goes to other files', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(twoGenerations(), findVectors) as never);
+    expect(findVectors.mock.calls[0][0]).toEqual(['new', 'other']);
+    expect(result.supersession.count).toBe(1);
+    expect(result.supersession.sample[0]).toMatchObject({ fileId: 'old', tier: 'fileName', supersededBy: 'new' });
+    expect(result.supersession.partial).toBe(true);
+  });
+
+  it('no two ranked chunks come from members sharing a source identity within one lake', async () => {
+    const chunkFor = (fileId: string) => ({ id: `ch-${fileId}`, fabFileId: fileId, vector: [1, 0], text: fileId });
+    const findVectors = pagingChunkMock(twoGenerations().map(f => chunkFor(f.id)) as never);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(twoGenerations(), findVectors) as never);
+    const names = result.results.map(r => r.fileName);
+    expect(new Set(names).size).toBe(names.length);
+    expect(result.results.map(r => r.fileId).sort()).toEqual(['new', 'other']);
+  });
+
+  it('surfaces the suppression through describeSearchLimitations, naming ids and the tier', async () => {
+    const result = await semanticDataLakeSearch(
+      collapseParams(),
+      adaptersFor(twoGenerations(), vi.fn().mockResolvedValue([])) as never
+    );
+    const prose = describeSearchLimitations(result);
+    expect(prose).toContain('old');
+    expect(prose).toContain('new');
+    expect(prose).toContain('fileName');
+    expect(isPartialSearch(result)).toBe(true);
+  });
+
+  it('flag off (the shipped default): nothing collapses even with lakes resolved', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), lakes: LAKES },
+      adaptersFor(twoGenerations(), findVectors) as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['old', 'new', 'other']);
+    expect(result.supersession).toEqual({ count: 0, sample: [], partial: false });
+    expect(isPartialSearch(result)).toBe(false);
+  });
+
+  it('flag on but no lakes resolved: nothing is attributable, so nothing collapses', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), supersessionCollapseEnabled: true },
+      adaptersFor(twoGenerations(), findVectors) as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['old', 'new', 'other']);
+    expect(result.supersession.count).toBe(0);
+  });
+
+  it('collapses AFTER the availability partition: a mid-reindex newest generation does not suppress the servable older one', async () => {
+    const files = [
+      {
+        id: 'old',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2024-01-01'),
+        chunkCount: 4,
+        vectorizedChunkCount: 4,
+      },
+      {
+        // Mid-reindex: chunks committed, none vectorized yet - withheld upstream of the collapse.
+        id: 'new',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2025-01-01'),
+        chunkCount: 4,
+        vectorizedChunkCount: 0,
+      },
+    ];
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(files, findVectors) as never);
+    // The older generation still ranks - the lake is not left contributing nothing for this document.
+    expect(findVectors.mock.calls[0][0]).toEqual(['old']);
+    expect(result.supersession.count).toBe(0);
+    expect(result.retrievalUnavailable.partial).toBe(true);
+  });
+
+  it('never collapses across lakes', async () => {
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const files = [
+      { id: 'x1', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:x' }], vectorized: true },
+      { id: 'y1', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:y' }], vectorized: true },
+    ];
+    const result = await semanticDataLakeSearch(
+      {
+        ...collapseParams(),
+        lakes: [...LAKES, { id: 'lakeY', datalakeTag: 'datalake:y' }],
+      },
+      adaptersFor(files, findVectors) as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['x1', 'y1']);
+    expect(result.supersession.count).toBe(0);
+  });
+});
+
 describe('fileScopedSemanticSearch (allow-list scope)', () => {
   const scopedParams = (fileIds: string[]) => ({
     query: 'stage III treatment',
@@ -596,6 +732,24 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
       findVectorsByFabFileIds,
     };
   };
+
+  /**
+   * Decision guard, not a description of a limitation: a curated kbScope is an explicit allow-list,
+   * so this entrypoint must never collapse superseded members even though it shares the ranking core
+   * with the lake-scoped one. It has no lake context to pass, and adding one would silently override
+   * a human's curation. Asserted here because a well-meaning "why is this asymmetric" edit is the
+   * likely way it gets broken.
+   */
+  it('does NOT collapse superseded members, even for two identically named files', async () => {
+    const files = [
+      { id: 'old', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:x' }], createdAt: new Date('2024-01-01') },
+      { id: 'new', fileName: 'Protocol.pdf', tags: [{ name: 'datalake:x' }], createdAt: new Date('2025-01-01') },
+    ];
+    const { adapters, findVectorsByFabFileIds } = scopedAdapters({ files });
+    const result = await fileScopedSemanticSearch(scopedParams(['old', 'new']), adapters as never);
+    expect(findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['new', 'old']);
+    expect(result.supersession).toEqual({ count: 0, sample: [], partial: false });
+  });
 
   it('searches vectors for EXACTLY the scoped file ids and returns only their hits', async () => {
     const { adapters, getAccessibleFiles, findVectorsByFabFileIds } = scopedAdapters({

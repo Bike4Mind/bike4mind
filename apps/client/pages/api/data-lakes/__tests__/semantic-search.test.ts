@@ -101,6 +101,8 @@ vi.mock('@bike4mind/services', async () => ({
     emptyRetrievalUnavailableReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
     ).emptyRetrievalUnavailableReport,
+    emptySupersessionReport: (await import('../../../../../../b4m-core/services/src/dataLakeService/supersession'))
+      .emptySupersessionReport,
     // Real implementations (pure, already unit-tested on their own) so this suite can assert on
     // the actual lakeAccessEventRepository.record call args rather than a reimplementation.
     attributeAccessedLakeIds: (
@@ -138,6 +140,7 @@ import { BedrockEmbeddingModel, getQuestErrorCode, ModelBackend, OllamaEmbedding
 import handler from '@pages/api/data-lakes/semantic-search';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
+import { emptySupersessionReport } from '../../../../../../b4m-core/services/src/dataLakeService/supersession';
 
 const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
@@ -165,6 +168,7 @@ const EMPTY_RESULT = {
   embeddingModel: 'text-embedding-ada-002',
   embeddingMismatch: emptyEmbeddingMismatchReport(),
   retrievalUnavailable: emptyRetrievalUnavailableReport(),
+  supersession: emptySupersessionReport(),
   scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
 };
 
@@ -237,6 +241,29 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(searchParams().vectorSearchEnabled).toBe(false);
+  });
+
+  it('threads the EnableRetrievalSupersessionCollapse setting through, with the resolved lakes', async () => {
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'EnableRetrievalSupersessionCollapse' ? true : 'text-embedding-ada-002'
+    );
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().supersessionCollapseEnabled).toBe(true);
+    // Both halves are needed for the collapse to run at all - the flag alone cannot attribute a
+    // file to a lake, so a caller that passes one without the other silently gets today's behaviour.
+    expect(searchParams().lakes).toBeDefined();
+  });
+
+  it('defaults supersessionCollapseEnabled to false when the setting is unset', async () => {
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'EnableRetrievalSupersessionCollapse' ? undefined : 'text-embedding-ada-002'
+    );
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().supersessionCollapseEnabled).toBe(false);
   });
 
   it('wires the self-host OpenSearch adapter when the backend and flag are on', async () => {
@@ -418,6 +445,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
       retrievalUnavailable: emptyRetrievalUnavailableReport(),
+      supersession: emptySupersessionReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -462,6 +490,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
       retrievalUnavailable: emptyRetrievalUnavailableReport(),
+      supersession: emptySupersessionReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -484,6 +513,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
       retrievalUnavailable: emptyRetrievalUnavailableReport(),
+      supersession: emptySupersessionReport(),
       filesInScope: 2314,
       embeddingModel: 'text-embedding-ada-002',
       scan: {
@@ -798,6 +828,7 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
     chunksScored: 12,
     embeddingMismatch: emptyEmbeddingMismatchReport(),
     retrievalUnavailable: emptyRetrievalUnavailableReport(),
+    supersession: emptySupersessionReport(),
     filesInScope: 3,
     embeddingModel: 'text-embedding-ada-002',
     scan: FULL_SCAN,
