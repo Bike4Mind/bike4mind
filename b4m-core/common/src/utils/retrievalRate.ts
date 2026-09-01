@@ -34,12 +34,21 @@ export type OptionalPathRetrievalRate = {
     rate: number | null;
     byReason: Record<NonNullable<RetrievalSummary['forcedSkipReason']>, number>;
   };
-  /** Forced turns where forced retrieval actually ran. Context for the two figures above. */
+  /**
+   * Forced turns with no suppression recorded. Context for the two figures above, and NOT a count
+   * of turns where retrieval ran: the seed marks a turn `forced` before the arm executes, so a
+   * forced turn that exited at the empty-query guard (nothing to retrieve about) lands here too.
+   * Check `attempted` on the turns themselves if you need "ran", not this bucket.
+   */
   forcedTurns: number;
   /**
-   * Turns carrying a retrieval record with no `mode`. These predate the field, so they are
-   * reported rather than silently dropped - a rollup whose window straddles the deploy would
-   * otherwise understate every population above with no sign that it had.
+   * Turns carrying a retrieval record with no `mode`, reported rather than silently dropped - a
+   * rollup that swallowed them would understate every population above with no sign that it had.
+   *
+   * Two sources, and the second is ONGOING rather than historical: turns recorded before `mode`
+   * shipped, and agent-mode runs, which write a retrieval summary through `persistRunAsQuest` but
+   * never pass the seed site in ChatCompletionProcess. A steady non-zero count here on a window
+   * well after the deploy is agent traffic, not stale data.
    */
   unclassifiedTurns: number;
 };
@@ -94,7 +103,8 @@ export function summarizeOptionalPathRetrieval(
 
     // A forced turn that a rule suppressed still ends up on the optional path, so `attempted`
     // here means the model called the tool of its own accord - the same signal as above, reached
-    // a different way. A forced turn with no skip reason simply ran forced retrieval.
+    // a different way. A forced turn with no skip reason had forced retrieval enabled and nothing
+    // switched it off; see `forcedTurns` for why that is not the same as "retrieval ran".
     if (turn.forcedSkipReason) {
       summary.forcedSuppressed.turns += 1;
       summary.forcedSuppressed.byReason[turn.forcedSkipReason] += 1;

@@ -44,6 +44,7 @@ import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -2313,11 +2314,20 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
+      };
 
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
 
-      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+      return {
+        enabledToolsArg,
+        getAccessibleFiles,
+        contextAndSystemMessages,
+        retrieval: savedQuest?.promptMeta?.retrieval,
+        offeredTools: savedQuest?.promptMeta?.offeredTools,
+      };
     };
 
     // #2228: a file that never reached the model used to leave no trace at all - the model answered
@@ -2447,6 +2457,61 @@ describe('ChatCompletionProcess', () => {
       expect(
         contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
       ).toBe(true);
+    });
+
+    /**
+     * The denominator of the #1394 metric, asserted through the real `process()` rather than
+     * against the seed site in isolation: a turn is only in the optional population if the tool
+     * was genuinely offered AND nothing forced retrieval. Reuses this harness because it is the
+     * one place that already drives both halves of that condition.
+     */
+    describe('optional-path retrieval mode is seeded from the same turn that offers the tool', () => {
+      it('marks a turn optional when the knowledge tool is offered and nothing forces retrieval', async () => {
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        expect(enabledToolsArg).toContain('search_knowledge_base');
+        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+      });
+
+      it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
+        // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
+        // ordinary chat turn would dilute the rate toward zero.
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: [],
+          files: [],
+        });
+
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(retrieval).toBeUndefined();
+      });
+
+      it('becomes the numerator when a knowledge-tool call merges its result onto the seed', async () => {
+        // The seed lands first and says attempted:false; the tool's own write arrives later in the
+        // turn. Composing the REAL seeded value here (rather than a hand-written literal) is what
+        // ties the merge unit tests to the shape `process()` actually produces.
+        const { retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        const merged = mergeRetrievalSummary(retrieval as any, {
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['knowledge-base'],
+          dataLakeTags: [],
+        });
+
+        expect(merged).toEqual({
+          attempted: true,
+          outcome: 'ok',
+          mode: 'optional',
+          surfaces: ['knowledge-base'],
+          dataLakeTags: [],
+        });
+      });
     });
   });
 

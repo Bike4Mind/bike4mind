@@ -100,6 +100,32 @@ describe('RetrievalRateTab', () => {
     expect(screen.getAllByText('n/a').length).toBeGreaterThan(0);
   });
 
+  it('does not claim the window is empty when only the rate populations are', async () => {
+    // The banner is about the optional path, not the window. Forced turns can be plentiful while
+    // there is still nothing that measures a declinable offer.
+    mockGet.mockResolvedValue(
+      response({
+        summary: summary({
+          offeredTurns: 0,
+          retrievedTurns: 0,
+          rate: null,
+          forcedSuppressed: {
+            turns: 0,
+            retrievedTurns: 0,
+            rate: null,
+            byReason: { attached_files: 0, personal_corpus: 0 },
+          },
+          forcedTurns: 120,
+        }),
+      })
+    );
+    renderTab();
+    const banner = await screen.findByTestId('retrieval-rate-empty');
+    expect(banner.textContent).toContain('optional path');
+    expect(banner.textContent).not.toContain('No classifiable turns');
+    expect(screen.getByText('120')).toBeTruthy();
+  });
+
   it('warns when the response only covers part of the requested window', async () => {
     mockGet.mockResolvedValue(response({ truncated: true, turnsScanned: 50000 }));
     renderTab();

@@ -528,6 +528,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.RetrievalRate}>
                 {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
               </TabPanel>
               <TabPanel value={AdminTab.EventMetrics}>

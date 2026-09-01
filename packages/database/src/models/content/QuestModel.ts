@@ -934,6 +934,18 @@ function initializeQuestModel() {
     // followed by $group on the same field
     ChatHistoryItemSchema.index({ 'promptMeta.model.name': 1 }, { name: 'promptMeta_model_name', sparse: true });
 
+    // Index for /api/admin/retrieval-rate: $match { 'promptMeta.retrieval': { $exists: true } }
+    // sorted by timestamp desc. Partial rather than sparse so the filter itself is the index
+    // predicate - only turns that could have retrieved are indexed, and the endpoint's sort and
+    // limit are served from the index instead of examining (and blocking-sorting) every Quest.
+    ChatHistoryItemSchema.index(
+      { timestamp: -1 },
+      {
+        name: 'retrieval_timestamp_desc',
+        partialFilterExpression: { 'promptMeta.retrieval': { $exists: true } },
+      }
+    );
+
     // Index for `persistRunAsQuest` lookup by agentExecutionId on every agent
     // completion. Sparse because most Quests are chat_completion and
     // lack the field - a dense index would waste space on nulls.

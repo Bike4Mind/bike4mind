@@ -75,13 +75,21 @@ describe('GET /api/admin/retrieval-rate', () => {
     expect(findQuery().timestamp).toBeUndefined();
   });
 
-  it('applies both date bounds when given', async () => {
+  it('includes the whole of the picked end day rather than cutting it off at midnight', async () => {
+    // `<input type="date">` sends a bare day. Bounding `$lte` on its UTC midnight would exclude
+    // every turn ON the selected end date - a window that silently omits its own last day.
     const { promise } = run({ startDate: '2026-08-01', endDate: '2026-08-31' });
     await promise;
     expect(findQuery().timestamp).toEqual({
-      $gte: new Date('2026-08-01'),
-      $lte: new Date('2026-08-31'),
+      $gte: new Date('2026-08-01T00:00:00.000Z'),
+      $lt: new Date('2026-09-01T00:00:00.000Z'),
     });
+  });
+
+  it('honours an explicit instant as given instead of rounding it up a day', async () => {
+    const { promise } = run({ endDate: '2026-08-31T12:00:00.000Z' });
+    await promise;
+    expect(findQuery().timestamp).toEqual({ $lte: new Date('2026-08-31T12:00:00.000Z') });
   });
 
   it('rejects an unparseable bound instead of silently widening to all time', async () => {

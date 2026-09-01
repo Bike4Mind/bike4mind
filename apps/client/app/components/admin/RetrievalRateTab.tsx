@@ -73,9 +73,11 @@ export default function RetrievalRateTab() {
 
   const summary = data?.summary;
 
-  // An empty population is not a zero rate, and the difference is the whole point: it usually
-  // means the window predates the `mode` field rather than that nobody retrieved.
-  const isEmpty = useMemo(
+  // An empty population is not a zero rate, and the difference is the whole point. Scoped to the
+  // two buckets the rates are computed over: forced and unclassified turns can be non-zero while
+  // there is still nothing to measure, so the banner says which population is empty rather than
+  // claiming the window holds no turns at all.
+  const hasNoRatePopulation = useMemo(
     () => Boolean(data) && summary?.offeredTurns === 0 && summary?.forcedSuppressed.turns === 0,
     [data, summary]
   );
@@ -144,10 +146,11 @@ export default function RetrievalRateTab() {
             </Alert>
           )}
 
-          {isEmpty && (
+          {hasNoRatePopulation && (
             <Alert color="neutral" data-testid="retrieval-rate-empty">
-              No classifiable turns in this window. Turns recorded before the retrieval-mode field shipped carry no mode
-              and are counted as unclassified rather than folded into a rate.
+              No turns in this window reached the optional path, so there is no rate to report. Any forced or
+              unclassified turns below are counted but cannot answer this question - a turn only measures the offer
+              when the model was free to decline it.
             </Alert>
           )}
 
@@ -165,12 +168,12 @@ export default function RetrievalRateTab() {
             <StatCard
               label="Forced turns"
               value={summary.forcedTurns.toLocaleString()}
-              caption="Retrieval ran because the session forced it"
+              caption="Forced retrieval enabled, nothing suppressed it"
             />
             <StatCard
               label="Unclassified"
               value={summary.unclassifiedTurns.toLocaleString()}
-              caption="Recorded before the retrieval-mode field shipped"
+              caption="No mode recorded - pre-deploy turns, or agent-mode runs"
             />
           </Stack>
 

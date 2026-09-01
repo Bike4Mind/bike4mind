@@ -14,11 +14,13 @@ import { summarizeOptionalPathRetrieval, type RetrievalRateInput } from '@bike4m
  */
 
 /**
- * Ceiling on turns folded into one response. A rollup wants the whole window, but the filter below
- * has no dedicated index (`promptMeta.retrieval` + `timestamp`), so an unbounded window on a large
- * deployment is a long collection scan inside a request. Past this the response says so via
- * `truncated` rather than quietly reporting a rate for a prefix of the window - narrow the dates
- * and read the buckets separately.
+ * Ceiling on turns folded into one response - a bound on the documents this endpoint MATERIALISES
+ * and folds, not on what the database examines. The scan itself is bounded by the partial index
+ * `retrieval_timestamp_desc` (QuestModel), which indexes exactly this filter in this sort order,
+ * so the limit is served from the index rather than by examining every Quest.
+ *
+ * Past the ceiling the response says so via `truncated` rather than quietly reporting a rate for
+ * a prefix of the window - narrow the dates and read the buckets separately.
  */
 const MAX_TURNS_SCANNED = 50_000;
 
@@ -26,6 +28,9 @@ const querySchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });
+
+/** `<input type="date">` sends this; anything else is treated as a caller-supplied exact instant. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 const parseDate = (value: string | undefined, label: string): Date | undefined => {
   if (value === undefined) return undefined;
@@ -40,6 +45,22 @@ const parseDate = (value: string | undefined, label: string): Date | undefined =
   return parsed;
 };
 
+/**
+ * The end bound as a half-open upper limit, so the picked day is INCLUDED.
+ *
+ * `new Date('2026-08-31')` is UTC midnight at the START of the 31st, so bounding with `$lte` on it
+ * would drop the entire selected day - the off-by-one that makes a date-picker window quietly
+ * exclude its own end date. A date-only bound therefore advances to the next midnight and the
+ * query uses `$lt`. An explicit instant is honoured as given.
+ */
+const endBoundExclusive = (value: string | undefined, parsed: Date | undefined): Date | undefined => {
+  if (!parsed) return undefined;
+  if (!value || !DATE_ONLY.test(value)) return parsed;
+  const next = new Date(parsed);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+};
+
 const handler = baseApi().get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
@@ -49,15 +70,18 @@ const handler = baseApi().get(
     const params = querySchema.parse(req.query);
     const startDate = parseDate(params.startDate, 'startDate');
     const endDate = parseDate(params.endDate, 'endDate');
+    // Half-open on a date-only bound so the picked end day is included; see endBoundExclusive.
+    const endBefore = endBoundExclusive(params.endDate, endDate);
+    const endIsExclusive = Boolean(params.endDate && DATE_ONLY.test(params.endDate));
 
     // `retrieval` is written for every turn that could have retrieved - forced retrieval enabled,
     // or the knowledge tool offered - so its presence IS the population. Turns with no knowledge
     // in scope never carry the field and are excluded without a second predicate.
     const query: Record<string, unknown> = { 'promptMeta.retrieval': { $exists: true } };
-    if (startDate || endDate) {
+    if (startDate || endBefore) {
       query.timestamp = {
         ...(startDate ? { $gte: startDate } : {}),
-        ...(endDate ? { $lte: endDate } : {}),
+        ...(endBefore ? (endIsExclusive ? { $lt: endBefore } : { $lte: endBefore }) : {}),
       };
     }
 
