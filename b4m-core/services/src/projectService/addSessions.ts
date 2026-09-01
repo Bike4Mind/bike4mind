@@ -11,9 +11,8 @@ import {
   secureParameters,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';
-import { distinctIdCount } from '../utils/objectIds';
+import { distinctIdCount, mergeIds } from '../utils/objectIds';
 import { updateShareableFiles } from './addFiles';
 
 const addSessionsProjectSchema = z.object({
@@ -39,6 +38,13 @@ export const addSessions = async (
   const { db } = adapters;
   const { projectId, sessionIds } = secureParameters(params, addSessionsProjectSchema);
 
+  // Resolved before the session guards so a bad projectId answers 404 'Project not found' rather
+  // than reporting the sessions as inaccessible.
+  const project = await db.projects.shareable.findAccessibleById(user, projectId);
+  if (!project) {
+    throw new NotFoundError('Project not found');
+  }
+
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
   if (sessions.length === 0) {
     throw new NotFoundError('Sessions not found');
@@ -48,17 +54,15 @@ export const addSessions = async (
   // twice - or sent as both `abc` and `ABC` - is not one that could not be reached.
   if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
 
-  const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) {
-    throw new NotFoundError('Project not found');
-  }
-
   // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
-  project.sessionIds = uniq([...project.sessionIds, ...sessions.map(session => session.id)]);
+  project.sessionIds = mergeIds(
+    project.sessionIds,
+    sessions.map(session => session.id)
+  );
   project.updatedAt = new Date();
 
   const fileIds = await updateShareableSessions(user, { project, sessions }, adapters);
-  project.fileIds = uniq([...project.fileIds, ...fileIds]);
+  project.fileIds = mergeIds(project.fileIds, fileIds);
 
   await db.projects.update(project);
 

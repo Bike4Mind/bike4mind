@@ -30,7 +30,9 @@ import * as addFilesModule from './addFiles';
 
 const USER_ID = 'user-1';
 const PROJECT_ID = 'project-1';
-const SESSION_ID = 'session-1';
+// Hex, not 'session-1': sessions are ObjectId-keyed, and the two-hex-cases test below is
+// only meaningful for an id Mongo actually resolves case-insensitively.
+const SESSION_ID = '67dbe18a7f9cf1fa5d9686aa';
 
 const LIVE_ID = '67dbe18a7f9cf1fa5d968600';
 // Castable, but its row is soft-deleted, so findAllByIds does not return it.

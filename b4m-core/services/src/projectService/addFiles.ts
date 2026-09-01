@@ -9,9 +9,8 @@ import {
   BadRequestError,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import uniq from 'lodash/uniq.js';
 import { pushShareable } from '../sharingService';
-import { distinctIdCount } from '../utils/objectIds';
+import { distinctIdCount, mergeIds } from '../utils/objectIds';
 
 const addFilesProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -47,8 +46,12 @@ export const addFiles = async (
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
 
   // The ids that RESOLVED, like addSessions: pushing the request list would store `ABC` alongside
-  // an existing `abc` as if they were two different files.
-  project.fileIds = uniq([...project.fileIds, ...files.map(f => f.id)]);
+  // an existing `abc` as if they were two different files. mergeIds, not uniq, because a row
+  // written before ids were canonicalised can ALREADY hold the uppercase form.
+  project.fileIds = mergeIds(
+    project.fileIds,
+    files.map(f => f.id)
+  );
   project.updatedAt = new Date();
 
   await updateShareableFiles(user.id, { project, files }, adapters);

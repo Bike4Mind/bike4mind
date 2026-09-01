@@ -23,8 +23,14 @@ export const usableSessionIds = (
  *
  * Do not write the result back to a document: a legacy non-hex entry like `Legacy-UUID-2019` would
  * be rewritten to a form that no longer matches what is stored.
+ *
+ * Only hex is folded. Mongo treats hex case-insensitively, arbitrary strings it does not, and these
+ * arrays are declared `[{ type: String }]` precisely so they can hold a non-hex legacy id. Folding
+ * those too would make an imported `Doc-A` and `doc-a` compare equal, so removing one drops both.
  */
-export const canonicalId = (id: string): string => id.toLowerCase();
+const HEX_OBJECT_ID = /^[0-9a-f]{24}$/i;
+
+export const canonicalId = (id: string): string => (HEX_OBJECT_ID.test(id) ? id.toLowerCase() : id);
 
 /**
  * How many DISTINCT rows a request could address, ignoring hex case. Callers compare this against
@@ -34,3 +40,24 @@ export const canonicalId = (id: string): string => id.toLowerCase();
  * twice: first counting raw duplicates, then counting case variants as separate ids.
  */
 export const distinctIdCount = (ids: string[]): number => new Set(ids.map(canonicalId)).size;
+
+/**
+ * Appends `incoming` to `existing`, skipping any id already present ignoring hex case.
+ *
+ * `uniq` alone is case-sensitive, so a row written before ids were canonicalised can hold `ABC`
+ * and still gain a second `abc` entry for the same file - and the reader's own `uniq`
+ * (ChatCompletionFeatures) is case-sensitive too, so that file gets fetched and embedded into the
+ * prompt twice. Stored entries are returned untouched: rewriting one to its canonical form would
+ * break a non-hex legacy id, per canonicalId above.
+ */
+export const mergeIds = (existing: string[], incoming: string[]): string[] => {
+  const seen = new Set(existing.map(canonicalId));
+  const merged = [...existing];
+  for (const id of incoming) {
+    const key = canonicalId(id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(id);
+  }
+  return merged;
+};

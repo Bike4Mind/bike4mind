@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { usableSessionIds } from './objectIds';
+import { canonicalId, distinctIdCount, mergeIds, usableSessionIds } from './objectIds';
 
 const GOOD = '507f1f77bcf86cd799439011';
 const JUNK = 'legacy-uuid-not-an-objectid';
@@ -38,5 +38,31 @@ describe('usableSessionIds', () => {
     const log = logger();
     expect(usableSessionIds([], 'knowledge', log)).toEqual([]);
     expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('canonicalId', () => {
+  it('folds hex case, which Mongo resolves to the same row either way', () => {
+    expect(canonicalId(GOOD.toUpperCase())).toBe(GOOD);
+  });
+
+  it('leaves a non-hex legacy id alone, so two that differ only in case stay distinct', () => {
+    expect(canonicalId('Doc-A')).toBe('Doc-A');
+    expect(distinctIdCount(['Doc-A', 'doc-a'])).toBe(2);
+  });
+});
+
+describe('mergeIds', () => {
+  it('does not append an id the row already holds in the other hex case', () => {
+    expect(mergeIds([GOOD.toUpperCase()], [GOOD])).toEqual([GOOD.toUpperCase()]);
+  });
+
+  it('keeps the stored form, so a non-hex legacy id is never rewritten', () => {
+    expect(mergeIds([JUNK], [JUNK])).toEqual([JUNK]);
+  });
+
+  it('appends genuinely new ids in order', () => {
+    const other = '507f1f77bcf86cd799439022';
+    expect(mergeIds([GOOD], [other, GOOD, other])).toEqual([GOOD, other]);
   });
 });

@@ -3,7 +3,7 @@ import { pushShareable } from '../sharingService';
 import { IFabFileRepository, IProjectRepository, IUserDocument, Permission } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { distinctIdCount } from '../utils/objectIds';
+import { canonicalId, distinctIdCount } from '../utils/objectIds';
 import uniq from 'lodash/uniq.js';
 
 const addSystemPromptsSchema = z.object({
@@ -34,9 +34,11 @@ export const addSystemPrompts = async (
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
 
-  // Derived from the RESOLVED ids, not the request: a doubled id - or the same id in two hex cases -
-  // would otherwise push two systemPrompts entries for one file.
-  const resolvedIds = uniq(files.map(f => f.id));
+  // Resolved ids, in REQUEST order: a doubled id - or the same id in two hex cases - would push two
+  // systemPrompts entries for one file, but `files` comes back in Mongo's order, and this array's
+  // order is the order the prompts compose in (ChatCompletionFeatures).
+  const resolvedById = new Map(files.map(f => [canonicalId(f.id), f.id]));
+  const resolvedIds = uniq(fileIds.map(id => resolvedById.get(canonicalId(id))).filter((id): id is string => !!id));
   const newFileIds = resolvedIds.filter(fileId => !project.systemPrompts.some(prompt => prompt.fileId === fileId));
 
   if (newFileIds.length === 0) {
