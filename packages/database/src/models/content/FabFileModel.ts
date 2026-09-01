@@ -1712,7 +1712,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
-    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: at } });
+    // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
+    // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
+    // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
+    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
+    // return stays the ids this call selected, which is what the index removal and its re-run want.
+    await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
     return ids;
   }
 

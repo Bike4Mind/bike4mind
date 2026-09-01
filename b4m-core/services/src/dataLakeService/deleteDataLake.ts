@@ -57,6 +57,9 @@ export const deleteDataLake = async (
   // Only short-circuit on the terminal state. A lake stuck in transitional 'deleting'
   // from a crashed prior attempt must be able to re-run; the phase-1 side effects
   // (cancel batches, soft-delete files, best-effort index removal) are idempotent.
+  // Idempotent for the SEQUENTIAL retry this admits, which is the only case it argues.
+  // Two teardowns overlapping in time is a different question, and what answers it is
+  // where claimDeleting sits relative to the stamp block - see the note there.
   if (existing.status === 'deleted') {
     return existing;
   }
@@ -78,16 +81,6 @@ export const deleteDataLake = async (
   // files and appears in no deleted list, so nothing could recover it.
   if (existing.status === 'restoring') {
     throw new BadRequestError('This data lake is being restored and cannot be deleted right now');
-  }
-
-  // Claimed BEFORE any side effect, and conditional on the states the guards above admitted: the
-  // guards ran against a document read two round trips ago (the grant load), so an archive, restore
-  // or second teardown landing in that gap must make this LOSE rather than be overwritten by it.
-  // Claiming first also means a lost claim leaves the lake untouched - no cancelled batches, no
-  // spent `filesDeletedAt`.
-  const entered = await db.dataLakes.claimDeleting(dataLakeId);
-  if (!entered) {
-    throw new BadRequestError('This data lake changed status mid-request and can no longer be deleted');
   }
 
   // Quiesce in-flight batches before teardown.
@@ -114,6 +107,26 @@ export const deleteDataLake = async (
     if (!stamp) {
       logger?.warn('[dataLakes] teardown recorded no stamp; this lake will restore unbounded', { dataLakeId });
     }
+  }
+
+  // Conditional on the states the guards above admitted, never a blind $set: those guards ran
+  // against a document read several round trips ago, so an archive, restore or second teardown
+  // landing in that gap must make this LOSE rather than be overwritten by it.
+  //
+  // Its POSITION is load-bearing, and deliberately not hoisted above the stamp block even though
+  // claiming earlier would buy a cleaner loss (no cancelled batches, no spent `filesDeletedAt`).
+  // `preMarkSweepInFlight` derives "an earlier unstamped sweep is already running" from
+  // `status === 'deleting'`, which is only sound while the status write cannot precede the stamp.
+  // Hoist this and a concurrent second teardown reads `{ status: 'deleting', filesDeletedAt: unset }`,
+  // takes the pre-mark branch, and sweeps every row under `softDeleteByDataLakeTag`'s own fallback
+  // `new Date()` - an orphan mark no lake names. `undeleteByDataLakeTag` matches `deletedAt` by exact
+  // equality against the lake's stamp, so restore then recovers none of them and its unconditional
+  // settle spends the only stamp: unrecoverable without DB surgery. Claiming here instead keeps
+  // 'deleting' implying the stamp is in force, so the second entrant folds onto the first's stamp
+  // through `claimFilesDeletedAt`'s set-if-unset read-back.
+  const entered = await db.dataLakes.claimDeleting(dataLakeId);
+  if (!entered) {
+    throw new BadRequestError('This data lake changed status mid-request and can no longer be deleted');
   }
 
   await warnOnPrefixCollision(db, existing, logger);

@@ -1640,6 +1640,18 @@ describe('DataLakeRepository archive-axis lifecycle claims', () => {
     }
   );
 
+  // The mirror of claimDeleting's refuses block, and the half that was missing: without it, narrowing the
+  // admitted set would make deleting an ordinary lake throw "changed status mid-request" for every
+  // user with both suites still green. 'archiving' is in here on purpose - see claimDeleting's note.
+  it.each(['draft', 'active', 'archiving', 'archived'] as const)(
+    'claimDeleting admits a lake in %s status',
+    async status => {
+      const created = await dataLakeRepository.create(baseLake({ slug: `delete-ok-${status}`, status }));
+      expect(await dataLakeRepository.claimDeleting(created.id)).toBe(true);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe('deleting');
+    }
+  );
+
   it.each(['draft', 'active'] as const)('claimArchiving admits a lake in %s status', async status => {
     const created = await dataLakeRepository.create(baseLake({ slug: `archive-ok-${status}`, status }));
     expect(await dataLakeRepository.claimArchiving(created.id)).toBe(true);

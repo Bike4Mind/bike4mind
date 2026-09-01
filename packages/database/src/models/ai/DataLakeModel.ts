@@ -549,6 +549,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // 'restoring' is deliberately absent: a teardown must lose to an unarchive or restore already
     // in flight rather than plain-write over it, which is what left a lake 'active' with every one
     // of its files soft-deleted. 'deleted'/'purging' are handled by deleteDataLake's own guards.
+    //
+    // 'archiving' IS admitted, and that is a deliberate asymmetry rather than an oversight: a
+    // delete may take the lake out from under an in-flight archive. It is safe only because that
+    // archive's own sweep is write-once, but its terminal settle is unconditional, so the pair
+    // still converges on 'archived' rather than 'deleted' - the one lifecycle pair this claim set
+    // does not close. Tracked separately; do not read the admitted set as covering it.
     return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
   }
 

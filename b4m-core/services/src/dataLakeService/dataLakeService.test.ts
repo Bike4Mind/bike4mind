@@ -2160,7 +2160,12 @@ describe('teardown stamp bookkeeping', () => {
     it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
       // Mid-flight when this shipped: rows already carry a stamp nothing recorded, and marking them
       // now with a later one would strand them deleted forever.
-      const adapters = teardownAdapters(lake({ status: 'deleting' }));
+      //
+      // This fixture describes the LEGACY lake and nothing else, and that is only true because the
+      // stamp is claimed before the status hop - so {deleting, unstamped} cannot also be a live
+      // second teardown's snapshot. Reorder those two and this fixture silently starts naming both
+      // states, with this test asserting the unmarked sweep is fine for a case where it is not.
+      const adapters = teardownAdapters(lake({ status: 'deleting', filesDeletedAt: undefined }));
       await deleteDataLake(owner, 'lake1', adapters);
 
       expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
@@ -2390,7 +2395,13 @@ describe('the archive-axis lifecycle claims - a raced delete and unarchive', () 
     // soft-deleted files and appears in no deleted list - unrecoverable by either restore path.
     const db = {
       dataLakes: {
-        findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
+        // Two reads, two answers: the guard sees the stale 'archived', the loss-path re-read sees the
+        // status that actually won. Serving both from one mockResolvedValue would let the refusal
+        // name 'archived' and still pass, which is the whole point of that re-read.
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake({ status: 'archived' }))
+          .mockResolvedValue(lake({ status: 'deleting' })),
         claimUnarchiving: vi.fn().mockResolvedValue(false),
         update: vi.fn(),
         setStats: vi.fn(),
@@ -2400,7 +2411,7 @@ describe('the archive-axis lifecycle claims - a raced delete and unarchive', () 
       fabFiles: { findArchivedByDataLakeTag: vi.fn(), unarchiveByDataLakeTag: vi.fn(), deleteManyInIds: vi.fn() },
     };
     await expect(unarchiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
-      /cannot restore a data lake in 'archived' status/i
+      /cannot restore a data lake in 'deleting' status/i
     );
     // Losing the claim must abort before any file work: an un-archive that half-ran is what left
     // the two states disagreeing in the first place.
@@ -2437,20 +2448,99 @@ describe('the archive-axis lifecycle claims - a raced delete and unarchive', () 
       dataLakes: {
         findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
         claimDeleting: vi.fn().mockResolvedValue(false),
-        claimFilesDeletedAt: vi.fn(),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
         update: vi.fn(),
       },
       dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
-      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
       fabFiles: { softDeleteByDataLakeTag: vi.fn() },
     };
     await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
       /changed status mid-request and can no longer be deleted/i
     );
-    // Claimed before any side effect, so a loss cancels no batch and spends no filesDeletedAt.
-    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
-    expect(db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
+    // The claim sits BELOW the batch quiesce and the stamp block, so a loss here does cancel batches
+    // and does spend a `filesDeletedAt`. That is the deliberate cost of keeping 'deleting' implying
+    // the stamp is in force - asserted rather than lamented, so a future reorder has to face it.
+    // What a loss must still guarantee is that nothing DESTRUCTIVE or terminal ran.
+    expect(db.dataLakes.claimFilesDeletedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
     expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('two concurrent teardowns: one wins, the other is refused, and no row is swept unmarked', async () => {
+    // The pair no test composed before this, which is exactly why a reordering that let the second
+    // entrant sweep unmarked passed both suites green. Both prior delete-race tests pit delete
+    // against a DIFFERENT operation, and the model-layer re-entrancy test asserts claimDeleting
+    // returns true twice from 'deleting' - correct there (a crash retry and a live second entrant
+    // are genuinely indistinguishable to the model) but it green-lights the mechanism.
+    //
+    // The interleaving is forced at the batch quiesce, the one await between the guards and the
+    // stamp block. With claimDeleting hoisted above that quiesce, B's snapshot reads
+    // { status: 'deleting', filesDeletedAt: unset }, takes the pre-mark branch, and sweeps every row
+    // under softDeleteByDataLakeTag's fallback `new Date()` - an orphan mark the lake does not name,
+    // which restore (exact equality on `deletedAt`) recovers none of while its unconditional settle
+    // spends the only stamp. Terminal, not retryable. With the claim below the stamp, the loser
+    // never reaches its sweep at all.
+    const doc = lake({ status: 'active' });
+    const sweptWith: (Date | undefined)[] = [];
+    let entrantB: Promise<unknown> | undefined;
+
+    const db = {
+      dataLakes: {
+        // A fresh copy per call, so each entrant carries its own guard-time snapshot.
+        findById: vi.fn().mockImplementation(async () => ({ ...doc })),
+        // Set-if-unset with read-back, the real claimFilesDeletedAt contract.
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => {
+          doc.filesDeletedAt ??= at;
+          return doc.filesDeletedAt;
+        }),
+        // matchedCount semantics: admitted statuses win, anything else loses.
+        claimDeleting: vi.fn().mockImplementation(async () => {
+          if (!['draft', 'active', 'archiving', 'archived', 'deleting'].includes(doc.status)) return false;
+          doc.status = 'deleting';
+          return true;
+        }),
+        update: vi.fn().mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => {
+          doc.status = status;
+          return { ...doc };
+        }),
+        find: vi.fn().mockResolvedValue([]),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockImplementation(async () => {
+          // Only the FIRST entrant opens the window. B re-enters this very mock, so it has to fall
+          // straight through: awaiting `entrantB` there would be B awaiting its own promise, which
+          // is a deadlock rather than an interleaving. B's rejection is swallowed here so it cannot
+          // surface as A's error and mask which entrant actually lost; the bare `await entrantB`
+          // after the assertion is what still makes a failed B fail this test.
+          if (!entrantB) {
+            entrantB = deleteDataLake(owner, 'lake1', { db } as never);
+            await entrantB.catch(() => {});
+          }
+          return [];
+        }),
+        markTerminalIfActive: vi.fn(),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockImplementation(async (_scope: unknown, at?: Date) => {
+          sweptWith.push(at);
+          return [];
+        }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be deleted/i
+    );
+    await entrantB;
+
+    // Exactly one sweep, carrying exactly the mark the lake records - so restore's equality filter
+    // reaches every row it soft-deleted.
+    expect(sweptWith).toEqual([doc.filesDeletedAt]);
+    expect(sweptWith).not.toContain(undefined);
+    expect(doc.status).toBe('deleted');
   });
 
   it.each(['deleting', 'deleted', 'restoring'] as const)(
