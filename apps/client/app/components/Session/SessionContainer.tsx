@@ -260,7 +260,12 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       }
 
       setCurrentSessionId(realId);
-      setCurrentSession(realSession);
+      // Merge over an already-adopted copy of the SAME session instead of replacing it: the
+      // client may have adopted the create response (Data Lake open/attach mints one holding
+      // knowledgeIds) before this event lands, and a replace makes whatever the wire copy
+      // lacks vanish - the knowledgeIds hydration effect then zeroes the workbench it had
+      // just filled. A different id is the optimistic-migration path and replaces as before.
+      setCurrentSession(prev => (prev && prev.id === realId ? { ...prev, ...realSession } : realSession));
 
       // Notify parent (e.g. /opti) so it can sync its local session state.
       if (onSessionCreatedRef.current) {

@@ -1,5 +1,6 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 
 export const API_REFERENCE_CONTENT = `
 # ${getBrandName()} API Reference
@@ -125,12 +126,15 @@ GET /api/quests/[id]
 
 **Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access — an AI scope works so the chat→poll flow needs a single key).
 
+Not a pure read: polling a quest whose run died without writing a terminal status settles it, so the poll that crosses the liveness threshold returns \`status: "done"\` instead of spinning on \`running\` forever. Whatever the run produced is preserved; \`type: "error"\` marks the case where it produced nothing, which is how a client machine-distinguishes a timeout from a genuine answer. Only the session owner's poll can settle a quest - a shared-session viewer reads it as-is, and a background sweep settles it instead.
+
 **Response:**
 
 \`\`\`json
 {
   "id": "quest_abc123",
   "status": "completed",
+  "type": "message",
   "reply": {
     "content": "Here is the AI response...",
     "model": "gpt-4o",
@@ -185,6 +189,55 @@ Cancels an in-progress streaming response.
 | POST | /api/sessions/[id]/chat/[messageId]/snip | Snip conversation at a message |
 | GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
 | POST | /api/infer | Raw inference endpoint |
+
+---
+
+### Agent Executions (ReAct)
+
+The tool-using agent loop behind the product UI's Agent Mode toggle. This is a different
+pipeline from \`POST /api/chat\`: it runs several LLM iterations, calling tools between them,
+rather than producing a single completion. It used to be reachable only over the
+\`agent_execute\` WebSocket route, so an API-key caller could reproduce a chat turn but not an
+agent run.
+
+#### Start an Agent Run
+
+\`\`\`
+POST /api/v1/agent-executions
+\`\`\`
+
+**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
+
+> **This endpoint is generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`startAgentExecution\`, derived from the same
+> object the handler validates with.
+>
+> The run is asynchronous and nothing is streamed back over REST: you get a \`202\` with an
+> execution id, then poll. Omit \`agent_id\` to get whatever profile the session's own surface
+> resolves to - that is what reproduces the in-app toggle, rather than pinning one specific
+> agent. The final answer is also written to the session as a normal chat message, so it
+> appears in history.
+
+#### Poll an Agent Run
+
+\`\`\`
+GET /api/v1/agent-executions/[id]
+\`\`\`
+
+**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
+
+> See the [generated API docs](/api/v1/docs) under \`getAgentExecution\`. Returns the run's
+> status, its reasoning trace (which grows while the run is in flight), and the final answer
+> once \`status\` is terminal. GET requests here are exempt from the per-day API-key quota, so
+> polling one run costs a single daily slot; the per-minute burst limit still applies.
+
+#### Agent Execution Endpoints Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/v1/agent-executions | Start an agent (ReAct) run |
+| GET | /api/v1/agent-executions/[id] | Poll status, reasoning trace, and answer |
 
 ---
 
@@ -262,7 +315,8 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| fileId | string | Yes | File ID to chunk |
+| fabFileId | string | Yes | File ID to chunk |
+| chunkSize | integer | Yes | Passage target in tokens. Must be an integer between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive. |
 
 #### File Endpoints Summary
 
@@ -334,6 +388,21 @@ GET /api/sessions
   "limit": 20
 }
 \`\`\`
+
+#### Update a Session
+
+\`\`\`
+PUT /api/sessions/[id]
+\`\`\`
+
+> **This endpoint is now generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`updateSession\`, derived from the same
+> object the handler validates with.
+>
+> This is also the call that turns on grounded retrieval for \`POST /api/chat\`:
+> set \`knowledgeIds\` and \`forceKnowledgeRetrieval: true\` on the session first -
+> retrieval is gated by these session fields, not by anything in the chat request.
 
 #### Session Endpoints Summary
 
@@ -633,9 +702,9 @@ read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 }
 \`\`\`
 
-#### v1 API (OpenAPI 3.1)
+#### OpenAPI 3.1 documented endpoints
 
-The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/ai/v1/tools\`) publish a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, and the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -644,7 +713,7 @@ The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/
 
 The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
 
-Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models both the completion event stream and the tools endpoint in full.
+Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives.
 
 #### AI Endpoints Summary
 
@@ -652,7 +721,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 |--------|----------|-------------|
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
-| POST | /api/ai/tts | Multi-provider text-to-speech (openai, elevenlabs) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
 | POST | /api/ai/generate-image | Image generation (DALL-E) |
 | POST | /api/ai/edit-image | Image editing |
@@ -1000,7 +1068,7 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | POST | /api/admin/system-prompts | Create system prompt |
 | GET | /api/admin/system-prompts/[promptId] | Get prompt |
 | PUT | /api/admin/system-prompts/[promptId] | Update prompt |
-| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt |
+| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt (DB-only prompts; use reset when a code default exists) |
 | POST | /api/admin/system-prompts/[promptId]/create-version | Create version |
 | POST | /api/admin/system-prompts/[promptId]/save-version | Save version |
 | POST | /api/admin/system-prompts/[promptId]/switch-version | Switch active version |

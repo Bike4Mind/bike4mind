@@ -45,7 +45,12 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { KnowledgeType, isSupportedEmbeddingModel, type IFabFileChunkDocument } from '@bike4mind/common';
+import {
+  countCodePoints,
+  KnowledgeType,
+  isSupportedEmbeddingModel,
+  type IFabFileChunkDocument,
+} from '@bike4mind/common';
 import { chunkByHeadings, stripFrontmatter } from './utils.js';
 import type { HelpIndex } from './types.js';
 
@@ -142,7 +147,10 @@ async function main(opts: Options): Promise<number> {
   // Meta-tag only. This script writes both signals on every article (see below), so the narrow
   // scope already covers everything it created, and it deletes outright - widening it to the
   // prefix arm would let the mirror reach a file some other lake put a `help:` tag on.
-  const existingIds = await fabFileRepository.findIdsByDataLakeTag({ datalakeTag: DATALAKE_TAG });
+  // OMITTING `fileTagPrefix` is what keeps it narrow: a registry scope carrying one matches the
+  // open prefix arm (no ownership conjunct). Previously this was meta-tag-only by accident of the
+  // creator-less degradation; it is now a deliberate choice, so do not "helpfully" add the prefix.
+  const existingIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: DATALAKE_TAG });
   if (existingIds.length > 0) {
     console.log(`Removing ${existingIds.length} existing help fabfile(s) + their chunks…`);
     if (!opts.dryRun) {
@@ -185,6 +193,7 @@ async function main(opts: Options): Promise<number> {
           fabFileId: '',
           text,
           tokenCount: estimateTokens(text),
+          charLength: countCodePoints(text),
           vector,
           createdAt: now,
           updatedAt: now,
@@ -223,6 +232,7 @@ async function main(opts: Options): Promise<number> {
       system: true,
       chunked: true,
       chunkCount: chunkPayloads.length,
+      chunkedCharCount: chunkPayloads.reduce((sum, c) => sum + (c.charLength ?? 0), 0),
       vectorized: true,
       vectorizedChunkCount: chunkPayloads.length,
       embeddingModel,

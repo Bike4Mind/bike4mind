@@ -149,7 +149,8 @@ Please generate a complete, well-structured notebook that performs this analysis
           { role: 'system', content: NOTEBOOK_GENERATION_PROMPT },
           { role: 'user', content: userPrompt },
         ],
-        { maxTokens: 4000, temperature: 0.7 },
+        // abortSignal: see ToolContext.getAbortSignal - Stop must reach nested generation too.
+        { maxTokens: 4000, temperature: 0.7, abortSignal: context.getAbortSignal?.() },
         async (texts, info) => {
           responseText = texts.filter(t => t !== null && t !== undefined).join('');
           if (info) completionInfo = info;

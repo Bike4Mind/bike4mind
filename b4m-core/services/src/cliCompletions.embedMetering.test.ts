@@ -5,8 +5,16 @@ import { CreditHolderType } from '@bike4mind/common';
 let enforceCredits = true;
 
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
-vi.mock('./creditService', () => ({ subtractCredits: vi.fn().mockResolvedValue(undefined) }));
+// Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
+vi.mock('./creditService', async importOriginal => ({
+  ...(await importOriginal<typeof import('./creditService')>()),
+  subtractCredits: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  // See cliCompletions.maxTokens.test.ts for coverage against the real implementation.
+  resolveOutputMaxTokens: vi.fn(
+    ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
+  ),
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',

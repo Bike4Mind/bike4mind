@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { ListItem, ListItemButton } from '@mui/joy';
@@ -7,6 +7,14 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeTreeView, { UNCATEGORIZED_KEY, type DataLakeTreeChrome } from './DataLakeTreeView';
+
+// DataLakeTreeView always calls this (cross-tree article search, #1693), even when disabled
+// (no `source` prop / query too short) - the hook itself still needs a stub since these tests
+// render without a QueryClientProvider. Individual tests override the return value.
+const { mockGetDataLakeArticles } = vi.hoisted(() => ({ mockGetDataLakeArticles: vi.fn() }));
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useGetDataLakeArticles: (params: unknown, source: unknown) => mockGetDataLakeArticles(params, source),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -29,18 +37,19 @@ const testChrome: DataLakeTreeChrome = {
       {label}
     </ListItemButton>
   ),
+  backRowPlacement: 'above',
   scrollSx: {},
   nodeListSx: {},
   fileListSx: {},
   renderNodeRow: (node, _depth, onOpen) => (
-    <ListItem key={node.segment}>
+    <ListItem>
       <ListItemButton data-testid={`datalake-node-${node.segment}`} onClick={onOpen}>
         {node.segment} ({node.fileCount})
       </ListItemButton>
     </ListItem>
   ),
   renderFileRow: (file, selected, onSelect) => (
-    <ListItem key={file.id}>
+    <ListItem>
       <ListItemButton data-testid={`datalake-file-${file.id}`} data-selected={selected} onClick={onSelect}>
         {file.fileName}
       </ListItemButton>
@@ -75,6 +84,13 @@ const TREE = buildTagTree([
   { tag: 'zebra:x', count: 5 },
 ]);
 
+const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
+
+beforeEach(() => {
+  mockGetDataLakeArticles.mockReset();
+  mockGetDataLakeArticles.mockReturnValue({ data: undefined, isLoading: false });
+});
+
 const renderTree = (over: Partial<React.ComponentProps<typeof DataLakeTreeView>> = {}) => {
   const onNavigate = vi.fn();
   const onSelectFile = vi.fn();
@@ -84,7 +100,7 @@ const renderTree = (over: Partial<React.ComponentProps<typeof DataLakeTreeView>>
       articles={ARTICLES}
       breadcrumb={[]}
       onNavigate={onNavigate}
-      selectedFileId={null}
+      selectedFileIds={EMPTY_SELECTED_IDS}
       onSelectFile={onSelectFile}
       isLoading={false}
       chrome={testChrome}
@@ -123,6 +139,11 @@ describe('DataLakeTreeView nodes', () => {
     fireEvent.click(screen.getByTestId('datalake-node-books'));
     expect(onNavigate).toHaveBeenCalledWith(['books']);
   });
+
+  it('shows the sort toggle at a folder level, where it actually reorders something', () => {
+    renderTree();
+    expect(screen.getByTestId('datalake-sort-toggle')).toBeTruthy();
+  });
 });
 
 describe('DataLakeTreeView leaf files', () => {
@@ -135,14 +156,46 @@ describe('DataLakeTreeView leaf files', () => {
   });
 
   it('marks the selected file through the chrome flag', () => {
-    renderTree({ breadcrumb: ['books', 'war'], selectedFileId: 'f1' });
+    renderTree({ breadcrumb: ['books', 'war'], selectedFileIds: new Set(['f1']) });
     expect(screen.getByTestId('datalake-file-f1').dataset.selected).toBe('true');
     expect(screen.getByTestId('datalake-file-f2').dataset.selected).toBe('false');
+  });
+
+  it('marks multiple selected files at once (files added to the prompt earlier stay highlighted)', () => {
+    renderTree({ breadcrumb: ['books', 'war'], selectedFileIds: new Set(['f1', 'f2']) });
+    expect(screen.getByTestId('datalake-file-f1').dataset.selected).toBe('true');
+    expect(screen.getByTestId('datalake-file-f2').dataset.selected).toBe('true');
   });
 
   it('shows the chrome empty-files label at an empty leaf', () => {
     renderTree({ breadcrumb: ['books', 'war'], articles: [] });
     expect(screen.getByText('No articles found')).toBeTruthy();
+  });
+
+  it('hides the sort toggle at a leaf - it always sorts by category then title regardless, so a live toggle would visibly do nothing', () => {
+    renderTree({ breadcrumb: ['books', 'war'] });
+    expect(screen.queryByTestId('datalake-sort-toggle')).toBeNull();
+  });
+
+  it('filters the leaf file list locally by the search query (#1693)', async () => {
+    renderTree({ breadcrumb: ['books', 'war'] });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'a-war');
+    expect(screen.getByTestId('datalake-file-f2')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-file-f1')).toBeNull();
+  });
+
+  it('sorts bracket-prefixed names by category then title, not the raw leading "["', () => {
+    const bracketed = [
+      file('b1', '[Marketing] Zebra Plan.md', ['briefs:x']),
+      file('b2', '[Marketing] Apple Plan.md', ['briefs:x']),
+      file('b3', '[Sales] Intro.md', ['briefs:x']),
+    ];
+    renderTree({ breadcrumb: ['briefs', 'x'], articles: bracketed });
+    const files = screen.getAllByTestId(/^datalake-file-/).map(el => el.dataset.testid);
+    // Marketing group (Apple before Zebra within it) sorts before Sales - a raw-name sort would
+    // instead interleave/tiebreak on the shared "[" and give a different, meaningless order.
+    expect(files).toEqual(['datalake-file-b2', 'datalake-file-b1', 'datalake-file-b3']);
   });
 });
 
@@ -184,9 +237,10 @@ describe('DataLakeTreeView back row', () => {
     expect(onNavigate).toHaveBeenCalledWith(['books']);
   });
 
-  it('renders sticky-back inside the scroll pane when chrome.stickyBackSx is set', () => {
+  it('renders sticky-back inside the scroll pane when chrome.backRowPlacement is sticky', () => {
     const stickyChrome: DataLakeTreeChrome = {
       ...testChrome,
+      backRowPlacement: 'sticky',
       stickyBackSx: { position: 'sticky', top: 0 },
     };
     const { onNavigate } = renderTree({ breadcrumb: ['books'], chrome: stickyChrome });
@@ -201,12 +255,22 @@ describe('DataLakeTreeView back row', () => {
     expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(true);
   });
 
-  it('keeps the back row outside the scroll pane under default chrome (no stickyBackSx)', () => {
+  it('keeps the back row outside the scroll pane when chrome.backRowPlacement is above', () => {
     renderTree({ breadcrumb: ['books'] });
-    // Default chrome renders the back row as a preceding sibling of the scroll pane, so it
-    // is NOT contained within it - the inverse of the sticky-chrome case above.
+    // Default chrome (backRowPlacement: 'above') renders the back row as a preceding sibling
+    // of the scroll pane, so it is NOT contained within it - the inverse of the sticky case.
     const scrollPane = screen.getByTestId('datalake-node-war').closest('ul')!.parentElement!;
     expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(false);
+  });
+
+  it('alwaysShowBackRow renders the back row even at an empty breadcrumb, as an exit control', () => {
+    const { onNavigate } = renderTree({ breadcrumb: [], alwaysShowBackRow: true });
+    const backBtn = screen.getByTestId('datalake-back');
+    expect(backBtn.textContent).toBe('All Categories');
+    fireEvent.click(backBtn);
+    // Popping an empty breadcrumb (slice(0, -1) of []) is still [] - the host's onNavigate([])
+    // is what drives the actual exit.
+    expect(onNavigate).toHaveBeenCalledWith([]);
   });
 });
 
@@ -227,7 +291,7 @@ describe('DataLakeTreeView uncategorized bucket', () => {
   const uncategorized = {
     files: loose,
     renderRow: (count: number, onOpen: () => void) => (
-      <ListItem key={UNCATEGORIZED_KEY}>
+      <ListItem>
         <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
           Uncategorized ({count})
         </ListItemButton>
@@ -258,5 +322,210 @@ describe('DataLakeTreeView uncategorized bucket', () => {
     renderTree({ uncategorized, tree: [] });
     expect(screen.queryByText('No categories')).toBeNull();
     expect(screen.getByTestId('datalake-node-uncategorized')).toBeTruthy();
+  });
+});
+
+describe('DataLakeTreeView v2 contract', () => {
+  it('controlled search/sort: uses the props and reports changes instead of internal state', () => {
+    const onSearchChange = vi.fn();
+    const onSortChange = vi.fn();
+    renderTree({ search: 'new', onSearchChange, sort: 'alpha', onSortChange });
+    // 'new' filters to the news node; alpha mode is active on the toggle
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+    expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
+    expect(screen.getByTestId('datalake-sort-toggle').dataset.sort).toBe('alpha');
+    fireEvent.change(screen.getByTestId('datalake-search').querySelector('input')!, { target: { value: 'x' } });
+    expect(onSearchChange).toHaveBeenCalledWith('x');
+    fireEvent.click(screen.getByTestId('datalake-sort-toggle'));
+    expect(onSortChange).toHaveBeenCalledWith('count');
+    // still controlled: the visible filter did not change on its own
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+  });
+
+  it('uncontrolled search with only onSearchChange: reports the change AND still filters locally', async () => {
+    // A host that passes onSearchChange without `search` must not lose typing (finding 2):
+    // internal state has to keep driving the filter even though the callback also fires.
+    const onSearchChange = vi.fn();
+    renderTree({ onSearchChange });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'new');
+    expect(onSearchChange).toHaveBeenCalledWith('new');
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+    expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
+  });
+
+  it('hideToolbar renders no search input', () => {
+    renderTree({ hideToolbar: true });
+    expect(screen.queryByTestId('datalake-search')).toBeNull();
+    expect(screen.getByTestId('datalake-node-books')).toBeTruthy();
+  });
+
+  it('leafMinDepth keeps the folder view at the seeded root and starts leaves below it', () => {
+    // tree has depth-1 'books' with children war/peace; seed the path at ['books'] with
+    // leafMinDepth 1: 'books' is the ROOT here, so even though searching yields nodes,
+    // an empty currentNodes at ['books'] must NOT flip to a file list.
+    const { onNavigate } = renderTree({ breadcrumb: ['books'], leafMinDepth: 1 });
+    expect(screen.getByTestId('datalake-node-war')).toBeTruthy(); // folder view at seeded root
+    fireEvent.click(screen.getByTestId('datalake-node-war'));
+    expect(onNavigate).toHaveBeenCalledWith(['books', 'war']);
+    // below the seed, an empty node level IS a leaf: files of books:war render
+    const leaf = renderTree({ breadcrumb: ['books', 'war'], leafMinDepth: 1 });
+    expect(leaf.getAllByTestId(/^datalake-file-/).length).toBeGreaterThan(0);
+  });
+
+  it('leafMinDepth gates the bucket at the seeded root and the synthetic key works at depth', () => {
+    const loose = [file('u1', 'loose.md', ['datalake:mine'])];
+    const uncategorized = {
+      files: loose,
+      renderRow: (count: number, onOpen: () => void) => (
+        <ListItem>
+          <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
+            Uncategorized ({count})
+          </ListItemButton>
+        </ListItem>
+      ),
+    };
+    const { onNavigate } = renderTree({ breadcrumb: ['books'], leafMinDepth: 1, uncategorized });
+    fireEvent.click(screen.getByTestId('datalake-node-uncategorized'));
+    expect(onNavigate).toHaveBeenCalledWith(['books', UNCATEGORIZED_KEY]);
+    const opened = renderTree({ breadcrumb: ['books', UNCATEGORIZED_KEY], leafMinDepth: 1, uncategorized });
+    expect(opened.getAllByTestId(/^datalake-file-/).map(el => el.dataset.testid)).toEqual(['datalake-file-u1']);
+  });
+
+  it('testIds overrides rename the container and error nodes', () => {
+    renderTree({ isError: true, testIds: { container: 'datalake-manager-tree', error: 'datalake-manager-error' } });
+    expect(screen.getByTestId('datalake-manager-tree')).toBeTruthy();
+    expect(screen.getByTestId('datalake-manager-error')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-tree')).toBeNull();
+  });
+});
+
+describe('DataLakeTreeView cross-tree article search (#1693)', () => {
+  const deepMatch = file('s1', 'Deep Match.md', ['zebra:x']);
+
+  it("searches article titles across the whole tree (not just this level's segment names), given a source", async () => {
+    mockGetDataLakeArticles.mockImplementation((params: { search?: string } | null) =>
+      params?.search === 'deep'
+        ? { data: { data: [deepMatch] }, isLoading: false }
+        : { data: undefined, isLoading: false }
+    );
+    renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(screen.getByTestId('datalake-search-articles')).toBeTruthy());
+    expect(screen.getByTestId('datalake-file-s1')).toBeTruthy();
+  });
+
+  it('shows a loading spinner in the search box while a cross-tree search is in flight', async () => {
+    mockGetDataLakeArticles.mockImplementation((params: { search?: string } | null) =>
+      params?.search === 'deep' ? { data: undefined, isLoading: true } : { data: undefined, isLoading: false }
+    );
+    const { container } = renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(container.querySelectorAll('.MuiCircularProgress-root').length).toBeGreaterThan(0));
+  });
+
+  it('selects a matched article through the normal onSelectFile callback', async () => {
+    mockGetDataLakeArticles.mockReturnValue({ data: { data: [deepMatch] }, isLoading: false });
+    const { onSelectFile } = renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(screen.getByTestId('datalake-file-s1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('datalake-file-s1'));
+    expect(onSelectFile).toHaveBeenCalledWith(deepMatch);
+  });
+
+  it('never searches without a source (e.g. a single-lake browser) - stays local-only', async () => {
+    renderTree({ source: undefined });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'anything');
+    await act(() => new Promise(resolve => setTimeout(resolve, 350)));
+    for (const call of mockGetDataLakeArticles.mock.calls) {
+      expect(call[0]).toBeNull();
+    }
+  });
+
+  it('does not search below the minimum query length', async () => {
+    renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'a');
+    await act(() => new Promise(resolve => setTimeout(resolve, 350)));
+    for (const call of mockGetDataLakeArticles.mock.calls) {
+      expect(call[0]).toBeNull();
+    }
+  });
+
+  it('clears the results immediately on an empty query, without waiting out the debounce', async () => {
+    mockGetDataLakeArticles.mockReturnValue({ data: { data: [deepMatch] }, isLoading: false });
+    renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(screen.getByTestId('datalake-search-articles')).toBeTruthy());
+    await userEvent.clear(searchInput);
+    // No debounce wait here - clearing bypasses it, so the stale section must be gone right away.
+    expect(screen.queryByTestId('datalake-search-articles')).toBeNull();
+  });
+
+  it('clears the results immediately when the query shrinks below the minimum length, without waiting out the debounce', async () => {
+    mockGetDataLakeArticles.mockReturnValue({ data: { data: [deepMatch] }, isLoading: false });
+    renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(screen.getByTestId('datalake-search-articles')).toBeTruthy());
+    await userEvent.clear(searchInput);
+    await userEvent.type(searchInput, 'd');
+    // No debounce wait here - dropping below MIN_SEARCH_LENGTH bypasses it too, same as clearing.
+    expect(screen.queryByTestId('datalake-search-articles')).toBeNull();
+  });
+});
+
+// "books" is tagged directly on one file AND is the parent of "books:war"/"books:peace" - that
+// file would otherwise be unreachable from any breadcrumb path once "books" had children. It
+// renders as an ordinary file row mixed into the folder list, not behind a separate route.
+describe('DataLakeTreeView own-tagged files mixed into the folder list', () => {
+  const directArticles = [...ARTICLES, file('d1', 'own-books.md', ['books'])];
+  const directTree = buildTagTree([
+    { tag: 'books:war', count: 2 },
+    { tag: 'books:peace', count: 1 },
+    { tag: 'books', count: 1 },
+    { tag: 'news:today', count: 1 },
+    { tag: 'zebra:x', count: 5 },
+  ]);
+
+  it('lists the directly-tagged file alongside its subfolders, reconciling the branch total', () => {
+    renderTree({ tree: directTree, articles: directArticles, breadcrumb: ['books'] });
+    expect(screen.getByTestId('datalake-node-war')).toBeTruthy();
+    expect(screen.getByTestId('datalake-node-peace')).toBeTruthy();
+    expect(screen.getByTestId('datalake-file-d1')).toBeTruthy();
+    // Reachable from this one folder: war(2) + peace(1) + d1(1) = 4, matching "books".fileCount.
+    const books = directTree[0];
+    expect(books.fileCount).toBe(4);
+  });
+
+  it('selects the file directly on click - no extra navigation hop', () => {
+    const { onNavigate, onSelectFile } = renderTree({
+      tree: directTree,
+      articles: directArticles,
+      breadcrumb: ['books'],
+    });
+    fireEvent.click(screen.getByTestId('datalake-file-d1'));
+    expect(onSelectFile).toHaveBeenCalledWith(directArticles.find(f => f.id === 'd1'));
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('omits any own-file rows for a branch with none of its own', () => {
+    renderTree({ tree: directTree, articles: directArticles, breadcrumb: ['news'] });
+    expect(screen.getByTestId('datalake-node-today')).toBeTruthy();
+    expect(screen.queryAllByTestId(/^datalake-file-/)).toHaveLength(0);
+  });
+
+  it('hides own files while searching, alongside the filtered-out subfolder', async () => {
+    renderTree({ tree: directTree, articles: directArticles, breadcrumb: ['books'] });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'war');
+    expect(screen.getByTestId('datalake-node-war')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-node-peace')).toBeNull();
+    expect(screen.queryByTestId('datalake-file-d1')).toBeNull();
   });
 });

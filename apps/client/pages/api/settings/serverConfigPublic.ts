@@ -2,6 +2,7 @@ import { settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 export type ServerConfigPublic = {
   apiUrl: string;
@@ -44,7 +45,7 @@ const handler = baseApi({ auth: false }).get(
 
     const config: ServerConfigPublic = {
       // In dev, derive from request host so the URL matches the actual port
-      apiUrl: process.env.APP_URL?.includes('localhost')
+      apiUrl: isLocalAppUrl()
         ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
         : process.env.APP_URL || '',
       defaultTheme: 'bike4mind',

@@ -12,6 +12,17 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   fabFileFind: vi.fn(),
   sendToQueue: vi.fn(),
+  // Hoisted rather than left inside the observability mock's closure: an SST cron's return value is
+  // discarded by EventBridge, so this log line is the only actionable output the rescue sweep's
+  // per-file catch produces. Unexposed, deleting that logger.error call is undetectable.
+  loggerError: vi.fn(),
+  // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
+  // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
+  // parameter is here for the same reason - dropping it silently strands paused files (#2120).
+  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date, _opts?: unknown) => ({
+    chunkCount: 0,
+    createdAt: { $lt: cutoff },
+  })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -19,7 +30,16 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
   fabFileRepository: {},
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // getSettingsValue for this cron's own flags, plus the retention pair the config-audit
+  // resolver reads - one declaration serving both consumers (see lakeConfigAuditDb).
+  adminSettingsRepository: {
+    getSettingsValue: h.getSettingsValue,
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+  // Wired by this cron now that it records the auto-activate it can cause. Stubbed rather than
+  // omitted: this mock replaces the whole module, so an unlisted export fails at import time.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   FabFile: { find: h.fabFileFind },
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -31,7 +51,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/observability', () => {
-  const mockLogger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+  const mockLogger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: h.loggerError, log: vi.fn() };
   mockLogger.withMetadata = vi.fn(() => mockLogger);
   return {
     Logger: vi.fn(function () {
@@ -45,8 +65,9 @@ vi.mock('sst', () => ({
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/worker/chunkScan', () => ({
-  buildFabFileChunkScanFilter: (cutoff: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } }),
+  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
+  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
@@ -70,8 +91,11 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.findStuckTaxonomy.mockResolvedValue([]);
     h.reconcileTaxonomy.mockResolvedValue([]);
     h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
-    // Rescue sweep defaults: auto-chunk off, no candidates.
+    // Rescue sweep defaults: auto-chunk off, no candidates, sends succeed. The send stub is reset
+    // explicitly because clearAllMocks() clears calls but NOT implementations - without this a test
+    // that makes sendToQueue reject leaks that into every test after it in file order.
     h.getSettingsValue.mockResolvedValue(false);
+    h.sendToQueue.mockResolvedValue(undefined);
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
@@ -95,6 +119,15 @@ describe('dataLakeBatchReconcile cron handler', () => {
       [{ id: 'b1', dataLakeId: 'lake1' }],
       TIMEOUT,
       expect.objectContaining({
+        // The config-audit repos, named rather than covered by expect.anything(): this sweep forces
+        // terminal exactly the batches that never reached finalizeBatchIfComplete, so it is the only
+        // path that can activate those lakes. Both keys are optional on the service, so a sweep that
+        // stopped spreading lakeConfigAuditDb would record nothing and still pass every other
+        // assertion in this file.
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.objectContaining({ record: expect.any(Function) }),
+          adminSettings: expect.objectContaining({ findBySettingNames: expect.any(Function) }),
+        }),
         metrics: expect.objectContaining({
           emitForcedTerminal: expect.any(Function),
           emitStuckGauge: expect.any(Function),
@@ -109,6 +142,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       taxonomyCandidates: 0,
       taxonomyForced: 0,
       rescuedChunkFiles: 0,
+      rescueFailures: 0,
     });
   });
 
@@ -123,6 +157,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       taxonomyCandidates: 0,
       taxonomyForced: 0,
       rescuedChunkFiles: 0,
+      rescueFailures: 0,
     });
   });
 
@@ -157,7 +192,50 @@ describe('dataLakeBatchReconcile cron handler', () => {
       h.reconcile.mockResolvedValue([]);
     });
 
-    it('re-enqueues complete-but-never-chunked files when auto-chunk is enabled', async () => {
+    it('CLAIMS then re-enqueues only the ids it won, tagging each with its claim token', async () => {
+      h.getSettingsValue.mockResolvedValue(true);
+      h.fabFileFind.mockReturnValue({
+        select: () => ({
+          limit: () => ({
+            lean: async () => [
+              { _id: 'ff1', userId: 'u1' }, // plain upload, no lake batch
+              { _id: 'ff2', userId: 'u2', batchId: 'batch-9' }, // data-lake file
+            ],
+          }),
+        }),
+      });
+      // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
+
+      const res = await handler();
+
+      // The scan filter must receive BOTH the age cutoff AND the stale-claim cutoff; a one-arg call
+      // (or the wrong Date) silently drops the stale-claim rescue arm. staleClaimBefore is the older
+      // of the two (30-min stale window vs 2-min age cutoff).
+      expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+      const [cutoff, staleClaimBefore] = h.buildScanFilter.mock.calls[0] as [Date, Date];
+      expect(cutoff).toBeInstanceOf(Date);
+      expect(staleClaimBefore).toBeInstanceOf(Date);
+      expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
+
+      // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
+      // the worker can reject a duplicate/superseded delivery.
+      expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff1',
+        userId: 'u1',
+      });
+      // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
+      // sweep carries no lakeId (platform switch only).
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff2',
+        userId: 'u2',
+        origin: 'convergence',
+      });
+      expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
+    });
+
+    it('enqueues every id the filter selected - duplicates are the worker CAS to resolve', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       h.fabFileFind.mockReturnValue({
         select: () => ({
@@ -172,10 +250,75 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       const res = await handler();
 
+      // No producer-side claim: the sweep sends what its filter selected, and a file already in
+      // flight loses the chunk worker's compare-and-set and returns without re-chunking.
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff1', userId: 'u1' });
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff2', userId: 'u2' });
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff1',
+        userId: 'u1',
+      });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
+    });
+
+    it('finishes the sweep when one enqueue fails, and reports the partial result (#2117)', async () => {
+      // The sweep is the safety net for files the chunk pipeline lost, so it matters most under the
+      // cluster/queue stress that makes a transient send failure likely. It used to reject out of the
+      // loop on the first failure: every candidate behind it was abandoned, and because the caller
+      // turns a throw into 0 it also reported a sweep that HAD rescued files as having rescued none.
+      h.getSettingsValue.mockResolvedValue(true);
+      h.fabFileFind.mockReturnValue({
+        select: () => ({
+          limit: () => ({
+            lean: async () => [
+              { _id: 'ff1', userId: 'u1' },
+              { _id: 'ff2', userId: 'u2' },
+              { _id: 'ff3', userId: 'u3' },
+              { _id: 'ff4', userId: 'u4' },
+            ],
+          }),
+        }),
+      });
+      // TWO fail, and neither is first or last: the middle placement distinguishes "kept going" from
+      // "stopped early", and the second failure is what forces `failed` to accumulate - a counter
+      // pinned to 1 would satisfy a single-failure fixture.
+      h.sendToQueue.mockImplementation(async (_url: unknown, msg: { fabFileId: string }) => {
+        if (msg.fabFileId === 'ff2' || msg.fabFileId === 'ff3') throw new Error('SQS throttled');
+      });
+
+      const res = await handler();
+
+      // All four attempted - the ones behind a failure are not abandoned.
+      expect(h.sendToQueue).toHaveBeenCalledTimes(4);
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff4', userId: 'u4' });
+      // And the counts are honest: two really were rescued, two really were not.
+      const body = JSON.parse(res.body);
+      expect(body.rescuedChunkFiles).toBe(2);
+      expect(body.rescueFailures).toBe(2);
+      // Each failure names its file. The cron's return value goes nowhere (EventBridge discards it),
+      // so without this line an operator has no way to tell WHICH files were not enqueued.
+      for (const fabFileId of ['ff2', 'ff3']) {
+        expect(h.loggerError).toHaveBeenCalledWith(
+          expect.stringContaining('failed to enqueue'),
+          expect.objectContaining({ fabFileId, error: 'SQS throttled' })
+        );
+      }
+    });
+
+    it('does not let a rescue failure take down the batch reconciliation around it', async () => {
+      // The isolation the caller's catch already provided must survive the per-item catch: the
+      // stuck-batch sweep above it still reports, and the handler still returns 200.
+      h.getSettingsValue.mockResolvedValue(true);
+      h.fabFileFind.mockReturnValue({
+        select: () => ({ limit: () => ({ lean: async () => [{ _id: 'ff1', userId: 'u1' }] }) }),
+      });
+      h.sendToQueue.mockRejectedValue(new Error('queue unreachable'));
+
+      const res = await handler();
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.rescuedChunkFiles).toBe(0);
+      expect(body.rescueFailures).toBe(1);
     });
 
     it('does nothing when auto-chunk is disabled', async () => {
@@ -183,6 +326,44 @@ describe('dataLakeBatchReconcile cron handler', () => {
       await handler();
       expect(h.fabFileFind).not.toHaveBeenCalled();
       expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    describe('convergence-paused exclusion is resolved per run (#2120)', () => {
+      // One getSettingsValue mock serves both keys, so route by name. enableAutoChunk must stay ON
+      // or rescueUnchunkedFiles returns before it ever reads the pause flag, and the assertion below
+      // would pass against a sweep that never ran.
+      const withPauseFlag = (pauseFlag: unknown) =>
+        h.getSettingsValue.mockImplementation(async (key: string) => (key === 'enableAutoChunk' ? true : pauseFlag));
+
+      it.each([
+        ['ON - paused files must not consume the rescue cap', true, true],
+        ['OFF - paused files must be swept back in and rebuilt', false, false],
+      ])('kill switch %s', async (_label, pauseFlag, expected) => {
+        withPauseFlag(pauseFlag);
+
+        await handler();
+
+        // Pinned as the third ARGUMENT, not as an outcome of the filter: the filter itself is mocked
+        // here, so this is the only place the caller's wiring is observable. Dropping the argument or
+        // hardcoding it to a constant - the two ways this regresses - both fail one of these rows.
+        expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+        expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: expected });
+      });
+
+      it('treats a missing or non-boolean setting as OFF, never as ON', async () => {
+        // The caller compares `=== true` rather than coercing, and that strictness is deliberate: a
+        // truthy-but-not-true value (an unset setting, a legacy string) must fall to the sweeping
+        // behaviour, because wrongly excluding is the far worse direction - it strands every paused
+        // file with no automatic rebuild at all.
+        for (const raw of [undefined, null, 'true', 1]) {
+          h.buildScanFilter.mockClear();
+          withPauseFlag(raw);
+
+          await handler();
+
+          expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: false });
+        }
+      });
     });
 
     it('a rescue failure is isolated: the run still heartbeats and reports 0', async () => {
@@ -195,7 +376,12 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       expect(h.recordRun).toHaveBeenCalledTimes(1);
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).rescuedChunkFiles).toBe(0);
+      // BOTH counts, not just the rescued one: the outer catch has to return a whole
+      // {enqueued, failed}, and a fallback that omits `failed` reports nothing at all here -
+      // JSON.stringify drops the undefined key, so the field silently vanishes from the body.
+      const body = JSON.parse(res.body);
+      expect(body.rescuedChunkFiles).toBe(0);
+      expect(body.rescueFailures).toBe(0);
     });
   });
 });

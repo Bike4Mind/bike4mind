@@ -10,6 +10,7 @@ import {
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
+  driveLakeIngestQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -666,6 +667,41 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
 });
 
 /**
+ * Quest Timeout Sweep
+ * Server-side backstop for quests stuck at `status: 'running'` past the
+ * liveness threshold (120s). The read-time recovery in GET /api/quests/[id]
+ * handles polling API clients, but a quest no client ever reads again stays
+ * stuck without this cron. Uses the same pure decision function as the read
+ * path (resolveQuestTimeoutRecovery).
+ *
+ * Schedule: every 5 minutes
+ * Enabled: production + dev
+ */
+const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/questTimeoutSweep.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -699,6 +735,55 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
+// admin APIs and compares against internal COGS estimates.
+const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/spendReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
+ * Drive-as-Lake Re-sync Poll (#1591 E1)
+ * Re-enqueues each due Google Drive connection onto the ingest handler, which diffs the folder
+ * against its data lake and applies adds/edits/removals. Dark until both EnableDataLakes and
+ * EnableDataLakeDrivePoll admin flags are on (the handler enforces the gate).
+ *
+ * Schedule: hourly (connections are re-polled at most every ~6h; see POLL_INTERVAL_MS in the handler)
+ * Enabled: production + dev
+ */
+const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
+  schedule: 'rate(1 hour)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/driveLakeResyncPoll.handler',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    // driveLakeIngestQueue: the poll enqueues each due connection onto the shared ingest handler,
+    // so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
+    link: [...allSecrets, driveLakeIngestQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '3 days',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -723,6 +808,9 @@ export {
   attackSimulationCron,
   modelDiscoveryFunction,
   modelDiscoveryCron,
+  questTimeoutSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
+  spendReconciliationCron,
+  driveLakeResyncPollCron,
 };

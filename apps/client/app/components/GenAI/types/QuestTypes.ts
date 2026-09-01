@@ -1,3 +1,4 @@
+import { normalizeQuestComplexity } from '@bike4mind/common';
 import { SvgIconComponent } from '@mui/icons-material';
 import {
   Description as TextIcon,
@@ -65,6 +66,31 @@ export const getTaskTypeColor = (type: TaskType): 'primary' | 'success' | 'warni
       return 'success';
     case TaskType.HUMAN_TASK:
       return 'danger';
+  }
+};
+
+/**
+ * Resolve a PERSISTED quest complexity onto the local Difficulty enum.
+ *
+ * Never returns undefined, and that is the whole point. `complexity` has never had a mongoose
+ * enum on any write path, so a retired rating (the V2 artifact schema's low/medium/high) can be
+ * sitting on disk. The previous `quest.complexity.toLowerCase() as Difficulty` cast made `low`
+ * and `high` miss DifficultyIcons entirely; indexing that Record with an unmapped key yields
+ * undefined, and rendering undefined as a component throws "Element type is invalid", which took
+ * the ENTIRE QuestMaster panel down through the error boundary rather than degrading one icon.
+ * Verified against a real browser before and after this change.
+ *
+ * Aliases resolve through the shared normalizer so this cannot drift from the canonical
+ * vocabulary; an undocumented rating falls back to Medium so something still renders.
+ */
+export const toDifficulty = (complexity: string): Difficulty => {
+  switch (normalizeQuestComplexity(complexity)) {
+    case 'Easy':
+      return Difficulty.EASY;
+    case 'Hard':
+      return Difficulty.HARD;
+    default:
+      return Difficulty.MEDIUM;
   }
 };
 

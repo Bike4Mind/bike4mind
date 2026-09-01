@@ -22,6 +22,7 @@ import {
   ImageModerationIncident,
   IUsageEventRepository,
   IOrganizationRepository,
+  IScopedSettingsRepository,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm';
 
@@ -50,7 +51,20 @@ interface GenerateAndSendProactiveMessageAdapters {
      * Optional: recording degrades to a no-op when a caller leaves them unwired.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
-    organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Required: forwarded verbatim into `generateTools`'s `ToolContext['db']`, whose
+     * `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
+     * `findMembershipOrgIds` off it).
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    /**
+     * Scoped-settings overlay for org/owner setting rungs (epic #1658 seam, #1955's
+     * search_knowledge_base budgets among them). Optional - resolveSearchBudgets falls back to
+     * the byte-identical platform path when this is absent, so an omitted overlay degrades
+     * gracefully rather than breaking proactive messages, but any org/owner override configured
+     * for this caller's scope will silently not apply here until it's wired.
+     */
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   apiKeyTable: ApiKeyTable;
   /**
@@ -118,6 +132,7 @@ export async function generateAndSendProactiveMessage({
           // Operational-usage recording for tool-internal llm.complete calls (recordToolOperationalUsage).
           usageEvents: db.usageEvents,
           organizations: db.organizations,
+          scopedSettings: db.scopedSettings,
         },
       },
       storage,

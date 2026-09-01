@@ -15,6 +15,30 @@ export const DATALAKE_TAG_PREFIX = 'datalake:';
 export const DATALAKE_TAG_STRENGTH = 1;
 
 /**
+ * How a lake's attached corpus is grounded into a chat turn, as a DELIBERATE per-lake product
+ * choice rather than a side effect of who is asking (see IDataLake.groundingMode):
+ * - `inline`: paste the corpus into the prompt (never defer to the search tool).
+ * - `retrieve`: leave the corpus to the offered search_knowledge_base tool (always defer the
+ *   tool-retrievable subset), so an owner and an entitlement-only reader ground identically.
+ * - `auto-by-size`: keep the size heuristic - defer only when the per-doc even-split inline depth
+ *   falls below the `CorpusRetrievalMinInlineTokensPerDoc` floor (see shouldDeferCorpusToRetrieval).
+ *
+ * The resolution seam is create-time (resolveLakeSessionDefaults -> session.corpusGroundingMode);
+ * the enforcement seam is the completion-path defer plan. Keep this tuple and DataLakeGroundingMode
+ * as the single source both the Zod schema and the Mongoose enum derive from.
+ */
+export const DATA_LAKE_GROUNDING_MODES = ['inline', 'retrieve', 'auto-by-size'] as const;
+export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
+
+/**
+ * Default per-lake grounding mode: `retrieve`. Chosen so inline-vs-retrieve is a deliberate choice
+ * that defaults SAFE - an owner and a reader of the same lake behave identically (retrieval) unless
+ * an editor opts the lake into inlining. Applied to a lake that never set the field (including lakes
+ * that predate it, whose stored value is absent) at the create-time resolution seam.
+ */
+export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
@@ -144,16 +168,115 @@ export const tagPrefixesOverlap = (a: string | undefined | null, b: string | und
   return left === right || left.startsWith(right) || right.startsWith(left);
 };
 
+// Codepoints that render blank despite carrying an "ink" Unicode category (Hangul and
+// halfwidth fillers are Lo, braille blank is So, Khmer inherent vowels are Mn) - stripped
+// before the ink test in hasBlankTagPrefixSegment.
+const INVISIBLE_INK = /\u115F|\u1160|\u17B4|\u17B5|\u2800|\u3164|\uFFA0/g;
+
+/**
+ * True when any ":"-separated segment of the prefix (ignoring the trailing colon) has no
+ * character that renders ink. A negated-whitespace test is not enough: format characters
+ * (U+200B/U+2060, category Cf) survive `trim()`, and a handful of letter/symbol codepoints
+ * (INVISIBLE_INK above) render blank too - all producing the same blank tree node. So
+ * require a letter, number, punctuation, symbol, or mark after stripping the known blanks.
+ * Shared by CreateDataLakeRequestInput's schema refine and the wizard mirror below so the
+ * server and client rules cannot drift.
+ */
+export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
+  const body = prefix.endsWith(':') ? prefix.slice(0, -1) : prefix;
+  return body.split(':').some(part => !/[\p{L}\p{N}\p{P}\p{S}\p{M}]/u.test(part.replace(INVISIBLE_INK, '')));
+};
+
+/**
+ * Storage-time bounds for one AI-inferred taxonomy category, shared by `sanitizeCategories`
+ * (utils/dataLakeTaxonomy.ts, the write path) and `ApplyTaxonomyRequestInput`'s Zod schema
+ * (schemas/dataLake.ts, the apply request's validation). These MUST agree: a category
+ * `sanitizeCategories` accepts and stores as `taxonomyStatus: 'ready'` has to be one apply's
+ * request schema will also accept, or the batch becomes permanently un-applyable - accepted at
+ * analysis time, then rejected on every apply attempt. Importing one shared source instead of
+ * two independently-hardcoded numbers is what keeps that from silently drifting.
+ */
+export const MAX_TAXONOMY_TAGS = 100;
+export const MAX_TAXONOMY_TAG_SUFFIX_LENGTH = 100;
+export const MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH = 150;
+export const MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG = 100;
+export const MAX_TAXONOMY_MATCHING_FOLDER_LENGTH = 512;
+
+/**
+ * Length bounds for a `fileTagPrefix`, measured on the TRIMMED value INCLUDING its trailing ":" -
+ * the same string `CreateDataLakeRequestInput` sizes after its own `.trim()`, so a value that is
+ * exactly at the limit is judged identically on both sides.
+ *
+ * Exported so every surface that produces or judges a prefix bounds it by the same number: the
+ * create schema, the wizard's form-level mirror (`tagPrefixIssue`), the Start Upload gate, the
+ * prefix the wizard DERIVES from a lake name, and the 422 translator. The derive step is why the
+ * max has to be shared rather than left to the schema: it builds the prefix out of a lake SLUG,
+ * whose own max is twice this, so a long name used to hand the user a prefix the server refuses.
+ */
+export const MIN_TAG_PREFIX_LENGTH = 2;
+export const MAX_TAG_PREFIX_LENGTH = 30;
+
+/**
+ * Length bounds and shape for a lake `slug`, owned here rather than by the create schema because
+ * the client PRODUCES the value it then sends: the wizard slugifies a lake name, truncates to the
+ * max, and gates Start Upload on the min, all before the schema ever sees the result. A produced
+ * value whose bound lives only in the schema is how the `fileTagPrefix` derive above came to hand
+ * users a prefix the server refused, so keep the schema, `slugifyDataLakeName`,
+ * `isValidDataLakeSlug`, the wizard's "name too short" copy and the 422 translator all reading
+ * these.
+ *
+ * The regex is shared for the same reason in the other direction: `slugifyDataLakeName` satisfies
+ * it BY CONSTRUCTION (it trims the edge hyphens truncation can expose), and the only thing that
+ * keeps that true is a test asserting against this exact pattern.
+ */
+export const MIN_DATA_LAKE_SLUG_LENGTH = 2;
+export const MAX_DATA_LAKE_SLUG_LENGTH = 60;
+export const DATA_LAKE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+
+/**
+ * A typed prefix as the create request will actually carry it: trimmed, and closed with the
+ * trailing ":" the wizard appends before POSTing.
+ *
+ * Every rule has to judge THIS value rather than the raw field, because the server judges the
+ * submitted string: 30 characters with no colon arrive as 31 and are refused, while a bare "a"
+ * arrives as the perfectly legal "a:". Sizing the field instead produced both errors at once -
+ * a gate that passed a value the server rejects, and one that blocked a value it accepts.
+ *
+ * Empty in, empty out: an untouched field has nothing to report, and returning ":" for it would
+ * manufacture a blank-segment complaint before the user has typed anything.
+ */
+export const submittedTagPrefix = (prefix: string | undefined | null): string => {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  if (!trimmed) return '';
+  return trimmed.endsWith(':') ? trimmed : `${trimmed}:`;
+};
+
 /**
  * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
  * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
- * rejects both cases at create.
+ * rejects all four cases at create.
+ *
+ * There is deliberately no MIN-length branch: the value judged here is the SUBMITTED one, and
+ * appending ":" makes any positive-length entry at least 2 characters, so MIN cannot fail from
+ * something the user typed. A bare ":" trips the blank-segment rule instead, and an empty field
+ * stays silent so an untouched form reports nothing.
  */
 export const tagPrefixIssue = (
   prefix: string | undefined | null,
   overlapping?: { name: string; fileTagPrefix: string } | null
 ): string | null => {
-  if (isReservedTagPrefix(prefix)) {
+  // Length first, then blank-segment, then reserved - the schema's own order, since its
+  // .min/.max run BEFORE its refines. So both surfaces name the same culprit for an input
+  // that trips two rules (an over-long prefix ending "::" reads as too long on either side).
+  // All of them judge the SUBMITTED form (see submittedTagPrefix), never the raw field.
+  const submitted = submittedTagPrefix(prefix);
+  if (submitted.length > MAX_TAG_PREFIX_LENGTH) {
+    return `Tag prefix must be ${MAX_TAG_PREFIX_LENGTH} characters or fewer (this one is ${submitted.length}). Shorten it - every tag in the lake carries it.`;
+  }
+  if (submitted && hasBlankTagPrefixSegment(submitted)) {
+    return 'Every ":" segment of the prefix needs a visible character (e.g. legal: or legal:contracts:).';
+  }
+  if (isReservedTagPrefix(submitted)) {
     return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
   }
   if (overlapping) {
@@ -221,13 +344,119 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "set to blank" stay distinguishable).
    */
   systemPrompt?: string;
+  /**
+   * The passage size (TOKENS) this lake requires of its members, when it declares one. Editor-only,
+   * same gate as the fields above, and surfaced so the settings form can seed the current value.
+   *
+   * ABSENT means the lake declares no target and inherits the platform default - which is not a
+   * cosmetic difference: an explicit target is the sole trigger for convergence (epic decision 5),
+   * so it is the difference between a lake that can be repaired toward its policy and one that is
+   * only ever measured. Absent for a non-editor too, who never renders the field.
+   */
+  requiredPassageTokenTarget?: number;
+  /**
+   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
+   * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
+   * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
+   * their own and managing it by accident. Built-in fallback lakes have no owner, so `false`.
+   *
+   * REQUIRED, not optional: both producers (toManageableConfig, toFallbackConfig) set it
+   * unconditionally, and the UI safety-gates on `isOwn === false` - an absent field would render
+   * no warning, so a future projection that forgot it would silently reintroduce the bug with a
+   * green typecheck. Required makes that a compile error instead.
+   */
+  isOwn: boolean;
+  /**
+   * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
+   * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
+   * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
+   * query. Mirrors the discover catalog's owner rule: never the owner's email, so a cross-org or
+   * admin view can't leak an address. Undefined when the owner can't be resolved (deleted
+   * account), or for own/fallback lakes.
+   */
+  ownerDisplayName?: string;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
+   * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
+   * picker can seed its current selection. Absent (never an empty-string stand-in) otherwise,
+   * so "not yours to see" and "no preferred prompt" stay distinguishable.
+   */
+  preferredSystemPromptId?: string;
+  /**
+   * How many proposals are waiting for this caller to review (#1671). EDITOR-ONLY, same gate as the
+   * fields above: deciding what enters a lake is a management right, so a reader must not learn that
+   * a queue exists, let alone how deep it is.
+   *
+   * Carried on the LIST rather than fetched per lake because it is the feature's only discovery
+   * surface. Nothing else in the app says a human has work waiting - without this the queue is
+   * reachable only by opening a lake's settings and noticing a tab that exists solely when it is
+   * non-empty, which is not a signal anyone will find.
+   *
+   * Absent (never 0) when the caller cannot manage the lake or the projection was given no proposal
+   * repo, so "none waiting" and "not yours to see" stay distinguishable.
+   */
+  pendingProposalCount?: number;
+  /**
+   * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
+   * surfaced only when the caller can manage the lake, so the settings picker can seed its current
+   * selection. Absent when the caller can't manage it OR the lake never set the field (readers get
+   * its EFFECT via the create-time resolver, never the setting itself).
+   */
+  groundingMode?: DataLakeGroundingMode;
+  /**
+   * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
+   * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
+   * (defaulted to 0, never omitted) when the caller can manage this lake, even with zero spend -
+   * unlike the other editor-only fields above, its mere presence vs. absence is itself the
+   * client's signal to show the spend view, so a manageable-but-unspent lake must not look
+   * identical to a non-manageable one. `GET /api/data-lakes/:id/spend` independently re-checks
+   * manage access as the real security boundary; this field only decides whether to show the tab.
+   */
+  embeddingSpendMicroUsd?: number;
+  /**
+   * Whether the requesting caller may REBUILD this lake's passages (re-chunk files already in
+   * it). Narrower than `canManage` on purpose: a fallback (built-in) lake has no document to
+   * mutate, so `canManage` is always false for it, but rebuild attaches nothing and mutates no
+   * lake document - see `assertLakeRebuildAccess`. For a DB lake the two are identical
+   * (`canRebuild === canManage`); for a fallback lake `canRebuild` is `ctx.isAdmin` while
+   * `canManage` stays `false`. Kept as a SEPARATE flag rather than folded into `canManage` so the
+   * client can gate the Rebuild affordance without also lighting up rename/delete/visibility/
+   * file-removal, which would still fail server-side on a fallback lake.
+   *
+   * REQUIRED, not optional - same reasoning as `isOwn`: both producers (toManageableConfig,
+   * toFallbackConfig) set it unconditionally, so an absent field is a compile error rather than a
+   * silently-reintroduced gap FOR EVERY IN-REPO CALLER. That guarantee has two known exceptions
+   * that TypeScript cannot see: a test fixture built via an `as ManageableDataLakeConfig` cast
+   * (e.g. resolveManageableLake.test.ts), and the actual HTTP response at the wire boundary
+   * (hooks/data/dataLakes.ts's `api.get<{ data: ManageableDataLakeConfig[] }>(...)`), which is
+   * trusted with no runtime validation. Both fail CLOSED (an absent field reads as falsy, hiding
+   * the affordance rather than exposing it), so this is a precision note, not a safety concern.
+   */
+  canRebuild: boolean;
+  /**
+   * Whether the requesting caller may edit this lake's admin-settable session-default OVERLAY
+   * (currently `groundingMode` only - see `IFallbackLakeSetting`). Same shape as `canRebuild`, for
+   * the same reason: a fallback (built-in) lake has no document, so `canManage` stays `false` for
+   * it, but the overlay attaches to no lake document either - see
+   * `assertFallbackLakeSettingsWriteAccess`. For a DB lake the two are identical
+   * (`canManageSettings === canManage`, and a DB lake's settings live on the document itself, so
+   * this flag gates nothing extra there); for a fallback lake `canManageSettings` is `ctx.isAdmin`
+   * directly, NOT `resolveCanManageLake` - an org-scoped registry lake must not let a customer-side
+   * org admin pass, mirroring `assertLakeRebuildAccess`'s reasoning exactly.
+   *
+   * REQUIRED, not optional - same reasoning as `canRebuild`: both producers (toManageableConfig,
+   * toFallbackConfig) must set it unconditionally, or an absent field silently hides the affordance
+   * (fails closed) rather than surfacing a compile error at the one spot that forgot it.
+   */
+  canManageSettings: boolean;
 }
 
 /**
  * A public data lake as it appears in the discover/browse surface: the lightweight card
  * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
- * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
- * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * DataLakeConfig - it drops the access/gate internals (the endpoint has already resolved the
+ * gate for this caller) and adds the human-facing preview metadata the catalog renders: owner
  * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
  * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
  */
@@ -289,8 +518,46 @@ export const DATA_LAKES: DataLakeConfig[] = [
     datalakeTag: 'datalake:opti-knowledge',
   },
   // Overlay-contributed customer lakes (e.g. the sales-intelligence lake) - absent in the fork.
+  // ASSUMPTION, unenforced at load time: no two entries here (including this one) may have
+  // overlapping fileTagPrefix values (e.g. 'opti:' and 'opti:legal:'). openLakeTagPrefix's callers
+  // (grantingLakes, attributeAccessedLakeIds) each independently reverse a prefix match back to
+  // ONE lake with no exclusivity check between lakes - an overlap would let a single file's
+  // content-tag satisfy two lakes' prefixes at once, over-attributing/over-granting to both. A
+  // dynamic (DB) lake is checked against this list at creation time (collidesWithRegistryPrefix in
+  // createDataLake.ts); nothing checks entries within this list against each other.
   ...PREMIUM_DATA_LAKES,
 ];
+
+/** Static-registry lake ids - see `openLakeTagPrefix`'s doc comment for what this set decides. */
+export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
+
+/**
+ * A lake's normalized file-tag prefix, but ONLY if the lake is in the static registry
+ * (`STATIC_LAKE_IDS`) - `undefined` for a dynamic (user-created) lake's prefix, which is
+ * user-controlled and can collide across tenants, so it is never usable as a standalone grant or
+ * attribution signal on its own; or for a static lake with no usable prefix at all.
+ *
+ * The shared place "is this lake's prefix an OPEN one" is decided BY ID MEMBERSHIP in the static
+ * registry, so every consumer that reverses a content-tag-prefix match back to a specific lake -
+ * `grantingLakes`/`isFileInAccessibleLake` (`apps/client/server/dataLakes/grantingLakes.ts`,
+ * naming the grantor of a single already-authorized file), `splitTagPrefixes` (same file's
+ * barrel, scoping a browse/search query), and `attributeAccessedLakeIds`
+ * (`b4m-core/services/src/dataLakeService/attributeAccessedLakes.ts`, naming the lake a retrieved
+ * file's content actually came from) - agrees on the same answer. Two independently-normalized
+ * copies of this predicate have drifted before (a padded prefix passed create validation but
+ * mismatched between the ownership arm and the tag counter); one shared computation is what keeps
+ * that class of bug from recurring in THOSE consumers.
+ *
+ * NOT the right predicate everywhere open/dynamic provenance matters, though: id-membership
+ * answers "is this id in the hardcoded list", not "did this lake come from the DB". A DB row can
+ * shadow a registry id, and there the two answers diverge - see `getDynamicDataLakeTags.ts`'s
+ * `dynamicIds`, which classifies by source for exactly that reason and must not be replaced with
+ * this function.
+ */
+export function openLakeTagPrefix(lake: { id: string; fileTagPrefix?: string | null }): string | undefined {
+  if (!STATIC_LAKE_IDS.has(lake.id)) return undefined;
+  return normalizeTagPrefix(lake.fileTagPrefix) ?? undefined;
+}
 
 /**
  * Canonical normalization for entitlement keys + `requiredEntitlement` values - the ONE

@@ -155,10 +155,16 @@ export function sessionActorName(sessionId: string | null | undefined): string {
  * pairs, a terminal needs ANSI codes, and neither can express the other's.
  *
  * Small and fixed rather than an unbounded hue ramp. Collisions are expected
- * and harmless because color is never the only signal - the actor name is
- * always rendered - which also keeps color from being forgeable identity.
+ * and harmless because color is never the only signal - the actor name and the
+ * actor-kind badge are always rendered - which also keeps color from being
+ * forgeable identity.
+ *
+ * Four, not an arbitrary count: see ACTOR_COLOR_SLOTS in actorColors.ts, which
+ * holds the validated hues and the all-pairs separation numbers that cap the set
+ * at four. Raising this without extending that validated palette folds two slots
+ * onto one color.
  */
-export const ACTOR_COLOR_SLOT_COUNT = 6;
+export const ACTOR_COLOR_SLOT_COUNT = 4;
 
 /**
  * Stable palette slot for an actor. Hash-derived, never array index or arrival

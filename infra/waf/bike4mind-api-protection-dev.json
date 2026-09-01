@@ -145,7 +145,15 @@
               "TextTransformations": [
                 {
                   "Priority": 0,
-                  "Type": "NONE"
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
                 }
               ],
               "PositionalConstraint": "STARTS_WITH"
@@ -447,18 +455,170 @@
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
-            "ByteMatchStatement": {
-              "SearchString": "/_next/static/",
-              "FieldToMatch": {
-                "UriPath": {}
-              },
-              "TextTransformations": [
+            "OrStatement": {
+              "Statements": [
                 {
-                  "Priority": 0,
-                  "Type": "NONE"
+                  "ByteMatchStatement": {
+                    "SearchString": "/_next/static/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/icons/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/images/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/scripts/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/app-config/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/version.json",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/favicon.ico",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
                 }
-              ],
-              "PositionalConstraint": "STARTS_WITH"
+              ]
             }
           }
         }
@@ -493,6 +653,10 @@
                 },
                 {
                   "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
                   "Type": "LOWERCASE"
                 }
               ],
@@ -508,6 +672,550 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "register-rate-limit"
+      }
+    },
+    {
+      "Name": "api-rate-limit-prod-shadow",
+      "Priority": 12,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 2000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "api-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "ai-route-rate-limit-prod-shadow",
+      "Priority": 13,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 300,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/ai/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "ai-route-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "register-rate-limit-prod-shadow",
+      "Priority": 14,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 100,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/send",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "register-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "image-rate-limit-prod-shadow",
+      "Priority": 15,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 1000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/_next/image",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "image-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "default-rate-limit-prod-shadow",
+      "Priority": 16,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 5000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "NotStatement": {
+              "Statement": {
+                "OrStatement": {
+                  "Statements": [
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/_next/static/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/icons/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/images/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/scripts/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/app-config/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/version.json",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/favicon.ico",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "default-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "static-asset-rate-limit-prod-shadow",
+      "Priority": 17,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 50000,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "OrStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/_next/static/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/icons/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/images/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/scripts/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/app-config/",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/version.json",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/favicon.ico",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "static-asset-rate-limit-prod-shadow"
       }
     }
   ],

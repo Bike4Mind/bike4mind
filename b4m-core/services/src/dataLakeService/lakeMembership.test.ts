@@ -45,7 +45,7 @@ describe('addFileToLake', () => {
     const adapters = makeAdapters();
 
     await expect(addFileToLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can add files/i
+      /do not have permission to add files/i
     );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -94,11 +94,62 @@ describe('removeFileFromLake', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
   });
 
+  // #2248: the return value carries what the removal pulled, so a restore can push back the real
+  // tags rather than a placeholder. Widened from `void`; every existing caller ignores the return.
+  it('returns the pulled content tags with their stored strengths, excluding the meta-tag', async () => {
+    const adapters = makeAdapters();
+
+    const result = await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+    expect(result).toEqual({ contentTags: [{ name: 'lk:invoices', strength: 1 }] });
+  });
+
+  it('returns empty contentTags for a meta-tag-only member (nothing to restore)', async () => {
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'datalake:lake', strength: 1 }] }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    const result = await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+    expect(result).toEqual({ contentTags: [] });
+  });
+
+  it('returns empty contentTags for a file the lake creator does not own, even when admitted by meta-tag', async () => {
+    // Same fixture as "strips only the meta-tag" above: admitted via the meta-tag arm only, so the
+    // prefix-matching tag is a bystander this lake never actually held as content.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            tags: [
+              { name: 'datalake:lake', strength: 1 },
+              { name: 'lk:invoices', strength: 1 },
+            ],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    const result = await removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters);
+
+    expect(result).toEqual({ contentTags: [] });
+  });
+
   it('refuses a caller who cannot manage the lake', async () => {
     const adapters = makeAdapters();
 
     await expect(removeFileFromLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can remove files/i
+      /do not have permission to remove files/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -129,6 +180,29 @@ describe('removeFileFromLake', () => {
     await expect(removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters)).rejects.toThrow(
       /not found in this data lake/i
     );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses the lake creator removing a prefix-only file merely shared with them (#1040)', async () => {
+    // Same code path as the admin test above - ownsFile never reads file.users/file.groups - but
+    // spelled out for #1040's literal scenario: the ACTOR here is the lake's own creator (passes
+    // canManageLake trivially), and the file's owner shared it with them read/write. A share is
+    // not ownership, so the outcome is identical to the admin case.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            users: [{ userId: 'owner', permissions: ['read', 'write'] }],
+            tags: [{ name: 'lk:invoices', strength: 1 }],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found in this data lake/i);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 

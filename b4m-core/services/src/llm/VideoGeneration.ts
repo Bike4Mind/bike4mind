@@ -41,7 +41,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { SoraVideoCostCalculator, SoraCostInput } from './videoCostCalculator/SoraVideoCostCalculator';
-import { deductCreditsWithOrgSupport } from '../creditService';
+import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { startQuestHeartbeat } from './questHeartbeat';
 import { insufficientCreditsError, getQuestErrorCode } from '@bike4mind/common';
 
@@ -279,6 +279,15 @@ export class VideoGenerationService {
       const sourceLabel = creditsSource === 'organization' ? 'Your organization does' : 'You do';
       throw insufficientCreditsError(
         `${sourceLabel} not have enough credits to complete this video generation. Current credits: ${credits}, required: approximately ${requiredCredits}.`
+      );
+    }
+
+    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
+    // shared pool. This is the only enforcement point - the settlement write
+    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
+    if (organization && isMemberCreditCapExceeded(organization, user.id, requiredCredits)) {
+      throw insufficientCreditsError(
+        `Your organization member credit limit has been reached for video generation. Contact your organization administrator.`
       );
     }
 

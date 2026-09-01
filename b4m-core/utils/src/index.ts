@@ -61,6 +61,7 @@ export * from './cacheKeys';
 export * from './pagination';
 export * from './settings';
 export * from './cache/AdminSettingsCache';
+export * from './cache/ScopedSettingsCache';
 export * from './cache/RapidReplyMappingsCache';
 export * from './queue';
 export * from './ws';

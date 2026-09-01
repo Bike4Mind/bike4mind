@@ -409,8 +409,9 @@ async function processOrgWebhook(message: z.infer<typeof OrgWebhookPayloadSchema
 }
 
 /**
- * Emit DeliveryFailed metrics in batched calls, one per error category, so
- * the alarm sees realistic totals without exploding metric cardinality.
+ * Emit DeliveryFailed metrics in batched calls, one per error category plus a
+ * dimensionless total, so the alarm sees realistic totals without exploding
+ * metric cardinality.
  */
 async function emitDeliveryFailureMetrics(
   orgId: string,
@@ -448,6 +449,17 @@ async function emitDeliveryFailureMetrics(
         { ...baseDimensions, errorType: 'notification_dispatch' },
         StandardUnit.Count
       )
+    );
+  }
+
+  // Dimensionless copy of the total: webhookDeliveryHighFailures (infra/alarms.ts) alarms on
+  // this metric with no dimension filter, so it needs its own dimensionless data point to
+  // receive any data - see apps/client/server/utils/cloudwatch.ts:recordWebhookDeliveryFailure
+  // for the same pattern on the per-user MCP delivery path.
+  const totalFailureCount = counts.handlerErrorCount + counts.perUserFailureCount + counts.dispatchErrorCount;
+  if (totalFailureCount > 0) {
+    emissions.push(
+      emitWebhookDeliveryMetric(WebhookMetrics.DELIVERY_FAILED, totalFailureCount, {}, StandardUnit.Count)
     );
   }
 

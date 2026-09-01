@@ -66,6 +66,11 @@ const PromptMetaTokenUsageSchema = z.object({
   // Billed cache-read count: raw provider value on provider-basis settlement,
   // capped-at-local-input discount value on local fallback.
   cacheReadInputTokens: z.number().optional(),
+  // Billed cache-WRITE count, at the 1.25x cache-creation rate. Provider-basis only:
+  // the local fallback never bills cache creation, so it stays absent there. Recorded
+  // because a write is the single most expensive component of a cold turn, and without
+  // it the cache-write rate can only be inferred from cacheReadInputTokens being absent.
+  cacheCreationInputTokens: z.number().optional(),
   // Which basis priced estimatedCost/creditsUsed: provider-reported usage or
   // the local tokenizer estimate (fallback when the provider omits usage).
   settledBasis: z.enum(['provider', 'local']).optional(),
@@ -303,11 +308,108 @@ export const CitableSourceSchema = z.object({
     .optional(),
 });
 
+/**
+ * Per-turn retrieval outcome (#1867): whether retrieval was attempted this turn and what happened,
+ * independent of whether the model then cited anything. Exists specifically to make the zero case
+ * distinguishable from "never asked" - `context.lakeMemory` and `citables` both go silent on a
+ * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
+ * where retrieval never ran at all.
+ *
+ * Deliberately holds NO counts and NO chunk/document identifiers. Counts already exist and are
+ * more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * `applyQuestStatusChanges`, while this shape cannot dedupe (no identifiers to dedupe by) and
+ * would have to sum - producing a second, disagreeing number for the same question. Similarity
+ * scores live on `LakeAccessEvent`, not here.
+ *
+ * CAUTION, not a guarantee: the absence of chunk/document identifiers is what keeps this shape
+ * OUT of `promptMetaRedaction.ts`'s scope (that helper is a functionCalls-only denylist and would
+ * not catch a nested nonidentifier field like `dataLakeTags` regardless). It does NOT mean this
+ * field never needs redaction consideration - `dataLakeTags` (which lakes were involved) already
+ * reaches non-owner viewers the same way `lakeMemory.dataLakeTags` does (session shares, feedback
+ * egress, admin logs, session clone - see redactedFeedback.ts, admin/model-logs.ts, clone.ts, none
+ * of which touch this field). That exposure is not new in the general case, but it IS new
+ * specifically on a zero-recall turn: `lakeMemory` was never written there before this field
+ * existed, so a turn that previously carried no lake-identity signal at all now carries one.
+ *
+ * `attempted`/`outcome` on their own would still be ambiguous about WHICH lakes were searched on a
+ * zero-recall turn (dataLakeTags otherwise lives only inside `lakeMemory`, written after the
+ * zero-belief return), so this stamps the resolved tags at write time rather than making a reader
+ * fall back to the session's current (possibly since-changed) `retrievalTags`.
+ *
+ * Absent-or-fully-present, matching `lakeMemory` above - see the Mongoose-side subSchema comment
+ * in QuestModel.ts for why partial-write and default-array shapes are unsafe here.
+ */
+export const RetrievalSummarySchema = z.object({
+  /** True once a retrieval-capable surface actually ran (not merely offered) this turn. */
+  attempted: z.boolean(),
+  /**
+   * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
+   * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
+   * 'not_indexed' - ran to completion having compared nothing: the corpus in scope carries no
+   *   usable vector (never indexed, or embedded with a foreign model), so no passage was ever
+   *   scored against the query. Distinct from 'ok' because the library was not searched at all,
+   *   and reporting that as a topical zero ("your documents do not cover this") is exactly the
+   *   confident-wrong-answer this field exists to catch. Distinct from 'failed' because nothing
+   *   broke: the remedy is re-vectorizing, which the corpus owner can do themselves, and a retry
+   *   never helps.
+   *   COVERAGE: only forced retrieval records this today. The same condition is reachable through
+   *   knowledgeBaseSearch's semantic arm, which still records 'ok' when every candidate was
+   *   withheld for having no usable vector - so a turn that used only that surface still
+   *   under-reports. Anything cutting on this field should treat 'ok' as "not proven searched"
+   *   until that arm is corrected.
+   * 'failed' - recall did not complete: it threw, OR the retrieval repository is not wired on
+   *   this host (the guards in ChatCompletionFeatures / knowledgeBaseSearch / knowledgeBaseRetrieve
+   *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
+   *   not the tempo: fix the outage or the host wiring, never re-index content. An unwired host
+   *   reports continuously too, so "chronic" alone does not pick out 'not_indexed'.
+   * On multiple retrieval calls within one turn, merge priority is failed > not_indexed > ok >
+   * no_lakes (see retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never
+   * masked by a later success or abstain, an unsearchable corpus outranks a legitimate zero so a
+   * success on another surface cannot erase it, and a real success is never masked by another
+   * surface's "no lakes in scope" abstain in the same turn.
+   */
+  outcome: z.enum(['ok', 'no_lakes', 'not_indexed', 'failed']),
+  /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
+  surfaces: z.array(z.string()),
+  /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
+  dataLakeTags: z.array(z.string()),
+});
+
+/**
+ * Why a grounded turn's library scan stopped short of the whole library.
+ *
+ * Written ONLY on a partially-covered turn (reportCoverage returns early otherwise), so presence
+ * means "partial" and `partial` is always true - the flag is explicit anyway because a reader
+ * checking `retrievalCoverage.partial` should not have to know that absence is the other half of
+ * the contract.
+ *
+ * Single producer (ChatCompletionFeatures.reportCoverage), which is why - unlike `warnings`,
+ * `citables` and `retrieval` - this field needs no merge case in applyQuestStatusChanges: a
+ * later tool-arm write that omits it is preserved by the one-level spread.
+ *
+ * `reasons` is the same diagnostic prose the warnings entry interpolates. It is shown to the
+ * reader behind a disclosure rather than in the banner body, because only some reasons are
+ * actionable (a document mid-reindex returns on its own; a per-turn chunk budget does not).
+ */
+export const RetrievalCoverageSchema = z.object({
+  /** Always true - see the presence contract above. */
+  partial: z.boolean(),
+  /** One entry per distinct cause, e.g. a candidate cap, a scan budget, an embedding mismatch. */
+  reasons: z.array(z.string()),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
+  /** Per-turn retrieval outcome - see RetrievalSummarySchema. Top-level (not under `context`)
+   * deliberately: applyQuestStatusChanges does a one-level spread merge, so a field nested under
+   * `context` would be replaced wholesale by any tool-arm write instead of merging. */
+  retrieval: RetrievalSummarySchema.optional(),
+  /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
+   * one-level-spread-merge reason as `retrieval` above. */
+  retrievalCoverage: RetrievalCoverageSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`

@@ -1,6 +1,6 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB, FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { taskScheduleRepository, connectDB } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -10,11 +10,14 @@ import { dispatch as researchEngineDispatch } from '@server/queueHandlers/resear
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
+import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
+import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import { runChunkRescueSweep } from './chunkRescueSweep';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -28,6 +31,7 @@ import {
  * so `Resource.*` reads resolve from env. It is the self-host stand-in for the hosted
  * SST queue consumers (infra/queues.ts) and cron (infra/cron.ts):
  *   - polls researchEngineQueue -> researchEngineQueue.dispatch (same handler as hosted)
+ *   - polls imageGenerationQueue / imageEditQueue -> the same dispatch handlers hosted uses
  *   - runs taskSchedulerService.process every 5 minutes with the same handler map as
  *     the hosted cron/scheduler.ts (kept in sync with it).
  */
@@ -38,10 +42,16 @@ const bootLogger = new Logger({ metadata: { service: 'selfHostWorker' } });
 const RESEARCH_VISIBILITY_TIMEOUT_SEC = 900;
 /** Chunking/embedding a file (esp. local Ollama embeddings on CPU) can take minutes. */
 const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
+/** Matches the 11-minute visibility timeout hosted gives both image queues (infra/queues.ts),
+ *  which sits above their 10-minute handler timeout so a slow render is never redelivered
+ *  mid-flight - a duplicate would charge the user's credits a second time. */
+const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
 const CHUNK_SCAN_INTERVAL_MS = 60_000;
+/** Matches hosted's daily dataLakeBatchReconcile cron cadence (infra/cron.ts). */
+const DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
 /** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
 const DRAIN_GRACE_MS = 20_000;
 
@@ -76,6 +86,36 @@ async function main() {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
     maxReceiveCount: FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   });
+
+  // Image generation and image edit. The app enqueues here from POST /api/ai/generate-image and
+  // POST /api/ai/edit-image (the `/image` chat command), so without a consumer the quest sits at
+  // 'pending' forever. The in-chat image_generation / edit_image LLM tools do NOT come through
+  // here - they render inline in ChatCompletion. Optional in the manifest: an install that
+  // upgraded without adding the env vars keeps the rest of the worker up and says so on boot.
+  const registerImageQueue = (
+    name: string,
+    feature: string,
+    url: string | undefined,
+    dispatch: typeof imageGenerationDispatch
+  ) => {
+    if (!url) {
+      bootLogger.warn(`${name} not configured; ${feature} will not run`);
+      return;
+    }
+    worker.registerQueueHandler(name, url, dispatch, {
+      visibilityTimeoutSec: IMAGE_VISIBILITY_TIMEOUT_SEC,
+      // Explicit rather than registerQueueHandler's default: hosted's dlq.retry is 3
+      // (infra/queues.ts), and image renders cost provider money per attempt.
+      maxReceiveCount: 3,
+    });
+  };
+  registerImageQueue(
+    'imageGenerationQueue',
+    'image generation',
+    Resource.imageGenerationQueue?.url,
+    imageGenerationDispatch
+  );
+  registerImageQueue('imageEditQueue', 'image edit', Resource.imageEditQueue?.url, imageEditDispatch);
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
   // in the self-host manifest - a basic install that never set the env var simply never runs
@@ -129,26 +169,17 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. The selection filter
-  // (buildFabFileChunkScanFilter) skips uploads that never completed so the scan can't churn.
+  // notification is missed, sweep un-chunked files and enqueue them. Selection and enqueue
+  // accounting live in chunkRescueSweep.ts, shared in shape with the hosted daily cron.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
+    await runChunkRescueSweep(bootLogger);
+  });
 
-    const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
-    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
-      .select('_id userId')
-      .limit(CHUNK_SCAN_BATCH)
-      .lean();
-
-    for (const file of candidates) {
-      await sendToQueue(Resource.fabFileChunkQueue.url, {
-        fabFileId: String(file._id),
-        userId: file.userId,
-      });
-    }
-    if (candidates.length > 0) {
-      bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
-    }
+  // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
+  // without this, a self-host batch that nobody's list-view revisits stays stuck indefinitely
+  // now that the timeout is 3 hours instead of 30 minutes. Same shared sweep, same timeout.
+  worker.registerScheduledTask('dataLakeBatchReconcile', DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS, async () => {
+    await runStuckBatchSweep(bootLogger);
   });
 
   // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
@@ -173,6 +204,15 @@ async function main() {
   // Held (not fire-and-forget) so shutdown can wait for it: a run abandoned
   // mid-flight strands its Mongo lease until the TTL expires.
   const startupLeg = startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
+
+  // Same "don't wait a full interval" reasoning as the discovery startup leg above, but not
+  // held for shutdown: each batch transition is an atomic guarded single-document update
+  // (markTerminalIfActive), so an abandoned run leaves no lease behind to strand.
+  runStuckBatchSweep(bootLogger).catch(err => {
+    bootLogger.error('[dataLakeBatchReconcile] startup sweep failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
   const shutdown = async (signal: string) => {
     bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);

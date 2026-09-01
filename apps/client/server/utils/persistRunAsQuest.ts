@@ -15,6 +15,7 @@
  */
 import { agentExecutionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
+import type { PromptMeta } from '@bike4mind/common';
 import { persistAgentArtifacts } from './persistAgentArtifacts';
 
 export async function persistRunAsQuest(
@@ -40,7 +41,17 @@ export async function persistRunAsQuest(
    * SessionMiddle - parity with chat, which accretes them live on the quest. The agent
    * path applies them live during the run (iteration_step), so this is the replay copy.
    */
-  uiSideEffects?: { type: string; payload: unknown }[]
+  uiSideEffects?: { type: string; payload: unknown }[],
+  /**
+   * Per-turn retrieval outcome accumulated across every tool call during the run (#1867), via
+   * the same OR/worst-of merge classic chat uses in applyQuestStatusChanges - see
+   * mergeRetrievalSummary. Written to `quest.promptMeta.retrieval` so the diagnosis panel can
+   * distinguish "retrieval never ran" from "ran and legitimately found nothing" for agent-mode
+   * turns, same as it already can for classic chat. A plain $set/literal-assign is safe here
+   * (unlike images, which needs $addToSet): only the top-level run writes this field, not a
+   * dispatched subagent - see agentExecutor's second onStatusUpdate host for that known gap.
+   */
+  retrieval?: PromptMeta['retrieval']
 ): Promise<void> {
   const images = generatedImages?.length ? generatedImages : undefined;
   const sideEffects = uiSideEffects?.length ? uiSideEffects : undefined;
@@ -80,6 +91,7 @@ export async function persistRunAsQuest(
           ...(execution.usedMementoIds?.length ? { 'promptMeta.context.mementoIds': execution.usedMementoIds } : {}),
           // Dotted key coexists with `promptMeta.context.mementoIds` above - no clobber.
           ...(finishReason ? { 'promptMeta.finishReason': finishReason } : {}),
+          ...(retrieval ? { 'promptMeta.retrieval': retrieval } : {}),
           // The agent Quest is authored once at completion (no subagent race like images),
           // so a plain $set is safe here.
           ...(sideEffects ? { uiSideEffects: sideEffects } : {}),
@@ -112,6 +124,7 @@ export async function persistRunAsQuest(
           const promptMeta = {
             ...(finishReason ? { finishReason } : {}),
             ...(execution.usedMementoIds?.length ? { context: { mementoIds: execution.usedMementoIds } } : {}),
+            ...(retrieval ? { retrieval } : {}),
           };
           return Object.keys(promptMeta).length ? { promptMeta } : {};
         })(),
@@ -137,6 +150,9 @@ export async function persistRunAsQuest(
         sessionId: execution.sessionId,
         userId: execution.userId,
         executionId,
+        // The caller's opt-out gates the durable rows too, not just the emission prompt: a model can
+        // still tag `<artifact>` off habit or a persona instruction after the prompt is withheld.
+        enableArtifacts: execution.enableArtifacts,
         logger,
       });
     }

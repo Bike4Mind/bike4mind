@@ -54,14 +54,18 @@ const resolveInviteType = (segment: string | undefined): InviteType | undefined 
   return Object.values(InviteType).find(value => value === segment);
 };
 
-// Used only for type inference via z.infer<typeof ...>
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const CreateInviteRequestSchema = z.object({
-  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
+// z.enum(Permission) produces Permission[] so the service type is satisfied.
+const createInviteBodySchema = z.object({
+  permissions: z.array(z.enum(Permission)),
   recipients: z.string().array().optional(),
   description: z.string().optional(),
-  expiresAt: z.date().optional(),
-  available: z.number().prefault(1).optional(),
+  // null is the client's "no expiry" (hooks/data/invites.ts DataInput) -- map to undefined so
+  // the service's 100-year prefault applies. z.coerce.date(null) would silently produce epoch.
+  expiresAt: z.preprocess(
+    v => (v === null ? undefined : v),
+    z.coerce.date().min(new Date(), 'expiresAt must be in the future').optional()
+  ),
+  available: z.number().optional(),
 });
 
 const handler = baseApi()
@@ -107,7 +111,7 @@ const handler = baseApi()
    * - Creates a new invitation.  If one or more email addresses given, will also send email(s) to the given addresses.
    */
   .post(
-    asyncHandler<{}, unknown, z.infer<typeof CreateInviteRequestSchema>, IParams>(async (req, res) => {
+    asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>, IParams>(async (req, res) => {
       const { type: urlPathType, id } = req.query;
       if (!urlPathType || !id) {
         return res.status(400).json({ message: 'Invalid invite request' });
@@ -116,10 +120,12 @@ const handler = baseApi()
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
 
+      const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          { id, type: inviteType, ...(req.body as any) },
+          // id and type come last so path params are always authoritative over any body field.
+          { ...restBody, ...(expiresAt !== undefined && { expiresAt }), id, type: inviteType },
           {
             db: {
               invites: inviteRepository,
@@ -177,7 +183,7 @@ const handler = baseApi()
                     projectId: id,
                     projectName: project.name,
                     memberId: recipientId,
-                    memberRole: (req.body.permissions || []).join(','),
+                    memberRole: (restBody.permissions || []).join(','),
                   },
                 },
                 { ability: req.ability }
@@ -205,7 +211,7 @@ const handler = baseApi()
           documentName,
           typeName,
           inviteLink,
-          req.body.description
+          restBody.description
         ).catch(error => {
           req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
         });

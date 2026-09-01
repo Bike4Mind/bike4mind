@@ -1,10 +1,19 @@
-import type { IDataLakeBatchRepository, IDataLakeRepository, IFabFileRepository, TaxonomyTag } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeBatchRepository,
+  IDataLakeRepository,
+  IFabFileRepository,
+  TaxonomyTag,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, folderTagForFile, tagsForFile } from '@bike4mind/common';
-import { canManageLake } from './authorizeLakeWrite';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
+import { collidesWithRegistryPrefix } from './tagPrefixCollision';
 
 interface ApplyTaxonomySuggestionsAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findById' | 'setTaxonomyStatusIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'bulkUpdateTags'>;
   };
@@ -37,7 +46,7 @@ interface ApplyTaxonomySuggestionsAdapters {
  * rather than having its concurrent change clobbered by a merge computed from stale data.
  */
 export const applyTaxonomySuggestions = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   batchId: string,
   acceptedTags: TaxonomyTag[],
   { db, logger, metrics }: ApplyTaxonomySuggestionsAdapters
@@ -47,8 +56,19 @@ export const applyTaxonomySuggestions = async (
 
   const lake = await db.dataLakes.findById(batch.dataLakeId);
   if (!lake) throw new NotFoundError('Data lake not found');
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can apply tag suggestions for this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to apply tag suggestions for this data lake');
+  }
+  // A prefix colliding with a STATIC REGISTRY lake (e.g. opti:) has no owning document, so its
+  // read arm is an ownership BYPASS - stamping tags under it would expose this lake's files to
+  // everyone entitled to the registry lake. Create already refuses such a prefix (see
+  // createDataLake.ts); this only catches a row that predates that check.
+  if (collidesWithRegistryPrefix(lake.fileTagPrefix)) {
+    // No admin remedy exists today - there is no path to change a lake's fileTagPrefix after
+    // creation - so this refusal is not pointing anyone at a fix that doesn't exist.
+    throw new BadRequestError(
+      "This lake's tag prefix overlaps a built-in data lake, so new tags cannot be applied to it."
+    );
   }
 
   // Guarded claim: only a batch whose suggestions are 'ready' (and not already being applied

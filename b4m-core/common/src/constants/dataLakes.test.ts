@@ -11,7 +11,14 @@ import {
   normalizeTagPrefix,
   toDataLakeConfig,
   tagPrefixesOverlap,
+  tagPrefixIssue,
+  submittedTagPrefix,
+  MAX_TAG_PREFIX_LENGTH,
+  hasBlankTagPrefixSegment,
   satisfiesTagPrefix,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -317,5 +324,159 @@ describe('getFileMembershipArm', () => {
   it('is null (never "prefix") when the scope has no creator to anchor the prefix arm to', () => {
     const file = { userId: 'creator-1', tags: [{ name: 'acme:legal' }] };
     expect(getFileMembershipArm(file, { ...scope, creatorUserId: undefined })).toBe(null);
+  });
+});
+
+describe('hasBlankTagPrefixSegment', () => {
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', ' :'])('flags an empty or whitespace segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // trim() strips WhiteSpace but not Cf format characters - these render as the same
+  // blank tree node, so the check requires ink instead. U+FEFF (BOM) is Cf too.
+  it.each(['a:\u200b:', 'a:\u2060:', 'a:\ufeff:'])('flags a zero-width segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // Not every blank-renderer is whitespace or Cf: Hangul/halfwidth fillers are letters (Lo),
+  // braille blank is a symbol (So), BEL is a control outside \s. All must count as blank.
+  it.each(['a:\u3164:', 'a:\uffa0:', 'a:\u2800:', 'a:\u115f:', 'a:\u0007:'])(
+    'flags an invisible-ink segment (%s)',
+    prefix => {
+      expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+    }
+  );
+
+  it('accepts ordinary single- and multi-segment prefixes', () => {
+    expect(hasBlankTagPrefixSegment('acme:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme:legal:')).toBe(false);
+  });
+
+  // Pins that the rule is "has ink", not an ASCII allowlist: real scripts and punctuation
+  // are valid segments, guarding against a future "fix" that would reject non-Latin users.
+  it('accepts non-Latin and punctuation-bearing segments', () => {
+    expect(hasBlankTagPrefixSegment('\u0444\u0430\u0439\u043b\u044b:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('\u6587\u4ef6:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('r&d:')).toBe(false);
+  });
+
+  // A colon-less value must not manufacture a phantom blank segment out of its last
+  // character - the trailing-colon rule is a separate check with its own message.
+  it('does not flag a colon-less prefix', () => {
+    expect(hasBlankTagPrefixSegment('a:b')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme')).toBe(false);
+  });
+});
+
+describe('submittedTagPrefix', () => {
+  it('closes a colon-less value the way the create request will', () => {
+    expect(submittedTagPrefix('acme')).toBe('acme:');
+    expect(submittedTagPrefix('acme:')).toBe('acme:');
+  });
+
+  it('trims first, so edge whitespace never becomes part of the value or its length', () => {
+    expect(submittedTagPrefix('  acme  ')).toBe('acme:');
+    expect(submittedTagPrefix('  acme:  ')).toBe('acme:');
+  });
+
+  // Returning ":" for an untouched field would manufacture a blank-segment complaint before
+  // the user has typed anything.
+  it('leaves an empty value empty', () => {
+    expect(submittedTagPrefix('')).toBe('');
+    expect(submittedTagPrefix('   ')).toBe('');
+    expect(submittedTagPrefix(undefined)).toBe('');
+    expect(submittedTagPrefix(null)).toBe('');
+  });
+});
+
+describe('tagPrefixIssue - length', () => {
+  // The reported failure: a long lake name derived a 45-char prefix that nothing client-side
+  // bounded, so the create 422'd with the form showing no reason.
+  it('reports a prefix past the max, naming the limit and the actual length', () => {
+    const issue = tagPrefixIssue('triage-router-dry-run-test-ken-delete-after:');
+    expect(issue).toContain('30 characters or fewer');
+    expect(issue).toContain('44');
+  });
+
+  it('accepts a prefix exactly at the max and rejects one character more', () => {
+    const atMax = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 1)}:`;
+    expect(atMax).toHaveLength(MAX_TAG_PREFIX_LENGTH);
+    expect(tagPrefixIssue(atMax)).toBeNull();
+    expect(tagPrefixIssue(`a${atMax}`)).toMatch(/30 characters or fewer/);
+  });
+
+  // The schema .trim()s before sizing, so edge whitespace must not count here either or the
+  // two rules disagree for a value sitting exactly on the boundary.
+  it('measures the trimmed value, like the schema does', () => {
+    const atMax = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 1)}:`;
+    // Raw, this is 34 chars and its trailing spaces read as a blank ":" segment; trimmed it is
+    // exactly what the server stores. Both false alarms are what trimming here avoids.
+    expect(tagPrefixIssue(`  ${atMax}  `)).toBeNull();
+  });
+
+  // The submitted value carries a trailing ":" the wizard appends, so a field holding exactly
+  // MAX colon-less characters is MAX+1 on arrival - sizing the field passed it and the server
+  // then refused it, which is the whole failure this rule exists to prevent.
+  it('counts the trailing ":" the request will add to a colon-less prefix', () => {
+    expect(tagPrefixIssue('a'.repeat(MAX_TAG_PREFIX_LENGTH))).toMatch(/30 characters or fewer/);
+    expect(tagPrefixIssue('a'.repeat(MAX_TAG_PREFIX_LENGTH - 1))).toBeNull();
+  });
+
+  // Length is a .min/.max check and runs BEFORE the schema's refines, so a value that trips
+  // both must read as too long on this side too.
+  it('names the length before a blank segment or the reserved namespace', () => {
+    expect(tagPrefixIssue(`datalake:${'a'.repeat(MAX_TAG_PREFIX_LENGTH)}::`)).toMatch(/30 characters or fewer/);
+  });
+});
+
+describe('tagPrefixIssue - blank segments', () => {
+  it('reports a blank segment as user-facing copy', () => {
+    expect(tagPrefixIssue('legal::')).toMatch(/visible character/);
+    expect(tagPrefixIssue('legal: :')).toMatch(/visible character/);
+  });
+
+  it('stays quiet for a healthy prefix and still reports the other two cases', () => {
+    expect(tagPrefixIssue('legal:')).toBeNull();
+    expect(tagPrefixIssue('datalake:')).toMatch(/reserved/);
+    expect(tagPrefixIssue('legal:', { name: 'Docs', fileTagPrefix: 'legal:' })).toMatch(/overlaps/);
+  });
+
+  // Precedence matches the schema's refine order, so the wizard and a server 400 name
+  // the same culprit for an input that trips both rules.
+  it('names the blank segment before the reserved namespace for "datalake::"', () => {
+    expect(tagPrefixIssue('datalake::')).toMatch(/visible character/);
+  });
+});
+
+// These three are the SINGLE copy of a rule CreateDataLakeRequestInput enforces and the wizard
+// produces against, so pin the literals here: a change to any of them is a change to what the
+// create endpoint accepts, and must be a deliberate edit to this test rather than a silent drift.
+describe('data lake slug bounds', () => {
+  it('holds the bounds the create schema enforces', () => {
+    expect(MIN_DATA_LAKE_SLUG_LENGTH).toBe(2);
+    expect(MAX_DATA_LAKE_SLUG_LENGTH).toBe(60);
+  });
+
+  it('accepts a lowercase alphanumeric slug with interior hyphens', () => {
+    expect('my-data-lake').toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('ab').toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('a1').toMatch(DATA_LAKE_SLUG_REGEX);
+  });
+
+  it('rejects edge hyphens, uppercase, and other separators', () => {
+    for (const bad of ['-lake', 'lake-', 'My-Lake', 'my_lake', 'my lake', 'my.lake']) {
+      expect(bad).not.toMatch(DATA_LAKE_SLUG_REGEX);
+    }
+  });
+
+  // The pattern needs a leading AND a trailing alphanumeric in SEPARATE positions, so it
+  // already refuses a 1-char slug - the schema's minimum is belt-and-braces there. The client
+  // is why the minimum still has to be shared: isValidDataLakeSlug gates on LENGTH alone
+  // (slugifyDataLakeName's output satisfies the pattern by construction), so length is the
+  // only rule the wizard actually applies.
+  it('refuses a single character on its own, matching MIN_DATA_LAKE_SLUG_LENGTH', () => {
+    expect('a').not.toMatch(DATA_LAKE_SLUG_REGEX);
+    expect('a'.length).toBeLessThan(MIN_DATA_LAKE_SLUG_LENGTH);
+    expect('ab'.length).toBe(MIN_DATA_LAKE_SLUG_LENGTH);
   });
 });

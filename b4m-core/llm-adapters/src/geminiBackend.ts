@@ -1,6 +1,7 @@
 import { Content, GenerationConfig, GoogleGenAI, Part, Tool } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
   ChatModels,
@@ -11,6 +12,7 @@ import {
   PermissionDeniedError,
   type CacheUsageStats,
   type IMessage,
+  type MessageContentObject,
   type MessageContentText,
   type MessageContentToolResult,
   type MessageContentToolUse,
@@ -73,7 +75,7 @@ export class GeminiBackend implements ICompletionBackend {
     toolCall: { name?: string; args?: Record<string, unknown> },
     part: GeminiPart,
     toolCalls: ToolCall[],
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }>,
+    toolsUsed: Array<RecordableToolUse>,
     checkDuplicates: boolean = false
   ): void {
     const toolName = toolCall.name ?? 'unknown_tool';
@@ -543,7 +545,7 @@ export class GeminiBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = modelName;
     const modelInfo = (await this.getModelInfo()).find(model => model.id === modelName);
@@ -562,6 +564,12 @@ export class GeminiBackend implements ICompletionBackend {
     // running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+
+    // Tool calls minted by an earlier round of THIS SAME completion chain - exempt from the
+    // gemini-3 replayed-history drop guard below, since a live call is a different failure mode
+    // (a visible, already-handled Gemini rejection) than a replayed one (a guaranteed-missing
+    // signature this backend should degrade gracefully for).
+    const liveToolUseIds = new Set(options._internal?.liveToolUseIds ?? []);
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
@@ -597,7 +605,7 @@ export class GeminiBackend implements ICompletionBackend {
     const systemInstruction = systemMessages.map(message => message.content).join('\n');
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
-    const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages);
+    const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
     const generationConfig = this.getGenerationConfig(modelInfo, options);
 
     // Zero or one tools; if one, then all the functionDefinitions are there, up to the
@@ -823,13 +831,21 @@ export class GeminiBackend implements ICompletionBackend {
                   await callback(results, { toolsUsed });
                 });
 
+                const resultContent = JSON.stringify({ result: outcome.result });
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.toolCall.id, name: outcome.toolCall.name },
+                  resultContent,
+                  true
+                );
+
                 // Push tool result to conversation history
                 messages.push({
                   role: 'tool',
                   content: [
                     {
                       type: 'tool_result',
-                      content: JSON.stringify({ result: outcome.result }),
+                      content: resultContent,
                       tool_use_id: outcome.toolCall.id,
                     },
                   ],
@@ -838,15 +854,22 @@ export class GeminiBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                const errorContent = JSON.stringify({
+                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                });
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.toolCall.id, name: outcome.toolCall.name },
+                  errorContent,
+                  false
+                );
                 // Push error as tool result
                 messages.push({
                   role: 'tool',
                   content: [
                     {
                       type: 'tool_result',
-                      content: JSON.stringify({
-                        error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
-                      }),
+                      content: errorContent,
                       tool_use_id: outcome.toolCall.id,
                     },
                   ],
@@ -871,6 +894,7 @@ export class GeminiBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + turnInputTokens,
                   accumOutputTokens: accumOutputTokens + turnOutputTokens,
+                  liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
                 },
               },
               callback,
@@ -1044,13 +1068,16 @@ export class GeminiBackend implements ICompletionBackend {
               await callback(results, { toolsUsed });
             });
 
+            const resultContent = JSON.stringify({ result: outcome.result });
+            recordToolResult(toolsUsed, { id: outcome.toolCall.id, name: outcome.toolCall.name }, resultContent, true);
+
             // Push tool result to conversation history
             messages.push({
               role: 'tool',
               content: [
                 {
                   type: 'tool_result',
-                  content: JSON.stringify({ result: outcome.result }),
+                  content: resultContent,
                   tool_use_id: outcome.toolCall.id,
                 },
               ],
@@ -1058,15 +1085,17 @@ export class GeminiBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            const errorContent = JSON.stringify({
+              error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+            });
+            recordToolResult(toolsUsed, { id: outcome.toolCall.id, name: outcome.toolCall.name }, errorContent, false);
             // Push error as tool result
             messages.push({
               role: 'tool',
               content: [
                 {
                   type: 'tool_result',
-                  content: JSON.stringify({
-                    error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
-                  }),
+                  content: errorContent,
                   tool_use_id: outcome.toolCall.id,
                 },
               ],
@@ -1090,6 +1119,7 @@ export class GeminiBackend implements ICompletionBackend {
               toolCallCount: toolCallCount + 1,
               accumInputTokens: accumInputTokens + turnInputTokens,
               accumOutputTokens: accumOutputTokens + turnOutputTokens,
+              liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
             },
           },
           callback,
@@ -1103,9 +1133,17 @@ export class GeminiBackend implements ICompletionBackend {
     }
   }
 
-  private formatMessagesIntoGeminiContent(messages: IMessage[]): any[] {
+  private formatMessagesIntoGeminiContent(messages: IMessage[], liveToolUseIds: Set<string>): any[] {
     const toolUseIdToName = new Map<string, string>();
     void toolUseIdToName;
+    // Populated below when a tool_use message's FIRST call has no thought_signature - Gemini
+    // requires one on the first call of a parallel batch, and a caller-side check (whichever
+    // model fetchAndProcessPreviousMessages was called with) cannot see a LATER cross-provider
+    // fallback hop onto Gemini (utils.ts's disableToolReplay is fixed before the fallback loop
+    // runs). Checking here instead means the guard travels with this backend regardless of why
+    // the messages ended up here - live turn, direct call, or a fallback hop mid-outage - and the
+    // paired tool_result below is dropped too, so functionCall/functionResponse counts stay equal.
+    const droppedToolUseIds = new Set<string>();
 
     return messages
       .map(message => {
@@ -1130,14 +1168,22 @@ export class GeminiBackend implements ICompletionBackend {
           };
         }
 
-        if (message.content?.[0].type === 'text') {
+        // Checked before the bare-text branch below: utils.ts's replayed-history reconstruction
+        // (fetchAndProcessPreviousMessages Priority 2) puts a leading `{type:'text'}` block ahead
+        // of the `tool_use` blocks in the SAME content array when the turn had both a text reply
+        // and tool calls. Gating on content[0].type alone took the text-only branch and silently
+        // dropped every tool_use block whenever text came first - so a replayed Gemini turn with a
+        // reply and a tool call would reach the model with the tool call missing.
+        const hasToolUse = Array.isArray(message.content) && message.content.some(item => item.type === 'tool_use');
+
+        if (!hasToolUse && message.content?.[0].type === 'text') {
           return {
             role: mapRole(message.role),
             parts: [{ text: (message.content?.[0] as MessageContentText).text }],
           };
         }
 
-        if (message.content?.[0].type === 'image') {
+        if (!hasToolUse && message.content?.[0].type === 'image') {
           return {
             role: mapRole(message.role),
             parts: [
@@ -1151,12 +1197,50 @@ export class GeminiBackend implements ICompletionBackend {
           };
         }
 
-        if (message.content?.[0].type === 'tool_use') {
+        if (hasToolUse) {
           // CRITICAL: Handle multiple tool_use items in one message (parallel function calls)
           // Per Gemini API docs: only the FIRST part gets thought_signature in parallel calls
-          const parts = message.content
-            .filter((item): item is MessageContentToolUse => item.type === 'tool_use')
-            .map((toolUse, index) => {
+          const toolUseBlocks = message.content.filter(
+            (item): item is MessageContentToolUse => item.type === 'tool_use'
+          );
+          const textParts = message.content
+            .filter((item): item is MessageContentText => item.type === 'text')
+            .map(item => ({ text: item.text }));
+
+          // A replayed history turn (utils.ts Priority 2) never persists thought_signature, so its
+          // reconstructed tool_use blocks always lack one. Rather than send a request Gemini 3 is
+          // documented to reject, drop the whole call set here (functionCall AND, below, its
+          // paired functionResponse) and fall back to whatever text survives - the same
+          // degradation utils.ts already does for a Gemini-primary turn, now enforced regardless
+          // of which model the history was originally fetched for. Scoped to the gemini-3 family:
+          // that is the one this repo has observed actually rejects a missing signature (see the
+          // pre-existing warn below this branch), so a 2.x/1.x model isn't degraded for no reason.
+          // /^gemini-3(\D|$)/ rather than a plain substring match: matches gemini-3-pro-preview,
+          // gemini-3.1-pro-preview, gemini-3.5-flash (a non-digit or end follows "gemini-3" in
+          // every real id), but not a hypothetical future gemini-30/gemini-33 family, which this
+          // repo has never observed to need the guard.
+          //
+          // This formatter runs on every recursive round of a live tool-calling turn too, and a
+          // live round's own just-minted tool_use block can ALSO lack a thought_signature (see the
+          // warn a few lines up) - that is a different, already-handled failure mode (Gemini
+          // rejects the request with a visible error the existing fallback/retry net catches), not
+          // the guaranteed-missing-signature case a replay produces. liveToolUseIds excludes the
+          // former so the guard cannot silently swallow a block this same completion chain just
+          // generated.
+          const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
+          if (isReplayed && /^gemini-3(\D|$)/.test(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+            this.logger.warn(
+              '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
+              { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
+            );
+            toolUseBlocks.forEach(t => droppedToolUseIds.add(t.id));
+            if (textParts.length === 0) return null;
+            return { role: mapRole(message.role), parts: textParts };
+          }
+
+          const parts: any[] = [...textParts];
+          parts.push(
+            ...toolUseBlocks.map((toolUse, index) => {
               toolUseIdToName.set(toolUse.id, toolUse.name);
 
               const part: any = {
@@ -1166,27 +1250,30 @@ export class GeminiBackend implements ICompletionBackend {
                 },
               };
 
-              // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls)
-              if (index === 0 && toolUse.thought_signature) {
-                part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
-                part.thought_signature = toolUse.thought_signature; // snake_case for other versions
-                this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
-                  name: toolUse.name,
-                  id: toolUse.id,
-                  position: 'first',
-                });
-              } else if (index === 0 && !toolUse.thought_signature) {
-                // Only warn for the first tool call if signature is missing
-                this.logger.warn('[Gemini] Missing thought_signature for first function call:', {
-                  name: toolUse.name,
-                  id: toolUse.id,
-                  messageRole: message.role,
-                });
-                this.logger.warn('[Gemini] This may cause a 400 error with Gemini 3 Pro');
+              // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls).
+              // Assigned only when present rather than unconditionally - an explicit `undefined`
+              // value serializes away via JSON.stringify same as an absent key, but there is no
+              // need to rely on that when the SDK sees the raw object first.
+              if (index === 0) {
+                if (toolUse.thought_signature) {
+                  part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
+                  part.thought_signature = toolUse.thought_signature; // snake_case for other versions
+                  this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
+                    name: toolUse.name,
+                    id: toolUse.id,
+                    position: 'first',
+                  });
+                } else {
+                  this.logger.warn('[Gemini] Missing thought_signature for first function call:', {
+                    name: toolUse.name,
+                    id: toolUse.id,
+                  });
+                }
               }
 
               return part;
-            });
+            })
+          );
 
           return {
             role: mapRole(message.role),
@@ -1195,19 +1282,27 @@ export class GeminiBackend implements ICompletionBackend {
         }
 
         if (message.content?.[0].type === 'tool_result') {
-          const toolResult = message.content[0] as MessageContentToolResult;
-          return {
-            role: mapRole(message.role),
-            parts: [
-              {
-                functionResponse: {
-                  name: toolUseIdToName.get(toolResult.tool_use_id) ?? toolResult.tool_use_id,
-                  response: {
-                    result: (message.content?.[0] as MessageContentToolResult).content,
-                  },
+          // A replayed turn (utils.ts Priority 2) bundles N tool_result blocks into ONE
+          // message when the turn made parallel calls - map every block, not just the
+          // first, or Gemini rejects the request for a functionResponse/functionCall
+          // count mismatch (mirrors the same fix on the tool_use side above). Results whose
+          // tool_use_id was dropped above (no thought_signature) are dropped here too, or an
+          // orphaned functionResponse would recreate the same count mismatch from the other side.
+          const parts = (message.content as MessageContentObject[])
+            .filter((item): item is MessageContentToolResult => item.type === 'tool_result')
+            .filter(toolResult => !droppedToolUseIds.has(toolResult.tool_use_id))
+            .map(toolResult => ({
+              functionResponse: {
+                name: toolUseIdToName.get(toolResult.tool_use_id) ?? toolResult.tool_use_id,
+                response: {
+                  result: toolResult.content,
                 },
               },
-            ],
+            }));
+          if (parts.length === 0) return null;
+          return {
+            role: mapRole(message.role),
+            parts,
           };
         }
 

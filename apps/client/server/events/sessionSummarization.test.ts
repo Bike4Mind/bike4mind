@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -20,6 +21,10 @@ const h = vi.hoisted(() => ({
   findPrefixArmLakes: vi.fn(
     async () => [] as { createdByUserId: string; fileTagPrefix: string; datalakeTag: string }[]
   ),
+  findByDatalakeTag: vi.fn(async () => null as { createdByUserId: string } | null),
+  canManageLake: vi.fn(() => false),
+  assertLakeAdmission: vi.fn(),
+  userFindById: vi.fn(async (id: string) => ({ id, isAdmin: false })),
   session: {} as Record<string, unknown>,
 }));
 
@@ -37,7 +42,7 @@ vi.mock('@server/utils/eventBus', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn(async () => h.session) },
-  User: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
+  User: { findById: h.userFindById },
   Quest: {
     find: vi.fn(() => ({
       sort: () => ({ limit: async () => [{ _id: 'q1', prompt: 'hello', reply: 'world' }] }),
@@ -45,15 +50,38 @@ vi.mock('@bike4mind/database', () => ({
   },
   sessionRepository: { update: h.sessionUpdate },
   fabFileRepository: { findOne: h.findOne },
-  dataLakeRepository: { find: vi.fn() },
+  dataLakeRepository: { find: vi.fn(), findByDatalakeTag: h.findByDatalakeTag },
   adminSettingsRepository: {},
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { updateFabFile: h.updateFabFile, createFabFile: h.createFabFile },
-  dataLakeService: { loadPrefixArmCandidateLakes: h.findPrefixArmLakes },
+  dataLakeService: {
+    loadPrefixArmCandidateLakes: h.findPrefixArmLakes,
+    // Real (not faked) extraction logic: cheap, pure, and this is exactly what the code under
+    // test needs to see the tags it passes as meta-tags or not.
+    extractDataLakeMetaTags: (names: unknown[]) =>
+      Array.from(
+        new Set(
+          names
+            .filter((n): n is string => typeof n === 'string')
+            .map(n => n.toLowerCase())
+            .filter(n => n.startsWith('datalake:'))
+        )
+      ),
+    canManageLake: h.canManageLake,
+    assertLakeAdmission: h.assertLakeAdmission,
+    // Real (not faked): a fixed test-only prefix, mirroring the shape of DATA_LAKES' opti: entry.
+    extractStaticRegistryPrefixedTags: (names: unknown[]) =>
+      names.filter((n): n is string => typeof n === 'string' && n.startsWith('opti:')),
+    // Real (not faked): a fixed test-only static-registry datalakeTag, mirroring
+    // DATA_LAKES' opti-knowledge entry (datalake:opti-knowledge, no owning DB document).
+    isStaticRegistryDatalakeTag: (tag: string) => tag.toLowerCase() === 'datalake:opti-knowledge',
+  },
 }));
 
 vi.mock('@client/services/operationsModelService', () => ({
@@ -101,6 +129,9 @@ const run = () =>
 describe('sessionSummarization summary-file lookup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks does not drop a mockRejectedValue, so an admission-refusal case would otherwise
+    // leak its rejection into every later test.
+    h.assertLakeAdmission.mockReset();
     h.fabFileStore.length = 0;
     h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
     h.findOne.mockImplementation(
@@ -174,62 +205,169 @@ describe('sessionSummarization summary-file lookup', () => {
     );
   });
 
-  // Since #1263, a prefix-arm content tag is lake membership on its own (no meta-tag required),
-  // and reconcileLakeTags now gates losing it the same as a meta-tag leave. Re-summarizing must
-  // carry that tag through too, or it silently evicts the file from a lake it never left.
-  it('carries a prefix-arm-only membership tag through re-summarization', async () => {
+  // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
+  // reconcileLakeTags (called inside updateFabFile) preserves existing membership regardless of
+  // what this door sends, so re-summarization can just pass the session's own tags through as-is
+  // without silently evicting a lake-indexed file it never actually left.
+  it("passes only the session's own tags to updateFabFile, relying on the callee to preserve lake membership", async () => {
+    // The session (h.session.tags, defaulted to [] in beforeEach) carries neither signal - the
+    // stored FabFile's existing meta-tag and prefix-arm tag are NOT manually carried through here.
     h.fabFileStore.push({
       id: 'fabfile-owner',
       userId: OWNER,
       sessionId: SESSION_ID,
       fileName: 'Notebook Summary.txt',
-      tags: [{ name: 'lk:invoices', strength: 1 }],
+      tags: [
+        { name: 'datalake:lake1', strength: 1 },
+        { name: 'lk:invoices', strength: 1 },
+      ],
     });
-    h.findPrefixArmLakes.mockResolvedValueOnce([
-      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
-    ]);
 
     await run();
 
     expect(h.updateFabFile).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tags: expect.arrayContaining([expect.objectContaining({ name: 'lk:invoices' })]) }),
+      expect.objectContaining({ tags: [] }),
       expect.anything()
     );
-  });
-
-  it('skips the candidate-lake query when no stored tag could carry a prefix arm', async () => {
-    h.fabFileStore.push({
-      id: 'fabfile-owner',
-      userId: OWNER,
-      sessionId: SESSION_ID,
-      fileName: 'Notebook Summary.txt',
-      tags: [{ name: 'plain', strength: 1 }],
-    });
-
-    await run();
-
     expect(h.findPrefixArmLakes).not.toHaveBeenCalled();
   });
 
-  // The doc comment above the carry-through says the session's own tags never overlap a
-  // membership signal - true in the normal case, but not an invariant the code can lean on.
-  it('does not duplicate a membership tag the session itself also carries', async () => {
-    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [{ name: 'lk:invoices' }] };
-    h.fabFileStore.push({
-      id: 'fabfile-owner',
-      userId: OWNER,
-      sessionId: SESSION_ID,
-      fileName: 'Notebook Summary.txt',
-      tags: [{ name: 'lk:invoices', strength: 1 }],
+  // createFabFile's new lake-tag gate (see fabFileService/create.ts) now throws for a datalake:
+  // meta-tag the session's user cannot manage, where before this PR it landed on the file
+  // ungated - the bug #1101 describes. A stale/unmanageable tag on an otherwise-unrelated session
+  // must not take the whole summary down with it.
+  describe('an unmanageable datalake: tag on a brand-new summary', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'datalake:someone-elses-lake' }, { name: 'plain' }],
+      };
+      h.canManageLake.mockReturnValue(false);
     });
-    h.findPrefixArmLakes.mockResolvedValueOnce([
-      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
-    ]);
 
-    await run();
+    it('drops it and still creates the summary with the rest of the tags', async () => {
+      await run();
 
-    const call = h.updateFabFile.mock.calls[0][1] as { tags: { name: string }[] };
-    expect(call.tags.filter(t => t.name === 'lk:invoices')).toHaveLength(1);
+      expect(h.createFabFile).toHaveBeenCalledTimes(1);
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+    });
+
+    it('logs a warning naming the dropped tag', async () => {
+      await run();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('datalake:someone-elses-lake'));
+    });
+
+    it('keeps a tag the session user CAN manage', async () => {
+      h.findByDatalakeTag.mockResolvedValueOnce({ createdByUserId: OWNER });
+      h.canManageLake.mockReturnValue(true);
+
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['datalake:someone-elses-lake', 'plain']);
+    });
+  });
+
+  // The admission contract (#1680) is a SECOND refusal class on the same createFabFile call, so it
+  // needs the same drop-and-warn treatment: the summary is the primary value this handler exists to
+  // preserve, and a refusal here is deterministic - rethrowing would fail the event on every retry.
+  describe('a datalake: tag the admission contract would refuse', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'datalake:enforcing-lake' }, { name: 'plain' }],
+      };
+      // Manageable - it is the admission verdict, not authorization, that refuses this one.
+      h.findByDatalakeTag.mockResolvedValue({ id: 'lake1', createdByUserId: OWNER });
+      h.canManageLake.mockReturnValue(true);
+      h.assertLakeAdmission.mockRejectedValue(new BadRequestError('"Lake" requires passages of 1000 tokens'));
+    });
+
+    it('drops the refused tag and still creates the RAG-indexed summary', async () => {
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledTimes(1);
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+    });
+
+    it('says the tag was refused at admission, not merely unmanageable', async () => {
+      await run();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('refused at admission'));
+    });
+
+    it('lets a non-admission failure from the gate propagate', async () => {
+      // Only a BadRequestError is a verdict; a settings-store outage must not be read as "refused".
+      h.assertLakeAdmission.mockRejectedValue(new Error('settings store unreachable'));
+
+      await expect(run()).rejects.toThrow('settings store unreachable');
+      expect(h.createFabFile).not.toHaveBeenCalled();
+    });
+  });
+
+  // A legacy static-registry content tag (e.g. opti:foo) predating this fix's rollout can be
+  // sitting on a session too - same reasoning as the datalake: meta-tag case, no DB lookup needed
+  // since that arm is admin-only.
+  describe('a legacy static-registry content tag on a brand-new summary', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'opti:legacy' }, { name: 'plain' }],
+      };
+    });
+
+    it('drops it for a non-admin and still creates the summary with the rest of the tags', async () => {
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('opti:legacy'));
+    });
+  });
+
+  // A static-registry lake's meta-tag (datalake:opti-knowledge) has no owning DB document, so
+  // findByDatalakeTag returns null for it - naively treating that as "unmanageable" would drop
+  // the tag even for an admin the real createFabFile gate would let keep it (bot review finding).
+  describe('a static-registry datalake: meta-tag on a brand-new summary', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'datalake:opti-knowledge' }, { name: 'plain' }],
+      };
+    });
+
+    it('drops it for a non-admin with no DB lookup', async () => {
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+      expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+    });
+
+    it('keeps it for an admin, matching what createFabFile would actually allow', async () => {
+      h.userFindById.mockResolvedValueOnce({ id: OWNER, isAdmin: true });
+
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['datalake:opti-knowledge', 'plain']);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
   });
 });

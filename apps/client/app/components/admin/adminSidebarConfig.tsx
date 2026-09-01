@@ -35,11 +35,12 @@ import InventoryIcon from '@mui/icons-material/Inventory';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import HandshakeIcon from '@mui/icons-material/Handshake';
 import EventBusyIcon from '@mui/icons-material/EventBusy';
+import SummarizeIcon from '@mui/icons-material/Summarize';
 
 export enum AdminTab {
   Users = 0,
   AdminSettings = 1,
-  Feedbacks = 2,
+  Feedback = 2,
   Analytics = 3,
   Accounts = 4,
   RegistrationInvites = 5,
@@ -94,6 +95,7 @@ export enum AdminTab {
   PartnerSignupRules = 55,
   EmbedKeys = 57,
   ModelLifecycle = 58,
+  PrReport = 59,
 }
 
 /**
@@ -136,7 +138,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: PeopleIcon, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: EmailIcon, tab: AdminTab.EmailVerification, label: 'Email Verification' },
-      { Icon: ContactSupportIcon, tab: AdminTab.Feedbacks, label: 'Feedbacks' },
+      { Icon: ContactSupportIcon, tab: AdminTab.Feedback, label: 'Feedback' },
       { Icon: PersonAddIcon, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
       { Icon: QueryStatsIcon, tab: AdminTab.Analytics, label: 'Analytics' },
       {
@@ -239,6 +241,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: WebhookIcon, tab: AdminTab.WebhookAuditLogs, label: 'Webhook Logs' },
       { Icon: QueryStatsIcon, tab: AdminTab.SlackMetrics, label: 'Slack Metrics' },
+      { Icon: SummarizeIcon, tab: AdminTab.PrReport, label: 'PR Status Digest', testid: 'admin-pr-report-btn' },
     ],
   },
   {

@@ -56,19 +56,19 @@ describe('applyPartnerRuleMembership', () => {
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
     const full = { ...cloneDeep(org), seats: 2, users: [{ userId: 'a' }, { userId: 'b' }] };
     db.organizations.findById.mockResolvedValue(full);
-    // PRE-image: 2 members, seats 2. The service derives newSeats = max(2, 2 + 1) = 3.
+    // PRE-image: 2 members, seats 2. Owner-inclusive: newSeats = max(2, 2 + 2) = 4 (owner + 3 members).
     db.organizations.addMemberRaisingSeats.mockResolvedValue(cloneDeep(full));
 
     const result = await run();
 
-    expect(result).toEqual({ added: true, reason: 'added-seat-raised', previousSeats: 2, newSeats: 3 });
+    expect(result).toEqual({ added: true, reason: 'added-seat-raised', previousSeats: 2, newSeats: 4 });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
   });
 
   it('reports the seat range from the atomic PRE-IMAGE, not the earlier read (concurrent raise)', async () => {
     // Guards the fix for the reported race: deriving previousSeats/newSeats from the top-of-function
-    // findById makes two racers report OVERLAPPING ranges (2->3 and 2->4), so an operator
-    // reconciling seat growth double-counts the 2->3 interval. The two mocks must therefore
+    // findById makes two racers report OVERLAPPING ranges (2->4 and 3->5), so an operator
+    // reconciling seat growth double-counts the shared interval. The two mocks must therefore
     // disagree, or the test cannot tell the two sources apart.
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
     // Stale read: what this caller saw before a concurrent signup landed.
@@ -86,8 +86,8 @@ describe('applyPartnerRuleMembership', () => {
 
     const result = await run();
 
-    // From the pre-image: 3 -> max(3, 3 + 1) = 4. From the stale read it would be 2 -> 3.
-    expect(result).toEqual({ added: true, reason: 'added-seat-raised', previousSeats: 3, newSeats: 4 });
+    // From the pre-image: 3 -> max(3, 3 + 2) = 5. From the stale read it would be 2 -> 4.
+    expect(result).toEqual({ added: true, reason: 'added-seat-raised', previousSeats: 3, newSeats: 5 });
   });
 
   it('adds a Stripe-billed org member that fits WITHOUT raising the ceiling', async () => {
@@ -106,6 +106,12 @@ describe('applyPartnerRuleMembership', () => {
     // A Stripe org's ceiling is never raised out of band.
     expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // The atomic add touches only users[]; seed the credit side-table too (#1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('rejects with at-capacity (no write) when a full Stripe-billed org cannot fit the user', async () => {
@@ -134,6 +140,12 @@ describe('applyPartnerRuleMembership', () => {
 
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // Backfill the credit side-table for the member the concurrent signup added (idempotent, #1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('refuses to add an unverified user (security gate) and writes nothing', async () => {
@@ -210,6 +222,12 @@ describe('applyPartnerRuleMembership', () => {
 
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // Backfill the credit side-table for the member the concurrent signup added (idempotent, #1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('rejects with at-capacity (no write) when a non-Stripe org is clamped at the seat ceiling (#1424)', async () => {

@@ -17,12 +17,12 @@
  */
 import {
   DATA_LAKES,
+  STATIC_LAKE_IDS,
   getAccessibleDataLakes,
   hasDeveloperUserTag,
   isImageServeable,
-  normalizeTagPrefix,
 } from '@bike4mind/common';
-import type { DataLakeConfig, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -34,6 +34,10 @@ import {
 import type { EntitlementRequest } from '@server/entitlements';
 import { getFilesStorage } from '@server/utils/storage';
 import { toAccessContext } from './toAccessContext';
+import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
+import { firstQueryValue } from './firstQueryValue';
+
+export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
 
 /**
  * Resolve the data lakes a user can browse: their dynamic (DB) lakes - already
@@ -46,8 +50,14 @@ import { toAccessContext } from './toAccessContext';
  * happen not to carry. Static lakes (no owner concept) still go through that filter.
  * The retrieval resolver does run that filter and compensates with its own owner re-check
  * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
+ *
+ * Returns `DataLakeConfig[]`, not the manageable projection: the dynamic half carries the
+ * `canManage`/`isOwn` labels but the static half does not, and every caller here (article,
+ * tag-count, and answer scoping) reads only id/tag/prefix - never a manage field. Typing the
+ * mixed result as the narrower shared shape keeps the manager-only labels off a path that has
+ * no use for them.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<ManageableDataLakeConfig[]> {
+export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
@@ -57,8 +67,10 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
   // it to stop the two halves of the merge disagreeing about what the caller holds.
   const ctx = await toAccessContext(req);
 
+  // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
+  // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
   const dynamic = ctx.isAdmin
-    ? await dataLakeService.listAllDataLakes({ db: { dataLakes: dataLakeRepository } })
+    ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
     : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of
@@ -73,52 +85,17 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
   return [...dynamic, ...staticLakes.filter(s => !dynamicIds.has(s.id))];
 }
 
-/**
- * Pure gate: is `file` accessible via any of `lakes`? Access = the file carries an accessible
- * lake's unique meta-tag (covers dynamic lakes safely - membership IS the meta-tag) OR a
- * static-registry (open) prefix. A dynamic lake's user-controlled prefix is deliberately NOT a
- * grant here - that was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
- * This is the single source of truth for single-file lake authorization (used by the browse
- * deep-link branch and the /api/files/:id lake-aware fallback). (#836)
- */
-export function isFileInAccessibleLake(lakes: DataLakeConfig[], file: IFabFileDocument): boolean {
-  const dataLakeTags = lakes.map(dl => dl.datalakeTag);
-  const { openTagPrefixes } = splitTagPrefixes(lakes);
-  const fileTagNames = file.tags?.map(t => t.name) ?? [];
-  const hasMetaTagAccess = dataLakeTags.some(t => fileTagNames.includes(t));
-  const hasOpenPrefixAccess = openTagPrefixes.some(p => fileTagNames.some(t => t.startsWith(p)));
-  return hasMetaTagAccess || hasOpenPrefixAccess;
-}
-
-/**
- * Resolve + authorize a single FabFile by id against the caller's accessible lakes. Returns the
- * FabFile doc when it belongs to a lake the caller can access, else null. Used as the fallback
- * for GET /api/files/:id so curated/shared lake files (which are authorized by lake tag/prefix,
- * NOT by per-file ACL) open in the shared file viewer. Does NOT itself mint a signed URL - the
- * caller passes the returned doc through fabFilesService.generateSignedUrl. (#836)
- */
-export async function findLakeAccessibleFabFile(
-  req: EntitlementRequest,
-  fileId: string
-): Promise<IFabFileDocument | null> {
-  const lakes = await resolveAccessibleLakes(req);
-  if (lakes.length === 0) return null;
-  const file = await fabFileRepository.findById(fileId);
-  if (!file || file.deletedAt) return null;
-  return isFileInAccessibleLake(lakes, file) ? file : null;
-}
-
 export interface DataLakeArticlesQuery {
-  id?: string;
+  // `string[]` for the same reason as `tags`/`search` below: /api/data-lakes/articles has no `[id]`
+  // route segment, so `id` comes purely from the query string and is repeatable.
+  id?: string | string[];
   tags?: string | string[];
-  search?: string;
+  search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
   sortDir?: string;
 }
-
-const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
 
 /**
  * Split the accessible lakes' file-tag prefixes by provenance:
@@ -139,9 +116,9 @@ function splitTagPrefixes(lakes: DataLakeConfig[]): { openTagPrefixes: string[];
   const openTagPrefixes: string[] = [];
   const scopedTagPrefixes: string[] = [];
   for (const lake of lakes) {
-    const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-    if (!prefix) continue;
-    (STATIC_LAKE_IDS.has(lake.id) ? openTagPrefixes : scopedTagPrefixes).push(prefix);
+    const normalized = normalizedLakePrefix(lake);
+    if (!normalized) continue;
+    (normalized.isOpen ? openTagPrefixes : scopedTagPrefixes).push(normalized.prefix);
   }
   return { openTagPrefixes, scopedTagPrefixes };
 }
@@ -155,7 +132,7 @@ export async function queryDataLakeArticles(
   req: EntitlementRequest,
   lakes: DataLakeConfig[],
   query: DataLakeArticlesQuery
-): Promise<{ data: unknown[]; total: number; hasMore: boolean }> {
+): Promise<{ data: unknown[]; total: number; hasMore: boolean; grantedLakeIds?: string[] }> {
   if (lakes.length === 0) return { data: [], total: 0, hasMore: false };
 
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
@@ -166,9 +143,14 @@ export async function queryDataLakeArticles(
   // lakes safely - membership IS the meta-tag) OR a static-registry (open) prefix.
   // A dynamic lake's user-controlled prefix is deliberately NOT a grant here - that
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
-  if (query.id) {
-    const file = await fabFileRepository.findById(query.id);
-    if (!file || file.deletedAt || !isFileInAccessibleLake(lakes, file)) {
+  // Narrowed like `search`/`tags` below: an array reaching findById casts to a Mongoose CastError
+  // and 500s the deep-link read. /api/data-lakes/articles has no `[id]` route segment, so nothing
+  // else overwrites this with a single value.
+  const articleId = firstQueryValue(query.id);
+  if (articleId) {
+    const file = await fabFileRepository.findById(articleId);
+    const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
+    if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };
     }
     const { content, chunks, vector, ...metadata } = file as unknown as Record<string, unknown>;
@@ -179,12 +161,15 @@ export async function queryDataLakeArticles(
       delete metadata.fileUrl;
       delete metadata.fileUrlExpireAt;
     }
-    return { data: [metadata], total: 1, hasMore: false };
+    // Surfaced so the caller's own access-audit attribution can reuse this SAME grantingLakes
+    // result (this is the sound, single-authorized-file case) instead of recomputing it - see
+    // apps/client/pages/api/data-lakes/articles.ts.
+    return { data: [metadata], total: 1, hasMore: false, grantedLakeIds: grantedLakeIds.map(l => l.id) };
   }
 
   const rawTags = query.tags;
   const tags: string[] = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
-  const search = query.search ?? '';
+  const search = firstQueryValue(query.search) ?? '';
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(2000, Math.max(1, Number(query.limit) || 50));
   const sortBy = query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
@@ -273,16 +258,47 @@ export async function queryDataLakeTagCounts(
   // Per-lake sizes come from the membership predicate, not from `<prefix>:` tag matches: a lake
   // whose files carry only the meta-tag (what the upload wizard produces) counts 0 under the
   // prefix rule, and a file carrying several taxonomy tags counts several times. The lake docs
-  // are fetched because the predicate's prefix arm has to be anchored to the lake's CREATOR -
-  // the config the browse surfaces receive deliberately carries no owner id. A static registry
-  // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
-  // safe direction (see buildDataLakeMembershipFilter).
-  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
-  const membershipScopes = lakes.map((lake, i) => ({
-    datalakeTag: lake.datalakeTag,
-    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
-    creatorUserId: lakeDocs[i]?.createdByUserId,
-  }));
+  // are fetched because an OWNED lake's prefix arm has to be anchored to the lake's CREATOR - the
+  // config the browse surfaces receive deliberately carries no owner id.
+  //
+  // A lake in the hardcoded registry takes the `registry` scope: meta-tag OR its (compile-time)
+  // prefix, no ownership arm. It previously fell through to meta-tag-only, which UNDER-COUNTED it
+  // against its own browse - the browse has always matched the open prefix arm. That is the drift
+  // the discriminated scope exists to stop; these counts and GET /api/data-lakes/:id/articles now
+  // resolve the same membership for both lake kinds.
+  //
+  // ONE batched read, never one per lake: an admin's lake set is every lake of every tenant, and
+  // the per-lake fan-out this replaced issued that many concurrent findOnes against a pool of two.
+  const lakeDocs = await dataLakeRepository.findByDatalakeTags(dataLakeTags);
+  const lakeDocsByTag = new Map(lakeDocs.map(doc => [doc.datalakeTag, doc]));
+  const membershipScopes: DataLakeMembershipScope[] = lakes.map(lake => {
+    const doc = lakeDocsByTag.get(lake.datalakeTag);
+    if (doc) {
+      // `?? lake.fileTagPrefix`: a doc whose own prefix is unset must not silently lose the prefix
+      // arm it had before this scope existed. Restores the pre-union fallback.
+      return {
+        kind: 'owned',
+        datalakeTag: lake.datalakeTag,
+        fileTagPrefix: doc.fileTagPrefix ?? lake.fileTagPrefix,
+        creatorUserId: doc.createdByUserId,
+      };
+    }
+    // POSITIVE evidence of registry-ness, never the absence of a document. The registry arm drops
+    // the ownership conjunct, so misclassifying a dynamic lake into it would turn that lake's
+    // USER-CHOSEN prefix into a cross-tenant read arm. Before the union, the same doc-less branch
+    // produced `creatorUserId: undefined` and the filter fail-closed it to meta-tag-only, so a
+    // misclassification here was inert - that backstop is gone, and this is what replaces it.
+    // `STATIC_LAKE_IDS` is the same classifier `splitTagPrefixes` already uses above, via
+    // openLakeTagPrefix; classifying one response two different ways is what invited this.
+    if (STATIC_LAKE_IDS.has(lake.id)) {
+      return dataLakeService.registryMembershipScope(lake);
+    }
+    // Doc-less and not in the registry: should be unreachable (every dynamic entry is derived
+    // from a document), so fail closed to meta-tag-only - exactly what this branch did before the
+    // union. Skipping the lake instead would drop its key from lakeFileCounts, and the UI renders
+    // an absent count identically to zero, hiding the anomaly this function exists to surface.
+    return { kind: 'owned', datalakeTag: lake.datalakeTag };
+  });
 
   const [tagCounts, uniqueArticleCounts, lakeFileCounts, lakeArmCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),

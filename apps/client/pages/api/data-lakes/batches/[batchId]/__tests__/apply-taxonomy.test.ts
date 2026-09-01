@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   applyTaxonomySuggestions: vi.fn(),
+  toAccessContext: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as upload-complete.test.ts).
@@ -19,11 +20,23 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeBatchRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { applyTaxonomySuggestions: h.applyTaxonomySuggestions },
 }));
+// Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
+// stub it to the caller identity, same shape the route previously built inline.
+vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../apply-taxonomy';
 
@@ -41,6 +54,9 @@ describe('POST /api/data-lakes/batches/[batchId]/apply-taxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.applyTaxonomySuggestions.mockResolvedValue({ success: true, filesUpdated: 3 });
+    h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
+      Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
+    );
   });
 
   it('filters out deleted tags before delegating to the service', async () => {

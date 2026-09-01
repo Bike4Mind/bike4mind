@@ -1,4 +1,5 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
+import { SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -40,7 +41,7 @@ const QuestPlansQuerySchema = z.object({
 const SubQuestSchema = z.object({
   id: z.string(),
   title: z.string().max(500),
-  status: z.enum(['not_started', 'in_progress', 'completed', 'skipped', 'deleted']).prefault('not_started'),
+  status: z.enum(SUBQUEST_STATUS_VALUES).prefault('not_started'),
   questId: z.string().optional(),
   startedAt: z.number().optional(),
 });

@@ -32,9 +32,13 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockRevokeBySid = vi.fn();
+const mockFindBySid = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
-  authSessionRepository: { revokeBySid: (...args: any[]) => mockRevokeBySid(...args) },
+  authSessionRepository: {
+    revokeBySid: (...args: any[]) => mockRevokeBySid(...args),
+    findBySid: (...args: any[]) => mockFindBySid(...args),
+  },
 }));
 
 import handler from '../returnToAdmin';
@@ -51,12 +55,16 @@ describe('POST /api/auth/returnToAdmin', () => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
     mockRotateSession.mockResolvedValue({
+      status: 'rotated',
       user: { id: 'admin-1' },
+      userId: 'admin-1',
       accessToken: 'admin-access',
       refreshToken: 'admin-refresh-rotated',
       sid: 'admin-sid',
       impersonatedBy: null,
     });
+    // The impersonation session this admin created.
+    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', impersonatedBy: 'admin-1' });
   });
 
   it('restores the admin session: rotates the parked token into the primary cookie and clears the return cookie', async () => {
@@ -89,6 +97,41 @@ describe('POST /api/auth/returnToAdmin', () => {
 
     await handler(req as any, res as any);
 
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('writes NO cookies when a concurrent rotation already advanced the parked admin session', async () => {
+    // Both writes are gated together. Clearing the return slot here would drop the admin's only
+    // durable credential while the primary slot still holds the impersonated token - a 30-minute
+    // access token and then a forced re-login. Worse, the impersonation revoke is best-effort, so
+    // if it failed the primary slot holds a LIVE impersonated token while the response says
+    // impersonating: false, and the next refresh silently reinstates that identity.
+    mockRotateSession.mockResolvedValue({
+      status: 'coalesced',
+      user: { id: 'admin-1' },
+      userId: 'admin-1',
+      accessToken: 'admin-access',
+      sid: 'admin-sid',
+      impersonatedBy: null,
+    });
+    const { req, res } = post('b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret');
+
+    await handler(req as any, res as any);
+
+    expect(res.getHeader('Set-Cookie')).toBeUndefined();
+    // The admin still gets a working access token, and the parked cookie survives for a retry.
+    expect(res._getJSONData()).toMatchObject({ accessToken: 'admin-access', impersonating: false });
+  });
+
+  it('refuses to revoke a session this admin did not create by impersonating', async () => {
+    // The sid comes straight out of a caller-supplied cookie, so without an ownership check any
+    // holder of a valid parked return cookie could revoke an arbitrary session by naming its sid.
+    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', impersonatedBy: 'a-different-admin' });
+    const { req, res } = post('b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret');
+
+    await handler(req as any, res as any);
+
+    expect(mockRevokeBySid).not.toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(200);
   });
 
