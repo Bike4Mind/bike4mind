@@ -465,6 +465,48 @@ describe('setDataLakeFileTags (#2255) against real Mongo', () => {
     expect(names).not.toContain('lk:uncategorized');
   });
 
+  it('the headline persona: a NON-ADMIN curator writes onto a member owned by a stranger', async () => {
+    // The AC test above proves a non-admin curator on a CREATOR-owned member; the test above that
+    // proves the stranger-owned split, but as a platform admin. This is the intersection - the
+    // actual frontier this door opens - and it is the combination neither of them covers.
+    const lake = await makeLake();
+    const stranger = await User.create({ username: 'stranger-curator', name: 'Stranger' });
+    const file = await FabFile.create({
+      userId: stranger.id,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      status: 'complete',
+      tags: [
+        { name: 'datalake:lake', strength: 1 },
+        { name: 'lk:uncategorized', strength: 1 },
+      ],
+    });
+    await dataLakeAccessGrantRepository.upsertGrant({
+      dataLakeId: lake.id as string,
+      principalType: 'user',
+      principalId: curatorId,
+      role: 'curator',
+      grantedByUserId: ownerId,
+    });
+    const curator = { userId: curatorId, isAdmin: false };
+
+    const result = await dataLakeService.setDataLakeFileTags(
+      curator,
+      lake.id as string,
+      file.id as string,
+      ['lk:invoices'],
+      { db: tagsDb }
+    );
+
+    expect(result.success).toBe(true);
+    const names = ((await FabFile.findById(file.id))?.tags ?? []).map(t => t.name);
+    expect(names).toContain('lk:invoices');
+    // The stranger's own file keeps its membership; only the server placeholder was swept.
+    expect(names).toContain('datalake:lake');
+    expect(names).not.toContain('lk:uncategorized');
+  });
+
   it('refuses to empty a prefix-only member, leaving its tags unchanged', async () => {
     const lake = await makeLake();
     const file = await makeFile(['lk:invoices']);

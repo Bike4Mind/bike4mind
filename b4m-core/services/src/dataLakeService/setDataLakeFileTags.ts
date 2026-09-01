@@ -40,9 +40,11 @@ interface SetDataLakeFileTagsAdapters extends LakeConfigAuditAdapters {
     >;
     // REQUIRED, unlike the removal door which leaves it optional: `loadActiveLakeGrants` degrades
     // to `[]` when unwired (authorizeLakeManage.ts), and the curator/org-grant persona IS this
-    // issue's AC. TS cannot catch an omission here - the route spreads `...lakeConfigAuditDb`, and
-    // spread properties skip excess-property checks. `listActiveByLakes` is needed too, for the
-    // batched grant resolver that gates step 11's third-lake stats recompute.
+    // issue's AC. This requiredness IS enforced: omitting it from the route's `db` literal is a
+    // TS2741 error even though that literal spreads `...lakeConfigAuditDb`, which carries no
+    // `dataLakeAccessGrants` of its own - excess-property checking governs EXTRA properties, while
+    // a missing required one is always an assignability error. `listActiveByLakes` is needed too,
+    // for the batched grant resolver that gates step 11's third-lake stats recompute.
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
     // No `lakeMembershipRemovals`: this door neither reads nor writes a removal record - see the
     // door's own docblock for why a removal record would defeat the point of this fix.
@@ -71,14 +73,26 @@ export interface SetDataLakeFileTagsResult {
     /** Pulled by this call - includes the swept `<prefix>uncategorized` placeholder, if any. */
     removed: string[];
     /**
-     * Under the prefix, not in the caller's desired set, but outside this lake's removal reach
-     * (a non-creator-owned file's stale name, or an existing name over the length cap) -
-     * DECLINED, not forgotten. The only way a caller learns a declarative PUT under-delivered.
+     * Under the prefix, not in the caller's desired set, and NOT removed - either outside this
+     * lake's removal reach (a non-creator-owned file's stale name, or an existing name over the
+     * length cap) or deliberately left in place (the placeholder step 15 would immediately
+     * re-mint). DECLINED, not forgotten: the only way a caller learns a declarative PUT
+     * under-delivered.
      */
     retained: string[];
-    /** POST-WRITE truth, from the re-read after every write below has landed. */
+    /**
+     * The post-state under this lake's prefix: the step-15 re-read, plus the fallback tagger's own
+     * additions - which are pushed AFTER that re-read, so this is a read plus a deterministic
+     * delta rather than a single post-write read. Still authoritative over the computed intent.
+     */
     current: string[];
   };
+  /**
+   * `pullTagsByFabFileId` `$unset`s a matching `primaryTag` on EVERY pull
+   * (FabFileModel.ts), and nothing here restores it - not even when step 15 re-mints the tag it
+   * named. Reported so a caller that cares about the file's primary label learns it went.
+   */
+  primaryTagCleared: boolean;
 }
 
 /**
@@ -148,6 +162,24 @@ const validateRequestedTags = (requestedTags: readonly string[], prefix: string)
  * `prefixArmTagNames` would let a manager strip a stranger's own tags off their file, the exact
  * hazard `removeFileFromDataLake.ts` guards against. `retained` in the response is what reports a
  * name this door declined to touch.
+ *
+ * The one exception, stated so nobody reads that property as absolute: `sweptPlaceholder` matches
+ * by NAME, not by provenance, so a stranger who happened to author a tag called exactly
+ * `<prefix>uncategorized` can have that single name swept by a manager's write. It is the name
+ * the server reserves for its own placeholder, so the collision is by construction - but "a
+ * manager can never remove a stranger's own tag" holds for every name except this one.
+ *
+ * A write can also make the file JOIN a co-prefixed THIRD lake by prefix arm (step 11), and step
+ * 5's overlap refusal cannot see every such lake: `findCollidingPrefixLakes` scopes its candidates
+ * to THIS lake's own `createdByUserId`/`organizationId` (`tagPrefixCollision.ts`), so a lake owned
+ * by a different user outside this lake's org is invisible to it, while `findPrefixArmChanges` -
+ * anchored on the FILE's owner - finds it. Such a join is graded by `assertLakeAdmission` alone,
+ * which is a chunk-policy gate and not authorization (`prefixArmMembership.ts` says so outright:
+ * "The MEMBERSHIP itself needs no gate"). The outcome is bounded - candidates are restricted to
+ * lakes the FILE'S OWN OWNER created, so the file can only ever join its owner's lake - and lakes
+ * co-prefixed across an org boundary are not a configuration seen in practice. If they become
+ * one, this is the line to revisit: refuse a join into a lake outside this lake's own collision
+ * scope rather than grade it on passage size.
  *
  * No new audit action (`LAKE_CONFIG_CHANGE_ACTIONS` has no membership action, and neither sibling
  * door writes a `LakeConfigChangeEvent`) - the step-17 log line is the only trail. It is
@@ -266,10 +298,11 @@ export const setDataLakeFileTags = async (
   // (below, feeding step 11) and `removed`/`retained` (the response) describe the REAL post-state
   // instead of a step-10 diff plus an invisible extra pull. See the module docblock's remove-half
   // paragraph and `fallbackLakeTags.ts`'s mint-blind stamp for why the door needs this at all.
+  // `desired.length > 0` rather than `desired.some(name => name !== placeholder)`: the third
+  // conjunct already excludes the placeholder from `desired`, so the two are equivalent - and this
+  // form makes the empty-body case (no sweep) readable without solving the conjunction.
   const sweptPlaceholder: string[] =
-    fileTagNames.includes(placeholder) && desired.some(name => name !== placeholder) && !desiredSet.has(placeholder)
-      ? [placeholder]
-      : [];
+    fileTagNames.includes(placeholder) && desired.length > 0 && !desiredSet.has(placeholder) ? [placeholder] : [];
 
   const toAdd = desired.filter(name => !currentUnderPrefixSet.has(name));
   // UNION, not concatenation: the placeholder can already qualify via `removable` (a creator-owned
@@ -279,6 +312,15 @@ export const setDataLakeFileTags = async (
     ...currentUnderPrefix.filter(name => !desiredSet.has(name) && removable.has(name)),
     ...sweptPlaceholder,
   ]);
+  // A `PUT {tags: []}` on a meta-tag member that already carries the placeholder would pull it
+  // (a creator-owned file's `removable` includes it) only for step 15 to re-mint the identical
+  // name - a net-zero write that still `$unset`s a matching `primaryTag`, which nothing restores.
+  // The `datalakeTag` conjunct is load-bearing, not belt-and-braces: it is what keeps step 12's
+  // prefix-only refusal intact. Retaining the placeholder for a PREFIX-ONLY member would satisfy
+  // the post-state check below and silently turn that documented refusal into a success.
+  if (desired.length === 0 && fileTagNames.includes(lake.datalakeTag) && toRemoveSet.has(placeholder)) {
+    toRemoveSet.delete(placeholder);
+  }
   const toRemove = [...toRemoveSet];
   // DECLINED, not forgotten: under the prefix, not in `desired`, but outside this lake's removal
   // reach on this file. Includes any over-cap existing name, since such a name can never be in
@@ -298,6 +340,20 @@ export const setDataLakeFileTags = async (
   // non-empty resulting signal by step 12's refusal below), not by construction -
   // `findPrefixArmChanges` takes no `excludeLake` the way the sibling `resolveOtherLakeClaims`
   // does.
+  // INVARIANT: `leaves` is always empty here, which is the only reason this door does not gate it
+  // the way `PrefixArmChanges.leaves` requires ("callers gate each one with `canManageLake` +
+  // `assertLakeWritable`", prefixArmMembership.ts) and the way `toggleTags.ts` does. A leave needs
+  // a removed name that satisfies some other lake B's prefix arm, and B is restricted to lakes the
+  // FILE's owner created. Two branches, both closed:
+  //   - creator-owned file: B shares this lake's `createdByUserId`, so step 5's
+  //     `findCollidingPrefixLakes` sees B and `decideStampPrefix` already refused the write.
+  //   - stranger-owned file: `removable` is empty, so the only removable name is the server
+  //     placeholder `<prefix>uncategorized`. B's prefix would have to sit strictly between this
+  //     lake's prefix and that name - impossible, because `normalizeTagPrefix` rejects any prefix
+  //     not ending in ':' and "uncategorized" contains none.
+  // The second branch rests on a colon. ANY widening of `removable` (see the module docblock's
+  // warning, which is about a DIFFERENT hazard) reopens an ungated eviction that writes no
+  // `LakeMembershipRemoval` - gate `leaves` before doing it.
   const { leaves, joins } = await findPrefixArmChanges(
     { fileOwnerUserId: file.userId, currentTagNames: fileTagNames, resultingTagNames },
     { db }
@@ -427,5 +483,6 @@ export const setDataLakeFileTags = async (
       retained,
       current,
     },
+    primaryTagCleared,
   };
 };

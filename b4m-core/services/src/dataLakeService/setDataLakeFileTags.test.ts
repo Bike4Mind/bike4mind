@@ -249,6 +249,53 @@ describe('setDataLakeFileTags', () => {
     expect(names).toContain('lk:uncategorized');
   });
 
+  it('does not pull a placeholder step 15 would immediately re-mint, so primaryTag survives', async () => {
+    const { db, logger, fabFiles } = makeAdapters({
+      file: {
+        id: 'f1',
+        userId: 'owner',
+        tags: [
+          { name: 'datalake:lake1', strength: 1 },
+          { name: 'lk:uncategorized', strength: 1 },
+        ],
+        primaryTag: 'lk:uncategorized',
+      },
+    });
+
+    const result = await setDataLakeFileTags(admin, 'lake1', 'f1', [], { db, logger });
+
+    // Net-zero on the tag set either way; the point is that the round trip through the pull would
+    // have $unset the primaryTag for nothing.
+    expect(fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(fabFiles._state.primaryTag).toBe('lk:uncategorized');
+    expect(result.primaryTagCleared).toBe(false);
+    expect(result.tags.removed).toEqual([]);
+    expect(result.tags.retained).toEqual(['lk:uncategorized']);
+    expect(fabFiles._state.tags.map(t => t.name)).toEqual(['datalake:lake1', 'lk:uncategorized']);
+  });
+
+  it('keeps the placeholder when the caller explicitly asks for it alongside another name', async () => {
+    const { db, logger, fabFiles } = makeAdapters({
+      file: {
+        id: 'f1',
+        userId: 'owner',
+        tags: [
+          { name: 'datalake:lake1', strength: 1 },
+          { name: 'lk:uncategorized', strength: 1 },
+        ],
+      },
+    });
+
+    // Pins sweptPlaceholder's `!desiredSet.has(placeholder)` conjunct: without it the sweep fires
+    // on the other desired name and silently drops a placeholder the caller asked to keep.
+    const result = await setDataLakeFileTags(admin, 'lake1', 'f1', ['lk:uncategorized', 'lk:fresh'], { db, logger });
+
+    expect(result.tags.removed).toEqual([]);
+    expect(fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(fabFiles._state.tags.map(t => t.name)).toContain('lk:uncategorized');
+    expect(result.tags.current.sort()).toEqual(['lk:fresh', 'lk:uncategorized']);
+  });
+
   describe('body validation (section 4) - each refusal writes nothing', () => {
     const base = { file: { id: 'f1', userId: 'owner', tags: [{ name: 'datalake:lake1', strength: 1 }] } };
 
@@ -441,6 +488,25 @@ describe('setDataLakeFileTags', () => {
     );
   });
 
+  it('reports primaryTagCleared in the RESULT, not only in the log line', async () => {
+    const { db, logger, fabFiles } = makeAdapters({
+      file: {
+        id: 'f1',
+        userId: 'owner',
+        tags: [
+          { name: 'datalake:lake1', strength: 1 },
+          { name: 'lk:stale', strength: 1 },
+        ],
+        primaryTag: 'lk:stale',
+      },
+    });
+
+    const result = await setDataLakeFileTags(admin, 'lake1', 'f1', ['lk:fresh'], { db, logger });
+
+    expect(result.primaryTagCleared).toBe(true);
+    expect(fabFiles._state.primaryTag).toBeUndefined();
+  });
+
   it("recomputes this lake's stats", async () => {
     const { db, logger, dataLakes } = makeAdapters({
       file: { id: 'f1', userId: 'owner', tags: [{ name: 'datalake:lake1', strength: 1 }] },
@@ -484,6 +550,37 @@ describe('setDataLakeFileTags', () => {
       expect(result.success).toBe(true);
       expect(dataLakes.setStats).toHaveBeenCalledWith('lakeB', expect.anything());
       expect(dataLakes.activateIfDraft).not.toHaveBeenCalledWith('lakeB');
+    });
+
+    // Positive control on step 11's admission block. Without a lake DECLARING a passage policy,
+    // `assertLakeAdmission` short-circuits to `admitted` before any read and the whole
+    // `if (joins.length > 0)` block can be deleted with this suite still green. The gate logs its
+    // clean pass for exactly this reason (see lakeAdmissionGate.ts).
+    const declaringLakeB = { ...lakeB, requiredPassageTokenTarget: 512 };
+
+    it('grades the joined lake against the admission contract, and admits a matching member', async () => {
+      const { db, logger } = makeAdapters({
+        file: { ...fileFixture, chunkedPassageTokenTarget: 512 },
+        lakes: [lake, declaringLakeB],
+      });
+
+      await setDataLakeFileTags(admin, 'lake1', 'f1', ['lk:fresh:doc'], { db, logger });
+
+      expect(logger.log).toHaveBeenCalledWith('[admission] 1 member(s) satisfy 1 lake chunk requirement(s)');
+    });
+
+    it('grades a NON-matching member as a violation (report-only, since nothing enforces here)', async () => {
+      const { db, logger, fabFiles } = makeAdapters({
+        file: { ...fileFixture, chunkedPassageTokenTarget: 128 },
+        lakes: [lake, declaringLakeB],
+      });
+
+      await setDataLakeFileTags(admin, 'lake1', 'f1', ['lk:fresh:doc'], { db, logger });
+
+      // Proves the gate COMPARES rather than merely running: same call, different member, opposite
+      // verdict. `EnforceLakeAdmission` is unset in this fixture, so the write is allowed through.
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('violate the retrievability contract'));
+      expect(fabFiles._state.tags.map(t => t.name)).toContain('lk:fresh:doc');
     });
 
     it('activates lake B too when the actor DOES manage it (a platform admin)', async () => {
