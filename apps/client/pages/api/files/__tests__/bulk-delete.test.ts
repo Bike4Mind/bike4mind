@@ -122,6 +122,7 @@ describe('bulk-delete - data-lake stats', () => {
     await run([...files.keys()], res);
 
     expect(h.computeDataLakeStats).toHaveBeenCalledWith({
+      kind: 'owned',
       datalakeTag: LAKE.datalakeTag,
       fileTagPrefix: LAKE.fileTagPrefix,
       creatorUserId: LAKE.createdByUserId,

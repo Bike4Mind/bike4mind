@@ -10,6 +10,7 @@ const LAKE = {
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   lakeMembershipScope: vi.fn(),
+  registryMembershipScope: vi.fn(),
   isFallbackLake: vi.fn(),
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
@@ -31,6 +32,7 @@ vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     lakeMembershipScope: h.lakeMembershipScope,
+    registryMembershipScope: h.registryMembershipScope,
     isFallbackLake: h.isFallbackLake,
     // Real implementation (already unit-tested on its own) so this suite asserts on the actual
     // lakeAccessEventRepository.record call args rather than a reimplementation.
@@ -130,19 +132,24 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     expect(serverOptions.userGroups).toEqual(['viewer-group']);
   });
 
-  it('browses a built-in registry lake by its OPEN prefix arm, not the ownership predicate', async () => {
-    // A fallback lake is owner-less and no write path can stamp its meta-tag, so its files carry
-    // only prefixed content tags. Scoping it by creator ownership would return nothing at all.
+  it('browses a built-in registry lake through the REGISTRY membership scope', async () => {
+    // A registry lake is owner-less, so scoping it by creator ownership drops its prefix arm and
+    // under-returns. It used to get a hand-rolled dataLakeTags/dataLakeTagPrefixes pair here; both
+    // this browse and the count surfaces now resolve the SAME scope, which is what stops the two
+    // from disagreeing about how many files the lake holds.
+    const registryScope = { kind: 'registry', datalakeTag: 'datalake:org1:acme-docs', fileTagPrefix: 'acme:' };
     h.isFallbackLake.mockReturnValue(true);
+    h.registryMembershipScope.mockReturnValue(registryScope);
     h.assertLakeAccess.mockResolvedValue({ ...LAKE, createdByUserId: '' });
     const { res } = makeRes();
 
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
     const [, , , serverOptions] = h.search.mock.calls[0];
-    expect(serverOptions.dataLakeTagPrefixes).toEqual(['acme:']);
-    expect(serverOptions.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
-    expect(serverOptions?.lakeMembership).toBeUndefined();
+    expect(serverOptions.lakeMembership).toEqual(registryScope);
+    // The hand-rolled pair is gone - leaving it would re-open the second, divergent predicate.
+    expect(serverOptions.dataLakeTagPrefixes).toBeUndefined();
+    expect(serverOptions.dataLakeTags).toBeUndefined();
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
   });
 
