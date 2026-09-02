@@ -10,6 +10,7 @@ import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
+import { describePipelineStall } from '@bike4mind/common';
 
 function cleanFileName(fileName: string): string {
   return fileName.replace(/\.[^/.]+$/, '').replace(/^\[.*?\]\s*/, '');
@@ -64,6 +65,7 @@ export default function DataLakeArticlePanel({
   const { data: content, isLoading } = useGetFabFileContent(readableFile);
   const reprocess = useReprocessFabFile(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const stallNotice = file ? describePipelineStall(file) : null;
 
   if (!file) {
     return (
@@ -149,10 +151,16 @@ export default function DataLakeArticlePanel({
             </>
           )}
         </Box>
-        {/* Surfaced from the chunk-pipeline hardening: files that extracted no text are flagged. */}
-        {file.notes && (
+        {/* Pipeline state (no extractable text, a halted rebuild) is derived from its own fields;
+            `notes` is the owner's own text and is shown alongside, not in place of it. */}
+        {stallNotice && (
           <Typography level="body-xs" sx={{ color: 'warning.500', mb: 1 }}>
-            ⚠️ {file.notes}
+            {'\u26a0\ufe0f'} {stallNotice}
+          </Typography>
+        )}
+        {file.notes && (
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
+            {file.notes}
           </Typography>
         )}
         {tags.length > 0 && (

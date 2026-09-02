@@ -78,6 +78,7 @@ export * from './utils/modelHelpers';
 export * from './utils/activity';
 export * from './utils/sseEvents';
 export * from './utils/stopReasons';
+export * from './utils/retrievalRate';
 export * from './utils/requestId';
 export * from './utils/anonymousSessionId';
 export * from './utils/sanitizeTelemetryError';

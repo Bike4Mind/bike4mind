@@ -38,7 +38,7 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder } from './tools/ToolBuilder';
+import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -679,6 +679,48 @@ describe('ChatCompletionProcess', () => {
       });
       expect(plan.deferredKnowledgeIds).toHaveLength(0);
       expect((service as any).logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  // #2243: this is the ONE site (restrictToDataLake: true) where swapping the caller-anchored
+  // scopedTagPrefixes arm for the creator-anchored lakeMemberships arm changes what matches -
+  // see Approach property 1. Pin both directions.
+  describe('countLakeReachableAttachments (#2243 lake-membership arm)', () => {
+    const LAKE = { id: 'lake1', name: 'Acme', slug: 'acme', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:' };
+    const MEMBERSHIP = { datalakeTag: LAKE.datalakeTag, fileTagPrefix: LAKE.fileTagPrefix, creatorUserId: 'creator-1' };
+
+    it('forwards lakeMemberships (derived from access.lakes), not scopedTagPrefixes', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [LAKE.fileTagPrefix],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      const search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+      (service as any).db = { fabfiles: { search } };
+
+      await (service as any).countLakeReachableAttachments(['f1']);
+
+      const options = search.mock.calls[0][5];
+      expect(options.lakeMemberships).toEqual([MEMBERSHIP]);
+      expect(options).not.toHaveProperty('scopedTagPrefixes');
+    });
+
+    it('Up: forwards the membership arm on the path a creator-owned prefix-only attachment takes', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      // Stands in for buildOwnershipConditions's real membership arm - already proven correct
+      // by the query-builder's own unit + real-Mongo tests; this pins that the count call SITE
+      // forwards what it needs to reach that arm.
+      const search = vi.fn().mockResolvedValue({ data: [{ id: 'f1' }], hasMore: false, total: 1 });
+      (service as any).db = { fabfiles: { search } };
+
+      const count = await (service as any).countLakeReachableAttachments(['f1']);
+      expect(count).toBe(1);
     });
   });
 
@@ -2313,11 +2355,20 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
+      };
 
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
 
-      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+      return {
+        enabledToolsArg,
+        getAccessibleFiles,
+        contextAndSystemMessages,
+        retrieval: savedQuest?.promptMeta?.retrieval,
+        offeredTools: savedQuest?.promptMeta?.offeredTools,
+      };
     };
 
     // #2228: a file that never reached the model used to leave no trace at all - the model answered
@@ -2356,7 +2407,10 @@ describe('ChatCompletionProcess', () => {
           knowledgeIds: ['f1'],
           files: [{ id: 'f1', fileName: 'context.md', vectorized: true, chunkCount: 4 }],
           fabPromptMessages: [
-            { role: 'user', content: `Here is the content from the attached file "context.md" for context:\n\n${body}` },
+            {
+              role: 'user',
+              content: `Here is the content from the attached file "context.md" for context:\n\n${body}`,
+            },
           ],
         });
 
@@ -2444,6 +2498,63 @@ describe('ChatCompletionProcess', () => {
       expect(
         contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
       ).toBe(true);
+    });
+
+    /**
+     * The denominator of the #1394 metric, asserted through the real `process()` rather than
+     * against the seed site in isolation: a turn is only in the optional population if the tool
+     * was genuinely offered AND nothing forced retrieval. Reuses this harness because it is the
+     * one place that already drives both halves of that condition.
+     */
+    describe('optional-path retrieval mode is seeded from the same turn that offers the tool', () => {
+      it('marks a turn optional when the knowledge tool is offered and nothing forces retrieval', async () => {
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        expect(enabledToolsArg).toContain('search_knowledge_base');
+        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+      });
+
+      it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
+        // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
+        // ordinary chat turn would dilute the rate toward zero.
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: [],
+          files: [],
+        });
+
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(retrieval).toBeUndefined();
+      });
+
+      it('becomes the numerator when a knowledge-tool call merges its result onto the seed', async () => {
+        // The seed lands first and says attempted:false; the tool's own write arrives later in the
+        // turn. Composing the REAL seeded value here (rather than a hand-written literal) is what
+        // ties this to the shape `process()` actually produces, and driving it through
+        // applyQuestStatusChanges - the site every tool write goes through - is what would catch
+        // that path being changed from a merge to an assignment, which would erase `mode`.
+        const { retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        const quest = { promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(quest, {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as any);
+
+        expect(quest.promptMeta.retrieval).toEqual({
+          attempted: true,
+          outcome: 'ok',
+          mode: 'optional',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags: [],
+        });
+      });
     });
   });
 
@@ -3248,6 +3359,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3262,6 +3374,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3278,6 +3391,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3299,6 +3413,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'no_lakes',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
       });

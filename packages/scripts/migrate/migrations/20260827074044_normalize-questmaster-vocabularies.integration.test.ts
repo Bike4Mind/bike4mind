@@ -149,9 +149,7 @@ describe('normalize-questmaster-vocabularies migration (real DB)', () => {
     // The regression that a self-consuming filter would cause: a doc holding an unknown token
     // still matches the selection filter after the pass, so _id-cursor pagination is what makes
     // this terminate. A hang here is the failure.
-    await insertPlan([
-      { id: 'q1', complexity: 'Medium', subQuests: [{ id: 'sq1', title: 'a', status: 'nope' }] },
-    ]);
+    await insertPlan([{ id: 'q1', complexity: 'Medium', subQuests: [{ id: 'sq1', title: 'a', status: 'nope' }] }]);
 
     await expect(migration.up()).resolves.toBeUndefined();
   });
@@ -179,9 +177,7 @@ describe('normalize-questmaster-vocabularies migration (real DB)', () => {
             title: 'Quest',
             description: 'd',
             complexity: 'Medium',
-            subQuests: [
-              { id: 'sq1', title: 'a', status: 'in-progress', reviewGate: true, reviewStatus: 'pending' },
-            ],
+            subQuests: [{ id: 'sq1', title: 'a', status: 'in-progress', reviewGate: true, reviewStatus: 'pending' }],
           },
         ],
       })

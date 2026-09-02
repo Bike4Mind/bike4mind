@@ -101,4 +101,11 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
     expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*serverTextHash:\s*null[^}]*\}/);
   });
+
+  // Terminal for the chunk rescue sweep (buildFabFileChunkScanFilter), so a stamp left over a byte
+  // rewrite excludes the new content from repair forever.
+  it('the shared patch also clears the no-extractable-text stamp (noExtractableTextAt)', () => {
+    const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
+    expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*noExtractableTextAt:\s*null[^}]*\}/);
+  });
 });

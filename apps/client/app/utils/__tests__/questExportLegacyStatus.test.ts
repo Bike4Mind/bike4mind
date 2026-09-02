@@ -79,7 +79,12 @@ describe('quest export with legacy statuses on disk', () => {
     const md = questPlanToMarkdown(legacyPlan);
     const csv = questPlanToCSV(legacyPlan);
 
-    for (const title of ['Canonical completed row', 'Retired hyphenated row', 'Retired pending row', 'Retired blocked row']) {
+    for (const title of [
+      'Canonical completed row',
+      'Retired hyphenated row',
+      'Retired pending row',
+      'Retired blocked row',
+    ]) {
       expect(md).toContain(title);
       expect(csv).toContain(title);
     }

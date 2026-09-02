@@ -115,7 +115,10 @@ describe('data lake purge -> OpenSearch removal, over the real chunk repository'
     ]);
 
     const { deleteByFabFileIdOrThrow, port } = makePort();
-    await port.removeForDataLake({ scope: SCOPE, fabFileIds: ['chunked-only', 'on-model-a', 'on-model-b', 'never-seen'] });
+    await port.removeForDataLake({
+      scope: SCOPE,
+      fabFileIds: ['chunked-only', 'on-model-a', 'on-model-b', 'never-seen'],
+    });
 
     expect(removals(deleteByFabFileIdOrThrow)).toEqual([`on-model-a ${MODEL}`, `on-model-b ${OTHER_MODEL}`].sort());
   });

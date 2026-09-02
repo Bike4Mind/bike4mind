@@ -10,6 +10,7 @@ const LAKE = {
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   lakeMembershipScope: vi.fn(),
+  registryMembershipScope: vi.fn(),
   isFallbackLake: vi.fn(),
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
@@ -31,6 +32,7 @@ vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     lakeMembershipScope: h.lakeMembershipScope,
+    registryMembershipScope: h.registryMembershipScope,
     isFallbackLake: h.isFallbackLake,
     // Real implementation (already unit-tested on its own) so this suite asserts on the actual
     // lakeAccessEventRepository.record call args rather than a reimplementation.
@@ -79,6 +81,7 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.isFallbackLake.mockReturnValue(false);
   h.lakeMembershipScope.mockReturnValue({
+    kind: 'owned',
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
     creatorUserId: LAKE.createdByUserId,
@@ -96,12 +99,15 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     // The creator, NOT the viewer: a viewer's own file that merely carries a colliding tag
     // prefix is not a member of someone else's lake, and a per-viewer answer could never match
     // the lake's persisted fileCount.
-    expect(serverOptions.lakeMembership).toEqual({
-      datalakeTag: 'datalake:org1:acme-docs',
-      fileTagPrefix: 'acme:',
-      creatorUserId: 'creator-1',
-    });
-    expect(serverOptions.lakeMembership.creatorUserId).not.toBe('viewer-9');
+    expect(serverOptions.lakeMemberships).toEqual([
+      {
+        kind: 'owned',
+        datalakeTag: 'datalake:org1:acme-docs',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    ]);
+    expect(serverOptions.lakeMemberships[0].creatorUserId).not.toBe('viewer-9');
   });
 
   it('passes the scope OUTSIDE the parsed params so a caller cannot forge one', async () => {
@@ -111,7 +117,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const [, params, , serverOptions] = h.search.mock.calls[0];
     // search() zod-parses params; a forgeable creatorUserId there would read anyone's files.
     // Every other scope key is out of the parsed params for the same reason.
-    expect(params.options).not.toHaveProperty('lakeMembership');
+    expect(params.options).not.toHaveProperty('lakeMemberships');
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
     expect(params.options).not.toHaveProperty('dataLakeTagPrefixes');
@@ -130,19 +136,26 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     expect(serverOptions.userGroups).toEqual(['viewer-group']);
   });
 
-  it('browses a built-in registry lake by its OPEN prefix arm, not the ownership predicate', async () => {
-    // A fallback lake is owner-less and no write path can stamp its meta-tag, so its files carry
-    // only prefixed content tags. Scoping it by creator ownership would return nothing at all.
+  it('browses a built-in registry lake through the REGISTRY membership scope', async () => {
+    // A registry lake is owner-less, so scoping it by creator ownership drops its prefix arm and
+    // under-returns. It used to get a hand-rolled dataLakeTags/dataLakeTagPrefixes pair here; both
+    // this browse and the count surfaces now resolve the SAME scope, which is what stops the two
+    // from disagreeing about how many files the lake holds.
+    const registryScope = { kind: 'registry', datalakeTag: 'datalake:org1:acme-docs', fileTagPrefix: 'acme:' };
     h.isFallbackLake.mockReturnValue(true);
+    h.registryMembershipScope.mockReturnValue(registryScope);
     h.assertLakeAccess.mockResolvedValue({ ...LAKE, createdByUserId: '' });
     const { res } = makeRes();
 
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
     const [, , , serverOptions] = h.search.mock.calls[0];
-    expect(serverOptions.dataLakeTagPrefixes).toEqual(['acme:']);
-    expect(serverOptions.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
-    expect(serverOptions?.lakeMembership).toBeUndefined();
+    // #2216 routes the registry browse through a membership scope; this branch carries the
+    // singular -> plural rename, so it arrives as a one-element `lakeMemberships` array.
+    expect(serverOptions.lakeMemberships).toEqual([registryScope]);
+    // The hand-rolled pair is gone - leaving it would re-open the second, divergent predicate.
+    expect(serverOptions.dataLakeTagPrefixes).toBeUndefined();
+    expect(serverOptions.dataLakeTags).toBeUndefined();
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
   });
 

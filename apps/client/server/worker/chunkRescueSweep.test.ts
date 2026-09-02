@@ -6,7 +6,10 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   // Spied (not a bare stub) so a test can assert the sweep passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
-  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
+  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date, _opts?: unknown) => ({
+    chunkCount: 0,
+    createdAt: { $lt: cutoff },
+  })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -15,11 +18,12 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('./chunkScan', () => ({
-  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
-  CHUNK_SCAN_BATCH: 50,
-  CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
-  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
+// Only the filter is stubbed; buildChunkScanQueuePayload stays real so the payload shape this
+// sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
+// module also keeps the cutoff constants real, which the cutoff assertions below depend on.
+vi.mock('./chunkScan', async importActual => ({
+  ...(await importActual<typeof import('./chunkScan')>()),
+  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
 }));
 
 import { runChunkRescueSweep } from './chunkRescueSweep';
@@ -31,14 +35,21 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const runSweep = () => runChunkRescueSweep(logger as never);
 
 const limitSpy = vi.fn();
+const selectSpy = vi.fn();
 const withCandidates = (candidates: Candidate[]) => {
   h.fabFileFind.mockReturnValue({
-    select: () => ({
-      limit: (n: number) => {
-        limitSpy(n);
-        return { lean: async () => candidates };
-      },
-    }),
+    // The projection is spied, not ignored: the lean() fixtures below carry userId whatever is
+    // projected, so without this a trim back to '_id' would keep every test green and ship
+    // `userId: 'undefined'` to the queue.
+    select: (projection: string) => {
+      selectSpy(projection);
+      return {
+        limit: (n: number) => {
+          limitSpy(n);
+          return { lean: async () => candidates };
+        },
+      };
+    },
   });
 };
 
@@ -64,6 +75,14 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
+  it('projects userId as well as _id - the payload needs it and the fixtures would mask its absence', async () => {
+    withCandidates([{ _id: 'ff1', userId: 'u1' }]);
+
+    await runSweep();
+
+    expect(selectSpy).toHaveBeenCalledWith('_id userId');
+  });
+
   it('selects with both cutoffs and the per-pass cap', async () => {
     await runSweep();
 
@@ -77,7 +96,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     expect(limitSpy).toHaveBeenCalledWith(50);
   });
 
-  it('stamps convergence provenance only on files that belong to a batch', async () => {
+  it('stamps convergence provenance on every message, batch or not', async () => {
     withCandidates([
       { _id: 'ff1', userId: 'u1', batchId: 'b1' },
       { _id: 'ff2', userId: 'u2' },
@@ -85,17 +104,19 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
 
     await expect(runSweep()).resolves.toEqual({ enqueued: 2, failed: 0 });
 
-    // Batch files are convergence work the kill switch may halt; a lone upload rescue is not, and
-    // stamping it would make the switch stop it too.
-    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
-      fabFileId: 'ff1',
-      userId: 'u1',
-      origin: 'convergence',
-    });
-    expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
-      fabFileId: 'ff2',
-      userId: 'u2',
-    });
+    // A scheduled rescue is background work whatever its batchId. Stamping only batch files let an
+    // un-stamped re-enqueue default to `user` in isConvergenceHalted, so a file the chunk handler
+    // had just parked as paused got chunked and embedded on the next tick.
+    for (const [fabFileId, userId] of [
+      ['ff1', 'u1'],
+      ['ff2', 'u2'],
+    ]) {
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
+        fabFileId,
+        userId,
+        origin: 'convergence',
+      });
+    }
   });
 
   it('finishes the sweep when one enqueue fails, and reports the partial result (#2158)', async () => {
@@ -123,6 +144,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     expect(h.sendToQueue).toHaveBeenCalledWith('http://elasticmq/fabFileChunkQueue', {
       fabFileId: 'ff4',
       userId: 'u4',
+      origin: 'convergence',
     });
     // Each failure names its file. The sweep's return value is discarded by the scheduled-task
     // wrapper, so without this line an operator cannot tell WHICH files were not enqueued.
@@ -164,5 +186,47 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+  });
+});
+
+describe('runChunkRescueSweep convergence-pause wiring', () => {
+  // The self-host twin of the rows in dataLakeBatchReconcile.test.ts. Until the sweep was extracted
+  // out of main.ts this had nowhere to live, so this side of the wiring was unpinned: the flag could
+  // be dropped or hardcoded here and every suite stayed green.
+  const withPauseFlag = (pauseFlag: unknown) =>
+    h.getSettingsValue.mockImplementation(async (key: string) => (key === 'enableAutoChunk' ? true : pauseFlag));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withCandidates([]);
+  });
+
+  it.each([
+    ['ON - paused files must not consume the rescue cap', true, true],
+    ['OFF - paused files must be swept back in and rebuilt', false, false],
+  ])('kill switch %s', async (_label, pauseFlag, expected) => {
+    withPauseFlag(pauseFlag);
+
+    await runSweep();
+
+    // Pinned as the third ARGUMENT, not as an outcome: the filter itself is mocked here, so this is
+    // the only place this caller's wiring is observable. Dropping it no longer compiles; hardcoding
+    // it to a constant is what these two rows still catch.
+    expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+    expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: expected });
+  });
+
+  it('treats a missing or non-boolean setting as OFF, never as ON', async () => {
+    // `=== true` rather than coercion, deliberately: wrongly EXCLUDING is the far worse direction -
+    // it strands every paused file with no automatic rebuild at all, since this sweep is their only
+    // one. An unset setting or a legacy string must therefore fall to sweeping.
+    for (const raw of [undefined, null, 'true', 1]) {
+      h.buildScanFilter.mockClear();
+      withPauseFlag(raw);
+
+      await runSweep();
+
+      expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: false });
+    }
   });
 });

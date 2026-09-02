@@ -72,7 +72,7 @@ describe('count_knowledge_base', () => {
     const ctx = makeContext();
     await run(ctx);
     expect(searchCalls(ctx)[0][5]).toMatchObject({
-      lakeMembership: dynamicLake.membership,
+      lakeMemberships: [dynamicLake.membership],
       restrictToDataLake: true,
       includeShared: true,
       userGroups: ['g1'],
@@ -95,7 +95,7 @@ describe('count_knowledge_base', () => {
       dataLakeTagPrefixes: [registryLake.fileTagPrefix],
       restrictToDataLake: true,
     });
-    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('lakeMembership');
+    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('lakeMemberships');
   });
 
   it('totals several libraries and names each', async () => {

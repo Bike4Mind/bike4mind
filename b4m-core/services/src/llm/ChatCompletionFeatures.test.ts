@@ -9,6 +9,7 @@ import {
   LakeMemoryFeature,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -1847,6 +1848,182 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
   });
 });
 
+/**
+ * The forced-retrieval conjunct fix (#2243): `retrievalTags` scopes candidates via an AND'ed
+ * `filters.tags` conjunct, not the ownership `$or` - so on a lake-created session (retrievalTags =
+ * [lake.datalakeTag]) every candidate had to carry that meta-tag, and the creator-anchored
+ * `lakeMemberships` arm could never admit a prefix-only member. The fix pairs
+ * narrowLakeAccessToSession + restrictToDataLake (scope to THIS session's lake only) with dropping
+ * the datalake: meta-tag from `filters.tags` (so the membership arm can do the admitting instead).
+ */
+describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  // Not the caller below ("viewer-1") - the membership arm must anchor to THIS creator.
+  const LAKE_DOC = {
+    id: 'lake-acme',
+    slug: 'acme',
+    name: 'Acme',
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    createdByUserId: 'creator-1',
+  };
+
+  const makeCtx = (opts: {
+    files?: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>;
+    dataLakes?: Array<Record<string, unknown>>;
+  }) => {
+    const files = opts.files ?? [];
+    const chunksByFile: Record<string, unknown[]> = Object.fromEntries(
+      files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.fileName}`, vector: [1, 0] }]])
+    );
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'viewer-1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(opts.dataLakes ?? []) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  it('scopes a lake-created session to that lake only, so a non-creator viewer reaches a creator-owned prefix-only member', async () => {
+    // No `datalake:acme` meta-tag - a prefix-only member, unreachable to a non-creator before #2243.
+    const prefixOnlyFile = { id: 'f1', fileName: 'playbook.pdf', tags: [{ name: 'acme:playbook' }] };
+    const ctx = makeCtx({ files: [prefixOnlyFile], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what is in the playbook'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      // The meta-tag conjunct is dropped entirely - the membership arm scopes instead.
+      { tags: [], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        restrictToDataLake: true,
+        lakeMemberships: [
+          { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+        ],
+      })
+    );
+    expect(messages[0]?.content ?? '').toContain('playbook.pdf');
+  });
+
+  it('drops only the datalake: meta-tag from filters.tags, retaining a non-lake content tag', async () => {
+    const file = { id: 'f1', fileName: 'legal-memo.pdf', tags: [{ name: 'acme:legal' }, { name: 'legal:review' }] };
+    const ctx = makeCtx({ files: [file], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme', 'legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the memo say'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('abstains as no_lakes - not failed - when the session names a lake this caller cannot reach', async () => {
+    // A revoked grant / archived lake / lapsed entitlement on a session that still names that lake.
+    // Nothing is in scope to search, which is an ACCESS state, not an outage: it must never reach
+    // buildOwnershipConditions' restrictToDataLake fail-fast, whose throw would land in the outer
+    // catch and stamp `failed` at error level on every turn of that session, indefinitely.
+    const ctx = makeCtx({ dataLakes: [] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:unreachable']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+    expect(ctx.logger.error).not.toHaveBeenCalled();
+    // Returned before the query: a zero-arm restricted search has nothing to ask.
+    expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+  });
+
+  it('leaves the personal base arms alone for a session whose tags name no lake at all', async () => {
+    // `retrievalTags` is not universally lake identity - a curated surface may scope by a content
+    // tag. narrowLakeAccessToSession deliberately no-ops there ("no lake opinion"), so pairing it
+    // with an unconditional restrictToDataLake would drop the own/shared/group arms and silently
+    // confine grounding to lake content, losing the caller's own files carrying that same tag.
+    const ctx = makeCtx({ files: [], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ restrictToDataLake: false })
+    );
+  });
+
+  it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
+    const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+    // A genuine outage on the query itself - distinct from the no_lakes abstain above, and the one
+    // case that SHOULD record `failed` and log at error level.
+    ctx.db.fabfiles.search = vi.fn().mockRejectedValue(new Error('connection reset'));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    expect(ctx.logger.error).toHaveBeenCalled();
+  });
+});
+
 describe('LakeMemoryFeature personal-corpus skip', () => {
   it('injects nothing when the session corpus is personal files', async () => {
     // Without this the card takes its empty-retrievalTags branch and falls back to the FULL entitled
@@ -1968,7 +2145,14 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
   const retrievalOf = (quest: IChatHistoryItemDocument) =>
     (
       quest.promptMeta as {
-        retrieval?: { attempted: boolean; outcome: string; surfaces: string[]; dataLakeTags: string[] };
+        retrieval?: {
+          attempted: boolean;
+          outcome?: string;
+          mode?: string;
+          forcedSkipReason?: string;
+          surfaces: string[];
+          dataLakeTags: string[];
+        };
       }
     )?.retrieval;
 
@@ -1978,6 +2162,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval).toEqual({
       attempted: true,
       outcome: 'failed',
+      mode: 'forced',
       surfaces: ['forced-retrieval'],
       dataLakeTags: [],
     });
@@ -1997,20 +2182,22 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval).toEqual({
       attempted: true,
       outcome: 'no_lakes',
+      mode: 'forced',
       surfaces: ['forced-retrieval'],
       dataLakeTags: [],
     });
   });
 
-  it('records failed when candidate files carry no usable vector, not a topical zero', async () => {
+  it('records not_indexed when candidate files carry no usable vector, not a topical zero', async () => {
     // Rows exist but every vector is empty, so nothing is ever scored against the query.
     const ctx = makeCtx({
       rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [] })),
     });
     const { retrieval } = await run(ctx);
-    // The regression this guards: an unvectorized corpus reading as "the library has nothing on
-    // this topic". It must outrank a genuine zero in the merge severity order.
-    expect(retrieval?.outcome).toBe('failed');
+    // Two regressions guarded at once: an unvectorized corpus reading as "the library has nothing
+    // on this topic" (so it must outrank 'ok' in the merge severity order), and it collapsing back
+    // into 'failed' (the two have opposite remedies - re-vectorize vs retry).
+    expect(retrieval?.outcome).toBe('not_indexed');
   });
 
   it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
@@ -2042,27 +2229,92 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval?.attempted).toBe(true);
   });
 
-  it('leaves no record on the three pre-attempt skips - never-ran must stay distinguishable', async () => {
+  it('leaves no record when there is no question to retrieve for', async () => {
+    // The one pre-attempt exit that stays silent: an empty message is not a turn that declined to
+    // retrieve, it is a turn with nothing to retrieve about, so it is not part of any denominator.
     const feature = new KnowledgeRetrievalFeature(
       makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
-    const factory = embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1];
-
     const blank = makeQuest();
-    await feature.getContextMessages(blank, factory, '   ');
-    expect(retrievalOf(blank)).toBeUndefined();
-
-    const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
-    await feature.getContextMessages(withFiles, factory, 'summarize the attached figure');
-    expect(retrievalOf(withFiles)).toBeUndefined();
-
-    const personalCtx = { ...makeCtx(), personalCorpusOnly: true };
-    const personalFeature = new KnowledgeRetrievalFeature(
-      personalCtx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    await feature.getContextMessages(
+      blank,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      '   '
     );
-    const personal = makeQuest();
-    await personalFeature.getContextMessages(personal, factory, 'what about my own upload');
-    expect(retrievalOf(personal)).toBeUndefined();
+    expect(retrievalOf(blank)).toBeUndefined();
+  });
+
+  describe('suppression skips (#1394)', () => {
+    // These two exits return before the recorder, so the turn used to look identical to one where
+    // forced retrieval was never configured - while actually being the case the routing question
+    // is about: forced retrieval is ON, a rule suppressed it, and the model is left on the
+    // optional tool path. `attempted` stays false; only the reason is new.
+    it('records the attached-files skip without claiming retrieval ran', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await feature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'attached_files',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('records the personal-corpus skip without claiming retrieval ran', async () => {
+      const personalFeature = new KnowledgeRetrievalFeature({
+        ...makeCtx(),
+        personalCorpusOnly: true,
+      } as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]);
+      const personal = makeQuest();
+      await personalFeature.getContextMessages(
+        personal,
+        embeddingFactory as unknown as Parameters<typeof personalFeature.getContextMessages>[1],
+        'what about my own upload'
+      );
+      expect(retrievalOf(personal)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'personal_corpus',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('does not let the skip record mask a tool retrieval later in the same turn', async () => {
+      // The whole point of the measurement: the model fell back to search_knowledge_base and it
+      // worked. The turn must read as attempted AND still say forced retrieval was suppressed.
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      quest.promptMeta!.retrieval = mergeRetrievalSummary(quest.promptMeta!.retrieval, {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['knowledgeBaseSearch'],
+        dataLakeTags: ['datalake:x'],
+      });
+
+      expect(retrievalOf(quest)).toMatchObject({
+        attempted: true,
+        outcome: 'ok',
+        mode: 'forced',
+        forcedSkipReason: 'attached_files',
+        surfaces: ['knowledgeBaseSearch'],
+      });
+    });
   });
 
   it('merges with another surface in the same turn rather than overwriting it', async () => {

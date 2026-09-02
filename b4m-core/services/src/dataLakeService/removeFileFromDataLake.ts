@@ -70,7 +70,9 @@ interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
  * tag under its lake's prefix (see `fallbackLakeTags`), so for a co-prefixed second lake the
  * stripped tag can be the file's ONLY one under that prefix - it stays a member by meta-tag but
  * drops out of tag-counts and the tag tree entirely. Closing that means re-stamping the survivor
- * after the pull, which is not done here because the trade-off above is deliberate.
+ * after the pull, which is not done here because the trade-off above is deliberate. A manager who
+ * notices can re-stamp it directly through `setDataLakeFileTags`
+ * (`PUT /api/data-lakes/:id/files/:fabFileId/tags`), which this issue's write half exists for.
  *
  * The population this can reach is now narrow: create-time collision checks reject a prefix that
  * overlaps another lake's within the same org or creator (see `tagPrefixCollision`), so two

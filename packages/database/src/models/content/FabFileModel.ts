@@ -1,6 +1,6 @@
 import {
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
-  CONVERGENCE_PAUSED_NOTES,
+  CHUNK_STALL_REASONS,
+  type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   FabFileChunkPolicyConflict,
@@ -532,10 +532,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
-      /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
-      lakeMembership?: DataLakeMembershipScope;
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
@@ -678,6 +677,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.fabFileModel.findOne({ _id: id, userId });
   }
 
+  async softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    // The three-clause filter IS the guard - `userId` and `batchId` are not optional refinements.
+    // `deletedAt: null` keeps this idempotent, so a client retry does not restamp an already-deleted
+    // row with a later date.
+    const res = await this.fabFileModel.updateMany(
+      { _id: { $in: ids }, userId, batchId, deletedAt: null },
+      { $set: { deletedAt: new Date() } }
+    );
+    return res.modifiedCount;
+  }
+
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
@@ -727,7 +738,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]> {
@@ -789,7 +799,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -846,7 +855,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -956,7 +964,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]> {
@@ -1322,10 +1329,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * transition is one-way. Same exclusion as findByContentHashes, for the same reason.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
-   * The prefix arm is bounded by the `{ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 }`
-   * index declared further down this file: `userId` equality narrows the scan to the lake
-   * creator's own files before the `tags.name` range is applied, so a prefix-heavy lake no longer
-   * fetches every other user's matching documents to check ownership.
+   * An OWNED scope's prefix arm is bounded by the `{ userId: 1, 'tags.name': 1, archivedAt: 1,
+   * deletedAt: 1 }` index declared further down this file: `userId` equality narrows the scan to
+   * the lake creator's own files before the `tags.name` range is applied, so a prefix-heavy lake
+   * no longer fetches every other user's matching documents to check ownership.
+   *
+   * A REGISTRY scope emits no `userId` conjunct at all (see DataLakeMembershipScope), so that
+   * sentence does not apply to it. Its prefix arm is still index-bound, just more widely: the
+   * `{ 'tags.name': 1, ... }` index leads on `tags.name`, which bounds an anchored `^prefix`
+   * regex as a range scan rather than a collection scan.
    */
   async computeDataLakeStats(
     scope: DataLakeMembershipScope
@@ -1382,7 +1394,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
@@ -1405,7 +1417,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never enqueued. It grades as in-flight, not as a failure; see evaluateMemberHealth.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkStallReason: 'rechunkPaused' },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
         }),
@@ -1427,10 +1439,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // hidden as still-indexing. Preserve null so "no error" stays distinct.
           error: { $ifNull: ['$error', null] },
           // The SECOND terminal-stall marker. The convergence kill switch abandons a vectorize by
-          // writing CONVERGENCE_PAUSED_NOTE to `notes` and never sets `error`, so omitting this here
-          // would leave the evaluator's arm reading undefined and silently never firing - the same
-          // shape as the contract gap that disabled the vectorizedChunkCount gate.
-          notes: { $ifNull: ['$notes', null] },
+          // stamping `chunkStallReason` and never sets `error`, so omitting this here would leave the
+          // evaluator's arm reading undefined and silently never firing - the same shape as the
+          // contract gap that disabled the vectorizedChunkCount gate.
+          chunkStallReason: { $ifNull: ['$chunkStallReason', null] },
           // The FOURTH stall/in-flight input. A member reset by a wave carries none of the three
           // above, so omitting this would admit it at the $match and then grade it as a settled
           // zero - worse than dropping it, because it would fail P3 on a rebuild that is merely
@@ -1461,7 +1473,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       chunkRebuildRequestedAt: Date | null;
       maxChunkCharLength: number | null;
       chunkedPassageTokenTarget: number | null;
@@ -1485,7 +1497,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never-enqueued rebuild disappear from the plan that would have re-driven it.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkStallReason: 'rechunkPaused' },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
           // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
@@ -1511,7 +1523,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // #1665 backfill has not run.
           vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
           error: { $ifNull: ['$error', null] },
-          notes: { $ifNull: ['$notes', null] },
+          chunkStallReason: { $ifNull: ['$chunkStallReason', null] },
           // See findDataLakeHealthMembers: without it a member admitted by the stamp above would be
           // graded on stale facts instead of being reported as `indexingInFlight`.
           chunkRebuildRequestedAt: { $ifNull: ['$chunkRebuildRequestedAt', null] },
@@ -1682,14 +1694,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    *    (#1939). The producer died between the reset and its sends, or the message was lost; either
    *    way there is no marker to upgrade and nothing scheduled to rebuild it. Shaped like the CHUNK
    *    arm and invisible in exactly the same way, so it belongs behind the same door - it is simply
-   *    identified by an OLD stamp instead of a note. The age bound is what keeps this door off a
+   *    identified by an OLD stamp instead of a stall reason. The age bound is what keeps this door off a
    *    rebuild that is merely in flight; REBUILD_PENDING_STALE_MS derives it from the chunk queue's
    *    visibility timeout, so a message still awaiting its first redelivery is never re-driven.
    *
    * Selected by the marker plus "nothing of it is retrievable", the same condition
    * `partitionByIndexAvailability` withholds on, rather than by chunk count - so this door offers a
    * repair for exactly the population search refuses to serve. `$in` over the shared
-   * CONVERGENCE_PAUSED_NOTES so it cannot drift from `isConvergencePausedNote`.
+   * CHUNK_STALL_REASONS so it cannot drift from `isChunkStalled`.
    */
   async findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
     const docs = await this.fabFileModel
@@ -1701,8 +1713,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           deletedAt: null,
           archivedAt: null,
           $or: [
-            { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } },
-            // `error` empty on this arm, unlike the note arm where it is empty by construction: a
+            { chunkStallReason: { $in: [...CHUNK_STALL_REASONS] } },
+            // `error` empty on this arm, unlike the stall-reason arm where it is empty by construction: a
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
@@ -1763,8 +1775,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 chunkCount: 0,
                 vectorized: false,
                 vectorizedChunkCount: 0,
-                notes: '',
                 error: null,
+                // The two machine-written pipeline markers, and NOT `notes` (#2016). `notes` is the
+                // owner's own text: blanking it here silently deleted whatever they had typed on
+                // every "Rebuild passages" wave and every per-file reprocess. Clearing these two is
+                // what makes reprocess the documented way back in for a file the rescue sweep has
+                // written off (`noExtractableTextAt`) or the kill switch halted (`chunkStallReason`).
+                chunkStallReason: null,
+                noExtractableTextAt: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
@@ -1781,8 +1799,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // file's passages away on paper; this is what says so. Without it the gap between
                 // this reset and the caller's queue send carries no marker at all, and a producer
                 // that dies in that gap - or a consumer whose own marker write is lost - leaves a
-                // chunkless, error-less, note-less file that health, convergence, the retrieval
-                // withhold and the rebuild door all read as an image.
+                // chunkless, error-less, marker-less file that health, convergence, the retrieval
+                // withhold and the rebuild door all read as an image. (`notes` is deliberately NOT
+                // one of the fields this reset touches - it is the owner's own text, #2016.)
                 chunkRebuildRequestedAt: new Date(),
               },
             }
@@ -1980,7 +1999,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
-    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: at } });
+    // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
+    // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
+    // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
+    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
+    // return stays the ids this call selected, which is what the index removal and its re-run want.
+    await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
     return ids;
   }
 
@@ -2247,6 +2271,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     fileUrlExpireAt: { type: Date },
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
+    // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
+    // IFabFile.notes. The enum documents the allowed values but does NOT enforce them at runtime:
+    // mongoose skips validators on update paths unless the caller passes `runValidators: true`, and
+    // no writer here does. TypeScript is what actually stops a typo producing a value
+    // `isChunkStalled` silently reads as "not stalled".
+    chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
+    noExtractableTextAt: { type: Date, default: null },
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from

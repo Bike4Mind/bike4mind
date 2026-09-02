@@ -54,9 +54,19 @@ import {
   buildLakeMemoryContext,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  DATALAKE_TAG_PREFIX,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+} from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  narrowLakeAccessToSession,
+  sessionNamesALake,
+  type ResolvedLakeAccessSet,
+} from '../dataLakeService/narrowLakeAccessToSession';
 import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
   classifyLoadedChunk,
@@ -698,11 +708,24 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     // outer-scoped variable, not read from a local inside the try, because the catch below must
     // report whichever lakes were resolved even if recall itself is what threw.
     let attemptedDataLakeTags: string[] = [];
-    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+    // NonNullable, not RetrievalSummary['outcome']: the latter now includes undefined, so an
+    // explicit `outcome: undefined` would type-check here and merge through verbatim, breaking
+    // the present-iff-`attempted` contract. Same guard recordForcedSkip uses for forcedSkipReason.
+    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        // Both recorders run only under forced retrieval, so they can label the turn themselves.
+        // Redundant with the seed in ChatCompletionProcess, which every path that constructs this
+        // feature also reaches - the redundancy is for ORDERING, not for a second entry point: a
+        // turn that exits between this write and the seed keeps its label.
+        //
+        // CAUTION for a third writer: 'forced' wins the merge irreversibly, so stamping it on an
+        // optional turn silently removes that turn from the #1394 denominator. Self-label only if
+        // the surface cannot run except under forced retrieval; otherwise omit `mode` and let the
+        // seed classify.
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags,
       });
@@ -1628,12 +1651,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * the IDENTICAL entitlement-aware access rule - no drift between two copies. Entitlement
    * keys are resolved once on the process and passed through.
    */
-  private async resolveDataLakeAccess(): Promise<{
-    dataLakeTags: string[];
-    dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
-    lakes: Awaited<ReturnType<typeof getDynamicDataLakeAccess>>['lakes'];
-  }> {
+  // Returns the resolver's own shape (`ResolvedLakeAccessSet`) rather than a hand-narrowed one:
+  // narrowLakeAccessToSession takes the full set, so a narrower local type would have to grow back
+  // to match it. `scopedTagPrefixes` is part of that shape and is carried, not consumed - nothing
+  // in this repo reads it as a query input; it is produced by getDynamicDataLakeAccess, filtered by
+  // the narrowing and forwarded by resolveRetrievalLakeScope, and it stays because the
+  // resolved-access shape is a contract, not because a live caller needs it.
+  private async resolveDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
     return getDynamicDataLakeAccess({ db, user, entitlementKeys });
@@ -1822,6 +1846,29 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return [{ role: 'system' as const, content: forcedRetrievalNoContextPrompt(finding) }];
   }
 
+  /**
+   * Record that forced retrieval was enabled for this turn but a rule suppressed it (#1394).
+   *
+   * `attempted: false` on purpose - nothing ran, so there is no outcome to report and this must
+   * not read as a zero-recall retrieval. What it does say is that the model was left on the
+   * optional tool path DESPITE the session being configured for forced retrieval, which is
+   * otherwise unrecoverable from the stored turn: the skips below return before the recorder, so
+   * these turns used to look exactly like turns that were never forced.
+   */
+  private recordForcedSkip(
+    quest: IChatHistoryItemDocument,
+    forcedSkipReason: NonNullable<RetrievalSummary['forcedSkipReason']>
+  ): void {
+    quest.promptMeta = quest.promptMeta ?? {};
+    quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+      attempted: false,
+      mode: 'forced',
+      forcedSkipReason,
+      surfaces: [],
+      dataLakeTags: [],
+    });
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
@@ -1837,6 +1884,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // itself if it genuinely needs the library alongside the attachment.
     if (quest.fabFileIds && quest.fabFileIds.length > 0) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
+      this.recordForcedSkip(quest, 'attached_files');
       return [];
     }
 
@@ -1850,6 +1898,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // retrieve_knowledge_content(file_id) for an unowned lake doc is denied too.
     if (this.chatCompletion.personalCorpusOnly) {
       this.logger.log('🔒 Forced retrieval: skipped (session corpus is personal files, not lake content)');
+      this.recordForcedSkip(quest, 'personal_corpus');
       return [];
     }
 
@@ -1861,11 +1910,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // the audit spine and the per-turn summary name this surface identically.
     // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
     let attemptedDataLakeTags: string[] = [];
-    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+    // NonNullable for the same reason as LakeMemoryFeature's recorder above.
+    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        mode: 'forced',
         surfaces: ['forced-retrieval'],
         dataLakeTags,
       });
@@ -1883,10 +1934,56 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     try {
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await this.resolveDataLakeAccess();
+      // Narrowed to the SESSION's lake(s), not just the caller's owner-wide access, and paired
+      // with `restrictToDataLake` below so the candidate pool is exactly that scope's membership -
+      // never the caller's whole library. Neither half alone is safe: dropping restrictToDataLake
+      // widens forced grounding to everything the caller owns (this was the only thing scoping the
+      // query to one lake); narrowing without restrictToDataLake still leaks the personal library
+      // through the own/shared/group base arms.
+      //
+      // Both halves are gated on `lakeScoped`, NOT applied unconditionally. The narrowing no-ops
+      // for a session whose tags name no lake (see sessionNamesALake), and pairing that no-op with
+      // restrictToDataLake would drop the base arms for a session that never asked to be
+      // lake-scoped - silently confining its grounding to lake content and losing the caller's own
+      // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      //
+      // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
+      // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
+      // predicate cannot change across the narrowing - but the pre-narrowing set is the meaning
+      // wanted here ("did the session name a lake among what this caller can reach"), and it does
+      // not depend on that superset relation continuing to hold.
+      const resolvedAccess = await this.resolveDataLakeAccess();
+      const lakeScoped = sessionNamesALake(resolvedAccess, this.retrievalTags);
+      const access = narrowLakeAccessToSession(resolvedAccess, this.retrievalTags);
+      const { dataLakeTags, dataLakeTagPrefixes, lakes } = access;
+      const lakeMemberships = lakeMembershipsFrom(lakes);
+      warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
+
+      // The session named a lake and narrowing retained none of it: a revoked grant, an archived
+      // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
+      // to search, which is exactly the `no_lakes` abstain below - NOT an outage. Without this,
+      // buildOwnershipConditions' restrictToDataLake fail-fast throws into the outer catch and
+      // stamps `failed` at error level on EVERY turn of that session, indefinitely, reporting a
+      // benign access state as a retrieval failure to logs and to the retrieval-rate metric.
+      // Only reachable while `lakeScoped` - with it false the base arms survive, so `conditions`
+      // is never empty and the fail-fast cannot fire.
+      if (lakeScoped && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+        recordRetrieval('no_lakes', []);
+        this.logger.log('🔒 Forced retrieval: session names no lake this caller can reach');
+        return this.noContextMessages('unavailable');
+      }
+
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
       const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
+
+      // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
+      // `retrievalTags` to) names the SESSION's lake, which is already applied above via
+      // narrowLakeAccessToSession + restrictToDataLake below. Left in `tags` - an AND'ed conjunct,
+      // not part of the ownership $or - it would require every candidate to carry that exact
+      // meta-tag and shut out exactly the prefix-only member this fix exists to admit. A non-lake
+      // content tag is a legitimate scope (narrowLakeAccessToSession's own doc) and survives.
+      const nonLakeRetrievalTags = this.retrievalTags.filter(tag => !tag.startsWith(DATALAKE_TAG_PREFIX));
 
       // 1. List the lake-accessible files (empty query -> all accessible). Ranking is by semantic
       //    similarity below, but the ORDER still matters: on a lake larger than the candidate cap
@@ -1894,7 +1991,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
-        { tags: this.retrievalTags, shared: false },
+        { tags: nonLakeRetrievalTags, shared: false },
         { page: 1, limit: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES },
         { by: 'fileName', direction: 'asc' },
         {
@@ -1903,7 +2000,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           userGroups: user.groups || [],
           dataLakeTags,
           dataLakeTagPrefixes, // static-registry (open) prefixes
-          scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
+          lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+          // Scope to the resolved lake(s) only, never the caller's whole library - but only when
+          // the session actually named a lake; see the `lakeScoped` note above.
+          restrictToDataLake: lakeScoped,
           excludeContent: true, // metadata only; chunk text + vectors fetched below
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
@@ -2090,10 +2190,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         }
         // Zero chunks SCORED, so no comparison against the query ever happened - whether the cause
         // is an unvectorized corpus or a wholly mismatched one, the library was not searched.
-        // 'failed' rather than 'ok' for exactly that reason: nothing threw, but recall did not
-        // complete, and this is an actionable pipeline/config defect that must outrank a genuine
-        // topical zero in the merge severity order rather than reading as "nothing on this topic".
-        recordRetrieval('failed', dataLakeTags);
+        // 'not_indexed' rather than 'ok' because reporting that as a topical zero would claim the
+        // library was searched and came up empty, and rather than 'failed' because nothing threw:
+        // the remedy is re-vectorizing, which the lake owner can do, and a retry never helps.
+        recordRetrieval('not_indexed', dataLakeTags);
         return this.noContextMessages('unavailable');
       }
       const scored = pool.sort(compareForcedRetrievalCandidates);

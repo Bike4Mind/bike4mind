@@ -134,6 +134,10 @@ describe('withStaticRegistryBypass', () => {
 
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:opti-knowledge', 'datalake:house-kb']);
     // Registry-sourced entries carry no membership scope - they have no creator to anchor one to.
+    // A fourth pinned property (#2243): since lakeMembershipsFrom (getDynamicDataLakeTags.ts) is
+    // exactly `lakes.flatMap(l => l.membership ? [l.membership] : [])`, "no lake here has a
+    // membership" IS "lakeMembershipsFrom(out.lakes) === []" - the injected lakes contribute no
+    // retrieval arm at all, unanchored or otherwise.
     expect(out.lakes.every(l => l.source === 'registry' && !l.membership)).toBe(true);
   });
 

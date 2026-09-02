@@ -1,3 +1,4 @@
+import { type ChunkStallReason } from '../../constants/chunking';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 
@@ -170,7 +171,12 @@ export interface IFabFile {
    */
   organizationId?: string;
 
-  /** User notes for the file */
+  /**
+   * The OWNER's own note on the file, and nothing else. No pipeline path writes or clears it (#2016):
+   * the chunk/vector stall markers that used to share this string live in `chunkStallReason` and
+   * `noExtractableTextAt`, because every writer of a single prose field clobbers the others - a
+   * "Rebuild passages" wave silently deleted whatever the owner had typed.
+   */
   notes?: string;
 
   /**
@@ -242,16 +248,38 @@ export interface IFabFile {
    * same write that clears the chunk rollups (#1939). `null`/absent means no rebuild is outstanding.
    *
    * The reset and the queue send are two operations, so without this the gap between them carries no
-   * marker at all: `chunkCount: 0`, `error: null`, `notes: ''` is the shape of an image or a
+   * marker at all: `chunkCount: 0`, `error: null` and no stall reason is the shape of an image or a
    * still-uploading row, and the file drops out of health, convergence and the retrieval withhold at
    * once. Cleared by `commitFabFileChunks` when the rebuild lands, and UPGRADED to
-   * `CONVERGENCE_PAUSED_CHUNK_NOTE` by the chunk handler when the kill switch halts it instead - see
-   * `isChunkRebuildPending` for why a pending rebuild must not simply pre-write that marker.
+   * `chunkStallReason: 'rechunkPaused'` by the chunk handler when the kill switch halts it instead -
+   * see `isChunkRebuildPending` for why a pending rebuild must not simply pre-write that marker.
    *
    * `null` rather than undefined for the same reason as `extractedCharCount`: the repository's `$set`
    * strips undefined, which would leave a stale stamp in place.
    */
   chunkRebuildRequestedAt?: Date | null;
+
+  /**
+   * Why this file's chunk/vector pipeline is STALLED, or `null`/absent when it is not (#2016). Both
+   * arms of the convergence kill switch stamp it; `commitFabFileChunks` clears it when the repair
+   * lands. See `ChunkStallReason` for the values, `isChunkStalled` for the predicate every reader
+   * uses, and `CHUNK_STALL_NOTICES` for the owner-facing prose.
+   *
+   * `null` rather than undefined for the same reason as `chunkRebuildRequestedAt`: the repository's
+   * `$set` strips undefined, which would leave a stale marker in place.
+   */
+  chunkStallReason?: ChunkStallReason | null;
+
+  /**
+   * When chunking last produced ZERO chunks for this file (#2016) - usually a failed or partial
+   * extraction (image-only, a parser-unfriendly .docx), occasionally a genuinely empty document.
+   * `null`/absent means text was extracted.
+   *
+   * TERMINAL for the chunk rescue sweep (`buildFabFileChunkScanFilter`), which is why it is a stored
+   * fact rather than a re-derivation: re-enqueueing such a file would fail identically every cycle.
+   * `resetChunkStateByIds` clears it, so the explicit reprocess path is the way back in.
+   */
+  noExtractableTextAt?: Date | null;
 
   /**
    * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
@@ -418,6 +446,9 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   embeddedChunkCount: null,
   embeddedCharCount: null,
   serverTextHash: null,
+  // Content-derived like the rest: the stamp asserts "no text in this file" about bytes the rewrite
+  // replaced. Leaving it would keep the rescue sweep's terminal guard closed against the new content.
+  noExtractableTextAt: null,
 } as const;
 
 export interface IFabFileListItem {
@@ -547,21 +578,48 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
- * Identifies a data lake for file-membership matching: a file belongs on an exact `datalakeTag`
- * match OR on a `fileTagPrefix` match against a file the lake's CREATOR OWNS. The predicate itself
- * is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
+ * Identifies a data lake for file-membership matching. The predicate itself is
+ * `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
  * `IFabFileRepository` can name it without the packages depending on each other.
  *
- * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens what
- * the filter selects, so a caller-supplied scope would reach another user's files - and on the
- * lifecycle paths, destroy them.
+ * TWO membership models, both legitimate, discriminated so a consumer cannot silently get the
+ * wrong one:
+ *
+ * - `owned` (DB lake): meta-tag OR (`fileTagPrefix` match AND the file is owned by the lake's
+ *   CREATOR). The prefix is user-chosen and unique only per creator, so the ownership conjunct is
+ *   what stops one lake's prefix from reaching another tenant's files.
+ * - `registry` (hardcoded DATA_LAKES lake): meta-tag OR `fileTagPrefix`, with NO ownership arm.
+ *   Such a lake is a shared knowledge base with many contributors and no creator to anchor to.
+ *   Safe ONLY because the prefix is compile-time config - see the ownership-bypass note on
+ *   `dataLakeTagPrefixes` in fabFileSearchQuery, which this replaces FOR PER-LAKE MEMBERSHIP only.
+ *   That mechanism is still live and must not be removed: the multi-lake retrieval surfaces
+ *   (semantic-search, the knowledge-base tools, ChatCompletionFeatures, and the tag-count prefix
+ *   arms) pass it for a whole SET of lakes at once, which a single-lake scope cannot express.
+ *
+ * A discriminated union rather than an optional `creatorUserId` because the previous shape could
+ * not express the registry model at all: the filter DEGRADED a creator-less scope to meta-tag-only,
+ * which under-counted registry lakes and forced the browse path to hand-roll the correct predicate
+ * at its own call site. The two then disagreed, violating the invariant stated on
+ * `countDataLakeFilesByMembership` below.
+ *
+ * Always build these from the lake DOCUMENT (`owned`) or the hardcoded registry entry
+ * (`registry`), never from request input: the prefix arm widens what the filter selects, and on
+ * the lifecycle paths that means destroying files.
  */
-export interface DataLakeMembershipScope {
-  datalakeTag: string;
-  fileTagPrefix?: string | null;
-  /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
-  creatorUserId?: string | null;
-}
+export type DataLakeMembershipScope =
+  | {
+      kind: 'owned';
+      datalakeTag: string;
+      fileTagPrefix?: string | null;
+      /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
+      creatorUserId?: string | null;
+    }
+  | {
+      kind: 'registry';
+      datalakeTag: string;
+      /** From the hardcoded DATA_LAKES registry ONLY - never a user-supplied prefix. */
+      fileTagPrefix?: string | null;
+    };
 
 /**
  * The model interface for the FabFile model.
@@ -652,6 +710,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to void.
    */
   deleteManyInIds(ids: string[]): Promise<void>;
+  /**
+   * Soft-delete the given ids, scoped to BOTH an owner and an upload batch, in one write. Exists for
+   * the upload-complete cleanup of browser-failed presign orphans: the scope is the security
+   * property (a stale or retried client sending stray ids must not be able to delete the caller's
+   * other files), and doing it as one `updateMany` rather than two queries per id keeps a large
+   * failure list from timing the request out before the batch is finalized. Returns how many rows
+   * were actually deleted.
+   */
+  softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number>;
 
   /**
    * Find all files in the given IDs.
@@ -691,14 +758,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[]; // Required when includeShared is true - user's group IDs for org-level sharing
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
-      scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       /**
-       * One lake's membership scope, matching the whole-lake writes exactly. Server-supplied
-       * only: it names the creator whose OWNED files the prefix arm matches, so it must never be
-       * read from request input.
+       * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
+       * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so
+       * it must never be read from request input.
        */
-      lakeMembership?: DataLakeMembershipScope;
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean; // Allow-list-as-authority: skip the ownership predicate; ignored unless restrictToFileIds is present
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
@@ -746,7 +812,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]>;
@@ -762,7 +827,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]>;
 
@@ -778,7 +842,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
@@ -794,7 +857,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]>;
@@ -999,11 +1061,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       vectorizedChunkCount: number | null;
       error: string | null;
       // Third terminal-stall input, same keep-in-sync rule as the two above: the convergence kill
-      // switch stalls a file via `notes` (CONVERGENCE_PAUSED_NOTE) without ever setting `error`.
-      notes: string | null;
+      // switch stalls a file via `chunkStallReason` without ever setting `error`.
+      chunkStallReason: ChunkStallReason | null;
       // Fourth in-flight input, same keep-in-sync rule: a file whose passages a wave just reset is
-      // chunkless with no error and no note, so this stamp is the only thing that tells "rebuilding"
-      // from "never had passages" (#1939).
+      // chunkless with no error and no stall reason, so this stamp is the only thing that tells
+      // "rebuilding" from "never had passages" (#1939).
       chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
@@ -1033,12 +1095,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       fileName?: string;
       tags: { name: string }[];
       chunkCount: number;
-      // Same keep-in-sync rule as findDataLakeHealthMembers: vectorizedChunkCount, error and notes
-      // together decide settled vs in-flight, and a row arriving without one silently disables that
-      // arm of the decision rather than failing.
+      // Same keep-in-sync rule as findDataLakeHealthMembers: vectorizedChunkCount, error and
+      // chunkStallReason together decide settled vs in-flight, and a row arriving without one
+      // silently disables that arm of the decision rather than failing.
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       /** See findDataLakeHealthMembers - the pending-rebuild stamp is an in-flight input here too. */
       chunkRebuildRequestedAt: Date | null;
       maxChunkCharLength: number | null;
@@ -1092,7 +1154,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
    * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to
    * "Rebuild passages", the one affordance an owner would actually reach for to repair them. They
-   * are identified by CONVERGENCE_PAUSED_CHUNK_NOTE, the same marker health, convergence and the
+   * are identified by `chunkStallReason`, the same marker health, convergence and the
    * retrieval withhold key on, OR by a `chunkRebuildRequestedAt` stamp older than
    * REBUILD_PENDING_STALE_MS - a rebuild nothing ever committed, which is what a producer killed
    * between the reset and the sends leaves behind (#1939). Same in-flight exclusion as
@@ -1113,6 +1175,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Stamps `chunkRebuildRequestedAt` in the SAME write (#1939), so the state this creates is never
    * unmarked: the send that follows can fail, and the producer can die before it, without leaving a
    * chunkless file that no reader can tell from an image.
+   *
+   * Does NOT touch `notes` (#2016) - that is the owner's own text, and this reset used to blank it on
+   * every rebuild wave and every per-file reprocess. It does clear the two machine-written markers
+   * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
+   * back in for a file the rescue sweep has written off.
    */
   resetChunkStateByIds(ids: string[]): Promise<string[]>;
   /**

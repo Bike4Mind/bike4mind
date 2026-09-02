@@ -81,7 +81,7 @@ describe('computeLakeHealth', () => {
     expect(health.affectedMembers).toHaveLength(0);
     expect(health.scanTruncated).toBe(false);
     expect(adapters.db.fabFiles.findDataLakeHealthMembers).toHaveBeenCalledWith(
-      { datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'u1' },
+      { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'u1' },
       25_000
     );
   });
