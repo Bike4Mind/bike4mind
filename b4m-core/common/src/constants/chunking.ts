@@ -203,19 +203,21 @@ export function isConvergencePausedNote(notes?: string | null): boolean {
  * has run in every environment. Reads the new field, then falls back to the legacy prose that the
  * pre-migration rows still carry in `notes`.
  *
- * It exists because the migration and the code that reads the new field do not deploy atomically,
- * in EITHER direction:
+ * It exists for the FORWARD window only: `migratorInvocation` is a `dependsOn` of the web stack
+ * only (infra/web.ts); the queue stack has none, so the executor can serve forced retrieval and
+ * `knowledge_base_search` while rows still carry the marker in `notes` and no `chunkStallReason`. A
+ * row stalled by the chunk arm then reads as a plain unindexed file: `isRetrievalExcluded` drops it
+ * upstream of the withhold on a vectorizedOnly lake, and `partitionByIndexAvailability` calls it
+ * servable everywhere else. The turn answers around a passage-less file and reports FULL coverage -
+ * the silent degradation this whole path exists to prevent.
  *
- * - Forward: `migratorInvocation` is a `dependsOn` of the web stack only (infra/web.ts); the queue
- *   stack has none, so the executor can serve forced retrieval and `knowledge_base_search` while
- *   rows still carry the marker in `notes` and no `chunkStallReason`. A row stalled by the chunk arm
- *   then reads as a plain unindexed file: `isRetrievalExcluded` drops it upstream of the withhold on
- *   a vectorizedOnly lake, and `partitionByIndexAvailability` calls it servable everywhere else. The
- *   turn answers around a passage-less file and reports FULL coverage - the silent degradation this
- *   whole path exists to prevent.
- * - Backward: nothing reverts the data. `migratorInvocation` only ever runs `up`, and `migrate down`
- *   is a manual CLI step, so a code rollback leaves rows migrated and pre-#2016 readers looking at an
- *   absent `notes`.
+ * A code ROLLBACK is the mirror image and this arm CANNOT cover it: the rows are already migrated
+ * (`chunkStallReason` set, `notes` unset) and the code restored is pre-#2016, which does not contain
+ * this function. Nothing reverts the data on its own either - `migratorInvocation` only ever runs
+ * `up` and `migrate down` is a manual CLI step - so `migrate down` is a REQUIRED step of any
+ * rollback past #2016, not an optional tidy-up. What this arm does buy is that `down()` is safe to
+ * run FIRST: whichever stack is still new keeps honoring the prose it restores, so a staggered
+ * rollback has no window where a stalled file reads as servable.
  *
  * Deliberately NOT used by the grading/health/UI readers: they are gated behind the web stack, and
  * a legacy row there renders the notice line AND the identical text as the owner's note.
