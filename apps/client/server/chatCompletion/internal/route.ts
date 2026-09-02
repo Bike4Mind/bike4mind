@@ -30,7 +30,7 @@ export const GENERIC_PROCESSING_FAILURE_REPLY = 'Something went wrong while proc
 /**
  * Namespace for quest-lifecycle operational metrics; also used by the timeout sweep
  * (apps/client/server/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
- * `ErrorClass` dimension in sync with infra/alarms.ts.
+ * `Stage` dimension in sync with infra/alarms.ts.
  */
 const QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
@@ -99,8 +99,10 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       // Operator-facing signal only - the quest's own reply to the user is handled separately
       // below. Without this, detection of a processing failure was "a user complains": nothing
       // alerted an operator. ErrorClass reuses the same taxonomy as tool-call telemetry
-      // (categorizeToolError) rather than inventing a second one, so an invalid-API-key or
-      // rate-limit storm is visible - and alarmable - by class, not just as an undifferentiated count.
+      // (categorizeToolError) rather than inventing a second one, so a rate-limit storm is visible -
+      // and alarmable - by class, not just as an undifferentiated count. categorizeToolError has no
+      // rule for a credential error, so an invalid-API-key failure still lands in internal_error
+      // alongside other unclassified throws - a known gap, tracked separately.
       //
       // Two datums, same metric name: CloudWatch keys a custom metric by namespace + name + the
       // EXACT dimension set and never rolls one up into the other, so the Stage-only point is what
