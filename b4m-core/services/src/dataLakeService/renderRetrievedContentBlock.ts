@@ -67,8 +67,8 @@ export const RETRIEVED_CONTENT_FOOTER = [
  *           much of the corpus was reached - forgeable into "this search covered everything".
  * The last two are the per-item headers, one per channel, and both attribute text to a named file -
  * forge one and the model credits a passage to a document the reader trusts more:
- *   `### `        the retrieve channel's `### <name> (ID: ...)`.
- *   `<n>. **`     the search channel's `<n>. **<name>** (relevance X)`.
+ *   `### `        the retrieve channel's `### <name> (ID: ...) - dated <date>`.
+ *   `<n>. **`     the search channel's `<n>. **<name>** (relevance X) - dated <date>`.
  * Both are matched with their trailing shape (a space, an opening `**`) rather than the bare token,
  * so an ordinary `## Heading` or numbered list in a document is left alone.
  *
@@ -87,6 +87,50 @@ export const defangRetrievedContent = (value: string): string =>
  * fix to one label defense reaches both surfaces.
  */
 export { toSingleLine as toContentLabel };
+
+/**
+ * The document's own date, for the passage headers both retrieval channels compose.
+ *
+ * `createdAt`, never `updatedAt`: `FabFileSchema` sets `timestamps: true`, and the `updateOne`
+ * calls on vectorization progress, tag writes and convergence all rewrite `updatedAt` - so it
+ * tracks index lifecycle rather than content revision. Measured on an affected lake, ordering on
+ * `updatedAt` put 34 older rows above 14 newer ones. `createdAt` is upload time, not authorship
+ * time: a good default, not a law.
+ *
+ * Formatted here rather than by each caller so the two channels cannot drift, and emitted as a UTC
+ * `YYYY-MM-DD`. Digits and separators only is the point: unlike the file name beside it, the result
+ * cannot carry a newline or forge one of the markers `defangRetrievedContent` guards, which is why
+ * callers pass it through untouched instead of wrapping it in `toContentLabel`. A caller that ever
+ * sources a date from document CONTENT or from a free-text metadata field does NOT get that
+ * guarantee and must label it like any other content-derived part.
+ *
+ * Returns null for an absent or unparseable value - callers omit the clause entirely rather than
+ * emit an empty one. Unparseable has to be handled here: `new Date('nonsense').toISOString()`
+ * throws a RangeError, and a passage header is not the place to fail a turn.
+ */
+export function formatDocumentDate(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * The date clause as it appears in a passage header, or '' when there is no usable date.
+ *
+ * All three channels that head retrieved content for the model append this - the search tool, the
+ * retrieve tool, and forced retrieval - so the separator and wording live here rather than being
+ * written out three times. Same reason `defangRetrievedContent` is shared: three copies of a
+ * literal is three chances to drift.
+ *
+ * Appended AFTER each channel's existing parenthetical, never folded into it. Both header shapes
+ * are load-bearing: `defangRetrievedContent` matches on their leading tokens, and the forced arm's
+ * `(ID: ...)` is an anchor its tests slice on.
+ */
+export function documentDateClause(value: Date | string | null | undefined): string {
+  const formatted = formatDocumentDate(value);
+  return formatted ? ` - dated ${formatted}` : '';
+}
 
 /**
  * Wrap already-composed sections in the untrusted-data block.

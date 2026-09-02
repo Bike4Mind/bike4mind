@@ -360,8 +360,10 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
   const makeRetrievalContext = () => {
+    // fileA carries a date and fileB deliberately does not, so the passage-date test (#2236) covers
+    // both the present and the absent case on one run.
     const files = [
-      { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [] },
+      { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
     const chunksByFile: Record<string, unknown[]> = {
@@ -416,6 +418,32 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(content).toContain('### Cortes NEJM 2024.pdf (ID: fileB)');
     expect(content).toContain('cite documents by name');
     expect(content).not.toContain('### [1]');
+  });
+
+  /**
+   * #2236. Without a date in the heading a model asked to prefer the newer of two conflicting
+   * passages has nothing to prefer on. Asserted on the forced arm specifically because it is the
+   * always-on injection site - a `forceKnowledgeRetrieval` session uses this one every turn.
+   */
+  it('heads a dated document with its date, and omits the clause entirely when there is none', async () => {
+    const { content } = await runRetrieval('indexed');
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
+    // fileB has no createdAt: no empty clause, no "dated undefined", no trailing separator.
+    expect(content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
+    expect(content).not.toContain('dated undefined');
+    expect(content).not.toContain('dated null');
+  });
+
+  it('carries the date on the named style too, so the two citation styles cannot drift', async () => {
+    const { content } = await runRetrieval();
+    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
+  });
+
+  it('leaves the date outside toContentLabel, which would be a no-op on it anyway', async () => {
+    const { content } = await runRetrieval('indexed');
+    // The date is digits and separators only, so it survives verbatim - and the `[N]` the indexed
+    // citation contract depends on is still intact beside it.
+    expect(content).toMatch(/### \[1\] .*\(ID: fileA\) - dated \d{4}-\d{2}-\d{2}/);
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
