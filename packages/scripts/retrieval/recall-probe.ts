@@ -47,7 +47,7 @@
  *   --userId    the principal the searches run as. Use an account with NO personal files: the
  *               unscoped arm ranks the caller's own library alongside the lake, and personal files
  *               would enter the corpus without being in the ground truth.
- *   --out-dir   where the JSON result lands (default ./out).
+ *   --out-dir   where the JSON result lands (default packages/scripts/out, which is gitignored).
  *   --dry-run   run the preflight checks and print the plan without writing settings or searching.
  *
  * SIDE EFFECT: the sweep WRITES the two admin settings on the target stage and restores their prior
@@ -57,6 +57,7 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
@@ -90,9 +91,24 @@ import {
   type SweepRow,
 } from './sweep';
 
+/** This file is packages/scripts/retrieval/, so the package root is two levels up. */
+const SCRIPTS_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 /** The lake `ingest-help-datalake.ts` creates, and the per-article tag prefix it writes. */
 const HELP_LAKE_SLUG = 'system-help';
 const HELP_TAG_PREFIX = 'help:';
+
+/**
+ * A deliberately easy, high-lexical-overlap query used only to prove the search path returns
+ * anything at all. It is NOT part of the measured set - it breaks the corpus design rules on
+ * purpose (see corpus.ts), because a precondition check wants the highest-signal query available,
+ * which is exactly the opposite of what a discriminating probe question wants.
+ */
+const CANARY_QUESTION: ProbeQuestion = {
+  id: 'canary',
+  question: 'data lakes',
+  supporting: ['features/data-lakes'],
+};
 
 // Typed as SettingKey so a typo fails the build rather than writing a row nothing reads.
 const TOKEN_BUDGET_SETTING: SettingKey = 'kbSearchResultTokenBudget';
@@ -203,7 +219,7 @@ function buildToolContext(user: IUserDocument, capture: Capture) {
  * `defaultEmbeddingModel` all send `search_knowledge_base` down its keyword fallback, which ignores
  * both knobs this probe exists to sweep. The run would complete and every row would look identical.
  */
-async function preflight(user: IUserDocument): Promise<{ lakeId: string; fileCount: number }> {
+async function preflight(user: IUserDocument, capture: Capture): Promise<{ lakeId: string; fileCount: number }> {
   const lake = await dataLakeRepository.findBySlug(HELP_LAKE_SLUG);
   if (!lake) {
     throw new Error(
@@ -266,6 +282,27 @@ async function preflight(user: IUserDocument): Promise<{ lakeId: string; fileCou
     throw new Error(
       `Probe user ${user.id} owns ${ownNonLake.length} file(s) outside the help lake. They would ` +
         `enter the ranking without being in the ground truth. Use a dedicated account with no files.`
+    );
+  }
+
+  // THE precondition every other check presupposes: that a search by THIS caller over THIS lake
+  // actually returns candidates. Everything above verifies the corpus exists; none of it verifies
+  // the caller can reach it. That gap is invisible downstream - a caller with no grant makes the
+  // tool search an empty candidate set, report `outcome: 'ok'`, and score a clean 0 on every
+  // question, which is indistinguishable from a relevance floor correctly rejecting everything.
+  //
+  // Empirical rather than a re-derivation of the access rules: this is a live end-to-end search, so
+  // it also catches an unusable embedding credential, a tag drift, or an unvectorized corpus - any
+  // reason the candidate set comes back empty, not just the one that bit us. Run before any config
+  // is applied, so the stage's own settings cannot be what suppresses it.
+  const canary = await runQuestion(CANARY_QUESTION, user, capture);
+  if (canary.served.length === 0) {
+    throw new Error(
+      `Canary search returned no documents, so the ${fileIds.length}-file lake is unreachable for ` +
+        `user ${user.id} and every question would score 0% at every configuration.\n` +
+        `Most likely cause: no access grant. "${HELP_LAKE_SLUG}" is gateless, org-less and not ` +
+        `public, so the only arm that admits anyone is the owner bypass - run as the account in the ` +
+        `lake's createdByUserId, or grant access via isPublic / requiredUserTag / organizationId.`
     );
   }
 
@@ -378,7 +415,9 @@ async function main(): Promise<void> {
   const argv = await yargs(hideBin(process.argv))
     .option('userId', { type: 'string', demandOption: true, describe: 'Principal the searches run as' })
     .option('configs', { type: 'string', default: '0:0', describe: 'tokenBudget:minRelevancePct, comma separated' })
-    .option('out-dir', { type: 'string', default: path.join(process.cwd(), 'out') })
+    // packages/scripts/out/ is gitignored; the repo root's out/ is not, so defaulting to cwd
+    // dropped an untracked result file into the repo whenever this ran from the root.
+    .option('out-dir', { type: 'string', default: path.resolve(SCRIPTS_PACKAGE_DIR, 'out') })
     .option('dry-run', { type: 'boolean', default: false })
     .strict()
     .parse();
@@ -401,7 +440,9 @@ async function main(): Promise<void> {
 
   const user = await userRepository.findById(argv.userId);
   if (!user) throw new Error(`No user ${argv.userId} on this stage.`);
-  const { lakeId, fileCount } = await preflight(user);
+
+  const capture = createCapturingRecorder();
+  const { lakeId, fileCount } = await preflight(user, capture);
 
   if (argv['dry-run']) {
     logger.log(
@@ -412,7 +453,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  const capture = createCapturingRecorder();
   const rows: SweepRow[] = [];
   const detail: Record<string, QuestionResult[]> = {};
 
@@ -441,8 +481,29 @@ async function main(): Promise<void> {
       rows.push({ ...config, aggregate: aggregate(results.map(r => r.outcome)) });
     }
   } finally {
-    for (const [name, value] of Object.entries(original)) await writeSetting(name, value);
-    logger.log('\nRestored the original settings values.');
+    // Restore every setting even if one throws, and never let a restore failure replace the error
+    // that actually ended the run - a mid-run DB outage takes the writes down with it, and an
+    // unguarded `await` here would surface the cleanup's socket timeout while hiding the cause.
+    // The stage is left mutated either way, so the values needed to undo it by hand are printed
+    // rather than merely logged as a failure.
+    const stranded: string[] = [];
+    for (const [name, value] of Object.entries(original)) {
+      try {
+        await writeSetting(name, value);
+      } catch (err) {
+        stranded.push(`${name}=${value ?? '(unset)'}`);
+        logger.warn(`Could not restore ${name}`, err);
+      }
+    }
+    if (stranded.length > 0) {
+      logger.error(
+        `SETTINGS LEFT MODIFIED ON THIS STAGE. Restore by hand: ${stranded.join(', ')} ` +
+          '("(unset)" means delete the row rather than writing a 0 - a 0 row and no row read the ' +
+          'same to the search path today, but not to a human reading the stage config later.)'
+      );
+    } else {
+      logger.log('\nRestored the original settings values.');
+    }
   }
 
   const table = formatSweepTable(rows);
