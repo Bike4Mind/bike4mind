@@ -10,6 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from './types.js';
 import { INCLUDED_CATEGORIES, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
@@ -140,12 +141,33 @@ function buildCategoryTree(entries: HelpIndexEntry[]): HelpCategory[] {
  * shares a number with (slug alone ranks `features/integrations/*` above
  * `features/overview`, pushing the landing article off the featured list).
  */
-function compareEntries(a: HelpIndexEntry, b: HelpIndexEntry): number {
+export function compareEntries(a: HelpIndexEntry, b: HelpIndexEntry): number {
   return (
     a.sidebarPosition - b.sidebarPosition ||
     a.slug.split('/').length - b.slug.split('/').length ||
     a.slug.localeCompare(b.slug)
   );
+}
+
+/**
+ * Derive `version` from the entries themselves rather than the wall clock, so a
+ * regen with no corpus changes produces byte-identical output (the `/api/help`
+ * ETag in apps/client/pages/api/help/index.ts keys off this value, and a clock
+ * timestamp made it - and the whole file - diff on every single build).
+ */
+export function computeVersion(entries: HelpIndexEntry[]): string {
+  return createHash('sha256').update(JSON.stringify(entries)).digest('hex').slice(0, 16);
+}
+
+/** Sort entries and derive categories/version from them - the pure, testable core of the build. */
+export function buildIndexFromEntries(rawEntries: HelpIndexEntry[]): HelpIndex {
+  const entries = [...rawEntries].sort((a, b) => a.category.localeCompare(b.category) || compareEntries(a, b));
+  const categories = buildCategoryTree(entries);
+  return {
+    entries,
+    categories,
+    version: computeVersion(entries),
+  };
 }
 
 /**
@@ -171,17 +193,8 @@ async function buildHelpIndex(): Promise<void> {
 
   console.log(`Processed ${entries.length} valid entries`);
 
-  entries.sort((a, b) => a.category.localeCompare(b.category) || compareEntries(a, b));
-
-  // Build category tree
-  const categories = buildCategoryTree(entries);
-
-  // Create the index
-  const index: HelpIndex = {
-    entries,
-    categories,
-    version: new Date().toISOString(),
-  };
+  const index = buildIndexFromEntries(entries);
+  const { categories } = index;
 
   // Ensure output directory exists
   const outputDir = path.dirname(OUTPUT_PATH);
@@ -197,7 +210,10 @@ async function buildHelpIndex(): Promise<void> {
   console.log(`Categories: ${categories.map(c => c.name).join(', ')}`);
 }
 
-buildHelpIndex().catch(error => {
-  console.error('Failed to build help index:', error);
-  process.exit(1);
-});
+// Only run when invoked directly (not when imported by tests)
+if (process.argv[1] && process.argv[1].endsWith('build-help-index.ts')) {
+  buildHelpIndex().catch(error => {
+    console.error('Failed to build help index:', error);
+    process.exit(1);
+  });
+}
