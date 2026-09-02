@@ -17,8 +17,12 @@ const h = vi.hoisted(() => ({
   // per-file catch produces. Unexposed, deleting that logger.error call is undetectable.
   loggerError: vi.fn(),
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
-  // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
-  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
+  // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
+  // parameter is here for the same reason - dropping it silently strands paused files (#2120).
+  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date, _opts?: unknown) => ({
+    chunkCount: 0,
+    createdAt: { $lt: cutoff },
+  })),
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
@@ -63,12 +67,12 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' }, fabFileChunkQueue: { url: 'http://sqs/fabFileChunkQueue' } },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/worker/chunkScan', () => ({
-  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
+// Only the two filters are stubbed (so the call args are assertable); the payload builder and the
+// age/stale cutoffs stay real so these tests pin the provenance the sweep actually sends.
+vi.mock('@server/worker/chunkScan', async importActual => ({
+  ...(await importActual<typeof import('@server/worker/chunkScan')>()),
+  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
   buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
-  CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
-  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
-  VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS: 15 * 60_000,
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
@@ -203,16 +207,17 @@ describe('dataLakeBatchReconcile cron handler', () => {
       routeFind([], []);
     });
 
-    it('CLAIMS then re-enqueues only the ids it won, tagging each with its claim token', async () => {
+    it('re-enqueues what the filter selected, with both scan cutoffs and a convergence stamp', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       routeFind(
         [
-          { _id: 'ff1', userId: 'u1' }, // plain upload, no lake batch
-          { _id: 'ff2', userId: 'u2', batchId: 'batch-9' }, // data-lake file
+          { _id: 'ff1', userId: 'u1' },
+          { _id: 'ff2', userId: 'u2' },
         ],
         []
       );
-      // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
+      // No producer-side claim and no batchId: the projection reads only _id and userId now, so a
+      // batch is invisible here - which is the point, both files are stamped the same way.
 
       const res = await handler();
 
@@ -225,22 +230,40 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(staleClaimBefore).toBeInstanceOf(Date);
       expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
 
-      // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
-      // the worker can reject a duplicate/superseded delivery.
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-      // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
+      // EVERY message is stamped convergence, with or without a batch: a scheduled sweep is
+      // background work, so it must stay haltable by the kill switch. An un-stamped re-enqueue
+      // reads as `user` and would re-chunk a file the switch had just parked as paused.
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        origin: 'convergence',
       });
-      // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
-      // sweep carries no lakeId (platform switch only).
+      // A global sweep carries no lakeId, so only the platform-scope switch halts it.
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',
         origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
+    });
+
+    it('projects userId as well as _id - the lean() fixtures would otherwise mask a trimmed projection', async () => {
+      h.getSettingsValue.mockResolvedValue(true);
+      const selectSpy = vi.fn();
+      h.fabFileFind.mockReturnValue({
+        select: (projection: string) => {
+          selectSpy(projection);
+          return { limit: () => ({ lean: async () => [{ _id: 'ff1', userId: 'u1' }] }) };
+        },
+      });
+
+      await handler();
+
+      // Every fixture here supplies userId whatever is projected, so a trim back to '_id' alone
+      // stays green while production enqueues `userId: 'undefined'`. This is the only assertion
+      // that fails on that.
+      expect(selectSpy).toHaveBeenCalledWith('_id userId');
     });
 
     it('enqueues every id the filter selected - duplicates are the worker CAS to resolve', async () => {
@@ -261,6 +284,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
@@ -291,7 +315,11 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       // All four attempted - the ones behind a failure are not abandoned.
       expect(h.sendToQueue).toHaveBeenCalledTimes(4);
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff4', userId: 'u4' });
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff4',
+        userId: 'u4',
+        origin: 'convergence',
+      });
       // And the counts are honest: two really were rescued, two really were not.
       const body = JSON.parse(res.body);
       expect(body.rescuedChunkFiles).toBe(2);
@@ -326,6 +354,44 @@ describe('dataLakeBatchReconcile cron handler', () => {
       await handler();
       expect(h.buildScanFilter).not.toHaveBeenCalled();
       expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    describe('convergence-paused exclusion is resolved per run (#2120)', () => {
+      // One getSettingsValue mock serves both keys, so route by name. enableAutoChunk must stay ON
+      // or rescueUnchunkedFiles returns before it ever reads the pause flag, and the assertion below
+      // would pass against a sweep that never ran.
+      const withPauseFlag = (pauseFlag: unknown) =>
+        h.getSettingsValue.mockImplementation(async (key: string) => (key === 'enableAutoChunk' ? true : pauseFlag));
+
+      it.each([
+        ['ON - paused files must not consume the rescue cap', true, true],
+        ['OFF - paused files must be swept back in and rebuilt', false, false],
+      ])('kill switch %s', async (_label, pauseFlag, expected) => {
+        withPauseFlag(pauseFlag);
+
+        await handler();
+
+        // Pinned as the third ARGUMENT, not as an outcome of the filter: the filter itself is mocked
+        // here, so this is the only place the caller's wiring is observable. Dropping the argument or
+        // hardcoding it to a constant - the two ways this regresses - both fail one of these rows.
+        expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+        expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: expected });
+      });
+
+      it('treats a missing or non-boolean setting as OFF, never as ON', async () => {
+        // The caller compares `=== true` rather than coercing, and that strictness is deliberate: a
+        // truthy-but-not-true value (an unset setting, a legacy string) must fall to the sweeping
+        // behaviour, because wrongly excluding is the far worse direction - it strands every paused
+        // file with no automatic rebuild at all.
+        for (const raw of [undefined, null, 'true', 1]) {
+          h.buildScanFilter.mockClear();
+          withPauseFlag(raw);
+
+          await handler();
+
+          expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: false });
+        }
+      });
     });
 
     it('a rescue failure is isolated: the run still heartbeats and reports 0', async () => {

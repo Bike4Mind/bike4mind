@@ -7,6 +7,7 @@
  * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
  * importing either boot graph.
  */
+import { CHUNK_STALL_REASONS, CONVERGENCE_ORIGIN, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -55,7 +56,7 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * already-chunked and in-progress files.
  *
  * Two more churn guards, matching how the chunk handler records a terminal outcome
- * (fabFileChunk.ts): a file that chunked to zero gets a 'No extractable text' note, and a file
+ * (fabFileChunk.ts): a file that chunked to zero gets a `noExtractableTextAt` stamp, and a file
  * whose chunking exhausted its SQS retries gets `error` set. Both are terminal for this scan -
  * re-enqueueing them would re-fail identically every cycle; recovery for those is the explicit
  * reprocess path, which clears the markers. `error` is deliberately NOT set on a non-final
@@ -68,7 +69,7 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * BY DESIGN (audio is never vectorizable; images are passed to models as URLs; video has no
  * extraction path and falls to the unsupported-type default), so sweeping them would burn the
  * per-run cap on no-op queue round-trips and stamp historical media files with a misleading
- * 'No extractable text' note. Query must stay in sync with isAudioMimeType and
+ * `noExtractableTextAt`. Query must stay in sync with isAudioMimeType and
  * SmartChunker.chunkImage / chunkFile's default branch.
  *
  * ONE exception, and it is why the exclusion is an `$or` arm rather than a flat key: a media file
@@ -82,16 +83,63 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  *
  * Bounded to one pass per file: the sweep enqueues, the chunker returns 0 chunks as it always would,
  * and `commitFabFileChunks` clears the stamp and writes the rollups - after which the handler's own
- * 'No extractable text' note excludes the file here again.
+ * `noExtractableTextAt` stamp excludes the file here again.
  */
-export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
+export interface ChunkScanFilterOptions {
+  /**
+   * Exclude files carrying a convergence stall reason. TRUE only while the convergence kill switch is
+   * ON, and that conditionality is the whole point (see the `chunkStallReason` clause below) - the
+   * caller passes the resolved flag rather than this being a constant.
+   *
+   * REQUIRED, and so is `opts` itself, deliberately: an omitted flag would default to "do not
+   * exclude", which is the pre-fix behaviour - the sweep would re-select every paused file on every
+   * pass while the switch is ON. Silently reinstating the bug is the wrong default, so a new caller
+   * has to state which side it wants and the compiler asks. Both existing callers resolve it from
+   * the platform setting; a test that does not care passes `false` explicitly.
+   */
+  excludeConvergencePaused: boolean;
+}
 
-export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
+export const buildFabFileChunkScanFilter = (
+  cutoff: Date,
+  staleClaimBefore: Date | undefined,
+  opts: ChunkScanFilterOptions
+) => ({
   status: 'complete' as const,
   chunkCount: 0,
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
+  // `null` matches an absent field too, so a file that has never chunked to zero still qualifies.
+  // A stored stamp rather than a prefix match on `notes` (#2016), which is the owner's own text.
+  noExtractableTextAt: null,
+  // The stall reasons are excluded only while the kill switch is ON, and the conditionality is
+  // load-bearing in BOTH directions:
+  //
+  //  - Switch ON: a paused file matches every other clause here (the reset zeroed chunkCount and the
+  //    pause writes no error), so it is re-selected on every pass. That is churn at best, and it
+  //    consumes the rescue cap, starving genuine lost-webhook candidates while the sweep still
+  //    reports a healthy enqueue count.
+  //  - Switch OFF: excluding it would be a REGRESSION. This sweep is the only automatic exit a
+  //    paused file has. The two other recovery paths are human-driven and lake-scoped, so neither
+  //    reaches a file outside every lake - exactly what this sweep exists to catch. And the
+  //    re-enqueue really does rebuild it: `isConvergenceHalted` returns false whenever the switch is
+  //    off, whatever `origin` says, so a re-selected file is genuinely re-chunked rather than
+  //    bounced. That is what makes CHUNK_STALL_NOTICES.rechunkPaused's user-visible "rebuilt when
+  //    convergence resumes" true. Note this no longer turns on the file lacking a batchId:
+  //    buildChunkScanQueuePayload stamps `origin` unconditionally, so with the switch ON every sweep
+  //    message is haltable - which is why the exclusion above only has to spare the queue a
+  //    round-trip, not prevent a re-chunk.
+  //
+  // Via CHUNK_STALL_REASONS so this query and `isChunkStalled` cannot drift, plus the transitional
+  // `notes` arm mirroring `isChunkStalledFile` - #2016's migration and this code do not deploy
+  // atomically, and a pre-migration row still carries the marker as prose. Delete the `notes` arm
+  // with the rest of the legacy reads, one release after the migration has landed everywhere.
+  ...(opts.excludeConvergencePaused
+    ? {
+        chunkStallReason: { $nin: [...CHUNK_STALL_REASONS] },
+        notes: { $nin: [...LEGACY_CHUNK_STALL_NOTES] },
+      }
+    : {}),
   error: { $in: [null, ''] },
   // Both clauses below are `$or`s, so they are nested under ONE `$and` rather than written as
   // sibling keys: two `$or` keys in the same object literal silently clobber each other (last key
@@ -181,4 +229,41 @@ export const buildStrandedVectorizeScanFilter = (cutoff: Date, staleClaimBefore?
         ],
       }
     : { isChunking: { $ne: true } }),
+});
+
+/**
+ * The chunk-queue payload for a file this scan selected. Shared by both sweep drivers (the
+ * self-host worker's fabFileChunkScan and the hosted dataLakeBatchReconcile cron) so the two
+ * can't drift on provenance.
+ *
+ * `origin` is stamped UNCONDITIONALLY, not just for files carrying a `batchId`. A scheduled rescue
+ * sweep is background work by definition, so it must be haltable by the convergence kill switch:
+ * with the switch on, the chunk handler parks a file with a stall reason but leaves it matching this
+ * scan's filter, and an un-stamped re-enqueue would be read as `user` work (isConvergenceHalted
+ * fails soft to `user`) and chunked anyway - spending exactly the budget the switch was set to stop.
+ * The tradeoff, which is the switch working as designed: while it is on, the sweep rescues nothing,
+ * including a genuinely stranded non-lake file. What brings such a file back is RE-SELECTION, not a
+ * resume path: the filter above excludes the stall reasons only while the switch is on, so the first
+ * sweep after it clears re-admits the file and rebuilds it (pinned in chunkScan.test.ts, because it
+ * is the only thing making this tradeoff acceptable). Belt and braces, deliberately - the exclusion
+ * decides SELECTION from a flag read once per pass, this stamp decides what the CONSUMER does with a
+ * message already in flight when the switch flips.
+ *
+ * One shape does NOT come back, and stamping unconditionally is what routes it there: a MEDIA file
+ * is admitted by the filter above only through `chunkRebuildRequestedAt`, and the halt write nulls
+ * that field, so once halted it leaves this filter for good and needs a manual reprocess. The
+ * mechanism predates this stamp, but a `batchId`-less media file never reached the halt branch
+ * before it did - so the one-way door is reachable here because of this function, and calling it
+ * pre-existing would be wrong. Closing it means readmitting a paused media file to the filter, which
+ * has to be reconciled with the switch-ON stall-reason exclusion above as well - the two would be
+ * pulling the same file in opposite directions. Tracked in #2224.
+ *
+ * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
+ * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).
+ * Known and owned rather than introduced here: #2157 and #2251 both track that gap.
+ */
+export const buildChunkScanQueuePayload = ({ fabFileId, userId }: { fabFileId: string; userId: string }) => ({
+  fabFileId,
+  userId,
+  origin: CONVERGENCE_ORIGIN,
 });

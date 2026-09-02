@@ -14,6 +14,7 @@ import {
   MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
   MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
   MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
@@ -259,6 +260,31 @@ export const ReanalyzeTaxonomyRequestInput = z.object({
   context: z.string().max(2000).optional(),
 });
 export type ReanalyzeTaxonomyRequestInputType = z.infer<typeof ReanalyzeTaxonomyRequestInput>;
+
+/**
+ * `PUT /api/data-lakes/:id/files/:fabFileId/tags` - the complete desired tag set UNDER THIS
+ * LAKE'S PREFIX (scoped-replace semantics: the server diffs against the file's current tags and
+ * pushes/pulls to match; tags outside the prefix are untouched). `tags` is REQUIRED, not
+ * optional - under replace semantics an absent field must never read as "the empty set", which
+ * would silently evict the file from the lake through a body a client forgot to send.
+ *
+ * Per-name length is bounded by `MAX_LAKE_FILE_TAG_NAME_LENGTH`, the longest a caller-authored
+ * name under any prefix could legitimately need; the lake-specific prefix bound is a service-level
+ * check (the lake is not resolved at parse time). The newline exclusion matches every other
+ * tag-name field in this schema file - a tag name is a single line.
+ */
+export const SetLakeFileTagsRequestInput = z.object({
+  tags: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(MAX_LAKE_FILE_TAG_NAME_LENGTH)
+        .regex(/^[^\r\n]*$/)
+    )
+    .max(MAX_TAXONOMY_TAGS),
+});
+export type SetLakeFileTagsRequestInputType = z.infer<typeof SetLakeFileTagsRequestInput>;
 
 // Deduplication
 

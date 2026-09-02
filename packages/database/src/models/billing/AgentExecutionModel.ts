@@ -305,6 +305,14 @@ export interface IAgentExecution {
    * invocation, so the flag must be re-read each time).
    */
   enableLattice?: boolean;
+  /**
+   * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
+   * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
+   * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
+   * Persisted at dispatch so it survives Lambda handoffs / continuations, and inherited by
+   * subagent / DAG children so a delegating run cannot route around the opt-out.
+   */
+  enableArtifacts?: boolean;
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -331,6 +339,14 @@ export interface IAgentExecution {
      * timeout", not "definitely not a timeout".
      */
     timedOut?: boolean;
+    /**
+     * Marks `message` as already phrased for an external caller, so the public
+     * projection may publish it verbatim. Absent/false means the message is a raw
+     * internal exception and MUST be sanitized before it leaves the process - see
+     * `loadAgentExecutionTrace`. Fail-closed by design: a new failure path that
+     * forgets this flag gets sanitized, not leaked.
+     */
+    callerSafe?: boolean;
   };
   /**
    * Coarse classifier for failures that operators / dashboards filter on.
@@ -460,7 +476,9 @@ const PendingPermissionSchema = new mongoose.Schema(
     toolCallId: { type: String },
     requestedAt: { type: Date, required: true },
   },
-  { _id: false }
+  // A zero-argument tool records `toolInput: {}`; without `minimize: false` that reads back as
+  // `undefined` and the permission card renders as if the arguments were unknown.
+  { _id: false, minimize: false }
 );
 
 const PendingGateSchema = new mongoose.Schema(
@@ -656,6 +674,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // Feature-parity flags
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
+    enableArtifacts: { type: Boolean },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
@@ -686,6 +705,7 @@ const AgentExecutionSchema = new mongoose.Schema(
         message: { type: String, required: true },
         stack: { type: String },
         timedOut: { type: Boolean },
+        callerSafe: { type: Boolean },
       },
       required: false,
     },
@@ -740,6 +760,14 @@ const AgentExecutionSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    // `minimize: false` because `checkpoint` and `result` are opaque LLM wire payloads read back
+    // verbatim and replayed to a provider. Mongoose's default `minimize` strips empty objects on
+    // `toObject()`/`toJSON()` (the read side - the stored document is fine), so a checkpointed
+    // `tool_use` block for a zero-argument tool (`input: {}`) came back with no `input` at all and
+    // Anthropic rejected the resumed request with
+    // "messages.N.content.0.tool_use.input: Field required". An empty object is meaningful here,
+    // never noise. Same reasoning as `OptiPlanStateSchema` above.
+    minimize: false,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
   }
@@ -1448,7 +1476,10 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     );
   }
 
-  async markFailed(id: string, error: { message: string; stack?: string; timedOut?: boolean }): Promise<void> {
+  async markFailed(
+    id: string,
+    error: { message: string; stack?: string; timedOut?: boolean; callerSafe?: boolean }
+  ): Promise<void> {
     await this.model.updateOne(
       { _id: id },
       {

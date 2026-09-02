@@ -91,12 +91,12 @@ export interface RecordOperationalUsageAdapters {
  * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
  * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
  * debit-capable callers are `server/events/recordSessionOperationalUsage` and
- * `pages/api/data-lakes/semantic-search`, and NEITHER is gated today: session ops are queued with
+ * `pages/api/data-lakes/semantic-search`. Only the latter is gated today: semantic-search runs its
+ * own per-member-cap and pool pre-flight before embedding. Session ops are still queued with
  * no pre-flight by at least `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the
  * project-attach fan-out (`pages/api/projects/[id]/sessions.ts`) and the admin spider (#1852;
- * other `SessionEvents` publishers do sit behind gated primary actions), and semantic-search has
- * no credit check of its own (#1843). Gating belongs at those entry points, not in a measurement
- * helper.
+ * other `SessionEvents` publishers do sit behind gated primary actions). Gating belongs at those
+ * entry points, not in a measurement helper.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,

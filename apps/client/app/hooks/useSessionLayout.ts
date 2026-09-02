@@ -92,7 +92,7 @@ interface SessionLayoutControlState {
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
   // Docked chat panel sizing (percentage)
-  dockChatWidth: number; // Width % for dockRight mode (default 35)
+  dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
   // Optimistic first-message: holds the user's prompt while the new session is being
   // confirmed by the server. Cleared on session.created. Not persisted.
@@ -119,7 +119,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
-      dockChatWidth: 35,
+      dockChatWidth: 40,
       dockChatHeight: 40,
     }),
     {

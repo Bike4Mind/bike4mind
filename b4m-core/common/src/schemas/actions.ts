@@ -1160,7 +1160,7 @@ export const SessionCreatedAction = shareableDocumentSchema.extend({
  * inbound (client-bound) side so `subscribeToAction` can be typed.
  */
 
-const AgentStepSchema = z.object({
+export const AgentStepSchema = z.object({
   type: z.enum(['thought', 'action', 'observation', 'final_answer']),
   content: z.string(),
   metadata: z

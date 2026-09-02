@@ -11,6 +11,7 @@ import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -29,6 +30,7 @@ import {
   getNodesAtPath,
 } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
+import { RemoveFileFromLakeCopy } from '@client/app/components/DataLakeWizard/RemoveFileFromLakeDialog';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
@@ -220,6 +222,7 @@ export default function DataLakeExplorer({
   // the empty state used to answer from the file scope instead, and got wrong (#1645).
   const { data: lakes, isLoading: lakesLoading, isError: lakesError, refetch: refetchLakes } = useGetDataLakes();
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
+  const currentUserId = useUser(s => s.currentUser?.id);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
   const handleDeleteFile = useCallback(
     (file: IFabFileDocument) => {
@@ -539,15 +542,20 @@ export default function DataLakeExplorer({
         </Box>
       </Box>
 
-      {/* Remove-from-lake confirmation for the tree's [x] action. Same contract as the
-          Discover viewer's remove: membership + prefix tags go, the file itself stays. */}
+      {/* Remove-from-lake confirmation for the tree's [x] action. Keeps its own test id (it
+          predates the shared dialog and other tests key off it) but takes the same copy helper,
+          so the two surfaces cannot drift on what they promise about post-removal reach. */}
       <Modal open={deleteTarget != null} onClose={() => setDeleteTarget(null)}>
         <ModalDialog data-testid="datalake-tree-removefile-confirm" role="alertdialog">
           <DialogTitle>Remove file from data lake?</DialogTitle>
           <DialogContent>
-            &ldquo;{deleteTarget ? deleteTarget.file.fileName.replace(/\.[^/.]+$/, '') : ''}&rdquo; will be removed from
-            &ldquo;{deleteTarget?.lake.name}&rdquo; and stops appearing here right away. The file stays in your Files
-            list and in any chats that use it.
+            {deleteTarget && (
+              <RemoveFileFromLakeCopy
+                isOwner={!!currentUserId && deleteTarget.file.userId === currentUserId}
+                fileName={deleteTarget.file.fileName}
+                lakeName={deleteTarget.lake.name}
+              />
+            )}
           </DialogContent>
           <DialogActions>
             <Button

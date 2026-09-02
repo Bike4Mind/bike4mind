@@ -60,6 +60,11 @@ const view: LakeAccessView = {
   channels: [{ kind: 'organization', value: 'orgA', label: 'Acme', holderCount: 3 }],
   history: [],
   historyTruncated: false,
+  candidateCapPressure: {
+    turnsWithSignal: 6,
+    turnsAtCap: 2,
+    lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
+  },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
@@ -95,6 +100,14 @@ describe('GET /api/data-lakes/[id]/access', () => {
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith({ data: view, meta: { canTransferOwnership: false } });
+    // The whole view is serialized, so candidate-cap pressure reaches JSON consumers with no
+    // route-level projection to keep in sync.
+    const body = json.mock.calls[0][0] as { data: LakeAccessView };
+    expect(body.data.candidateCapPressure).toEqual({
+      turnsWithSignal: 6,
+      turnsAtCap: 2,
+      lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
+    });
   });
 
   it('refuses a caller who can read but not manage the lake (403), without assembling', async () => {

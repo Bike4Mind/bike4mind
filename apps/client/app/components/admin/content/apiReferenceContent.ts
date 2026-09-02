@@ -126,12 +126,15 @@ GET /api/quests/[id]
 
 **Required API-key scope:** \`notebooks:read\`, \`ai:chat\`, or \`ai:generate\` (any one grants access — an AI scope works so the chat→poll flow needs a single key).
 
+Not a pure read: polling a quest whose run died without writing a terminal status settles it, so the poll that crosses the liveness threshold returns \`status: "done"\` instead of spinning on \`running\` forever. Whatever the run produced is preserved; \`type: "error"\` marks the case where it produced nothing, which is how a client machine-distinguishes a timeout from a genuine answer. Only the session owner's poll can settle a quest - a shared-session viewer reads it as-is, and a background sweep settles it instead.
+
 **Response:**
 
 \`\`\`json
 {
   "id": "quest_abc123",
   "status": "completed",
+  "type": "message",
   "reply": {
     "content": "Here is the AI response...",
     "model": "gpt-4o",
@@ -186,6 +189,55 @@ Cancels an in-progress streaming response.
 | POST | /api/sessions/[id]/chat/[messageId]/snip | Snip conversation at a message |
 | GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
 | POST | /api/infer | Raw inference endpoint |
+
+---
+
+### Agent Executions (ReAct)
+
+The tool-using agent loop behind the product UI's Agent Mode toggle. This is a different
+pipeline from \`POST /api/chat\`: it runs several LLM iterations, calling tools between them,
+rather than producing a single completion. It used to be reachable only over the
+\`agent_execute\` WebSocket route, so an API-key caller could reproduce a chat turn but not an
+agent run.
+
+#### Start an Agent Run
+
+\`\`\`
+POST /api/v1/agent-executions
+\`\`\`
+
+**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
+
+> **This endpoint is generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`startAgentExecution\`, derived from the same
+> object the handler validates with.
+>
+> The run is asynchronous and nothing is streamed back over REST: you get a \`202\` with an
+> execution id, then poll. Omit \`agent_id\` to get whatever profile the session's own surface
+> resolves to - that is what reproduces the in-app toggle, rather than pinning one specific
+> agent. The final answer is also written to the session as a normal chat message, so it
+> appears in history.
+
+#### Poll an Agent Run
+
+\`\`\`
+GET /api/v1/agent-executions/[id]
+\`\`\`
+
+**Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
+
+> See the [generated API docs](/api/v1/docs) under \`getAgentExecution\`. Returns the run's
+> status, its reasoning trace (which grows while the run is in flight), and the final answer
+> once \`status\` is terminal. GET requests here are exempt from the per-day API-key quota, so
+> polling one run costs a single daily slot; the per-minute burst limit still applies.
+
+#### Agent Execution Endpoints Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/v1/agent-executions | Start an agent (ReAct) run |
+| GET | /api/v1/agent-executions/[id] | Poll status, reasoning trace, and answer |
 
 ---
 
@@ -1055,6 +1107,12 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | POST | /api/admin/context-telemetry/[id]/create-issue | Create GitHub issue |
 | GET | /api/admin/context-telemetry/integration-status | Integration status |
 | GET | /api/admin/context-telemetry/metrics | Telemetry metrics |
+
+### Retrieval Rate
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/admin/retrieval-rate | Optional-path retrieval rate over a date window |
 
 ### LiveOps Triage
 

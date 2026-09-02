@@ -173,6 +173,30 @@ export interface LakeAdmissionAdapters {
 }
 
 /**
+ * PER-CALL policy, deliberately NOT on `LakeAdmissionAdapters`. The adapters bag is infrastructure
+ * (`db`, `embeddingModel`, `logger`) and gets spread - both by callers assembling one and by this
+ * module at `resolved` below - so an enforcement-disabling flag living in it could ride a
+ * `{ ...adapters }` into a door that never asked for it, invisibly and with no type error. A
+ * positional options object cannot: every caller that wants it has to name it at the call site.
+ * Same split as `recomputeLakeStats(lake, adapters, opts)` and its `skipActivation`.
+ */
+export interface LakeAdmissionOptions {
+  /**
+   * Skip resolving `EnforceLakeAdmission` entirely and grade every lake as report-only - for a call
+   * that is not a JOIN at all (#2248's restore: a removal deliberately retains the file's chunks,
+   * so a restore cannot change whether they are findable, and grading it as a fresh join could
+   * permanently refuse a member ingested before the lake's policy tightened). The verdict still
+   * computes and still warns on a violation, so nothing here is silenced - only the throw is.
+   *
+   * Distinct from the `EnforceLakeAdmission` LEVER: that setting decides whether this INSTALL
+   * enforces the contract on a join. This says "this call is not a join", a property of the
+   * operation, not of the install's rollout stage - so it is legitimate beside the lever rather
+   * than a way to route around it. Pass it from nowhere except the restore path.
+   */
+  forceReportOnly?: boolean;
+}
+
+/**
  * The settings resolver's parameter is typed as the concrete `Logger`, but every call it makes is
  * optional-chained (`logger?.warn?.()`), so a partial logger is safe there. One narrowing in one
  * place, rather than a cast at every door.
@@ -258,7 +282,8 @@ async function resolveEnforcingLakes(
 export async function assertLakeAdmission(
   lakes: readonly AdmissionLake[],
   members: readonly AdmissionMember[],
-  adapters: LakeAdmissionAdapters
+  adapters: LakeAdmissionAdapters,
+  { forceReportOnly }: LakeAdmissionOptions = {}
 ): Promise<AdmissionVerdict> {
   // Short-circuit before ANY read: no members, or no lake declaring a passage policy, means there
   // is no contract to grade. Checked on the raw lakes rather than on `buildLakeRequirements` so the
@@ -273,9 +298,12 @@ export async function assertLakeAdmission(
   const requirements = buildLakeRequirements(declaring, embeddingModel);
   if (requirements.length === 0) return { status: 'admitted' };
 
+  // `forceReportOnly` skips the settings read entirely (an empty enforcing set), rather than
+  // resolving it and discarding the result - the restore path's whole point is that this call
+  // grades nothing as enforceable, so there is nothing for that read to inform.
   const [resolvedMembers, enforcingLakeIds] = await Promise.all([
     resolveMemberTargets(members, resolved),
-    resolveEnforcingLakes(declaring, resolved),
+    forceReportOnly ? Promise.resolve(new Set<string>()) : resolveEnforcingLakes(declaring, resolved),
   ]);
 
   const verdict = decideLakeAdmission(resolvedMembers, requirements, enforcingLakeIds);
