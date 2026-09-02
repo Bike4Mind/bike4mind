@@ -58,7 +58,10 @@ class LakeMembershipDecisionRepository
       // changed to keep-newest must not leave the old kept id behind, where `membersRemovedByDecision`
       // would ignore it today and some future reader would treat it as the owner's choice.
       { $set: { decision, keptFabFileId: keptFabFileId ?? null, groupIdentity, decidedByUserId, decidedAt, source } },
-      { new: true, upsert: true }
+      // `runValidators` is NOT the default on findOneAndUpdate, and without it the `decision` and
+      // `source` enums above are decorative on this path - the only path that writes a row. A value
+      // the planner cannot act on would persist silently and fail later, at a read, on live data.
+      { new: true, upsert: true, runValidators: true }
     );
     return doc.toJSON() as ILakeMembershipDecisionDocument;
   }
