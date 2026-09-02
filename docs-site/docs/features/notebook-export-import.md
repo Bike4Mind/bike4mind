@@ -230,7 +230,7 @@ POST /api/notebooks/export
 **Request Body:**
 ```json
 {
-  "notebookIds": ["id1", "id2"],
+  "notebookIds": ["507f1f77bcf86cd799439011", "67dbe18a7f9cf1fa5d9686aa"],
   "includeKnowledge": true,
   "includeArtifacts": true,
   "includeTools": true,

@@ -123,8 +123,15 @@ export const NotebookExportRequestSchema = z.object({
     .optional()
     .prefault(10 * 1024 * 1024), // 10MB default
   // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel, so one non-hex entry rejects the
-  // whole query with a CastError the route could only answer as a 500.
-  notebookIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'must be a 24-character hex notebook id')).optional(),
+  // whole query with a CastError the route could only answer as a 500. Empty is rejected rather
+  // than treated as "all": getSessionsToExport only adds the `_id` filter when the array is
+  // non-empty, so `[]` and an omitted field produce the same bare `{ userId }` query - a caller
+  // who named zero notebooks would receive an archive of every one they own.
+  notebookIds: z
+    .array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'must be a 24-character hex notebook id'))
+    .min(1, 'name at least one notebook, or omit notebookIds to export all')
+    .max(50, 'Maximum 50 notebooks per export request')
+    .optional(),
   fromDate: z.iso.datetime().optional(),
   toDate: z.iso.datetime().optional(),
 });

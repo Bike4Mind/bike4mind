@@ -33,4 +33,17 @@ describe('NotebookExportRequestSchema - notebookIds', () => {
       expect(result.error.issues[0].path.join('.')).toBe('notebookIds.1');
     }
   });
+
+  it('rejects an empty array, which the service would otherwise read as "export everything"', () => {
+    // `getSessionsToExport` only adds the `_id` filter when the array is non-empty, so `[]` and an
+    // omitted field issue the same bare `{ userId }` query. Naming zero notebooks must not return
+    // all of them; omitting the field remains the way to ask for everything.
+    expect(NotebookExportRequestSchema.safeParse({ notebookIds: [] }).success).toBe(false);
+  });
+
+  it('caps the batch at 50, matching the sibling curate schema', () => {
+    const ids = Array.from({ length: 51 }, () => HEX);
+    expect(NotebookExportRequestSchema.safeParse({ notebookIds: ids }).success).toBe(false);
+    expect(NotebookExportRequestSchema.safeParse({ notebookIds: ids.slice(0, 50) }).success).toBe(true);
+  });
 });
