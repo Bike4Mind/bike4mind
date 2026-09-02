@@ -700,9 +700,12 @@ describe('useApplyTaxonomySuggestions result toast (#2093)', () => {
   };
 
   // toast.* are module-level spies shared across this file, so calls accumulate without this.
+  // apiPost is reset too, matching the sibling describes: every case here queues a
+  // mockResolvedValueOnce, and one left unconsumed would shift the queue into an unrelated test.
   beforeEach(() => {
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.warning).mockClear();
+    apiPost.mockReset();
   });
 
   it('does not claim "already up to date" when files silently lost their CAS check', async () => {
