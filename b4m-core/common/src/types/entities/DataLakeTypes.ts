@@ -22,6 +22,12 @@ export const DATA_LAKE_STATUSES = [
   'active',
   'archiving',
   'archived',
+  // Two transitional statuses for the two reversal axes, deliberately NOT one shared 'restoring'.
+  // They used to be the same value, and because each axis admits its own status for crash re-entry,
+  // an unarchive and a restore-from-deleted could both hold it and both settle 'active' - a
+  // terminal settle conditional on the claimed status passes for BOTH claimants and so cannot
+  // separate them. Distinct values make the two axes mutually exclusive at the claim.
+  'unarchiving',
   'restoring',
   'deleting',
   'deleted',
@@ -38,6 +44,22 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
+
+/**
+ * What a terminal lifecycle settle may write alongside the status it settles on: the spent
+ * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
+ * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
+ * make it a general update that happens to be conditional.
+ *
+ * The mark fields are `null`-only, never a Date: a settle clears a spent stamp, and the only writer
+ * that may SET one is the set-if-unset claim (`claimFilesArchivedAt`/`claimFilesDeletedAt`).
+ */
+export type LakeSettleFields = {
+  status: DataLakeStatus;
+  filesArchivedAt?: null;
+  filesDeletedAt?: null;
+  lastUpdatedByUserId?: string;
+};
 
 /** Per-batch policy for files whose content hash already exists in the lake. */
 export type ConflictResolution = 'skip' | 'update' | 'duplicate';
@@ -460,15 +482,33 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   claimDeleting(id: string): Promise<boolean>;
   /**
-   * Enter `restoring` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
+   * Enter `unarchiving` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
    * claimed for the same reason: `unarchiveDataLake` pre-checks a document it read moments earlier,
    * and `deleteDataLake` also accepts `archived`, so a delete landing in that gap must make this
    * LOSE rather than be overwritten by it. A plain `$set` there leaves the lake `active` with every
    * member soft-deleted and `restoreDeletedDataLake` refusing it, which strands the files.
-   * Re-entrant from `restoring` itself so a crashed prior attempt can retry. Returns whether this
-   * caller may proceed.
+   * Re-entrant from `unarchiving` itself so a crashed prior attempt can retry.
+   *
+   * Also admits the legacy shared `restoring`, which is what an archive-axis reversal in flight
+   * across the deploy that split the two statuses is sitting in. Claiming it CONVERTS that lake
+   * onto this axis, so a delete-axis restore holding the same value loses its own terminal settle
+   * rather than both settling `active`. Once no lake predates the split this entry can go.
    */
   claimUnarchiving(id: string): Promise<boolean>;
+  /**
+   * Settle a lake onto its TERMINAL status, conditional on it still holding the transitional status
+   * this caller claimed - the closing half of the `claim*` pattern above.
+   *
+   * Claiming the transitional status stops two operations from STARTING on top of each other; it
+   * does not stop one that already started from settling over the other's result. Both sweeps run
+   * to completion either way, so what this decides is which operation gets to RECORD its outcome:
+   * the one still holding its claim. The loser reports a conflict rather than silently writing a
+   * status whose file state belongs to somebody else.
+   *
+   * Resolves the settled document, or `null` when the lake has moved on (lost) or vanished - the
+   * caller re-reads to tell those apart, since only the loss path needs the distinction.
+   */
+  settleLifecycleStatus(id: string, from: DataLakeStatus, set: LakeSettleFields): Promise<IDataLakeDocument | null>;
   /**
    * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
    * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
