@@ -27,6 +27,7 @@ const {
   removeFileLakeIds,
   lakesState,
   workBenchState,
+  mockFileOwnerId,
 } = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
@@ -44,6 +45,8 @@ const {
     files: [] as { id: string; fileName: string }[],
     listeners: new Set<() => void>(),
   },
+  // Mutable so a test can exercise the non-owner copy branch of the remove-confirm dialog.
+  mockFileOwnerId: { value: 'owner-1' },
 }));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
@@ -110,8 +113,8 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true, isFeatureEnabled: () => true, isLoading: false }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (selector?: (s: { isAdmin: boolean }) => unknown) =>
-    selector ? selector({ isAdmin: true }) : { isAdmin: true },
+  useUser: (selector?: (s: { isAdmin: boolean; currentUser: { id: string } }) => unknown) =>
+    selector ? selector({ isAdmin: true, currentUser: { id: 'owner-1' } }) : { isAdmin: true },
 }));
 // Both writers, not just openManager: SelectedLakeHeader selects openWizardForLake too, and a
 // stub missing it hands the Add-files button `undefined` - the click throws, and a test that
@@ -160,7 +163,12 @@ vi.mock('./DataLakeChatTree', () => ({
     dropHint?: string;
     tree: { segment: string }[];
   }) => {
-    const file = { id: 'file-123', fileName: 'x.pdf', tags: [{ name: 'datalake:lake-a' }] };
+    const file = {
+      id: 'file-123',
+      fileName: 'x.pdf',
+      userId: mockFileOwnerId.value,
+      tags: [{ name: 'datalake:lake-a' }],
+    };
     return (
       <div
         data-testid="mock-tree"
@@ -219,6 +227,7 @@ describe('DataLakeExplorer chat-first surface', () => {
     vi.clearAllMocks();
     sessionState.currentSessionId = 'sess-1';
     removeFileLakeIds.length = 0;
+    mockFileOwnerId.value = 'owner-1';
     lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
     workBenchState.files = [];
     // Re-applied each test since clearAllMocks only clears call history, not implementation -
@@ -480,6 +489,24 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The mutation must target the lake the confirm dialog named - by the time it fires, the
     // hook has to have been (re)constructed with that lake's id, not the initial null.
     expect(removeFileLakeIds[removeFileLakeIds.length - 1]).toBe('lake-1');
+  });
+
+  it('promises the file stays in Files (and Undo) when the actor owns it', () => {
+    mockFileOwnerId.value = 'owner-1'; // matches the mocked useUser's currentUser.id
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-delete'));
+    expect(screen.getByTestId('datalake-tree-removefile-confirm').textContent).toMatch(/stays in your Files/);
+    expect(screen.getByTestId('datalake-tree-removefile-confirm').textContent).toMatch(/Undo/);
+  });
+
+  it('does not promise "your Files" for a file the actor does not own - states only what is certain', () => {
+    mockFileOwnerId.value = 'someone-else';
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-delete'));
+    const text = screen.getByTestId('datalake-tree-removefile-confirm').textContent ?? '';
+    expect(text).not.toMatch(/your Files/);
+    expect(text).toMatch(/owner's Files/);
+    expect(text).toMatch(/Undo/);
   });
 });
 

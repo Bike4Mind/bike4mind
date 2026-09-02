@@ -20,8 +20,9 @@ import { adminSettingsRepository, FabFile } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
 import {
+  buildChunkScanQueuePayload,
   buildFabFileChunkScanFilter,
   CHUNK_SCAN_BATCH,
   CHUNK_SCAN_MIN_AGE_MS,
@@ -46,8 +47,19 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
   const now = Date.now();
   const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
   const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
-    .select('_id userId batchId')
+  // Platform flag only: this sweep is global, so there is no single lake to resolve a scoped
+  // override against - a candidate need not be in any lake at all, which is part of what the sweep
+  // exists to catch. Conditional in BOTH directions, and the OFF direction is the load-bearing one:
+  // this sweep is the only automatic exit a paused file has, so excluding unconditionally would
+  // strand it forever and break CONVERGENCE_PAUSED_CHUNK_NOTE's user-visible "rebuilt when
+  // convergence resumes". `=== true` rather than coercion: anything else must fall to sweeping,
+  // because wrongly excluding is the far worse direction. Keep in sync with rescueUnchunkedFiles.
+  const excludeConvergencePaused =
+    (await adminSettingsRepository.getSettingsValue(CONVERGENCE_PAUSE_SETTING_KEY)) === true;
+  const candidates = await FabFile.find(
+    buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused })
+  )
+    .select('_id userId')
     .limit(CHUNK_SCAN_BATCH)
     .lean();
 
@@ -56,7 +68,6 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
   // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
   // file is not re-sent every pass.
   const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
-  const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
 
   // Bounded-concurrency fan-out with a PER-FILE catch. A throttled or unroutable send used to reject
   // out of a sequential loop and abandon every candidate behind it, and the count reported was the
@@ -69,11 +80,7 @@ export async function runChunkRescueSweep(runLogger: Logger): Promise<{ enqueued
   let failed = 0;
   const enqueueOne = async (id: string) => {
     try {
-      await sendToQueue(queueUrl, {
-        fabFileId: id,
-        userId: userById.get(id)!,
-        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
-      });
+      await sendToQueue(queueUrl, buildChunkScanQueuePayload({ fabFileId: id, userId: userById.get(id)! }));
       enqueued++;
     } catch (e) {
       failed++;

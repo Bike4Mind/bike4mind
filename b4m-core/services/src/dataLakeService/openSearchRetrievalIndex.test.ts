@@ -4,13 +4,13 @@ import { openSearchRetrievalIndex } from './openSearchRetrievalIndex';
 const SCOPE = { datalakeTag: 'lake:1', fileTagPrefix: null };
 
 const makePort = (modelsByFile: Record<string, string[]>, onDelete?: () => Promise<void>) => {
-  const embeddingModelsByFabFileIds = vi.fn().mockResolvedValue(modelsByFile);
+  const retrievalIndexModelsByFabFileIds = vi.fn().mockResolvedValue(modelsByFile);
   const deleteByFabFileIdOrThrow = vi.fn(onDelete ?? (async () => undefined));
   return {
-    embeddingModelsByFabFileIds,
+    retrievalIndexModelsByFabFileIds,
     deleteByFabFileIdOrThrow,
     port: openSearchRetrievalIndex({
-      db: { fabFileChunks: { embeddingModelsByFabFileIds } },
+      db: { fabFileChunks: { retrievalIndexModelsByFabFileIds } },
       searchIndex: { deleteByFabFileIdOrThrow },
     }),
   };
@@ -21,14 +21,14 @@ describe('openSearchRetrievalIndex.removeForDataLake', () => {
     // The pairing, not the union. Before this, models were resolved across the whole batch and every
     // file was paired with every model in it: f1 would also be deleted from model-b and f2 from
     // model-a, two requests that match nothing. At connector scale that doubles removal traffic.
-    const { embeddingModelsByFabFileIds, deleteByFabFileIdOrThrow, port } = makePort({
+    const { retrievalIndexModelsByFabFileIds, deleteByFabFileIdOrThrow, port } = makePort({
       f1: ['model-a'],
       f2: ['model-b'],
     });
 
     await port.removeForDataLake({ scope: SCOPE, fabFileIds: ['f1', 'f2'] });
 
-    expect(embeddingModelsByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(retrievalIndexModelsByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(deleteByFabFileIdOrThrow).toHaveBeenCalledTimes(2);
     expect(deleteByFabFileIdOrThrow).toHaveBeenCalledWith('f1', 'model-a');
     expect(deleteByFabFileIdOrThrow).toHaveBeenCalledWith('f2', 'model-b');
@@ -58,11 +58,11 @@ describe('openSearchRetrievalIndex.removeForDataLake', () => {
   });
 
   it('does nothing for an empty fabFileIds list - no model lookup, no deletes', async () => {
-    const { embeddingModelsByFabFileIds, deleteByFabFileIdOrThrow, port } = makePort({});
+    const { retrievalIndexModelsByFabFileIds, deleteByFabFileIdOrThrow, port } = makePort({});
 
     await port.removeForDataLake({ scope: SCOPE, fabFileIds: [] });
 
-    expect(embeddingModelsByFabFileIds).not.toHaveBeenCalled();
+    expect(retrievalIndexModelsByFabFileIds).not.toHaveBeenCalled();
     expect(deleteByFabFileIdOrThrow).not.toHaveBeenCalled();
   });
 

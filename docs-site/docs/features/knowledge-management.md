@@ -138,6 +138,20 @@ own once indexing completes - re-run the search then. Prefer to converge a lake 
 people are querying it.
 :::
 
+:::note A large repair is paced on purpose
+Rebuilding or converging a lake re-embeds every file it touches, and every embedding call in the
+platform shares one provider quota. Both doors therefore run against a platform-wide throughput cap -
+a limit on embedding calls per minute and on tokens per minute - so a big repair drains steadily
+instead of arriving all at once and crowding out ordinary uploads. Searches are deliberately outside
+that cap: querying a lake never waits behind a repair.
+
+What you may see while a large repair runs: files finishing in waves rather than all together, and
+occasionally a file that reports being throttled. Throttling resolves itself - the work retries
+automatically, and no action is needed unless it persists for hours. If indexing stops entirely and
+files report that a throughput limit is set to 0, that is a deliberate platform-admin setting rather
+than a fault; ask an administrator, since nothing you can change from the lake will restart it.
+:::
+
 ### Vector Embeddings
 Every chunk is:
 - **Semantically Indexed** - Meaning-based search

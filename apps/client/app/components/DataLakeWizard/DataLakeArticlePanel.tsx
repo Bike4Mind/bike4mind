@@ -1,25 +1,15 @@
 import { useState } from 'react';
-import {
-  Box,
-  Button,
-  Chip,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Modal,
-  ModalDialog,
-  Skeleton,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, Chip, Skeleton, Tooltip, Typography } from '@mui/joy';
 import ChatIcon from '@mui/icons-material/Chat';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import { useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
+import { useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
+import { describePipelineStall } from '@bike4mind/common';
 
 function cleanFileName(fileName: string): string {
   return fileName.replace(/\.[^/.]+$/, '').replace(/^\[.*?\]\s*/, '');
@@ -33,6 +23,7 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
 interface DataLakeArticlePanelProps {
   file: IFabFileDocument | null;
   dataLakeId: string;
+  lakeName: string;
   /**
    * Whether the caller may manage this lake (admin or creator). Gates the per-file
    * management actions (Re-process, Remove) - lake lists surface other users'
@@ -51,14 +42,15 @@ interface DataLakeArticlePanelProps {
 export default function DataLakeArticlePanel({
   file,
   dataLakeId,
+  lakeName,
   canManage,
   onAskAbout,
   onRemoved,
 }: DataLakeArticlePanelProps) {
   const { data: content, isLoading } = useGetFabFileContent(file);
   const reprocess = useReprocessFabFile(dataLakeId);
-  const removeFile = useRemoveFileFromDataLake(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const stallNotice = file ? describePipelineStall(file) : null;
 
   if (!file) {
     return (
@@ -125,7 +117,6 @@ export default function DataLakeArticlePanel({
                   color="danger"
                   data-testid={`datalake-removefile-btn-${file.id}`}
                   startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
-                  loading={removeFile.isPending}
                   onClick={() => setConfirmRemove(true)}
                   sx={{ flexShrink: 0, fontSize: '13px' }}
                 >
@@ -135,10 +126,16 @@ export default function DataLakeArticlePanel({
             </>
           )}
         </Box>
-        {/* Surfaced from the chunk-pipeline hardening: files that extracted no text are flagged. */}
-        {file.notes && (
+        {/* Pipeline state (no extractable text, a halted rebuild) is derived from its own fields;
+            `notes` is the owner's own text and is shown alongside, not in place of it. */}
+        {stallNotice && (
           <Typography level="body-xs" sx={{ color: 'warning.500', mb: 1 }}>
-            ⚠️ {file.notes}
+            {'\u26a0\ufe0f'} {stallNotice}
+          </Typography>
+        )}
+        {file.notes && (
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
+            {file.notes}
           </Typography>
         )}
         {tags.length > 0 && (
@@ -184,37 +181,14 @@ export default function DataLakeArticlePanel({
         </Box>
       )}
 
-      <Modal open={confirmRemove} onClose={() => setConfirmRemove(false)}>
-        <ModalDialog data-testid="datalake-removefile-confirm" role="alertdialog">
-          <DialogTitle>Remove file from data lake?</DialogTitle>
-          <DialogContent>
-            “{title}” will be removed from this data lake. The file stays in your Files list and any chats that use it —
-            only its membership in this lake is removed. It stops appearing here right away; some search backends finish
-            clearing it on the lake&apos;s next sync.
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="danger"
-              data-testid="datalake-removefile-confirm-btn"
-              loading={removeFile.isPending}
-              onClick={() =>
-                removeFile.mutate(file.id, {
-                  onSuccess: () => {
-                    setConfirmRemove(false);
-                    onRemoved?.();
-                  },
-                })
-              }
-            >
-              Remove
-            </Button>
-            <Button variant="plain" color="neutral" onClick={() => setConfirmRemove(false)}>
-              Cancel
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+      <RemoveFileFromLakeDialog
+        open={confirmRemove}
+        onClose={() => setConfirmRemove(false)}
+        file={file}
+        lakeName={lakeName}
+        dataLakeId={dataLakeId}
+        onRemoved={onRemoved}
+      />
     </Box>
   );
 }

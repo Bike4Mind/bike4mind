@@ -205,6 +205,7 @@ export default function DataLakeManagerPanel() {
           <DataLakeArticlePanel
             file={selectedFile}
             dataLakeId={activeLake.id}
+            lakeName={activeLake.name}
             canManage={activeLake.canManage}
             onRemoved={() => setSelectedFile(null)}
           />

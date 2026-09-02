@@ -209,6 +209,20 @@ describe('OrgGoogleDriveConnectionModel - accessors', () => {
     // BaseRepository.findOne resolves to undefined (not null) on no match - matches the sibling repos.
     expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-1')).toBeFalsy();
   });
+
+  it('findByDataLakeIdAny sees what findByDataLakeId cannot: a disabled row, and no org scope', async () => {
+    // The purge teardown resolves through this one. It runs with only a lake id, and a disabled row
+    // still occupies the unique driveFolderId index - so either filter would leave the folder
+    // permanently unclaimable.
+    const created = await OrgGoogleDriveConnection.create({ ...base, enabled: false });
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-1')).toBeFalsy();
+    const found = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny('lake-1');
+    expect(found?.id).toBe(created.id);
+    expect(found?.organizationId).toBe('org-1');
+    // Still excludes the credential, like every other default read.
+    expect(found?.oauthRefreshToken).toBeUndefined();
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeIdAny('lake-missing')).toBeFalsy();
+  });
 });
 
 describe('OrgGoogleDriveConnectionModel - health + sync cursor', () => {
