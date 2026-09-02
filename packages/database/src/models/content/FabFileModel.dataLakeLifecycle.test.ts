@@ -246,14 +246,13 @@ describe('FabFile data lake lifecycle membership', () => {
     it('a non-creator VIEWER reaches the prefix-only member only once lakeMemberships replaces the caller-anchored arm', async () => {
       await seedLakeRows();
 
-      // Old shape: the caller-anchored SCOPED prefix arm. Must ALSO carry dataLakeTags, or the
-      // scoped arm - a strict subset of base access with none of the viewer's own files in scope -
-      // returns zero rows rather than showing the meta-tagged member; only the prefix arm differs
-      // between "before" and "after" here.
+      // Old shape: the meta-tag arm alone. This is what the caller-anchored `scopedTagPrefixes`
+      // option degraded to for a non-creator - its prefix arm was `prefix AND base access`, a
+      // strict subset of an arm already present, so it could never admit a creator-owned file.
+      // Only the lake arm differs between "before" and "after" here.
       const before = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
         includeShared: true,
         dataLakeTags: [DATALAKE_TAG],
-        scopedTagPrefixes: ['acme:'],
       });
       expect(before.data.map(f => f.fileName).sort()).toEqual(['meta.txt']);
 

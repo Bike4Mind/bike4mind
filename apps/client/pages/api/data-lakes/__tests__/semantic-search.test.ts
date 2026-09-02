@@ -112,6 +112,9 @@ vi.mock('@bike4mind/services', async () => ({
     lakeMembershipsFrom: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/getDynamicDataLakeTags')
     ).lakeMembershipsFrom,
+    warnIfManyLakeMemberships: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/getDynamicDataLakeTags')
+    ).warnIfManyLakeMemberships,
     resolveSearchBudgets: mockResolveSearchBudgets,
     // A distinct, identifiable value (not a real adapter) so a test can assert reference
     // equality without depending on openSearchChunkAdapter's own implementation.

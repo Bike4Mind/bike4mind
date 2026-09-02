@@ -18,8 +18,7 @@ import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } 
 import type { Logger } from '@bike4mind/observability';
 import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
 
-/** EntitlementRequest carries no logger; the routes calling this are Express requests that do. */
-type RetrievalScopeRequest = EntitlementRequest & MembershipRequest & { logger?: Logger };
+type RetrievalScopeRequest = EntitlementRequest & MembershipRequest;
 
 /** The tag/prefix triple `semanticDataLakeSearch` scopes on. Mirrors the core resolver's return. */
 export type RetrievalLakeScope = Awaited<ReturnType<typeof dataLakeService.getDynamicDataLakeAccess>>;

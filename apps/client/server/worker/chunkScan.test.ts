@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './chunkScan';
-import { CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE } from '@bike4mind/common';
+import { buildFabFileChunkScanFilter } from './chunkScan';
+import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
@@ -14,9 +14,9 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
     if (cond === null) return value === null || value === undefined;
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
     if (cond && typeof cond === 'object') {
-      // EVERY operator in the condition, not just the first one found: `notes` carries both a
-      // `$not` and a `$nin`, and a first-match-wins evaluator would silently ignore one of them -
-      // passing the tests while the real query behaved differently.
+      // EVERY operator in the condition, not just the first one found. A first-match-wins evaluator
+      // is green over a query that behaves differently the moment any field carries two operators,
+      // which this filter has done before and can again.
       const ops = cond as Record<string, unknown>;
       const checks: boolean[] = [];
       if ('$ne' in ops) {
@@ -98,7 +98,7 @@ describe('buildFabFileChunkScanFilter', () => {
       isChunking: false,
       createdAt: old,
       deletedAt: null,
-      notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
+      noExtractableTextAt: new Date('2025-12-31T12:00:00Z'),
     };
     expect(matches(doc, filter)).toBe(false);
   });
@@ -175,7 +175,7 @@ describe('buildFabFileChunkScanFilter', () => {
     };
     expect(matches(stamped, filter)).toBe(true);
     expect(matches({ ...stamped, error: 'chunker gave up' }, filter)).toBe(false);
-    expect(matches({ ...stamped, notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image` }, filter)).toBe(false);
+    expect(matches({ ...stamped, noExtractableTextAt: new Date() }, filter)).toBe(false);
   });
 });
 
@@ -185,42 +185,53 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', (
   // chunkRebuildRequestedAt is left UNSET rather than null: only the chunk-handler path clears it,
   // the vectorize path (fabFileVectorize.ts) writes its marker without touching it, so a fixture
   // that pins it to null would only reproduce one of the two marker paths.
-  const paused = (note: string) => ({
+  const candidate = (overrides: Doc = {}) => ({
     status: 'complete',
     chunkCount: 0,
     isChunking: false,
     createdAt: old,
     deletedAt: null,
-    notes: note,
+    ...overrides,
   });
+  const paused = (reason: string) => candidate({ chunkStallReason: reason });
+  /** A pre-#2016 row: the marker is still prose in `notes` and no `chunkStallReason` exists yet. */
+  const legacyPaused = (note: string) => candidate({ notes: note });
 
   describe('while the kill switch is ON', () => {
     const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: true });
 
     it.each([
-      ['the chunk-handler marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
-      ['the vectorize marker', CONVERGENCE_PAUSED_NOTE],
-    ])('skips a paused file - %s', (_label, note) => {
+      ['the chunk-handler marker', 'rechunkPaused'],
+      ['the vectorize marker', 'vectorizePaused'],
+    ])('skips a paused file - %s', (_label, reason) => {
       // A paused file matches every OTHER clause (the reset zeroed chunkCount, the pause writes no
       // error), so without the exclusion it is re-selected every pass and consumes the rescue cap,
       // starving genuine lost-webhook candidates while the sweep still reports a healthy count.
-      expect(matches(paused(note), filter)).toBe(false);
+      expect(matches(paused(reason), filter)).toBe(false);
+    });
+
+    it.each([
+      ['the chunk-handler marker', CHUNK_STALL_NOTICES.rechunkPaused],
+      ['the vectorize marker', CHUNK_STALL_NOTICES.vectorizePaused],
+    ])('skips a pre-migration paused file carrying the marker as prose - %s', (_label, note) => {
+      // #2016's migration and this code do not deploy atomically, so the transitional `notes` arm is
+      // what keeps the exclusion working through the window. Delete with the rest of the legacy reads.
+      expect(matches(legacyPaused(note), filter)).toBe(false);
     });
 
     it('still selects an ordinary un-chunked file, so the exclusion is not over-broad', () => {
-      expect(matches({ ...paused('quarterly report for the board deck') }, filter)).toBe(true);
+      expect(matches(legacyPaused('quarterly report for the board deck'), filter)).toBe(true);
     });
 
-    it('still selects a file with no notes at all', () => {
-      const { notes, ...noNotes } = paused('x');
-      expect(matches(noNotes, filter)).toBe(true);
+    it('still selects a file with no stall reason and no notes at all', () => {
+      expect(matches(candidate(), filter)).toBe(true);
     });
 
-    it('still selects a file whose notes are explicitly null', () => {
-      // $nin matches a null/missing field (null is not in a list of note strings). Pinned because
-      // getting this wrong would silently drop every un-noted file from the sweep - the opposite,
-      // and far worse, failure than the churn this exclusion fixes.
-      expect(matches({ ...paused('x'), notes: null }, filter)).toBe(true);
+    it('still selects a file whose stall reason and notes are explicitly null', () => {
+      // $nin matches a null/missing field. Pinned because getting this wrong would silently drop
+      // every unstalled file from the sweep - the opposite, and far worse, failure than the churn
+      // this exclusion fixes.
+      expect(matches(candidate({ chunkStallReason: null, notes: null }), filter)).toBe(true);
     });
   });
 
@@ -228,9 +239,9 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', (
     const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
 
     it.each([
-      ['the chunk-handler marker', CONVERGENCE_PAUSED_CHUNK_NOTE],
-      ['the vectorize marker', CONVERGENCE_PAUSED_NOTE],
-    ])('SELECTS a paused file so it is rebuilt - %s', (_label, note) => {
+      ['the chunk-handler marker', 'rechunkPaused'],
+      ['the vectorize marker', 'vectorizePaused'],
+    ])('SELECTS a paused file so it is rebuilt - %s', (_label, reason) => {
       // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a paused
       // file has: the other two recovery paths are human-driven and lake-scoped, so neither reaches a
       // file outside every lake - exactly what the sweep exists to catch. And the re-enqueue really
@@ -238,19 +249,16 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', (
       // defaults a missing origin to 'user' and returns false, so it is genuinely re-chunked rather
       // than bounced. Excluding it unconditionally would break the marker's user-visible promise
       // that passages are "rebuilt when convergence resumes".
-      expect(matches(paused(note), filter)).toBe(true);
+      expect(matches(paused(reason), filter)).toBe(true);
     });
 
-    it('still excludes the no-extractable-text note, which is terminal either way', () => {
-      expect(matches(paused(`${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}: scanned image`), filter)).toBe(false);
+    it('SELECTS a pre-migration paused file too, so the legacy arm is gated the same way', () => {
+      expect(matches(legacyPaused(CHUNK_STALL_NOTICES.rechunkPaused), filter)).toBe(true);
     });
-  });
 
-  it('defaults to NOT excluding when no options are passed', () => {
-    // The safer default: a caller that forgets the flag keeps the pre-existing rescue behaviour
-    // rather than silently stranding paused files.
-    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
-    expect(matches(paused(CONVERGENCE_PAUSED_CHUNK_NOTE), filter)).toBe(true);
+    it('still excludes a zero-chunk file, which is terminal either way', () => {
+      expect(matches(candidate({ noExtractableTextAt: new Date('2026-01-02T00:00:00Z') }), filter)).toBe(false);
+    });
   });
 });
 

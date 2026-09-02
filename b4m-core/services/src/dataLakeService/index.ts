@@ -44,6 +44,7 @@ export * from './lakeAdmissionGate';
 export * from './recordMembershipDecision';
 export * from './removeFileFromDataLake';
 export * from './addFileToDataLake';
+export * from './setDataLakeFileTags';
 export * from './acceptDataLakePurge';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';
