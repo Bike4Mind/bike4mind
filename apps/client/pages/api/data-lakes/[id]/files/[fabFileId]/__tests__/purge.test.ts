@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createHash } from 'crypto';
+import { createHmac } from 'crypto';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
@@ -71,6 +71,7 @@ vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
+vi.mock('sst', () => ({ Resource: { SECRET_ENCRYPTION_KEY: { value: 'test-secret-encryption-key' } } }));
 
 import handler from '../purge';
 
@@ -373,6 +374,15 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     );
   });
 
+  it('caps the error text filed on a throw, so a long or unbounded message cannot ride into the no-TTL row', async () => {
+    h.purgeDataLakeDocument.mockRejectedValue(new Error('x'.repeat(1000)));
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res)).rejects.toThrow();
+    const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
+    expect(metadata.error).toHaveLength(500);
+  });
+
   it('does not file an audit record for a NotFound refusal either', async () => {
     const { NotFoundError } = await import('@bike4mind/utils');
     h.purgeDataLakeDocument.mockRejectedValue(new NotFoundError('File not found in this data lake'));
@@ -397,7 +407,9 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
     const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
     expect(metadata).not.toHaveProperty('fileName');
-    expect(metadata.fileNameHash).toBe(createHash('sha256').update('q3.pdf').digest('hex'));
+    expect(metadata.fileNameHash).toBe(
+      createHmac('sha256', 'test-secret-encryption-key').update('q3.pdf').digest('hex')
+    );
     expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
   });
 

@@ -393,6 +393,10 @@ describe('purgeDataLakeDocument', () => {
 
     expect(receipt.storageObjectDeleted).toBe(false);
     expect(receipt.storageObjectsRemaining).toBe(1);
+    // Chunks (and the rollups they carry) survive too: a partial sweep must not leave the row's
+    // health rollups stale relative to chunks that no longer exist.
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(receipt.chunksRemaining).toBe(receipt.chunksBefore);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
     expect(db.sessions.findAllWithKnowledgeId).not.toHaveBeenCalled();
     expect(receipt.documentDeleted).toBe(false);

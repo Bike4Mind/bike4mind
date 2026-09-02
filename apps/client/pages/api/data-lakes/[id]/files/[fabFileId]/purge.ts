@@ -16,7 +16,8 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { Types } from 'mongoose';
-import { createHash } from 'crypto';
+import { createHmac } from 'crypto';
+import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
@@ -31,13 +32,15 @@ import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
  * and `fileName` is user-supplied text that can itself be the sensitive fact ("Q3 layoffs -
  * <name>.docx"). The adjacent lake audit trail forbids exactly this at the schema layer so the
  * trail cannot become a copy of the corpus. The hash keeps a stable, correlatable handle for the
- * same document without retaining what it was called.
+ * same document without retaining what it was called. HMAC'd against the server's own secret
+ * rather than plain-hashed: a file name is low-entropy text, and an unsalted hash of it would be
+ * dictionary-reversible by anyone who can read the audit trail.
  */
 const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
   const { fileName, ...rest } = receipt;
   return {
     ...rest,
-    fileNameHash: createHash('sha256')
+    fileNameHash: createHmac('sha256', Resource.SECRET_ENCRYPTION_KEY.value)
       .update(fileName ?? '')
       .digest('hex'),
   };
@@ -188,7 +191,10 @@ const handler = baseApi()
             fabFileId,
             verified: false,
             phase: receiptFiled ? 'post-destruction' : 'sweep',
-            error: error instanceof Error ? error.message : 'Unknown error',
+            // Capped: this lands in the same no-TTL CounterLog auditableReceipt exists to keep
+            // clean of unbounded, potentially sensitive text, and an error message is attacker- or
+            // library-controlled length.
+            error: (error instanceof Error ? error.message : 'Unknown error').slice(0, 500),
             ...resolveAuditPrincipal(req.user!, req.apiKeyInfo),
           },
         },
