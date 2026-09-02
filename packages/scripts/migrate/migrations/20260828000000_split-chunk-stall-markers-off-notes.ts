@@ -41,13 +41,22 @@ import { type MigrationFile } from './index';
  * Gating the queue stacks on the migrator would not close it: the old handlers keep serving until
  * their own deploy either way.
  *
- * The READ side of both windows - the forward one above, and a code rollback, where nothing reverts
- * the data because `migratorInvocation` only ever runs `up` and `migrate down` is a manual CLI step -
- * is covered by `isChunkStalledFile` (b4m-core/common/src/constants/chunking.ts) and its Mongo mirror
- * in `buildFabFileSearchQuery`. Those transitional arms read the legacy prose alongside the new field,
- * so a retrieval path serving ahead of, or behind, this migration still withholds and NAMES a stalled
- * file. They are what makes rolling the code back safe without also running `down()`, and they are
- * deleted one release after this has landed everywhere - see that docblock.
+ * The READ side of that forward window is covered by `isChunkStalledFile`
+ * (b4m-core/common/src/constants/chunking.ts) and its Mongo mirror in `buildFabFileSearchQuery`.
+ * Those transitional arms read the legacy prose alongside the new field, so a retrieval path serving
+ * AHEAD of this migration still withholds and NAMES a stalled file. They are deleted one release
+ * after this has landed everywhere - see that docblock.
+ *
+ * ROLLING BACK PAST #2016 REQUIRES `migrate down`. Nothing reverts the data on its own
+ * (`migratorInvocation` only ever runs `up`), and the transitional arms above do not help here: they
+ * read prose this migration deleted, and the pre-#2016 code a rollback restores does not contain
+ * them. A row left migrated reads as unstalled to every pre-#2016 reader - no `abandonedByKillSwitch`
+ * health signal, a permanent "still indexing" from `partitionByIndexAvailability`, and no "Rebuild
+ * passages" repair from `findConvergencePausedFilesByScope`. Run `down()` FIRST: the transitional
+ * arms honor the prose it restores, so the still-new stack keeps working until it is gone. It is a
+ * PARTIAL restore by design (see its comment): a row whose owner typed a note after `up()` keeps
+ * that note and loses its marker with the dropped field, so audit those rather than assume `down()`
+ * recovered every row.
  */
 
 /** Applied to the two stall notes only; they are fixed literals but contain a regex metacharacter ('.'). */
