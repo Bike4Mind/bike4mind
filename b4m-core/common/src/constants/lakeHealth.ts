@@ -92,6 +92,8 @@ export function resolveLakeHealthPolicy(opts: {
 export type LakeHealthMemberInput = {
   fabFileId: string;
   fileName?: string;
+  /** Byte size (`FabFile.fileSize`); `null` until measured. Feeds `findDuplicateMembers` only. */
+  fileSize?: number | null;
   /** Chunks created for the file (`FabFile.chunkCount`). */
   chunkCount: number;
   /**
@@ -382,6 +384,76 @@ export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: La
   };
 }
 
+/** One member of a duplicate-fileName group (#2239). */
+export type LakeHealthDuplicateMember = {
+  fabFileId: string;
+  fileName: string;
+  fileSize: number | null;
+};
+
+/**
+ * >= 2 live members sharing one exact `fileName` within a lake. This is a same-NAME check, not the
+ * identity-key derivation the admission checkpoint uses (#2238, itself blocked on #2235) - neither
+ * has landed, and this surface does not depend on either. A shared fileName is exactly the
+ * population that check would miss anyway: deliberate retention of a superseded document is normally
+ * expressed through naming (`policy-v2.md` beside `policy-v3.md`), which yields a different name and
+ * never groups here - so a same-name repeat is strong evidence of an accumulated upload generation,
+ * not a deliberate kept-both decision.
+ */
+export type LakeHealthDuplicateGroup = {
+  fileName: string;
+  members: LakeHealthDuplicateMember[];
+  /**
+   * True when at least two members of this group carry different, both-measured `fileSize` values -
+   * PROOF the content differs, not just a repeat upload of identical bytes. Equal size is evidence of
+   * identity but never proof (a same-length substitution, e.g. a changed digit, preserves byte length
+   * exactly) - so `false` here must be read as "not confirmed to differ", never as "confirmed identical".
+   */
+  confirmedDiffering: boolean;
+};
+
+export type LakeHealthDuplicatesReport = {
+  /** Total members that share a fileName with at least one sibling in this lake. */
+  memberCount: number;
+  /** Duplicate-name groups, largest group first. */
+  groups: LakeHealthDuplicateGroup[];
+};
+
+/**
+ * Group a lake's members by exact fileName and report every group with more than one member
+ * (#2239). Pure and report-only: it names what a bulk repair action would later act on, but takes
+ * none - no gate and no executor exist yet for a cross-member delete/supersede (#2245's job).
+ */
+export function findDuplicateMembers(
+  members: Array<Pick<LakeHealthMemberInput, 'fabFileId' | 'fileName' | 'fileSize'>>
+): LakeHealthDuplicatesReport {
+  const byName = new Map<string, LakeHealthDuplicateMember[]>();
+  for (const m of members) {
+    if (!m.fileName) continue;
+    const entry: LakeHealthDuplicateMember = {
+      fabFileId: m.fabFileId,
+      fileName: m.fileName,
+      fileSize: nonNegOrNull(m.fileSize),
+    };
+    const group = byName.get(m.fileName);
+    if (group) group.push(entry);
+    else byName.set(m.fileName, [entry]);
+  }
+
+  const groups: LakeHealthDuplicateGroup[] = [];
+  let memberCount = 0;
+  for (const [fileName, groupMembers] of byName) {
+    if (groupMembers.length < 2) continue;
+    memberCount += groupMembers.length;
+    const distinctSizes = new Set(groupMembers.map(m => m.fileSize).filter((s): s is number => s !== null));
+    groups.push({ fileName, members: groupMembers, confirmedDiffering: distinctSizes.size > 1 });
+  }
+  // Largest group first, so the drill-down leads with the lake's biggest accumulation.
+  groups.sort((a, b) => b.members.length - a.members.length);
+
+  return { memberCount, groups };
+}
+
 /**
  * The shape GET /api/data-lakes/:id/health returns - the report with its drill-down list capped and
  * an exact count beside it, plus a scan-bound flag. Defined here so the handler, the service and the
@@ -394,6 +466,8 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
   affectedMemberCount: number;
   /** True when the lake exceeded the member scan bound, so every ratio here is partial. */
   scanTruncated: boolean;
+  /** Duplicate-fileName members (#2239). Report-only - see `findDuplicateMembers`. */
+  duplicateMembers: LakeHealthDuplicatesReport;
 };
 
 function emptyTally(): PredicateTally {

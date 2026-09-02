@@ -1363,6 +1363,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * membership + liveness filter as computeDataLakeStats, and only members that produced chunks
    * (`chunkCount > 0`): a chunkless image or a still-pending upload carries no retrievable content.
    *
+   * `fileSize` also feeds `findDuplicateMembers`: a same-fileName pair whose sizes differ is
+   * confirmed to differ in content, which is the only discriminator this row shape can offer without
+   * a second read (see that function's doc for why chunkCount cannot serve the same purpose).
+   *
    * ONE exception, and it is the case this report exists for: a member the convergence kill switch
    * stopped mid-rewrite is chunkless because its passages were DELETED, not because it never had
    * any. Excluding it made a lake report "Reachable 100%" over the members it still had while a
@@ -1379,6 +1383,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     Array<{
       fabFileId: string;
       fileName?: string;
+      fileSize: number | null;
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
@@ -1419,6 +1424,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           _id: 0,
           fabFileId: { $toString: '$_id' },
           fileName: 1,
+          fileSize: { $ifNull: ['$fileSize', null] },
           chunkCount: { $ifNull: ['$chunkCount', 0] },
           // Preserve null (UNMEASURED) rather than coalescing to 0 - the evaluator must tell "not yet
           // measured" from "measured as zero". $ifNull with null keeps an ABSENT field as null too.

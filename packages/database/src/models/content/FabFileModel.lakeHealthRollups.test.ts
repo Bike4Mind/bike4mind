@@ -74,6 +74,7 @@ describe('lake-health rollup primitives (#1666)', () => {
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
       embeddedCharCount: 9000,
+      fileSize: 42,
       tags: [{ name: tag, strength: 1 }],
     });
     await makeFile('unmeasured.txt', {
@@ -102,7 +103,10 @@ describe('lake-health rollup primitives (#1666)', () => {
       chunkedCharCount: 9000,
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
+      fileSize: 42,
     });
+    // No fileSize stamped: projected as null, not coerced to 0 (feeds findDuplicateMembers).
+    expect(byName['unmeasured.txt'].fileSize).toBeNull();
     // The terminal-failure marker is projected so the evaluator can grade a failed file (not hide it).
     expect(byName['failed.txt'].error).toBe('embedding provider rejected the request');
     // Unmeasured file: the #1666 CHAR rollups come back as null, NOT coerced to 0.

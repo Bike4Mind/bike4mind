@@ -17,6 +17,7 @@ import { computeLakeHealth } from './computeLakeHealth';
 type Member = {
   fabFileId: string;
   fileName?: string;
+  fileSize?: number | null;
   chunkCount: number;
   vectorizedChunkCount: number | null;
   error: string | null;
@@ -184,5 +185,29 @@ describe('computeLakeHealth', () => {
     expect(health.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 1 });
     expect(health.predicates.fullyVectorized.fail).toBe(1);
     expect(health.affectedMembers[0].failed).toContain('fullyVectorized');
+  });
+
+  it('reports duplicateMembers for two upload generations sharing a fileName (#2239)', async () => {
+    const older: Member = { ...healthyMember('gen1'), fileName: 'contract.pdf', fileSize: 1000 };
+    const newer: Member = { ...healthyMember('gen2'), fileName: 'contract.pdf', fileSize: 1200 };
+    const unique: Member = { ...healthyMember('solo'), fileName: 'solo.txt', fileSize: 5 };
+    const health = await computeLakeHealth(lake, makeAdapters([older, newer, unique]) as never);
+
+    expect(health.duplicateMembers.memberCount).toBe(2);
+    expect(health.duplicateMembers.groups).toEqual([
+      {
+        fileName: 'contract.pdf',
+        members: [
+          { fabFileId: 'gen1', fileName: 'contract.pdf', fileSize: 1000 },
+          { fabFileId: 'gen2', fileName: 'contract.pdf', fileSize: 1200 },
+        ],
+        confirmedDiffering: true,
+      },
+    ]);
+  });
+
+  it('reports an empty duplicateMembers report when no fileName repeats', async () => {
+    const health = await computeLakeHealth(lake, makeAdapters([healthyMember('a'), healthyMember('b')]) as never);
+    expect(health.duplicateMembers).toEqual({ memberCount: 0, groups: [] });
   });
 });

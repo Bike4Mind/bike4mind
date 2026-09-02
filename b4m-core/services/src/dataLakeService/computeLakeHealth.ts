@@ -1,5 +1,6 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
+  findDuplicateMembers,
   resolveLakeHealthPolicy,
   summarizeLakeHealth,
   type IAdminSettingsRepository,
@@ -40,6 +41,11 @@ export interface ComputeLakeHealthAdapters {
  * `inherited` platform/owner `DefaultChunkSize` (epic decision 5), resolved through the SAME
  * `deriveServeCharBudget` the serve path uses, so predicate P4 ("serve cap >= policy size") cannot
  * disagree with what retrieval actually does.
+ *
+ * Also reports duplicate members (#2239): a lake can pass all four predicates - every member
+ * vectorized, chunk-consistent, vector-bearing, under the serve cap - while carrying two upload
+ * generations of the same documents, which is measurably healthy and wrong. `findDuplicateMembers`
+ * groups this same member scan by exact fileName; report-only, same as the rest of this module.
  */
 export async function computeLakeHealth(
   lake: Pick<
@@ -67,7 +73,13 @@ export async function computeLakeHealth(
   // scanning on a null tag. Mirrors the same guard in GET /api/data-lakes/:id/articles.
   if (!lake.datalakeTag) {
     const empty = summarizeLakeHealth([], policy);
-    return { ...empty, affectedMembers: [], affectedMemberCount: 0, scanTruncated: false };
+    return {
+      ...empty,
+      affectedMembers: [],
+      affectedMemberCount: 0,
+      scanTruncated: false,
+      duplicateMembers: { memberCount: 0, groups: [] },
+    };
   }
 
   const rows = await db.fabFiles.findDataLakeHealthMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
@@ -81,10 +93,12 @@ export async function computeLakeHealth(
   }
 
   const report = summarizeLakeHealth(members, policy);
+  const duplicateMembers = findDuplicateMembers(members);
   return {
     ...report,
     affectedMembers: report.affectedMembers.slice(0, AFFECTED_MEMBERS_RETURNED),
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
+    duplicateMembers,
   };
 }

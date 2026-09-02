@@ -4,6 +4,7 @@ import {
   resolveLakeHealthPolicy,
   evaluateMemberHealth,
   summarizeLakeHealth,
+  findDuplicateMembers,
   type LakeHealthMemberInput,
 } from './lakeHealth';
 import { isMemberIndexingInFlight } from './lakeConvergence';
@@ -663,4 +664,68 @@ describe('lake health and convergence agree on what "still indexing" means', () 
       expect(evaluateMemberHealth(m, DEFAULT_POLICY).status.fullyVectorized === 'unknown').toBe(inFlight);
     });
   }
+});
+
+describe('findDuplicateMembers', () => {
+  it('reports no groups when every fileName is unique', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'one.txt', fileSize: 10 },
+      { fabFileId: 'b', fileName: 'two.txt', fileSize: 20 },
+    ]);
+    expect(result).toEqual({ memberCount: 0, groups: [] });
+  });
+
+  it('groups members sharing an exact fileName and counts every member in the group', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'report.pdf', fileSize: 100 },
+      { fabFileId: 'b', fileName: 'report.pdf', fileSize: 100 },
+      { fabFileId: 'c', fileName: 'unique.txt', fileSize: 5 },
+    ]);
+    expect(result.memberCount).toBe(2);
+    expect(result.groups).toEqual([
+      {
+        fileName: 'report.pdf',
+        members: [
+          { fabFileId: 'a', fileName: 'report.pdf', fileSize: 100 },
+          { fabFileId: 'b', fileName: 'report.pdf', fileSize: 100 },
+        ],
+        confirmedDiffering: false,
+      },
+    ]);
+  });
+
+  it('flags confirmedDiffering only when two measured sizes actually disagree', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: 100 },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 250 },
+    ]);
+    expect(result.groups[0].confirmedDiffering).toBe(true);
+  });
+
+  it('does not treat an unmeasured (null) size as a confirmed difference', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'policy.md', fileSize: null },
+      { fabFileId: 'b', fileName: 'policy.md', fileSize: 100 },
+    ]);
+    expect(result.groups[0].confirmedDiffering).toBe(false);
+  });
+
+  it('ignores members with no fileName', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: undefined, fileSize: 1 },
+      { fabFileId: 'b', fileName: undefined, fileSize: 2 },
+    ]);
+    expect(result).toEqual({ memberCount: 0, groups: [] });
+  });
+
+  it('sorts groups largest first', () => {
+    const result = findDuplicateMembers([
+      { fabFileId: 'a', fileName: 'pair.txt', fileSize: 1 },
+      { fabFileId: 'b', fileName: 'pair.txt', fileSize: 1 },
+      { fabFileId: 'c', fileName: 'triple.txt', fileSize: 1 },
+      { fabFileId: 'd', fileName: 'triple.txt', fileSize: 1 },
+      { fabFileId: 'e', fileName: 'triple.txt', fileSize: 1 },
+    ]);
+    expect(result.groups.map(g => g.fileName)).toEqual(['triple.txt', 'pair.txt']);
+  });
 });
