@@ -72,7 +72,8 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 import { Logger } from '@bike4mind/observability';
 import { b4mTools } from '@bike4mind/services/llm/tools';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
-import type { IUserDocument, RecordLakeAccessEventInput } from '@bike4mind/common';
+import type { IUserDocument, RecordLakeAccessEventInput, SettingKey } from '@bike4mind/common';
+import { readServedDocuments } from './auditEvent';
 import { PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import { aggregate, scoreQuestion, type QuestionOutcome } from './metrics';
 import {
@@ -88,8 +89,9 @@ import {
 const HELP_LAKE_SLUG = 'system-help';
 const HELP_TAG_PREFIX = 'help:';
 
-const TOKEN_BUDGET_SETTING = 'kbSearchResultTokenBudget';
-const MIN_RELEVANCE_SETTING = 'kbSearchMinRelevancePct';
+// Typed as SettingKey so a typo fails the build rather than writing a row nothing reads.
+const TOKEN_BUDGET_SETTING: SettingKey = 'kbSearchResultTokenBudget';
+const MIN_RELEVANCE_SETTING: SettingKey = 'kbSearchMinRelevancePct';
 
 const logger = new Logger();
 
@@ -183,7 +185,7 @@ function buildToolContext(user: IUserDocument, capture: Capture) {
  * `defaultEmbeddingModel` all send `search_knowledge_base` down its keyword fallback, which ignores
  * both knobs this probe exists to sweep. The run would complete and every row would look identical.
  */
-async function preflight(): Promise<{ lakeId: string; fileCount: number }> {
+async function preflight(user: IUserDocument): Promise<{ lakeId: string; fileCount: number }> {
   const lake = await dataLakeRepository.findBySlug(HELP_LAKE_SLUG);
   if (!lake) {
     throw new Error(
@@ -221,6 +223,31 @@ async function preflight(): Promise<{ lakeId: string; fileCount: number }> {
     logger.warn(
       `Only ${vectorized}/${fileIds.length} help files are vectorized. Recall is bounded by that, ` +
         `not by the settings under test - finish the ingest before trusting these numbers.`
+    );
+  }
+
+  // The harness identifies a served document by its `help:<slug>` tag, which the ingest writes
+  // alongside the lake meta-tag. If that prefix ever drifts, every served file resolves to
+  // UNTAGGED and recall collapses to zero across the board - which reads as a retrieval failure
+  // rather than a harness bug. Pin the assumption against the live corpus, loudly, up front.
+  const sample = await fabFileRepository.findById(fileIds[0]);
+  if (!sample?.tags?.some(t => t.name.startsWith(HELP_TAG_PREFIX))) {
+    throw new Error(
+      `Help lake files do not carry a "${HELP_TAG_PREFIX}" tag, so served documents cannot be ` +
+        `mapped back to help slugs. The ingest's FILE_TAG_PREFIX and this probe have drifted.`
+    );
+  }
+
+  // The unscoped search arm ranks the caller's OWN library alongside the lake, and a hit on a
+  // personal file is not attributable to any lake - so the tool records no audit event for it and
+  // the probe would read a real result as "served nothing". Ground truth cannot describe those
+  // files either. Enforce the precondition instead of documenting it.
+  const ownFiles = await fabFileRepository.findByUserId(user.id);
+  const ownNonLake = ownFiles.filter(f => !f.tags?.some(t => t.name.startsWith(HELP_TAG_PREFIX)));
+  if (ownNonLake.length > 0) {
+    throw new Error(
+      `Probe user ${user.id} owns ${ownNonLake.length} file(s) outside the help lake. They would ` +
+        `enter the ranking without being in the ground truth. Use a dedicated account with no files.`
     );
   }
 
@@ -299,28 +326,17 @@ async function runQuestion(question: ProbeQuestion, user: IUserDocument, capture
   const tool = b4mTools.search_knowledge_base.implementation(context, {});
   await tool.toolFn({ query: question.question });
 
-  const event = await waitForEvent(capture);
+  const reading = readServedDocuments(await waitForEvent(capture));
 
-  // No event at all is the correct reading of "served nothing": the tool only records once the
-  // semantic arm produced output, so a search that found nothing writes no row. That is exactly the
-  // outcome a relevance floor is supposed to produce on a negative question.
-  if (!event) {
-    const outcome = scoreQuestion([], new Set(question.supporting));
-    return { ...question, served: [], outcome };
-  }
-
-  // The keyword fallback records the SAME surface but carries no scores (see the two call sites in
-  // knowledgeBaseSearch/index.ts). Reaching it means neither knob under test applied, so the run
-  // must stop rather than report a keyword-search number as a budget-sweep result.
-  if (!event.scores || event.scores.length === 0) {
+  if (reading.kind === 'keyword-fallback') {
     throw new Error(
-      `Question ${question.id} fell through to KEYWORD search (audit row carried no scores). ` +
+      `Question ${question.id} fell through to KEYWORD search (audit row carried no chunk scores). ` +
         `The semantic arm did not run, so this configuration was never exercised. Check the ` +
         `embedding credential and defaultEmbeddingModel on this stage.`
     );
   }
 
-  const served = await resolveSlugs(event.fileIds ?? []);
+  const served = reading.kind === 'served' ? await resolveSlugs(reading.fileIds) : [];
   return { ...question, served, outcome: scoreQuestion(served, new Set(question.supporting)) };
 }
 
@@ -352,10 +368,10 @@ async function main(): Promise<void> {
 
   await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage));
   logger.log(`Connected (stage: ${Resource.App.stage})`);
-  const { lakeId, fileCount } = await preflight();
 
   const user = await userRepository.findById(argv.userId);
   if (!user) throw new Error(`No user ${argv.userId} on this stage.`);
+  const { lakeId, fileCount } = await preflight(user);
 
   if (argv['dry-run']) {
     logger.log(
