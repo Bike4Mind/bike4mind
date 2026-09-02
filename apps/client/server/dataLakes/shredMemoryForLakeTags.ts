@@ -11,7 +11,10 @@ import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
  *
  * Mirrors `recomputeStatsForLakeTags`: resolve each `datalake:*` meta-tag the file carried to its
  * lake and act on every one, independently and best-effort, so one unresolvable or unwired lake
- * cannot skip the rest.
+ * cannot skip the rest. Best-effort means a failure on one lake is caught and logged, not
+ * rethrown - unlike the adapter docstring's default "a throw propagates", the destruction has
+ * already converged and the receipt is already filed by the time this runs, and per-lake
+ * isolation across an unbounded fan-out requires the catch to live here rather than at the call site.
  */
 export const shredMemoryForLakeTags = async (
   tagNames: readonly unknown[],

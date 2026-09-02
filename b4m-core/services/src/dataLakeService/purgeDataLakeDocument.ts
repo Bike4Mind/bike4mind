@@ -53,12 +53,21 @@ interface PurgeDataLakeDocumentAdapters {
    * ledgers under the same `fabFileId`; scoping the shred to one lake would leave the other lake
    * folding and recalling beliefs sourced from a document it was told is gone. Optional only
    * because the service cannot reach the ledger repository itself; a host that leaves it unwired
-   * keeps recalling those beliefs. Called once, after the destruction converged, with every
-   * `datalake:*` meta-tag the file carried - the host resolves each to its lake, the same way
-   * `onPurged`'s other-lakes stats rebuild does.
+   * keeps recalling those beliefs. Called once, after the destruction converged, with every tag
+   * the file carried plus the purging lake's own tag (see `tagNames` below) - the host resolves
+   * each `datalake:*` name to its lake. Unlike `onPurged`'s other-lakes stats rebuild, the purging
+   * lake is NOT excluded: that rebuild skips it because `recomputeLakeStats` already covered it
+   * directly, but nothing here does the purging lake's shred for it. A host that catches and logs
+   * per-lake (as the one wired host does) should say so on its own hook, since it changes the
+   * "a throw propagates" contract this adapter would otherwise imply.
    */
   shredDocumentMemory?: (args: {
-    /** Every data-lake meta-tag the file carried before deletion, pre-lowercased filtering done by the host. */
+    /**
+     * Every tag the file carried before deletion, PLUS the purging lake's own `datalake:*` tag -
+     * added even when the file did not carry it, since a prefix-arm member (see
+     * `lakeMembershipSignals`) can be a full member of the purging lake with no meta-tag at all.
+     * No filtering is done here; the host resolves the `datalake:*` names to lakes and de-dupes.
+     */
     tagNames: string[];
     /** The `sources` entry every extracted fact carries. */
     fabFileId: string;
@@ -278,7 +287,13 @@ export const purgeDataLakeDocument = async (
   // Only once the document is genuinely gone: shredding the beliefs of a document that survived a
   // failed sweep would destroy recall for content still in the lake.
   if (verified) {
-    await shredDocumentMemory?.({ tagNames, fabFileId: file.id });
+    await shredDocumentMemory?.({
+      // The purging lake ALWAYS, tag or no tag: a prefix-arm member carries no `datalake:*`
+      // meta-tag, but `findLakeMemoryExtractionMembers` folds it on the same two-signal scope
+      // this purge admitted it through, so its beliefs are on this lake's ledger all the same.
+      tagNames: lake.datalakeTag ? [lake.datalakeTag, ...tagNames] : tagNames,
+      fabFileId: file.id,
+    });
   }
 
   await onPurged?.({
