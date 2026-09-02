@@ -19,6 +19,7 @@ import { Types } from 'mongoose';
 import { createHmac } from 'crypto';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -91,6 +92,7 @@ const handler = baseApi()
           fabFiles: fabFileRepository,
           fabFileChunks: fabFileChunkRepository,
           sessions: sessionRepository,
+          ...lakeConfigAuditDb,
         },
         // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
         // FabFileChunk collection itself, so the chunk delete already removes it. Same wiring as

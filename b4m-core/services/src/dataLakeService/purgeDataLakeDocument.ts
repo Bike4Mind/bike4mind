@@ -1,9 +1,11 @@
 import type {
   DataLakeDocumentPurgeReceipt,
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileChunkRepository,
   IFabFileRepository,
+  ILakeConfigChangeEventRepository,
   ISessionRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -31,6 +33,14 @@ interface PurgeDataLakeDocumentAdapters {
      * the creator - who, after a transfer, is exactly the wrong person.
      */
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    /**
+     * Passed straight through to `recomputeLakeStats`, which spreads a caller's `lakeConfigAuditDb`
+     * (see that constant) into the audit trail a draft-lake auto-activation writes. Optional here
+     * for the same reason it is optional on `LakeConfigAuditAdapters`: a caller that omits it still
+     * gets a correct recompute, just an unaudited activation.
+     */
+    lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
+    adminSettings?: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /**
@@ -237,8 +247,9 @@ export const purgeDataLakeDocument = async (
 
   // The purged lake only. Every OTHER lake the document belonged to is the caller's to rebuild
   // through `onPurged` - resolving a tag back to its lake needs repositories this service does
-  // not take.
-  const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db });
+  // not take. `actor` threaded so a draft-lake auto-activation this purge triggers is attributed
+  // to whoever (or whatever key) authorized the destruction, not filed as `system`.
+  const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db }, { actor });
 
   const receipt: DataLakeDocumentPurgeReceipt = {
     dataLakeId: lake.id,

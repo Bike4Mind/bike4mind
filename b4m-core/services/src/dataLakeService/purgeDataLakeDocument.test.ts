@@ -89,6 +89,19 @@ describe('purgeDataLakeDocument', () => {
     expect(logger.info).not.toHaveBeenCalled();
   });
 
+  it('threads the actor into recomputeLakeStats so an auto-activation this purge triggers is attributed, not filed under system', async () => {
+    const db = makeDb();
+    db.dataLakes.activateIfDraft = vi.fn(async () => true);
+    const record = vi.fn(async () => {});
+    const dbWithAudit = { ...db, lakeConfigChangeEvents: { record }, adminSettings: undefined };
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db: dbWithAudit, storage: makeStorage() });
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ principalKind: 'user', principalId: OWNER.userId })
+    );
+  });
+
   it('removes the document from a wired retrieval index BEFORE anything destructive', async () => {
     const order: string[] = [];
     const db = makeDb();
