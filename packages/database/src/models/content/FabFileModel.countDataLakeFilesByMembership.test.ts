@@ -169,8 +169,11 @@ describe('FabFileRepository.countDataLakeFilesByMembership', () => {
     // exactly what its branches cover (#2031).
 
     it('counts a meta-tag-only member as uncategorized', async () => {
-      // What the upload wizard produces, and the file the picker counted but the tree could not
-      // show: in the lake, under no category.
+      // The file the picker counted but the tree could not show: in the lake, under no category.
+      // Reached when the fallback tagger declines to stamp `<prefix>uncategorized` - a STATIC
+      // registry lake (no lake document, so its prefix never resolves), either decideStampPrefix
+      // decline, or a row written before that tagger existed. The ordinary write doors DO stamp,
+      // so a lake filled through them has an empty slice rather than this one.
       await makeFile({ tags: ['datalake:papers'] });
 
       const counts = await fabFileRepository.countDataLakeFilesByMembership([scope('papers', 'papers:')]);

@@ -54,8 +54,10 @@ beforeAll(async () => {
   await mongoose.connect(server.getUri());
   await FabFile.create(
     [
-      // Member via the meta-tag, no taxonomy tag: the upload wizard's default output, and the file
-      // the picker counted while the tree could not show it.
+      // Member via the meta-tag, no taxonomy tag - the file the picker counted while the tree
+      // could not show it. Arises where the fallback tagger does not stamp
+      // `<prefix>uncategorized`: a STATIC registry lake (no lake document to resolve a prefix
+      // from), either decideStampPrefix decline, or a row predating that tagger.
       { fileName: 'meta-only', tags: ['datalake:acme'] },
       // Member via the meta-tag AND categorized - the tree has a branch for this one.
       { fileName: 'categorized', tags: ['datalake:acme', 'acme:legal'] },
