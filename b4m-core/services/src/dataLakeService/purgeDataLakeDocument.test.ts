@@ -107,7 +107,7 @@ describe('purgeDataLakeDocument', () => {
 
     expect(order).toEqual(['index', 'chunks']);
     expect(removeForDataLake).toHaveBeenCalledWith({
-      scope: { datalakeTag: 'datalake:sales', fileTagPrefix: 'sales', creatorUserId: 'owner-1' },
+      scope: { kind: 'owned', datalakeTag: 'datalake:sales', fileTagPrefix: 'sales', creatorUserId: 'owner-1' },
       fabFileIds: ['file-1'],
     });
     expect(receipt.retrievalIndexOutcome).toBe('purged');
