@@ -1,6 +1,7 @@
 import { ApiKeyScope, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/database/auth';
 import { BadRequestError } from '@bike4mind/utils';
+import mongoose from 'mongoose';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
@@ -39,8 +40,10 @@ function readSingle(value: string | string[] | undefined): string | undefined {
  * circulation. The documented fallback (docs/architecture/api-key-scope-rollout.md)
  * is to stage the scope and read the re-mint backlog off a log line - but that is
  * discovery by traffic, and a key that fires monthly never appears in a two-week
- * staging window. This reads the 90 days of history in ApiKeyUsageLog instead, so
- * the list is complete for anything that has actually called the routes.
+ * staging window. This reads the history in ApiKeyUsageLog instead - up to the
+ * collection's 90-day TTL - so the list covers anything that has actually called
+ * the routes in that window, capped at MAX_ROWS with `truncated` set when the cap
+ * is hit.
  *
  * The verdict per key comes from `decideScopeGate` - the same function the
  * runtime gate uses - so this cannot drift from enforcement. That also means the
@@ -91,7 +94,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
       limit: MAX_ROWS,
     });
 
-    const keyDocs = traffic.length ? await userApiKeyRepository.find({ _id: { $in: traffic.map(t => t.keyId) } }) : [];
+    // keyId comes from 90 days of historical log rows, so one unparseable value
+    // must not sink the whole report: an unfiltered $in raises a Mongoose
+    // CastError, which errorHandler rewrites to 404 "Resource not found" - and an
+    // operator reads that as "no data", the worst way for this tool in particular
+    // to fail. Ids dropped here resolve to no scopes below and are still reported
+    // as would-403, which is the safe direction.
+    const lookupIds = traffic.map(t => t.keyId).filter(id => mongoose.Types.ObjectId.isValid(id));
+    const keyDocs = lookupIds.length ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }) : [];
     const scopesByKeyId = new Map<string, ApiKeyScope[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
 
     const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);

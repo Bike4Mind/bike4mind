@@ -49,6 +49,13 @@ vi.mock('@bike4mind/database/auth', () => ({
 
 import '../scope-preflight';
 
+// Real ObjectId strings: the route filters uncastable ids out of the $in, so
+// placeholder names like 'passes' would be dropped and every row would read deny.
+const PASSES = '507f1f77bcf86cd799439011';
+const BREAKS = '507f1f77bcf86cd799439012';
+const DELETED = '507f1f77bcf86cd799439013';
+const GRANDFATHERED = '507f1f77bcf86cd799439014';
+
 const invoke = async (query: Record<string, unknown>, user: unknown = { isAdmin: true }) => {
   const { req, res } = createMocks({ method: 'GET' });
   Object.assign(req, { query, user });
@@ -101,19 +108,19 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
 
   it('classifies each key by the real gate and puts the breakage first', async () => {
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: 'passes', userId: 'u1', requests: 5, lastUsed: new Date(), endpoints: ['/api/x/a'] },
-      { keyId: 'breaks', userId: 'u2', requests: 99, lastUsed: new Date(), endpoints: ['/api/x/b'] },
+      { keyId: PASSES, userId: 'u1', requests: 5, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: BREAKS, userId: 'u2', requests: 99, lastUsed: new Date(), endpoints: ['/api/x/b'] },
     ]);
     find.mockResolvedValue([
-      { id: 'passes', scopes: ['notebooks:read', 'admin:*'] },
-      { id: 'breaks', scopes: ['notebooks:read'] },
+      { id: PASSES, scopes: ['notebooks:read', 'admin:*'] },
+      { id: BREAKS, scopes: ['notebooks:read'] },
     ]);
 
     const res = await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' });
     const body = res._getJSONData();
 
     // Sorted worst-first despite `passes` coming first out of the aggregation.
-    expect(body.rows.map((r: any) => r.keyId)).toEqual(['breaks', 'passes']);
+    expect(body.rows.map((r: any) => r.keyId)).toEqual([BREAKS, PASSES]);
     expect(body.rows[0].outcome).toBe('deny');
     expect(body.rows[1].outcome).toBe('allow');
     expect(body.rows[0].heldScopes).toEqual(['notebooks:read']);
@@ -121,7 +128,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
 
   it('reports a key that no longer exists as holding nothing', async () => {
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: 'deleted', userId: 'u1', requests: 3, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: DELETED, userId: 'u1', requests: 3, lastUsed: new Date(), endpoints: ['/api/x/a'] },
     ]);
     find.mockResolvedValue([]);
 
@@ -134,13 +141,41 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
   it('marks a key as surviving only on staging when the scope is staged', async () => {
     process.env.API_KEY_SCOPE_STAGING = 'optihashi:read';
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: 'grandfathered', userId: 'u1', requests: 7, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: GRANDFATHERED, userId: 'u1', requests: 7, lastUsed: new Date(), endpoints: ['/api/x/a'] },
     ]);
-    find.mockResolvedValue([{ id: 'grandfathered', scopes: [] }]);
+    find.mockResolvedValue([{ id: GRANDFATHERED, scopes: [] }]);
 
     const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'optihashi:read' }))._getJSONData();
     expect(body.rows[0].outcome).toBe('stagedAllow');
     expect(body.stagedScopes).toEqual(['optihashi:read']);
+  });
+
+  it('survives a log row whose keyId is not a valid ObjectId', async () => {
+    // An unfiltered $in would raise a Mongoose CastError, which errorHandler
+    // turns into a 404 - indistinguishable from "no data" to the operator.
+    findKeyTrafficByEndpointPrefix.mockResolvedValue([
+      { keyId: 'not-an-objectid', userId: 'u1', requests: 2, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: '507f1f77bcf86cd799439011', userId: 'u2', requests: 1, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+    ]);
+    find.mockResolvedValue([{ id: '507f1f77bcf86cd799439011', scopes: ['admin:*'] }]);
+
+    const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
+
+    // Only the castable id reaches the query...
+    expect(find).toHaveBeenCalledWith({ _id: { $in: ['507f1f77bcf86cd799439011'] } });
+    // ...and the malformed row is still reported rather than dropped.
+    expect(body.rows).toHaveLength(2);
+    expect(body.rows.find((r: any) => r.keyId === 'not-an-objectid').outcome).toBe('deny');
+  });
+
+  it('does not query at all when no keyId is castable', async () => {
+    findKeyTrafficByEndpointPrefix.mockResolvedValue([
+      { keyId: 'junk', userId: 'u1', requests: 1, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+    ]);
+
+    const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
+    expect(find).not.toHaveBeenCalled();
+    expect(body.rows[0].outcome).toBe('deny');
   });
 
   it('says so when no key has called the routes', async () => {

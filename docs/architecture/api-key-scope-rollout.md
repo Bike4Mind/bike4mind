@@ -68,9 +68,11 @@ two-week staging window, so a quiet log cannot distinguish "everyone re-minted" 
 "the quarterly job has not run yet". Size the population up front with the
 **scope preflight** (Admin -> Reliability / Incident Ops -> API Key Scope Preflight,
 backed by `GET /api/admin/api-keys/scope-preflight`). Given an endpoint prefix and the
-scopes you intend to require, it reads the 90 days of history in `ApiKeyUsageLog` and
-lists every key that has actually called those routes, marking each as would-403,
-surviving-only-on-staging, or already fine. It reaches its verdict by calling
+scopes you intend to require, it reads the history in `ApiKeyUsageLog` - up to that
+collection's 90-day TTL - and lists the keys that have actually called those routes,
+marking each as would-403, surviving-only-on-staging, or already fine. It caps the
+result and says so when the cap is hit, so treat a truncated list as partial and
+narrow the prefix. It reaches its verdict by calling
 `decideScopeGate` - the same function the runtime gate calls - so it cannot drift from
 enforcement.
 
