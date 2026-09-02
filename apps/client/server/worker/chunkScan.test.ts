@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import {
-  buildChunkScanQueuePayload,
-  buildFabFileChunkScanFilter,
-  buildStrandedVectorizeScanFilter,
-} from './chunkScan';
+import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter, buildStrandedVectorizeScanFilter } from './chunkScan';
 import { CHUNK_STALL_NOTICES, provenancePayloadShape, shouldHaltConvergence } from '@bike4mind/common';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
@@ -401,7 +397,7 @@ describe('buildStrandedVectorizeScanFilter', () => {
             mimeType: 'application/pdf',
             ...claimed,
           },
-          buildFabFileChunkScanFilter(cutoff, claimCutoff)
+          buildFabFileChunkScanFilter(cutoff, claimCutoff, { excludeConvergencePaused: false })
         )
       );
     });
@@ -431,7 +427,9 @@ describe('buildStrandedVectorizeScanFilter', () => {
       deletedAt: null,
       mimeType: 'application/pdf',
     };
-    expect(matches(doc, buildFabFileChunkScanFilter(cutoff))).toBe(false);
+    expect(matches(doc, buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false }))).toBe(
+      false
+    );
     expect(matches(doc, filter)).toBe(true);
   });
 });
