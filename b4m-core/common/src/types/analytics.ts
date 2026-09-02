@@ -72,6 +72,53 @@ export interface IPlatformEndpointUsage {
 }
 
 /**
+ * One API key's observed traffic against a set of routes, from ApiKeyUsageLog.
+ * The join key is `keyId`, which is the UserApiKey document id (set by
+ * userApiKeyService/validate.ts).
+ */
+export interface IApiKeyEndpointTraffic {
+  keyId: string;
+  userId: string;
+  requests: number;
+  lastUsed: Date;
+  /** Distinct endpoints this key hit under the prefix, capped for display. */
+  endpoints: string[];
+}
+
+/**
+ * What the scope gate WOULD decide for one key if a set of `requiredScopes`
+ * were declared on the routes it has been calling.
+ *
+ * `outcome` mirrors ScopeGateDecision (apps/client/server/middlewares/apiKeyScopeGate.ts)
+ * and is produced by calling that module's `decideScopeGate` - never by
+ * reimplementing its rules here. A preflight that drifts from the runtime gate
+ * reports a confidently wrong re-mint list, which is worse than no preflight.
+ */
+export interface IApiKeyScopePreflightRow extends IApiKeyEndpointTraffic {
+  /** Scopes the key was actually minted with. */
+  heldScopes: string[];
+  /** 'deny' = 403s on enforcement. 'stagedAllow' = only surviving via staging. */
+  outcome: 'allow' | 'stagedAllow' | 'deny';
+}
+
+/**
+ * Result of a scope-enforcement preflight: who breaks if these scopes are
+ * declared on these routes.
+ */
+export interface IApiKeyScopePreflight {
+  endpointPrefix: string;
+  requiredScopes: string[];
+  /** Days of history examined. ApiKeyUsageLog's TTL caps real coverage at 90. */
+  windowDays: number;
+  /** Scopes currently staged, so a stagedAllow row is explicable. */
+  stagedScopes: string[];
+  /** Every key seen on these routes in the window, worst outcome first. */
+  rows: IApiKeyScopePreflightRow[];
+  /** True when the row cap was hit, so the caller knows the list is partial. */
+  truncated: boolean;
+}
+
+/**
  * Resolves source for the /api/ai/v1/completions endpoint. This endpoint is
  * called only by CLI and 3rd-party API users (never by web chat - that uses a
  * different pipeline). We distinguish CLI from raw API by the `b4m-cli/`

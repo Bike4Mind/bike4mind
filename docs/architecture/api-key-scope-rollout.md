@@ -59,8 +59,23 @@ target stage - the same as any other lever there.
 
 While a scope is listed, a route requiring it lets through a key that lacks it and
 logs `API key scope check missed but staged - allowing` with the key id, the held
-scopes, and the endpoint. That log line *is* the re-mint backlog: every hit is a
-production key that will start failing the day the entry is removed.
+scopes, and the endpoint. Every hit is a production key that will start failing the
+day the entry is removed.
+
+That log is a *confirmation* of the backlog, not the way to discover it. Discovery by
+traffic is incomplete on its own: a key that fires monthly never appears in a
+two-week staging window, so a quiet log cannot distinguish "everyone re-minted" from
+"the quarterly job has not run yet". Size the population up front with the
+**scope preflight** (Admin -> Reliability / Incident Ops -> API Key Scope Preflight,
+backed by `GET /api/admin/api-keys/scope-preflight`). Given an endpoint prefix and the
+scopes you intend to require, it reads the 90 days of history in `ApiKeyUsageLog` and
+lists every key that has actually called those routes, marking each as would-403,
+surviving-only-on-staging, or already fine. It reaches its verdict by calling
+`decideScopeGate` - the same function the runtime gate calls - so it cannot drift from
+enforcement.
+
+If the preflight returns nothing, there is no grandfathered population and the whole
+staging sequence below can be skipped: declare the gate and enforce in one step.
 
 Two things it deliberately will not do:
 
@@ -91,15 +106,20 @@ brand-new scope is a brand-new endpoint with no keys in circulation.
 ## The rollout
 
 1. Land the enum value and the catalog registration.
-2. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
-3. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
-4. Watch `API key scope check missed but staged - allowing`. Each distinct `keyId` is a
-   key to re-mint with the new scope. Rotate them with their owners.
-5. When the line stops appearing, remove the entry from `API_KEY_SCOPE_STAGING`.
-   The gate is now live.
+2. Run the **scope preflight** against the routes you are about to gate. If it returns
+   no keys, skip to step 6 and enforce in one step - there is nobody to grandfather,
+   and staging a gate with no population to protect just means it never enforces.
+   Otherwise the result is your re-mint list.
+3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
+4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
+5. Re-mint the keys from step 2 with their owners. Watch
+   `API key scope check missed but staged - allowing` as a cross-check that the list was
+   complete - a `keyId` there that step 2 did not name means the preflight window was too
+   short, so widen it rather than trusting the log alone.
+6. Remove the entry from `API_KEY_SCOPE_STAGING`. The gate is now live.
 
-Do not skip step 5 quietly. A scope left in the list forever is a gate that has never
-once enforced.
+Do not skip the last step quietly. A scope left in the list forever is a gate that has
+never once enforced.
 
 ## Troubleshooting
 

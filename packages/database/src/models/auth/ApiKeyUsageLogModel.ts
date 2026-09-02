@@ -1,4 +1,10 @@
-import { IEndpointUsageBucket, IEndpointUsageDay, IMongoDocument, IPlatformEndpointUsage } from '@bike4mind/common';
+import {
+  IApiKeyEndpointTraffic,
+  IEndpointUsageBucket,
+  IEndpointUsageDay,
+  IMongoDocument,
+  IPlatformEndpointUsage,
+} from '@bike4mind/common';
 import mongoose, { Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -241,6 +247,65 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       byEndpoint: result?.byEndpoint ?? [],
       overTime: result?.overTime ?? [],
     };
+  }
+
+  /**
+   * Every API key that has called a route under `endpointPrefix` within the
+   * window, with its request count, last use, and the distinct endpoints it hit.
+   *
+   * This is the evidence half of a scope-enforcement preflight: before declaring
+   * `requiredScopes` on routes that are currently scope-less, you need the list
+   * of keys already calling them, because a key holds only what it was minted
+   * with and will 403 the moment the gate enforces. Deciding which of these keys
+   * would actually break is the caller's job - it must ask `decideScopeGate`
+   * rather than compare scope arrays itself.
+   *
+   * Note there is NO index on `endpoint` (see the schema's index block), so this
+   * is a collection scan bounded by the timestamp match. That is tolerable
+   * because the collection carries a 90-day TTL and this runs a handful of times
+   * per scope rollout, not on a request path. Add a compound index if that
+   * changes.
+   */
+  async findKeyTrafficByEndpointPrefix(params: {
+    endpointPrefix: string;
+    days?: number;
+    /** Max keys returned; the caller should surface truncation to the operator. */
+    limit?: number;
+    /** Distinct endpoints kept per key, for display. */
+    endpointsPerKey?: number;
+  }): Promise<IApiKeyEndpointTraffic[]> {
+    const { endpointPrefix, days = 90, limit = 500, endpointsPerKey = 10 } = params;
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    // The prefix is operator-supplied and goes into a $regex, so escape it.
+    // Without this, a prefix like `/api/a+b` silently matches the wrong routes
+    // and the preflight under-reports - a false "nobody breaks".
+    const escaped = endpointPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    return this.model.aggregate<IApiKeyEndpointTraffic>([
+      { $match: { timestamp: { $gte: from }, endpoint: { $regex: `^${escaped}` } } },
+      {
+        $group: {
+          _id: '$keyId',
+          userId: { $first: '$userId' },
+          requests: { $sum: 1 },
+          lastUsed: { $max: '$timestamp' },
+          endpoints: { $addToSet: '$endpoint' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          keyId: '$_id',
+          userId: 1,
+          requests: 1,
+          lastUsed: 1,
+          endpoints: { $slice: ['$endpoints', endpointsPerKey] },
+        },
+      },
+      { $sort: { requests: -1 } },
+      { $limit: limit },
+    ]);
   }
 }
 
