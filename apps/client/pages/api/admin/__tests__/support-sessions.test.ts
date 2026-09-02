@@ -137,6 +137,19 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
     expect(mockFindSessionById).not.toHaveBeenCalled();
   });
 
+  it('accepts an uppercase-hex id and audits it under the canonical lowercase id', async () => {
+    const { run } = call(sessionHandler, {
+      isAdmin: true,
+      query: { id: SESSION.toUpperCase(), supportCase: SUPPORT_CASE },
+    });
+    await run();
+
+    expect(mockFindSessionById).toHaveBeenCalledWith(SESSION.toUpperCase());
+    // The audit row keys off the loaded document, not the request string, so a
+    // lowercase audit query still finds an uppercase-addressed read.
+    expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION }));
+  });
+
   it('404s an unknown session without auditing', async () => {
     mockFindSessionById.mockResolvedValue(null);
     const { run } = call(sessionHandler, { isAdmin: true });

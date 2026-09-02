@@ -24,7 +24,7 @@ const CloneRequestSchema = z.strictObject({
 });
 
 // Rate limit: 5 clones per minute per user (prevents storage bloat)
-const cloneRateLimit = rateLimit({ limit: 5, windowMs: 60000 });
+const cloneRateLimit = rateLimit({ limit: 5, windowMs: 60000, bucket: 'quest-plans/clone' });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))

@@ -9,7 +9,7 @@ import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
 
-const exportRateLimit = rateLimit({ limit: 5, windowMs: 60000 });
+const exportRateLimit = rateLimit({ limit: 5, windowMs: 60000, bucket: 'quest-plans/export' });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))

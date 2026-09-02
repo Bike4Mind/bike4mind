@@ -6,7 +6,7 @@
  */
 
 import { BadRequestError } from '@bike4mind/utils';
-import { isValidObjectId } from '@server/utils/objectId';
+import { toObjectIdString } from '@server/utils/objectId';
 import { WORK_ITEM_STATUSES, type WorkItemStatus } from '@bike4mind/common';
 
 const TITLE_MAX = 300;
@@ -82,11 +82,15 @@ export function validateWorkItemDependencies(value: unknown): string[] | undefin
   if (value.length > DEPENDENCIES_MAX) {
     throw new BadRequestError(`dependencies must contain ${DEPENDENCIES_MAX} ids or fewer`);
   }
+  // Canonicalized, not passed through: `dependencies` is a [String] field that
+  // WorkItemModel compares against the lowercase `id` virtual, so an uppercase entry
+  // would read as a deleted dependency (and dedupe as a second, distinct id).
   const ids = value.map(entry => {
-    if (typeof entry !== 'string' || !isValidObjectId(entry)) {
+    const id = typeof entry === 'string' ? toObjectIdString(entry) : undefined;
+    if (!id) {
       throw new BadRequestError(`dependencies contains an invalid work item id: ${String(entry)}`);
     }
-    return entry;
+    return id;
   });
   return Array.from(new Set(ids));
 }

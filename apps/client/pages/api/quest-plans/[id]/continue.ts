@@ -20,7 +20,7 @@ const ContinueRequestSchema = z.object({
   }),
 });
 
-const continueRateLimit = rateLimit({ limit: 20, windowMs: 60000 });
+const continueRateLimit = rateLimit({ limit: 20, windowMs: 60000, bucket: 'quest-plans/continue' });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))
