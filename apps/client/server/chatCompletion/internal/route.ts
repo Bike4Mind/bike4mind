@@ -1,10 +1,12 @@
 import { timingSafeEqual } from 'crypto';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { Resource } from 'sst';
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { questRepository } from '@bike4mind/database';
-import { QuestStartBodySchema } from '@bike4mind/services';
+import { QuestStartBodySchema, categorizeToolError } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { processQuest } from '@server/queueHandlers/questProcessor';
+import { emitMetrics } from '@server/utils/cloudwatch';
 
 /**
  * Internal `/process` surface of the always-on ChatCompletion.
@@ -24,6 +26,13 @@ import { processQuest } from '@server/queueHandlers/questProcessor';
  * `registerInternalRoutes`.
  */
 export const GENERIC_PROCESSING_FAILURE_REPLY = 'Something went wrong while processing your request. Please try again.';
+
+/**
+ * Namespace for quest-lifecycle operational metrics; also used by the timeout sweep
+ * (apps/client/server/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
+ * `ErrorClass` dimension in sync with infra/alarms.ts.
+ */
+const QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
 /**
  * Shared-secret bearer check. Both the frontend Lambda and this service link
@@ -84,7 +93,32 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
     res.status(202).json({ accepted: true, questId: params.questId });
 
     const task = processQuest(params, logger).catch(async err => {
-      logger.error('Quest processing failed', { error: err instanceof Error ? err.message : String(err) });
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error('Quest processing failed', { error: errorMessage });
+
+      // Operator-facing signal only - the quest's own reply to the user is handled separately
+      // below. Without this, detection of a processing failure was "a user complains": nothing
+      // alerted an operator. ErrorClass reuses the same taxonomy as tool-call telemetry
+      // (categorizeToolError) rather than inventing a second one, so an invalid-API-key or
+      // rate-limit storm is visible - and alarmable - by class, not just as an undifferentiated count.
+      //
+      // Two datums, same metric name: CloudWatch keys a custom metric by namespace + name + the
+      // EXACT dimension set and never rolls one up into the other, so the Stage-only point is what
+      // the alarm below watches (a per-class dimension set would leave it permanently
+      // INSUFFICIENT_DATA) while the Stage+ErrorClass point drives the "which class is failing"
+      // dashboard breakdown. Neither double-counts the other since they are distinct series.
+      const stage = Resource.App.stage;
+      const errorClass = categorizeToolError(errorMessage);
+      void emitMetrics(QUESTS_CLOUDWATCH_NAMESPACE, [
+        { name: 'ProcessingFailed', value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+        {
+          name: 'ProcessingFailed',
+          value: 1,
+          dimensions: { Stage: stage, ErrorClass: errorClass },
+          unit: StandardUnit.Count,
+        },
+      ]);
+
       // Surface the failure to the client instead of leaving the quest 'running' forever - but only
       // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own
       // message (`quest.reply = err.message`) and marks the quest terminal before it rethrows, so an

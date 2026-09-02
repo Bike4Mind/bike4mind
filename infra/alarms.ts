@@ -126,6 +126,10 @@ export const deprecatedModelRequestAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
   : undefined;
 
+export const questProcessingFailureAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('QuestProcessingFailureAlarm')
+  : undefined;
+
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
@@ -1149,6 +1153,40 @@ if (isMonitoredStage) {
     tags: {
       Application: 'FeedbackDelivery',
       Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Quest processing failures
+   *
+   * Before this, a quest whose processing threw was only visible on the client (its own error
+   * reply, or the generic fallback) and in application logs - nothing paged or dashboarded, so
+   * detection was "a user complains". Staging measurement: every quest carrying the generic
+   * fallback reply was masking a distinct underlying error (one, an invalid API key, reached 172
+   * users before anyone noticed), so this alarms on the raw failure count rather than waiting for
+   * a single error class to dominate.
+   *
+   * Metric emitted by: apps/client/server/chatCompletion/internal/route.ts, in the
+   * processQuest(...).catch handler. Reads the Stage-only rollup datum (see the comment at that
+   * call site) - alarms match one exact dimension set, so the per-ErrorClass breakdown is a
+   * dashboard concern, not this alarm's.
+   */
+  new aws.cloudwatch.MetricAlarm('questProcessingFailures', {
+    name: `${$app.name}-${$app.stage}-quest-processing-failures`,
+    alarmDescription: 'Quest processing is failing on the internal ChatCompletion /process path',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ProcessingFailed',
+    namespace: 'Lumina5/Quests',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 5,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [questProcessingFailureAlarm!.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
     },
   });
 }
