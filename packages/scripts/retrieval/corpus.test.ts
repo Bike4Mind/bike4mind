@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadHelpArticles } from '../help/loadHelpArticles';
 import { NEGATIVES, NEVER_SUPPORTING, POSITIVES, PROBE_QUESTIONS, REFERENCED_SLUGS } from './corpus';
@@ -22,6 +25,30 @@ describe('probe ground truth', () => {
       missing,
       `Ground truth cites slugs that are not public help articles (renamed or moved?):\n  ${missing.join('\n  ')}`
     ).toEqual([]);
+  });
+
+  it('references only slugs the help-lake ingest will actually create', () => {
+    // loadHelpArticles reads docs-site; the ingest reads the GENERATED index. They are normally in
+    // step, but the index is what determines what ends up in the lake, so the ground truth has to
+    // hold against that source specifically - a slug present in docs but absent from the index is
+    // an article the probe can never retrieve.
+    const indexPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../apps/client/app/generated/help-index.json'
+    );
+    // Generated, so a fresh checkout may not have it yet. Absent is not a failure - the docs-site
+    // assertion above still covers the ground truth; this one adds the ingest's own view when built.
+    if (!existsSync(indexPath)) return;
+
+    const entries = JSON.parse(readFileSync(indexPath, 'utf-8')).entries as {
+      slug: string;
+      accessLevel: string;
+    }[];
+    const ingested = new Set(entries.filter(e => e.accessLevel === 'public').map(e => e.slug));
+    const missing = REFERENCED_SLUGS.filter(slug => !ingested.has(slug));
+    expect(missing, `Ground truth cites slugs the ingest will not put in the lake:\n  ${missing.join('\n  ')}`).toEqual(
+      []
+    );
   });
 
   it('never cites the survey and grab-bag articles as supporting', () => {
