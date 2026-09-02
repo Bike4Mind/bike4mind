@@ -52,7 +52,7 @@ vi.mock('@bike4mind/common', async () => {
   return {
     CONVERGENCE_ORIGIN: actual.CONVERGENCE_ORIGIN,
     shouldHaltConvergence: actual.shouldHaltConvergence,
-    isConvergencePausedNote: actual.isConvergencePausedNote,
+    isChunkStalled: actual.isChunkStalled,
     DATA_LAKES: [],
     KnowledgeType: { FILE: 'file' },
   };

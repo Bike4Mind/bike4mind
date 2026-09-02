@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   revokeToken: vi.fn(),
   findByIdWithCredentials: vi.fn(),
   release: vi.fn(),
+  findByDataLakeIdAny: vi.fn(),
   userFindById: vi.fn(),
   order: [] as string[],
 }));
@@ -24,6 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: h.userFindById, updateOne: vi.fn() },
   orgGoogleDriveConnectionRepository: {
     findByIdWithCredentials: h.findByIdWithCredentials,
+    findByDataLakeIdAny: h.findByDataLakeIdAny,
     release: h.release,
     updateHealth: vi.fn(),
   },
@@ -42,7 +44,7 @@ vi.mock('googleapis', () => ({
   },
 }));
 
-import { releaseDriveConnection } from './common';
+import { releaseDriveConnection, releaseDriveConnectionForLake } from './common';
 
 describe('releaseDriveConnection', () => {
   beforeEach(() => {
@@ -140,6 +142,44 @@ describe('releaseDriveConnection', () => {
   it('is a no-op for a connection that is not visible to the given org', async () => {
     h.findByIdWithCredentials.mockResolvedValue(null);
     await expect(releaseDriveConnection('conn1', 'orgB')).resolves.toBe(false);
+    expect(h.revokeToken).not.toHaveBeenCalled();
+    expect(h.release).not.toHaveBeenCalled();
+  });
+});
+
+describe('releaseDriveConnectionForLake', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.revokeToken.mockResolvedValue(undefined);
+    h.release.mockResolvedValue(true);
+    h.userFindById.mockResolvedValue({ googleDrive: null });
+    h.findByIdWithCredentials.mockResolvedValue({
+      id: 'conn1',
+      connectedBy: 'user-1',
+      oauthRefreshToken: 'enc(org-refresh)',
+    });
+  });
+
+  it('releases the connection using the org id stored on the row, not one the caller supplies', async () => {
+    // The purge sweep only has a lake id, and by the time it runs the lake document is on its way
+    // out - so the org has to come off the connection itself or the release cannot be scoped at all.
+    h.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
+    await expect(releaseDriveConnectionForLake('lake1')).resolves.toBe(true);
+    expect(h.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+  });
+
+  it('resolves the row regardless of enabled state, which a disabled row would otherwise strand', async () => {
+    // A disabled connection still occupies the unique driveFolderId index, so skipping it here is
+    // exactly the strand this path exists to prevent.
+    h.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: false });
+    await expect(releaseDriveConnectionForLake('lake1')).resolves.toBe(true);
+    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+  });
+
+  it('is a no-op for a lake with no Drive connection', async () => {
+    h.findByDataLakeIdAny.mockResolvedValue(null);
+    await expect(releaseDriveConnectionForLake('lake1')).resolves.toBe(false);
     expect(h.revokeToken).not.toHaveBeenCalled();
     expect(h.release).not.toHaveBeenCalled();
   });

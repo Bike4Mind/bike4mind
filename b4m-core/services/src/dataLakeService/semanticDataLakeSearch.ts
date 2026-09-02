@@ -7,6 +7,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   SupportedEmbeddingModel,
+  type ChunkStallReason,
   type DataLakeMembershipScope,
 } from '@bike4mind/common';
 import {
@@ -279,12 +280,14 @@ interface RankableFile {
   /**
    * The next three exist for the mid-(re)index refusal (#1681) and are read ONLY by
    * `partitionByIndexAvailability`. `chunkCount` with `vectorizedChunkCount` says whether the file's
-   * chunks are embedded yet; `error` and `notes` say whether a shortfall is a genuine in-flight
-   * pass or a permanent stall (which must NOT be withheld, or a broken file silently marks every
-   * search partial forever).
+   * chunks are embedded yet; `error` and `chunkStallReason` say whether a shortfall is a genuine
+   * in-flight pass or a permanent stall (which must NOT be withheld, or a broken file silently marks
+   * every search partial forever).
    */
   chunkCount?: number;
   error?: string | null;
+  chunkStallReason?: ChunkStallReason | null;
+  /** Transitional legacy stall prose; read only by `isChunkStalledFile` - see its docblock in `common`. */
   notes?: string | null;
   /** A requested-but-uncommitted passage rebuild (#1939) - the only in-flight signal a CHUNKLESS
    *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
@@ -630,6 +633,7 @@ async function rankChunksForFiles(args: {
       chunkEmbeddingModelStampedAt: file?.chunkEmbeddingModelStampedAt,
       chunkCount: file?.chunkCount,
       error: file?.error,
+      chunkStallReason: file?.chunkStallReason,
       notes: file?.notes,
       chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
     };
@@ -1019,6 +1023,7 @@ export async function semanticDataLakeSearch(
         // reads as "nothing to withhold" and re-arms the silent-degradation bug on that entrypoint.
         chunkCount: f.chunkCount,
         error: f.error,
+        chunkStallReason: f.chunkStallReason,
         notes: f.notes,
         // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
         // ranking map below still names it) is exactly the omission this comment warns about, and it
@@ -1116,6 +1121,7 @@ export async function fileScopedSemanticSearch(
         // reads as "nothing to withhold" and re-arms the silent-degradation bug on that entrypoint.
         chunkCount: f.chunkCount,
         error: f.error,
+        chunkStallReason: f.chunkStallReason,
         notes: f.notes,
         // #1939: the ONLY in-flight signal a chunkless member carries. Dropping it here (while the
         // ranking map below still names it) is exactly the omission this comment warns about, and it

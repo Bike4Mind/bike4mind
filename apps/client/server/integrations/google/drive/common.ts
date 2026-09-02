@@ -170,6 +170,25 @@ export async function releaseDriveConnection(connectionId: string, organizationI
 }
 
 /**
+ * Tear down whatever Drive connection feeds a lake, for a caller that only has the lake id - the
+ * phase-2 purge sweep. Resolves the connection GLOBALLY and regardless of `enabled` (see
+ * findByDataLakeIdAny) and takes the organizationId off the row itself, because the purge runs while
+ * the lake document is on its way out and must not depend on re-deriving the org from it.
+ *
+ * Without this the purge left the row behind, and because driveFolderId is globally unique with no
+ * surface able to reach a connection whose lake is gone, that folder became unconnectable by anyone,
+ * forever - with the encrypted credential still sitting in it.
+ *
+ * Returns whether a row was released; false means the lake had no connection, which is the ordinary
+ * case and also what a re-run of the sweep sees.
+ */
+export async function releaseDriveConnectionForLake(dataLakeId: string): Promise<boolean> {
+  const connection = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(dataLakeId);
+  if (!connection) return false;
+  return releaseDriveConnection(connection.id, connection.organizationId);
+}
+
+/**
  * Resolve a valid Google Drive access token for a user from their stored (encrypted) OAuth
  * credential, refreshing + persisting it if expired. Throws if the user has no connection or the
  * refresh fails - the caller decides whether to surface a re-auth prompt.

@@ -19,10 +19,10 @@ import type { LakeMembershipReport } from './lakeMembershipHealth';
  */
 import {
   CHARS_PER_TOKEN_SERVE_BOUND,
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
+  type ChunkStallReason,
   deriveServeCharBudget,
   isChunkRebuildPending,
-  isConvergencePausedNote,
+  isChunkStalled,
 } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
@@ -114,19 +114,19 @@ export type LakeHealthMemberInput = {
    */
   error?: string | null;
   /**
-   * `FabFile.notes`. Read ONLY to detect CONVERGENCE_PAUSED_NOTE, the second class of permanently-
-   * stalled file: the convergence kill switch abandons a vectorize by writing this note and clearing
-   * `isVectorizing`, and it never sets `error`, so without this the file satisfies none of the
-   * settled arms and hides from BOTH sides of the reachable ratio forever - the same green-counters-
-   * but-broken mode `error` exists to catch, reached by a different route. The handler's own log
-   * states these do not auto-resume, so this is durable, not a window.
+   * `FabFile.chunkStallReason`. The second class of permanently-stalled file: the convergence kill
+   * switch abandons a vectorize by stamping this and clearing `isVectorizing`, and it never sets
+   * `error`, so without this the file satisfies none of the settled arms and hides from BOTH sides of
+   * the reachable ratio forever - the same green-counters-but-broken mode `error` exists to catch,
+   * reached by a different route. The handler's own log states these do not auto-resume, so this is
+   * durable, not a window.
    */
-  notes?: string | null;
+  chunkStallReason?: ChunkStallReason | null;
   /**
    * `FabFile.chunkRebuildRequestedAt` (#1939): a passage rebuild was requested and has not committed.
    * The THIRD not-a-plain-zero signal, and the only one that fires on a member with no marker of any
-   * kind - the reset that stamps it clears `notes`, leaves `error` null and zeroes both counts, so
-   * the member is otherwise shaped exactly like an image. Read as STILL INDEXING, never as a
+   * kind - the reset that stamps it clears the stall reason, leaves `error` null and zeroes both
+   * counts, so the member is otherwise shaped exactly like an image. Read as STILL INDEXING, never as a
    * failure: the file is mid-rebuild by definition, and grading it as a settled zero would flash
    * every ordinary reprocess red. It is admitted to the member set (see `summarizeLakeHealth`) so it
    * shows up as unmeasured coverage rather than disappearing from the lake entirely.
@@ -183,17 +183,18 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   const embeddedChunkCount = nonNegOrNull(member.embeddedChunkCount);
   const vectorizedChunkCount = nonNegOrNull(member.vectorizedChunkCount);
   const hasError = typeof member.error === 'string' && member.error.length > 0;
-  // The kill switch marks an abandoned vectorize with `notes` and never with `error`, so this is the
-  // second terminal-stall signal, not a redundant one. See LakeHealthMemberInput.notes.
+  // The kill switch marks an abandoned vectorize with `chunkStallReason` and never with `error`, so
+  // this is the second terminal-stall signal, not a redundant one. See
+  // LakeHealthMemberInput.chunkStallReason.
   //
   // Correct WITHOUT a `chunkCount` guard of its own, but only because `commitFabFileChunks` clears
-  // the marker in the same transaction as the chunks it writes. Without that clear, a file the
-  // RESCUE SWEEP had already rebuilt would still carry the marker while legitimately mid-vectorize,
+  // the reason in the same transaction as the chunks it writes. Without that clear, a file the
+  // RESCUE SWEEP had already rebuilt would still carry the reason while legitimately mid-vectorize,
   // be forced to settled here, and fail P3 on its real ratio - a normal rebuild flashing red, this
   // block's own failure mode reached by another route. The clear is transactional, so it cannot be
   // lost while the rebuild it describes lands; if it is ever made best-effort, this needs the guard
   // `passagesRemoved` uses below.
-  const abandonedByKillSwitch = isConvergencePausedNote(member.notes);
+  const abandonedByKillSwitch = isChunkStalled(member.chunkStallReason);
   // The CHUNK arm of the same switch, and the one case where absent rollups are not "unmeasured".
   // `resetChunkStateByIds` nulls all four rollups in the write that deletes the file's passages, so
   // every predicate below would abstain on `null` and the member would grade `unknown` across the
@@ -201,10 +202,10 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // the drill-down and the headline. That is precisely the reading this module exists to catch, so
   // the missing rollups are read as the PROVEN zero they are: no passages means no vector-bearing
   // chunk and no reachable character. `chunkCount === 0` is required, not decorative - the marker
-  // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset, and nothing on
-  // the success path clears `notes`), so keying on the note alone would fail a repaired file forever.
+  // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset), so keying on
+  // the reason alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
-  const passagesRemoved = member.chunkCount === 0 && member.notes === CONVERGENCE_PAUSED_CHUNK_NOTE;
+  const passagesRemoved = member.chunkCount === 0 && member.chunkStallReason === 'rechunkPaused';
   // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
   // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
   // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
@@ -331,7 +332,7 @@ export type LakeHealthReport = {
  * to drop the lake off `healthy` regardless of the percentage beside it.
  */
 export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: LakeHealthPolicy): LakeHealthReport {
-  // The CHUNK marker only, matching `findDataLakeHealthMembers`'s own `$match` and
+  // The CHUNK arm only, matching `findDataLakeHealthMembers`'s own `$match` and
   // `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
   // already admitted by `chunkCount > 0` and needs no exception here.
   //
@@ -341,8 +342,7 @@ export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: La
   // report while a rebuild is running - and it is also what keeps a rebuild that was never enqueued
   // visible instead of silently reducing the lake to the members it still has.
   const withChunks = members.filter(
-    m =>
-      m.chunkCount > 0 || m.notes === CONVERGENCE_PAUSED_CHUNK_NOTE || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+    m => m.chunkCount > 0 || m.chunkStallReason === 'rechunkPaused' || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
   const results = withChunks.map(m => evaluateMemberHealth(m, policy));
 

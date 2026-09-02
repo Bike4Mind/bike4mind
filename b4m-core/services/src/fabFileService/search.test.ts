@@ -138,7 +138,6 @@ describe('fabFileService search - the access scope cannot come from request inpu
       userGroups: ['group-a'],
       dataLakeTags: ['datalake:org1:handbook'],
       dataLakeTagPrefixes: ['acme:'],
-      scopedTagPrefixes: ['docs:'],
       lakeMemberships: [membershipScope],
       restrictToDataLake: true,
     });
@@ -148,7 +147,6 @@ describe('fabFileService search - the access scope cannot come from request inpu
     expect(options.userGroups).toEqual(['group-a']);
     expect(options.dataLakeTags).toEqual(['datalake:org1:handbook']);
     expect(options.dataLakeTagPrefixes).toEqual(['acme:']);
-    expect(options.scopedTagPrefixes).toEqual(['docs:']);
     // Mirrors the forwarding regression fabFileSearchQuery.test.ts guards - a second named-hop
     // (R4) that can just as easily drop the field silently (see search.ts's forward at :119).
     expect(options.lakeMemberships).toEqual([membershipScope]);

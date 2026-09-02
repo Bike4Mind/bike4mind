@@ -138,6 +138,18 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
+   * The connection bound to a lake regardless of `enabled`, and deliberately GLOBAL. The caller is
+   * the lake-purge teardown: it runs after the lake's org is no longer resolvable, and a disabled row
+   * still holds the unique driveFolderId claim, so neither the org scope nor the enabled filter of
+   * findByDataLakeId can be applied without stranding the folder. SECURITY: server-side only.
+   */
+  async findByDataLakeIdAny(
+    targetDataLakeId: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.findOne({ targetDataLakeId });
+  }
+
+  /**
    * The connection that has claimed a given Drive folder, if any. Deliberately GLOBAL - it answers
    * "is this folder claimed by ANY org" (the point of the global-unique index). SECURITY: the
    * returned document (which excludes the credential) is a server-side claim check; never hand it to

@@ -66,7 +66,6 @@ export interface SearchFabFilesServerOptions {
   userGroups?: string[];
   dataLakeTags?: string[];
   dataLakeTagPrefixes?: string[];
-  scopedTagPrefixes?: string[];
   restrictToDataLake?: boolean;
   lakeMemberships?: DataLakeMembershipScope[];
 }
@@ -115,7 +114,6 @@ export const search = async (
       userGroups: serverOptions?.userGroups,
       dataLakeTags: serverOptions?.dataLakeTags,
       dataLakeTagPrefixes: serverOptions?.dataLakeTagPrefixes,
-      scopedTagPrefixes: serverOptions?.scopedTagPrefixes,
       restrictToDataLake: serverOptions?.restrictToDataLake,
       lakeMemberships: serverOptions?.lakeMemberships,
     }
