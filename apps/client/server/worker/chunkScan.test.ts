@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildFabFileChunkScanFilter } from './chunkScan';
-import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
+import { z } from 'zod';
+import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter } from './chunkScan';
+import { CHUNK_STALL_NOTICES, provenancePayloadShape, shouldHaltConvergence } from '@bike4mind/common';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
@@ -113,6 +114,25 @@ describe('buildFabFileChunkScanFilter', () => {
       notes: 'quarterly report, uploaded for the board deck',
     };
     expect(matches(doc, filter)).toBe(true);
+  });
+
+  it('KNOWN STRAND: does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
+    // Known one-way door, documented on buildChunkScanQueuePayload: a media file reaches this filter
+    // only through chunkRebuildRequestedAt, and the halt write nulls it in the same statement that
+    // records the stall reason. Asserted rather than left implicit so the strand is visible to
+    // whoever closes it - the switch-OFF block below covers the non-media file, which does come back.
+    const doc = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      error: null,
+      mimeType: 'audio/mpeg',
+      chunkStallReason: 'rechunkPaused',
+      chunkRebuildRequestedAt: null,
+    };
+    expect(matches(doc, filter)).toBe(false);
   });
 
   it('skips a file whose chunking already failed (error persisted by the chunk handler)', () => {
@@ -292,5 +312,32 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
     // re-chunking.
     expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
     expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
+  });
+});
+
+describe('buildChunkScanQueuePayload', () => {
+  it('stamps convergence origin even when the file has no batch, so the kill switch can halt it', () => {
+    // A paused file carries no batchId, and an un-stamped message reads as `user` work
+    // (isConvergenceHalted fails soft) - which is how a paused file used to get re-chunked.
+    expect(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' })).toEqual({
+      fabFileId: 'ff1',
+      userId: 'u1',
+      origin: 'convergence',
+    });
+  });
+
+  it('sends no lakeId: a global sweep is halted by the platform switch, not a per-lake pause', () => {
+    expect(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' })).not.toHaveProperty('lakeId');
+  });
+
+  it('is halted by the shape the chunk handler actually parses, not just by carrying an origin key', () => {
+    // Binds the stamp to the vocabulary the switch actually decides on, rather than to the string
+    // 'convergence': a value outside WORK_ORIGINS parses to undefined, defaults to 'user' and stops
+    // being haltable. The consumer's own suite (fabFileChunk.test.ts) covers the handler's half of
+    // the contract; this covers the producer's.
+    const parsed = z
+      .object(provenancePayloadShape)
+      .parse(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' }));
+    expect(shouldHaltConvergence(parsed.origin ?? 'user', true)).toBe(true);
   });
 });

@@ -7,7 +7,7 @@
  * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
  * importing either boot graph.
  */
-import { CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, CONVERGENCE_ORIGIN, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
@@ -122,10 +122,13 @@ export const buildFabFileChunkScanFilter = (
   //  - Switch OFF: excluding it would be a REGRESSION. This sweep is the only automatic exit a
   //    paused file has. The two other recovery paths are human-driven and lake-scoped, so neither
   //    reaches a file outside every lake - exactly what this sweep exists to catch. And the
-  //    re-enqueue really does rebuild it: the send below stamps `origin` only for a file with a
-  //    batchId, and `isConvergenceHalted` defaults a missing origin to 'user' and returns false, so
-  //    a batchId-less file is genuinely re-chunked rather than bounced. That is what makes
-  //    CHUNK_STALL_NOTICES.rechunkPaused's user-visible "rebuilt when convergence resumes" true.
+  //    re-enqueue really does rebuild it: `isConvergenceHalted` returns false whenever the switch is
+  //    off, whatever `origin` says, so a re-selected file is genuinely re-chunked rather than
+  //    bounced. That is what makes CHUNK_STALL_NOTICES.rechunkPaused's user-visible "rebuilt when
+  //    convergence resumes" true. Note this no longer turns on the file lacking a batchId:
+  //    buildChunkScanQueuePayload stamps `origin` unconditionally, so with the switch ON every sweep
+  //    message is haltable - which is why the exclusion above only has to spare the queue a
+  //    round-trip, not prevent a re-chunk.
   //
   // Via CHUNK_STALL_REASONS so this query and `isChunkStalled` cannot drift, plus the transitional
   // `notes` arm mirroring `isChunkStalledFile` - #2016's migration and this code do not deploy
@@ -169,4 +172,41 @@ export const buildFabFileChunkScanFilter = (
         }
       : { isChunking: { $ne: true } },
   ],
+});
+
+/**
+ * The chunk-queue payload for a file this scan selected. Shared by both sweep drivers (the
+ * self-host worker's fabFileChunkScan and the hosted dataLakeBatchReconcile cron) so the two
+ * can't drift on provenance.
+ *
+ * `origin` is stamped UNCONDITIONALLY, not just for files carrying a `batchId`. A scheduled rescue
+ * sweep is background work by definition, so it must be haltable by the convergence kill switch:
+ * with the switch on, the chunk handler parks a file with a stall reason but leaves it matching this
+ * scan's filter, and an un-stamped re-enqueue would be read as `user` work (isConvergenceHalted
+ * fails soft to `user`) and chunked anyway - spending exactly the budget the switch was set to stop.
+ * The tradeoff, which is the switch working as designed: while it is on, the sweep rescues nothing,
+ * including a genuinely stranded non-lake file. What brings such a file back is RE-SELECTION, not a
+ * resume path: the filter above excludes the stall reasons only while the switch is on, so the first
+ * sweep after it clears re-admits the file and rebuilds it (pinned in chunkScan.test.ts, because it
+ * is the only thing making this tradeoff acceptable). Belt and braces, deliberately - the exclusion
+ * decides SELECTION from a flag read once per pass, this stamp decides what the CONSUMER does with a
+ * message already in flight when the switch flips.
+ *
+ * One shape does NOT come back, and stamping unconditionally is what routes it there: a MEDIA file
+ * is admitted by the filter above only through `chunkRebuildRequestedAt`, and the halt write nulls
+ * that field, so once halted it leaves this filter for good and needs a manual reprocess. The
+ * mechanism predates this stamp, but a `batchId`-less media file never reached the halt branch
+ * before it did - so the one-way door is reachable here because of this function, and calling it
+ * pre-existing would be wrong. Closing it means readmitting a paused media file to the filter, which
+ * has to be reconciled with the switch-ON stall-reason exclusion above as well - the two would be
+ * pulling the same file in opposite directions. Tracked in #2224.
+ *
+ * No `lakeId`: a FabFile carries only `batchId`, so a pause set ONLY at Lake scope does not halt
+ * these messages - the platform-scope switch does. See resolvePauseFlag (convergenceKillSwitch.ts).
+ * Known and owned rather than introduced here: #2157 and #2251 both track that gap.
+ */
+export const buildChunkScanQueuePayload = ({ fabFileId, userId }: { fabFileId: string; userId: string }) => ({
+  fabFileId,
+  userId,
+  origin: CONVERGENCE_ORIGIN,
 });
