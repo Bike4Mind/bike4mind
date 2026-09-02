@@ -24,6 +24,11 @@
  * the payload in memory. Same data the audit trail gets, no race, and no parsing of the
  * model-facing string the tool returns.
  *
+ * The probe captures the `statusUpdate` seam alongside it, because the audit trail alone cannot say
+ * whether an absent event means "retrieval served nothing" or "the harness never saw the write".
+ * Unlike the audit write, every terminal path AWAITS its status write, so `promptMeta.retrieval` is
+ * always present by the time `toolFn` resolves. See `auditEvent.ts`, which owns that decision.
+ *
  * CORPUS. The `system-help` lake: 51 public help articles, seeded by
  * `packages/scripts/help/ingest-help-datalake.ts`. See `corpus.ts` for why that corpus and why the
  * ground truth is hand-authored.
@@ -73,7 +78,7 @@ import { Logger } from '@bike4mind/observability';
 import { b4mTools } from '@bike4mind/services/llm/tools';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 import type { IUserDocument, RecordLakeAccessEventInput, SettingKey } from '@bike4mind/common';
-import { readServedDocuments } from './auditEvent';
+import { readRetrievalStatus, readServedDocuments, type CapturedPromptMeta } from './auditEvent';
 import { PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import { aggregate, scoreQuestion, type QuestionOutcome } from './metrics';
 import {
@@ -100,21 +105,29 @@ const logger = new Logger();
 // ---------------------------------------------------------------------------
 
 /**
- * Stands in for the lake-audit repository so the probe reads exactly what the tool reported, at the
- * adapter boundary the ToolContext already exposes. Nothing is persisted.
+ * Stands in for the two seams the probe observes one tool call through, both adapter boundaries the
+ * ToolContext already exposes: the lake-audit repository (WHAT was served) and `statusUpdate` (the
+ * tool's own account of WHETHER it served anything). Nothing is persisted.
  */
 function createCapturingRecorder() {
   const events: RecordLakeAccessEventInput[] = [];
+  const promptMetas: CapturedPromptMeta[] = [];
   return {
     events,
+    promptMetas,
     recorder: {
       record: async (input: RecordLakeAccessEventInput) => {
         events.push(input);
         return undefined as unknown as never;
       },
     },
+    statusUpdate: async (update?: { promptMeta?: CapturedPromptMeta }) => {
+      if (update?.promptMeta) promptMetas.push(update.promptMeta);
+      return undefined;
+    },
     reset: () => {
       events.length = 0;
+      promptMetas.length = 0;
     },
   };
 }
@@ -126,6 +139,11 @@ type Capture = ReturnType<typeof createCapturingRecorder>;
  * tool does not await the result, so the event lands a few microtasks after `toolFn` returns. Poll
  * briefly rather than sleeping a fixed interval: the settings read is cached, so this almost always
  * succeeds on the first tick.
+ *
+ * Only called once the status seam has confirmed content WAS served, so exhausting the timeout is
+ * unambiguously a stalled write and never an honest empty result. Still returns `null` rather than
+ * throwing, to keep `readServedDocuments` the single place the two absences are told apart - the
+ * one decision that has to stay testable without a stage.
  */
 async function waitForEvent(capture: Capture, timeoutMs = 5_000): Promise<RecordLakeAccessEventInput | null> {
   const deadline = Date.now() + timeoutMs;
@@ -168,7 +186,7 @@ function buildToolContext(user: IUserDocument, capture: Capture) {
       scopedSettings: scopedSettingsRepository,
       lakeAccessEvents: capture.recorder,
     },
-    statusUpdate: async () => undefined,
+    statusUpdate: capture.statusUpdate,
     onStart: async () => undefined,
   } as unknown as ToolContext;
 }
@@ -326,7 +344,19 @@ async function runQuestion(question: ProbeQuestion, user: IUserDocument, capture
   const tool = b4mTools.search_knowledge_base.implementation(context, {});
   await tool.toolFn({ query: question.question });
 
-  const reading = readServedDocuments(await waitForEvent(capture));
+  // Awaited by the tool on every terminal path, so it is already captured. Only the un-awaited
+  // audit write needs waiting for, and only when this says one is coming - so a negative question
+  // now costs no wall clock instead of burning the full timeout to learn nothing.
+  const status = readRetrievalStatus(capture.promptMetas);
+  const event = status.kind === 'served-content' ? await waitForEvent(capture) : (capture.events[0] ?? null);
+  const reading = readServedDocuments(event, status);
+
+  if (reading.kind === 'unmeasurable') {
+    throw new Error(
+      `Question ${question.id} produced no measurable result: ${reading.reason} Refusing to score ` +
+        `it as a zero, which would be indistinguishable from the relevance floor doing its job.`
+    );
+  }
 
   if (reading.kind === 'keyword-fallback') {
     throw new Error(
