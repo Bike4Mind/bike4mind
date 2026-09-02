@@ -190,6 +190,33 @@ export const MIN_TAG_PREFIX_LENGTH = 2;
 export const MAX_TAG_PREFIX_LENGTH = 30;
 
 /**
+ * The longest a single tag name under a lake's prefix can be: the longest prefix plus the longest
+ * taxonomy suffix a name under it could carry. Derived rather than hardcoded so it tracks
+ * `MAX_TAG_PREFIX_LENGTH` and `MAX_TAXONOMY_TAG_SUFFIX_LENGTH` instead of drifting from either.
+ * This bounds what a caller may WRITE under a prefix; it does not bound what the upload path may
+ * already have stored there (folder-derived names are not truncated), so an existing name over
+ * this length is a real, legitimate possibility a replace-semantics door must account for.
+ */
+export const MAX_LAKE_FILE_TAG_NAME_LENGTH = MAX_TAG_PREFIX_LENGTH + MAX_TAXONOMY_TAG_SUFFIX_LENGTH;
+
+/**
+ * Length bounds and shape for a lake `slug`, owned here rather than by the create schema because
+ * the client PRODUCES the value it then sends: the wizard slugifies a lake name, truncates to the
+ * max, and gates Start Upload on the min, all before the schema ever sees the result. A produced
+ * value whose bound lives only in the schema is how the `fileTagPrefix` derive above came to hand
+ * users a prefix the server refused, so keep the schema, `slugifyDataLakeName`,
+ * `isValidDataLakeSlug`, the wizard's "name too short" copy and the 422 translator all reading
+ * these.
+ *
+ * The regex is shared for the same reason in the other direction: `slugifyDataLakeName` satisfies
+ * it BY CONSTRUCTION (it trims the edge hyphens truncation can expose), and the only thing that
+ * keeps that true is a test asserting against this exact pattern.
+ */
+export const MIN_DATA_LAKE_SLUG_LENGTH = 2;
+export const MAX_DATA_LAKE_SLUG_LENGTH = 60;
+export const DATA_LAKE_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+
+/**
  * A typed prefix as the create request will actually carry it: trimmed, and closed with the
  * trailing ":" the wizard appends before POSTing.
  *
@@ -340,6 +367,20 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   preferredSystemPromptId?: string;
   /**
+   * How many proposals are waiting for this caller to review (#1671). EDITOR-ONLY, same gate as the
+   * fields above: deciding what enters a lake is a management right, so a reader must not learn that
+   * a queue exists, let alone how deep it is.
+   *
+   * Carried on the LIST rather than fetched per lake because it is the feature's only discovery
+   * surface. Nothing else in the app says a human has work waiting - without this the queue is
+   * reachable only by opening a lake's settings and noticing a tab that exists solely when it is
+   * non-empty, which is not a signal anyone will find.
+   *
+   * Absent (never 0) when the caller cannot manage the lake or the projection was given no proposal
+   * repo, so "none waiting" and "not yours to see" stay distinguishable.
+   */
+  pendingProposalCount?: number;
+  /**
    * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
    * surfaced only when the caller can manage the lake, so the settings picker can seed its current
    * selection. Absent when the caller can't manage it OR the lake never set the field (readers get
@@ -397,8 +438,8 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
 /**
  * A public data lake as it appears in the discover/browse surface: the lightweight card
  * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
- * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
- * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * DataLakeConfig - it drops the access/gate internals (the endpoint has already resolved the
+ * gate for this caller) and adds the human-facing preview metadata the catalog renders: owner
  * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
  * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
  */

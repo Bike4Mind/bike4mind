@@ -58,6 +58,27 @@ export function isIndexAlreadyExistsError(error: Error): boolean {
 }
 
 /**
+ * A removal target that does not exist: OpenSearch answers 404 `index_not_found_exception`.
+ *
+ * Read as "there is provably nothing here to delete", which is why the purge is allowed to treat it
+ * as a SATISFIED removal rather than a failure (see deleteByFabFileIdOrThrow). That reading only
+ * holds for this exact condition - a missing index cannot be hiding documents - so this stays
+ * deliberately narrow and every other 4xx keeps aborting the sweep.
+ *
+ * Shape-matched the same way as `isIndexAlreadyExistsError` above, including the message fallback:
+ * opensearch-js surfaces the type on `error.body.error.type` for a ResponseError, but a wrapped or
+ * re-thrown error can carry it only in the message.
+ */
+export function isIndexNotFoundError(error: Error): boolean {
+  const statusCode = (error as { statusCode?: number }).statusCode;
+  const body = (error as { body?: { error?: { type?: string } } }).body;
+  if (statusCode === 404 && body?.error?.type === 'index_not_found_exception') {
+    return true;
+  }
+  return (error.message ?? '').toLowerCase().includes('index_not_found_exception');
+}
+
+/**
  * Extract a `Retry-After` delay (ms) from an opensearch-js `ResponseError`, if the cluster
  * sent one. opensearch-js exposes response headers on `error.headers` (and `error.meta.headers`).
  * `Retry-After` is either a number of seconds or an HTTP date. Returns null when absent/unparseable.

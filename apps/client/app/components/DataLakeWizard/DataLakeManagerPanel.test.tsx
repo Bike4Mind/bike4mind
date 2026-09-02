@@ -74,6 +74,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
         lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
       },
     }),
+    // The nav's in-lake tree is DataLakeTreeView, which calls this even with no `source` (the
+    // manager passes none, so cross-tree search stays off) - it still has to exist on the mock.
+    useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
     // The access modal (mounted by the panel) pulls these from this module; the modal itself is
     // covered by its own suite, so a quiet stub keeps this mock complete (see the missing-export trap).
     useLakeAccessView: () => ({ data: undefined, isLoading: false, isError: false }),
@@ -405,6 +408,44 @@ describe('DataLakeManagerPanel - root view', () => {
     renderPanel();
     await user.click(screen.getByTestId('field-tooltip-data-lake-panel'));
     expect(screen.getByTestId('datalake-manager-lake-mine')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - pending-proposal chip', () => {
+  it('advertises the waiting review count on the lake row', () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 4 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 to review');
+  });
+
+  it('omits the chip at zero, so a row with nothing waiting is unchanged', () => {
+    // The guard is truthiness, not presence: a `!== undefined` check would render "0 to review"
+    // and invent a queue for every lake that has ever been reviewed clean.
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 0 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-mine')).not.toBeInTheDocument();
+    // The row still renders its ordinary content - the chip's absence costs nothing else.
+    expect(screen.getByTestId('datalake-manager-lake-mine')).toHaveTextContent('Mine');
+  });
+
+  it('omits the chip when the server sends no count at all', () => {
+    // The server omits the field for a lake the caller cannot manage, so a reader must see nothing.
+    renderPanel();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-mine')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-pending-proposals-theirs')).not.toBeInTheDocument();
+  });
+
+  it('says "source is" for one and "sources are" for many', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 1 }], isLoading: false });
+    const { rerender } = renderPanel();
+    await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
+    expect(await screen.findByText('1 source is waiting for your review')).toBeInTheDocument();
+
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 3 }], isLoading: false });
+    rerenderPanel(rerender);
+    await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
+    expect(await screen.findByText('3 sources are waiting for your review')).toBeInTheDocument();
   });
 });
 

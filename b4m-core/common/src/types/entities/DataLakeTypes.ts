@@ -22,6 +22,12 @@ export const DATA_LAKE_STATUSES = [
   'active',
   'archiving',
   'archived',
+  // Two transitional statuses for the two reversal axes, deliberately NOT one shared 'restoring'.
+  // They used to be the same value, and because each axis admits its own status for crash re-entry,
+  // an unarchive and a restore-from-deleted could both hold it and both settle 'active' - a
+  // terminal settle conditional on the claimed status passes for BOTH claimants and so cannot
+  // separate them. Distinct values make the two axes mutually exclusive at the claim.
+  'unarchiving',
   'restoring',
   'deleting',
   'deleted',
@@ -38,6 +44,22 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
+
+/**
+ * What a terminal lifecycle settle may write alongside the status it settles on: the spent
+ * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
+ * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
+ * make it a general update that happens to be conditional.
+ *
+ * The mark fields are `null`-only, never a Date: a settle clears a spent stamp, and the only writer
+ * that may SET one is the set-if-unset claim (`claimFilesArchivedAt`/`claimFilesDeletedAt`).
+ */
+export type LakeSettleFields = {
+  status: DataLakeStatus;
+  filesArchivedAt?: null;
+  filesDeletedAt?: null;
+  lastUpdatedByUserId?: string;
+};
 
 /** Per-batch policy for files whose content hash already exists in the lake. */
 export type ConflictResolution = 'skip' | 'update' | 'duplicate';
@@ -311,6 +333,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
+  /**
+   * Batched `findByDatalakeTag`, for callers holding a whole lake set (the tag-count surface):
+   * one read instead of one per lake. Lakes with no document are simply absent from the result,
+   * so the caller must key by `datalakeTag` rather than assume a positional match.
+   */
+  findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Entitlement-aware variant of `findActiveByUserTags`: active lakes the user can reach by
@@ -345,18 +373,26 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   /**
-   * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
-   * independent of any caller identity (the catalog is the same for everyone). Only gate-less
-   * lakes qualify - a lake that acquired a `requiredUserTag`/`requiredEntitlement` after being
-   * published is no longer open to all, so it must not surface in a browse-everyone view (this
-   * mirrors the both-blank requirement arm on the retrieval/list paths). `search` matches name
-   * or description case-insensitively. Returns one page plus the unpaged `total` for the UI.
+   * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
+   * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
+   * `findAccessible`'s public arm, so a lake that acquired a `requiredUserTag`/
+   * `requiredEntitlement` after being published is hidden from callers who lack the gate but
+   * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
+   * Without that, an entitled user could open such a lake from their own lake list while discover
+   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
+   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * per-caller too. `search` matches name or description case-insensitively. Returns one page
+   * plus the unpaged `total` for the UI.
    */
-  findPublicLakes(opts?: {
-    search?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
+  findPublicLakes(
+    viewer: AccessContext,
+    opts?: {
+      search?: string;
+      limit?: number;
+      offset?: number;
+      grantedLakeIds?: string[];
+    }
+  ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(
     id: string,
@@ -429,6 +465,50 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * prior attempt can still be retried. Returns whether this caller may proceed.
    */
   claimRestoring(id: string): Promise<boolean>;
+  /**
+   * Enter the transitional `archiving` state, claimed rather than set for the same reason as
+   * `claimPurging`: `archiveDataLake` guards a document it read several round trips earlier, so a
+   * delete or restore that lands in that gap must make this LOSE rather than be overwritten by it.
+   * Admits only the states that guard admits (`draft`/`active`, plus `archiving` itself so a
+   * crashed prior attempt can re-enter) - must stay in sync with it. Returns whether this caller
+   * may proceed.
+   */
+  claimArchiving(id: string): Promise<boolean>;
+  /**
+   * Enter the transitional `deleting` state - the phase-1 teardown's twin of `claimArchiving`, and
+   * the other half of the delete-vs-unarchive race `claimUnarchiving` closes. What the
+   * admitted set EXCLUDES is the point: `restoring` (an unarchive or a restore already in flight),
+   * `deleted` and `purging`. Must stay in sync with `deleteDataLake`'s entry guard.
+   */
+  claimDeleting(id: string): Promise<boolean>;
+  /**
+   * Enter `unarchiving` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
+   * claimed for the same reason: `unarchiveDataLake` pre-checks a document it read moments earlier,
+   * and `deleteDataLake` also accepts `archived`, so a delete landing in that gap must make this
+   * LOSE rather than be overwritten by it. A plain `$set` there leaves the lake `active` with every
+   * member soft-deleted and `restoreDeletedDataLake` refusing it, which strands the files.
+   * Re-entrant from `unarchiving` itself so a crashed prior attempt can retry.
+   *
+   * Also admits the legacy shared `restoring`, which is what an archive-axis reversal in flight
+   * across the deploy that split the two statuses is sitting in. Claiming it CONVERTS that lake
+   * onto this axis, so a delete-axis restore holding the same value loses its own terminal settle
+   * rather than both settling `active`. Once no lake predates the split this entry can go.
+   */
+  claimUnarchiving(id: string): Promise<boolean>;
+  /**
+   * Settle a lake onto its TERMINAL status, conditional on it still holding the transitional status
+   * this caller claimed - the closing half of the `claim*` pattern above.
+   *
+   * Claiming the transitional status stops two operations from STARTING on top of each other; it
+   * does not stop one that already started from settling over the other's result. Both sweeps run
+   * to completion either way, so what this decides is which operation gets to RECORD its outcome:
+   * the one still holding its claim. The loser reports a conflict rather than silently writing a
+   * status whose file state belongs to somebody else.
+   *
+   * Resolves the settled document, or `null` when the lake has moved on (lost) or vanished - the
+   * caller re-reads to tell those apart, since only the loss path needs the distinction.
+   */
+  settleLifecycleStatus(id: string, from: DataLakeStatus, set: LakeSettleFields): Promise<IDataLakeDocument | null>;
   /**
    * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
    * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
@@ -531,6 +611,13 @@ export interface IDataLakeBatch {
    * schema comment on this field for why it's tracked separately. */
   processingFailedFiles: number;
   skippedFiles: number;
+  /**
+   * Drive-ingest-only: driveFileIds skip() has already counted into `skippedFiles` for THIS batch.
+   * A skip mints no FabFile, so it is invisible to the ordinary alreadyIngested subtraction
+   * (findDriveFileIdsByBatchId) - without recording it here, a chain re-diffing the same
+   * permanently-unsupported file on every slice would re-fetch and re-count it once per slice.
+   */
+  skippedDriveFileIds?: string[];
 
   // Size tracking
   totalSizeBytes: number;
@@ -596,7 +683,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * inside its Lambda timeout; the sweep is idempotent so any residue is picked up next run.
    * Served by the `{ status: 1, updatedAt: 1 }` index.
    */
-  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
@@ -611,6 +698,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and
+   * increment `skippedFiles`, gated on that driveFileId not already being recorded - so a chain
+   * re-diffing the same permanently-unsupported file across several slices counts and subtracts it
+   * exactly once. Returns false (a no-op, not an error) when it was already recorded.
+   */
+  recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean>;
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
    * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
   tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
@@ -643,6 +737,27 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Guarded status transition to ANY status, terminal or not, carrying the client-supplied failure
+   * tallies in the same atomic write. The route variant of the two methods above: the PUT endpoint
+   * accepts any `BatchStatus` plus `failedFiles`/`failedFileNames`, which neither of them can
+   * express, and an unguarded `update` there could resurrect a batch the pipeline already settled.
+   * Returns the post-update doc to the single winner and null to a caller whose batch was already
+   * terminal, so the caller can tell a real transition from a no-op instead of inferring it from a
+   * stale read.
+   */
+  updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Re-plan a still-active batch's expected file count, guarded like the transitions above. The
+   * multi-run Drive folder ingest is the caller: its batch spans several queue-Lambda invocations, so
+   * the expected total is only known progressively - it is raised whenever a later slice re-walks a
+   * folder that grew, and set exactly when the chain ends, which is what lets the finalize gate
+   * (`vectorized + failed + skipped === totalFiles`) still be reached exactly.
+   */
+  setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null>;
+  /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
    * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
@@ -672,7 +787,7 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
    * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
-  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchSummary[]>;
   /**
    * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
    * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -

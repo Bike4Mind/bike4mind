@@ -6,13 +6,31 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { randomUUID } from 'crypto';
 
 const MAX_LAST_ERROR_LEN = 500;
 
-// A 'syncing' claim older than this is treated as abandoned and is reclaimable. The ingest queue's
-// Lambda has a hard 10-minute timeout (visibility 12 min - see infra/queues.ts), so a run that dies
-// without releasing cannot legitimately hold a claim past this bound; anything older is a dead owner.
+// An UNCHAINED 'syncing' claim older than this is treated as abandoned and is reclaimable. Such a
+// claim is refreshed once per run, so the longest a live one can go un-refreshed is one invocation:
+// the ingest queue's Lambda has a hard 10-minute timeout (visibility 12 min - see infra/queues.ts),
+// and anything older is a dead owner.
 const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-min Lambda ceiling
+
+// A CHAINED claim (one carrying activeIngestBatchId) is a different measurement. It is refreshed at
+// each slice boundary, so the un-refreshed interval is the continuation message's QUEUE WAIT, not the
+// run length - and driveLakeIngestQueue is shared across every Drive connection, so two full-length
+// messages ahead of a continuation already exceed the bound above. Stealing such a claim is not a
+// harmless reclaim: the poll that takes it runs a FRESH sync with no resumeBatchId, so it never
+// subtracts what the chain already uploaded (still `pending`, hence invisible to the ordinary diff)
+// and re-ingests the tail as new ADDs - the exact duplicate spiral chaining exists to prevent. Hence
+// a longer bound here, sized for several full-length messages queued ahead of a continuation. Still
+// finite, so an abandoned chain cannot wedge a connection in 'syncing' forever - but the reclaim is
+// reachable only from an OPERATOR-INITIATED path (the manual Re-sync button, which calls claimForSync
+// directly), not automatically: findDueForPoll filters on status:'connected', so the scheduled poll
+// never re-enqueues onto a wedged 'syncing' connection, and an abandoned chain's own in-flight message
+// gives up first (MAX_INGEST_REDRIVES x its delay tops out under 20 min). A stuck-connection reaper
+// that reclaims automatically would be separate work, not something this bound provides.
+const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 12-min visibility windows
 
 /**
  * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
@@ -68,6 +86,12 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     lastPolledAt: { type: Date },
     // When the current 'syncing' claim was taken; a stale one is reclaimable (see claimForSync).
     syncClaimedAt: { type: Date },
+    // The batch a sliced ingest chain is filling; the id a continuation presents to adoptSyncClaim.
+    activeIngestBatchId: { type: String },
+    // The one-time-use token a continuation must ALSO present to adoptSyncClaim, minted fresh by
+    // each renewSyncClaim/adoptSyncClaim call and never reused - see adoptSyncClaim's doc comment for
+    // why activeIngestBatchId alone (unchanged for a whole chain) cannot serve as this CAS token.
+    ingestClaimToken: { type: String },
 
     // Incremental-sync resumption (Drive changes pageToken)
     syncCursor: { type: String },
@@ -94,6 +118,10 @@ OrgGoogleDriveConnectionSchema.index({ targetDataLakeId: 1 }, { unique: true, na
 
 // Org lookups - NON-unique: an org may connect several folders/lakes.
 OrgGoogleDriveConnectionSchema.index({ organizationId: 1 }, { name: 'org_gdrive_conn_org_id' });
+
+// Credential-owner lookup (findByConnectedBy) - the profile-disconnect revoke needs every connection
+// whose credential belongs to the disconnecting user, across orgs, so this is deliberately unscoped.
+OrgGoogleDriveConnectionSchema.index({ connectedBy: 1 }, { name: 'org_gdrive_conn_connected_by' });
 
 // Scheduled re-sync poll scan (findDueForPoll): enabled + status equality, then lastPolledAt for both
 // the cutoff range and the oldest-first sort. Small collection today, but the sort is served from the
@@ -134,6 +162,18 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
+   * The connection bound to a lake regardless of `enabled`, and deliberately GLOBAL. The caller is
+   * the lake-purge teardown: it runs after the lake's org is no longer resolvable, and a disabled row
+   * still holds the unique driveFolderId claim, so neither the org scope nor the enabled filter of
+   * findByDataLakeId can be applied without stranding the folder. SECURITY: server-side only.
+   */
+  async findByDataLakeIdAny(
+    targetDataLakeId: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.findOne({ targetDataLakeId });
+  }
+
+  /**
    * The connection that has claimed a given Drive folder, if any. Deliberately GLOBAL - it answers
    * "is this folder claimed by ANY org" (the point of the global-unique index). SECURITY: the
    * returned document (which excludes the credential) is a server-side claim check; never hand it to
@@ -143,6 +183,16 @@ class OrgGoogleDriveConnectionRepository
     driveFolderId: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.findOne({ driveFolderId });
+  }
+
+  /**
+   * Every connection whose stored credential belongs to a given user (`connectedBy` is re-stamped
+   * with the credential in updateCredential, so it always names the credential's owner). Deliberately
+   * CROSS-ORG: the caller is the user's own profile-disconnect, which revokes their Google grant and
+   * so breaks these connections whichever org they belong to. Excludes credentials.
+   */
+  async findByConnectedBy(connectedBy: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
+    return this.find({ connectedBy });
   }
 
   /**
@@ -224,7 +274,10 @@ class OrgGoogleDriveConnectionRepository
     // Clear the error on a healthy update; redact + truncate otherwise (lastError is client-visible
     // and its predictable caller is a raw provider err.message - see redactLastError).
     set.lastError = update.lastError ? redactLastError(update.lastError) : null;
-    return this.model.findByIdAndUpdate(id, { $set: set }, { new: true });
+    // Every caller here moves the connection OUT of 'syncing' (the success release, a credential
+    // failure, a disconnect), so any ingest-chain id/token goes with it - see releaseSyncClaim.
+    const unset = update.status === 'syncing' ? undefined : { activeIngestBatchId: '', ingestClaimToken: '' };
+    return this.model.findByIdAndUpdate(id, { $set: set, ...(unset && { $unset: unset }) }, { new: true });
   }
 
   /** Advance the incremental-sync cursor after a sync batch is durably created. */
@@ -248,17 +301,99 @@ class OrgGoogleDriveConnectionRepository
    * process that died past the Lambda timeout without releasing - the connection would be wedged in
    * 'syncing' forever with no operator path back. The stale-claim arm makes that failure degrade to
    * "one ingest was lost" (reclaimable next run) instead of "this connection can never sync again".
+   *
+   * The staleness arm is SPLIT by whether the claim carries a chain token, because the two measure
+   * different durations and stealing a live chain is far more damaging than stealing an idle claim -
+   * see CHAINED_SYNC_CLAIM_STALE_MS.
    */
   async claimForSync(id: string): Promise<boolean> {
     const staleBefore = new Date(Date.now() - SYNC_CLAIM_STALE_MS);
+    const chainedStaleBefore = new Date(Date.now() - CHAINED_SYNC_CLAIM_STALE_MS);
     const claimed = await this.model.findOneAndUpdate(
       {
         _id: id,
-        $or: [{ status: 'connected' }, { status: 'syncing', syncClaimedAt: { $lt: staleBefore } }],
+        $or: [
+          { status: 'connected' },
+          // $in: [null] matches a missing field too - a claim that never started a chain.
+          { status: 'syncing', activeIngestBatchId: { $in: [null] }, syncClaimedAt: { $lt: staleBefore } },
+          {
+            status: 'syncing',
+            activeIngestBatchId: { $ne: null },
+            syncClaimedAt: { $lt: chainedStaleBefore },
+          },
+        ],
       },
-      { $set: { status: 'syncing', syncClaimedAt: new Date() } }
+      // A fresh claim starts no chain, so any continuation id/token left by a dead one is cleared
+      // here - otherwise a stale message could still present it to adoptSyncClaim and join a chain
+      // that is no longer running.
+      {
+        $set: { status: 'syncing', syncClaimedAt: new Date() },
+        $unset: { activeIngestBatchId: '', ingestClaimToken: '' },
+      }
     );
     return claimed !== null;
+  }
+
+  /**
+   * Continuation-only take-over of a live claim (see the type docs): matches on the batch id AND the
+   * one-time token this chain's previous slice minted (renewSyncClaim), so only that chain's own next
+   * slice can pick the claim up. The claim therefore never returns to 'connected' between slices, which
+   * is what keeps the re-sync poll from starting a competing walk mid-chain.
+   *
+   * The match is on `activeIngestBatchId` (unchanged for a whole chain, since it also names the batch
+   * document to resume) AND `ingestClaimToken` (rotated to a fresh value on every successful adopt).
+   * The batch id alone cannot be the CAS token: two deliveries of the SAME continuation message would
+   * both match it and both win, since matching it doesn't consume it. Rotating a second field the
+   * update also changes is what makes a redelivered duplicate lose - Mongo applies findOneAndUpdate
+   * atomically, so only the first of two concurrent callers can observe the pre-rotation value.
+   * Returns the freshly-minted token on success (for the caller to carry forward if it defers again),
+   * or null if the take-over lost.
+   */
+  async adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null> {
+    const rotatedToken = randomUUID();
+    const adopted = await this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing', activeIngestBatchId, ingestClaimToken: claimToken },
+      { $set: { syncClaimedAt: new Date(), ingestClaimToken: rotatedToken } }
+    );
+    return adopted !== null ? rotatedToken : null;
+  }
+
+  /**
+   * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one.
+   * The later-slice arm (activeIngestBatchId AND expectedToken must both still match) is a real
+   * compare-and-set for that case, for the same reason adoptSyncClaim's is: `expectedToken` closes the
+   * gap the batch id alone leaves, since the batch id never changes across a whole chain and so cannot
+   * tell "my own live chain" apart from "a chain I used to hold and lost to a reclaim/disconnect/
+   * reconnect" (both have the same activeIngestBatchId once a new owner renews or adopts).
+   *
+   * The no-chain-yet arm is NOT a compare-and-set against the caller's own `activeIngestBatchId`: it
+   * matches any doc currently sitting at null/null regardless of which batch id the caller passed in,
+   * so a stale first-slice caller (e.g. an abandoned attempt whose crash-retry already produced a fresh,
+   * unrelated claim on the same connection) can still win it and redirect the connection to ITS batch
+   * id. Known gap, tracked separately rather than closed here - not blocking because the un-chained
+   * `updateHealth` path already has an equivalent window on main.
+   *
+   * Always mints a fresh `ingestClaimToken` on success and returns it - the caller carries it into the
+   * next slice's continuation payload for adoptSyncClaim to present.
+   */
+  async renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null> {
+    const rotatedToken = randomUUID();
+    const renewed = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        status: 'syncing',
+        $or: [
+          // No chain yet: the first slice, right after its own fresh claimForSync (which unsets both
+          // fields). Not gated on expectedToken - a first slice never held one to present.
+          { activeIngestBatchId: { $in: [null] }, ingestClaimToken: { $in: [null] } },
+          // A later slice renewing its own still-held chain: both the id AND the token must still match
+          // what this run was issued, or the claim moved on without us.
+          ...(expectedToken ? [{ activeIngestBatchId, ingestClaimToken: expectedToken }] : []),
+        ],
+      },
+      { $set: { syncClaimedAt: new Date(), activeIngestBatchId, ingestClaimToken: rotatedToken } }
+    );
+    return renewed !== null ? rotatedToken : null;
   }
 
   /**
@@ -284,7 +419,13 @@ class OrgGoogleDriveConnectionRepository
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     const set: Record<string, unknown> = { status: 'connected', lastPolledAt: new Date() };
     if (lastError) set.lastError = redactLastError(lastError);
-    return this.model.findOneAndUpdate({ _id: id, status: 'syncing' }, { $set: set }, { new: true });
+    // The chain (if any) is over once the claim goes; leaving the id/token would let an in-flight
+    // continuation message adopt a claim nobody holds.
+    return this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing' },
+      { $set: set, $unset: { activeIngestBatchId: '', ingestClaimToken: '' } },
+      { new: true }
+    );
   }
 
   /**

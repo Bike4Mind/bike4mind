@@ -111,3 +111,31 @@ export function runHasAttachments(
     (sessionKnowledgeIds?.length ?? 0) > 0
   );
 }
+
+/**
+ * Whether the run may offer each delegation surface. Consumed at `buildSharedTools`'
+ * DEPENDENCY level, not the name level, because names cannot gate these two tools:
+ * `delegate_to_agent` and `coordinate_task` are pushed as objects, gated only on
+ * `deps.agentStore` / `deps.dagDispatcher` being present - `enabledTools` never sees
+ * them (issue #1829; the chat path enforces the same contract by resolving
+ * `agentStore: undefined`, see ChatCompletionProcess).
+ *
+ * So a profile that names either tool in `deniedTools` - or a session whose
+ * `disableUserIntegrations` promises "no agent delegation" - has exactly one
+ * enforcement point: withhold the dependency the injection keys off. `offerDag`
+ * implies nothing about `offerDelegate`; a profile may deny only `coordinate_task`
+ * and keep single-agent delegation.
+ */
+export function delegationOffer(input: {
+  profileDeniedTools?: readonly string[];
+  session: { disabledTools?: string[] | null; disableUserIntegrations?: boolean | null };
+}): { offerDelegate: boolean; offerDag: boolean } {
+  const denied = new Set([...(input.profileDeniedTools ?? []), ...(input.session.disabledTools ?? [])]);
+  if (input.session.disableUserIntegrations) {
+    for (const tool of DELEGATION_TOOLS) denied.add(tool);
+  }
+  return {
+    offerDelegate: !denied.has('delegate_to_agent'),
+    offerDag: !denied.has('coordinate_task'),
+  };
+}

@@ -173,6 +173,25 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('persistLinkedQuestId (#1867 turn linkage)', () => {
+    it('is absent on a fresh execution', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.linkedQuestId).toBeUndefined();
+    });
+
+    it('persists the real Quest id separately from questId (which holds the sessionId)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ questId: 'session-id-back-ref-hack' }));
+      await agentExecutionRepository.persistLinkedQuestId(exec.id, 'the-real-quest-id');
+
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.linkedQuestId).toBe('the-real-quest-id');
+      // The two fields must never collapse into one another - questId keeps whatever it was
+      // created with, regardless of what persistLinkedQuestId writes.
+      expect(loaded?.questId).toBe('session-id-back-ref-hack');
+    });
+  });
+
   describe('addChildExecution', () => {
     it('links a child id to the parent without duplicating', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution());
@@ -927,7 +946,7 @@ describe('AgentExecutionRepository', () => {
       );
 
       const swept = await agentExecutionRepository.cleanupStaleActive(userId, 20 * 60 * 1000);
-      expect(swept).toBe(0);
+      expect(swept).toEqual([]);
 
       const after = await agentExecutionRepository.findById(parent.id);
       expect(after?.status).toBe('awaiting_dag_children');
@@ -1051,13 +1070,50 @@ describe('AgentExecutionRepository', () => {
         { $set: { updatedAt: longAgo } }
       );
 
-      const count = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
+      const ids = await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000);
 
-      expect(count).toBe(1);
+      expect(ids).toEqual([stale.id]);
       const after = await AgentExecutionModel.findById(stale.id);
       expect(after?.status).toBe('aborted');
       expect(after?.failureReason).toBeUndefined();
       expect(after?.abortedAt).toBeInstanceOf(Date);
+    });
+
+    it('returns only the executions the guarded write actually took', async () => {
+      // Callers settle the quests behind these ids, so an id the write did not
+      // transition is not merely noise: that run completed naturally, and its
+      // quest can still be `pending` while `persistRunAsQuest` fills in the real
+      // answer. Settling on it stamps an abandoned-run error over a success.
+      const userId = new mongoose.Types.ObjectId().toString();
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const stale = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+      const racer = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+      await AgentExecutionModel.collection.updateMany(
+        { _id: { $in: [stale.id, racer.id].map(id => new mongoose.Types.ObjectId(id)) } },
+        { $set: { updatedAt: longAgo } }
+      );
+
+      // Land the natural completion in the window between the id read and the
+      // guarded write - the only place this race can happen.
+      const realUpdateMany = AgentExecutionModel.updateMany.bind(AgentExecutionModel);
+      const spy = vi.spyOn(AgentExecutionModel, 'updateMany').mockImplementation((async (
+        filter: mongoose.FilterQuery<unknown>,
+        update: mongoose.UpdateQuery<unknown>
+      ) => {
+        await AgentExecutionModel.collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(racer.id) },
+          { $set: { status: 'completed' } }
+        );
+        return realUpdateMany(filter, update);
+      }) as unknown as typeof AgentExecutionModel.updateMany);
+
+      try {
+        expect(await agentExecutionRepository.cleanupStaleActive(userId, 30 * 60 * 1000)).toEqual([stale.id]);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect((await AgentExecutionModel.findById(racer.id))?.status).toBe('completed');
     });
   });
 
@@ -1270,6 +1326,50 @@ describe('AgentExecutionRepository', () => {
 
       const rows = await agentExecutionRepository.findBillingBySessionId(sessionId, 'org-1');
       expect(rows).toHaveLength(1);
+    });
+  });
+
+  // Mongoose's default `minimize` strips empty objects on the read boundary (`toObject()`), which
+  // silently deleted `input: {}` from a checkpointed zero-argument tool call. The resumed run then
+  // replayed a `tool_use` block with no `input` and Anthropic rejected the request with
+  // "messages.N.content.0.tool_use.input: Field required".
+  describe('empty-object preservation on Mixed payloads', () => {
+    it('reads back a checkpointed zero-argument tool_use with its empty input intact', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+      const checkpoint = {
+        iteration: 1,
+        messages: [
+          { role: 'user', content: 'what time is it?' },
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'toolu_1', name: 'current_datetime', input: {} }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Saturday' }],
+          },
+        ],
+      };
+
+      await agentExecutionRepository.updateCheckpoint(execution.id, checkpoint);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+
+      const restored = reloaded?.checkpoint as typeof checkpoint;
+      const toolUse = (restored.messages[1].content as Array<Record<string, unknown>>)[0];
+      expect(toolUse).toHaveProperty('input');
+      expect(toolUse.input).toEqual({});
+    });
+
+    it('reads back a pending permission for a zero-argument tool with its empty toolInput intact', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { toolName: 'current_datetime', toolInput: {}, requestedAt: new Date() },
+      });
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+
+      expect(reloaded?.pendingPermission).toHaveProperty('toolInput');
+      expect(reloaded?.pendingPermission?.toolInput).toEqual({});
     });
   });
 });

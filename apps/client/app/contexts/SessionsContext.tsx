@@ -299,7 +299,12 @@ export const useSystemPromptFiles = () => {
 export const useSessionAgents = (sessionId?: string) => {};
 
 export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
-  const { currentUser } = useUser.getState();
+  // Read reactively (not useUser.getState()): a point-in-time snapshot leaves changeSession
+  // comparing against a stale lastNotebookId, and a null snapshot at mount makes it return early
+  // before opening the session or writing. Narrow primitive selectors keep re-renders to genuine
+  // id / lastNotebookId changes.
+  const currentUserId = useUser(s => s.currentUser?.id);
+  const currentUserLastNotebookId = useUser(s => s.currentUser?.lastNotebookId);
 
   // The current session ID, many components use this to determine if they should render
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -543,7 +548,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     async (sessionId: string) => {
       // Early exit if already on this session
       if (sessionId === currentSessionId) return;
-      if (!currentUser?.id) return;
+      if (!currentUserId) return;
 
       // Optimistic session IDs are seeded into the cache and into context by
       // useSendMessage before navigation. The server doesn't know about them
@@ -581,19 +586,24 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
+      // Refresh the opened session's cached data on every open. Kept independent of the
+      // user-record write below: coupling it to the lastNotebookId comparison meant reopening
+      // your stored last notebook skipped the refresh, so getOrFetchSession could serve a cache
+      // entry up to 30 min stale (ensureQueryData staleTime in app/hooks/data/sessions.ts).
+      queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
+
       // Fire-and-forget on purpose: lastNotebookId feeds API chat routing (getSessionId in
       // pages/api/chat.ts), session resumption, and Slack notebook resolution (notebook-manager
       // in b4m-core/slack, which only ever reads it - a lost write is repaired by the next
       // web-app message, never by a Slack one). Awaiting would hold up the switch, and a toast
       // would interrupt a path the user is actively navigating.
-      if (sessionId && currentUser.lastNotebookId !== sessionId) {
-        updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
+      if (currentUserLastNotebookId !== sessionId) {
+        updateUserToServer(currentUserId, { lastNotebookId: sessionId }).catch(error => {
           console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
         });
-        queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
       }
     },
-    [currentSessionId, currentUser?.id, queryClient, currentUser?.lastNotebookId, setWorkBenchFiles, initializeSession]
+    [currentSessionId, currentUserId, queryClient, currentUserLastNotebookId, setWorkBenchFiles, initializeSession]
   );
 
   // Whether the context's session copy can be BELIEVED about having no knowledge files: every

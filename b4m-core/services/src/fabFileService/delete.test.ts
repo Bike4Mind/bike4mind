@@ -37,7 +37,7 @@ describe('deleteFabFile', () => {
       };
       fabFileChunks: {
         deleteManyByFabFileId: Mock;
-        distinctEmbeddingModelsByFabFileIds: Mock;
+        distinctRetrievalIndexModelsByFabFileIds: Mock;
       };
       users: {
         findById: Mock;
@@ -69,7 +69,7 @@ describe('deleteFabFile', () => {
         },
         fabFileChunks: {
           deleteManyByFabFileId: vi.fn(),
-          distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
+          distinctRetrievalIndexModelsByFabFileIds: vi.fn().mockResolvedValue([]),
         },
         users: {
           findById: vi.fn().mockResolvedValue({ id: mockUserId }),
@@ -155,7 +155,7 @@ describe('deleteFabFile', () => {
       // FabFile.embeddingModel alone is only the CURRENT one and would miss an earlier index.
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
       mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
-      mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([
+      mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds.mockResolvedValue([
         'text-embedding-3-small',
         'text-embedding-3-large',
       ]);
@@ -163,7 +163,7 @@ describe('deleteFabFile', () => {
 
       await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
-      expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).toHaveBeenCalledWith([mockFileId]);
+      expect(mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds).toHaveBeenCalledWith([mockFileId]);
       expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledTimes(2);
       expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith(mockFileId, 'text-embedding-3-small');
       expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith(mockFileId, 'text-embedding-3-large');
@@ -172,7 +172,7 @@ describe('deleteFabFile', () => {
     it('skips the delete calls (but still resolves models) when the chunk store has no models for this file', async () => {
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
       mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
-      mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([]);
+      mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds.mockResolvedValue([]);
       mockAdapter.searchIndex = { deleteByFabFileId: vi.fn() };
 
       await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
@@ -187,7 +187,7 @@ describe('deleteFabFile', () => {
       await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).resolves.toMatchObject({
         action: 'deleted',
       });
-      expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
+      expect(mockAdapter.db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds).not.toHaveBeenCalled();
     });
   });
 

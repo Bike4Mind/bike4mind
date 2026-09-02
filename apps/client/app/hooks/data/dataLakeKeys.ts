@@ -35,8 +35,11 @@ export const dataLakeKeys = {
   /** Batches still ingesting or in the background AI-tagging phase. */
   activeBatches: ['data-lake-batches', 'active'] as const,
   /** Query key for one lake's file list. `params` stays in the key for parity with the
-   *  pre-registry shape (a trailing `undefined` hashes as null and must keep doing so). */
-  files: (dataLakeId: string | null, params?: { limit?: number }) => ['dataLakeFiles', dataLakeId, params] as const,
+   *  pre-registry shape (a trailing `undefined` hashes as null and must keep doing so), and it
+   *  is what separates the full list from the Uncategorized-only slice of the same route - both
+   *  stay under `filesOf`, so one tag write still invalidates both. */
+  files: (dataLakeId: string | null, params?: { limit?: number; uncategorized?: boolean }) =>
+    ['dataLakeFiles', dataLakeId, params] as const,
   /** Invalidation prefix covering every `files(id, ...)` variant of one lake. */
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
@@ -77,4 +80,12 @@ export const dataLakeKeys = {
   configHistoryOf: (dataLakeId: string) => ['dataLakeConfigHistory', dataLakeId] as const,
   /** Invalidation prefix covering every lake's config history. */
   configHistoryRoot: ['dataLakeConfigHistory'] as const,
+  /**
+   * One lake's acquisition review queue (GET /api/data-lakes/:id/proposals), #1671. Outside `list`
+   * for the same reason as `spend`: `list` is the shared invalidation prefix for renames and
+   * visibility changes, and the queue has nothing to do with those.
+   */
+  proposals: (dataLakeId: string | null, status?: string) => ['dataLakeProposals', dataLakeId, { status }] as const,
+  /** Invalidation prefix covering every status variant of one lake's queue. */
+  proposalsOf: (dataLakeId: string) => ['dataLakeProposals', dataLakeId] as const,
 };

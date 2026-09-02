@@ -2,10 +2,17 @@ import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+} from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMembership';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -133,7 +140,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // makes whichever one runs first, plus the attribution step, share a single round trip
           // instead of each re-resolving it.
           let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
-          const dynamicAccess = () => (dynamicAccessPromise ??= getDynamicDataLakeAccess(context));
+          // Narrowed INSIDE the chain so the memo stays a Promise (it is shared by several later
+          // awaits) and so every consumer sees the session-scoped set, not the owner-wide one.
+          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context));
 
           let files: IFabFileDocument[] = [];
 
@@ -178,10 +187,18 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
                 const sharedFile = await context.db.fabfiles.findById(file_id);
                 if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
-                  const { dataLakeTags, dataLakeTagPrefixes } = await dynamicAccess();
+                  const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
                   const fileTags = sharedFile.tags?.map(t => t.name) || [];
                   const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
                   const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
+                  // A dynamic lake's prefix arm, mirroring what search now matches (#2243): without
+                  // this, a prefix-only member the caller reached through search_knowledge_base
+                  // could not be opened by retrieve_knowledge_content - a file returned by search
+                  // but then denied. Anchored to that lake's creator, never the caller, matching
+                  // buildDataLakeMembershipFilter exactly (see satisfiesMembershipScope).
+                  const hasMembershipAccess = lakeMembershipsFrom(lakes).some(m =>
+                    satisfiesMembershipScope(m, sharedFile)
+                  );
                   const hasShareAccess = sharedFile.users?.some(
                     (u: { userId: string; permissions: string[] }) =>
                       u.userId === context.userId && u.permissions?.some(p => p === 'read' || p === 'write')
@@ -193,7 +210,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                       (g: { groupId: string; permissions: string[] }) =>
                         userGroups.includes(g.groupId) && g.permissions?.some(p => p === 'read' || p === 'write')
                     );
-                  if (hasMetaTagAccess || hasPrefixAccess || hasShareAccess || hasGroupAccess) {
+                  if (hasMetaTagAccess || hasPrefixAccess || hasMembershipAccess || hasShareAccess || hasGroupAccess) {
                     files = [sharedFile];
                   }
                 }
@@ -237,7 +254,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 }
               );
             } else {
-              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await dynamicAccess();
+              const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
+              const lakeMemberships = lakeMembershipsFrom(lakes);
+              warnIfManyLakeMemberships(lakeMemberships, context.logger, 'retrieve_knowledge_content');
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -250,7 +269,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   userGroups: context.user.groups || [],
                   dataLakeTags,
                   dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                  scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
+                  lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                   ...retrievalFilter,
@@ -382,9 +401,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             // Untrusted on every part that comes from the document, not just the body: the file
             // name and tag list are attacker-influenced too, and a newline in either would carry a
-            // forged marker into the header lines. See renderRetrievedContentBlock.
+            // forged marker into the header lines. See renderRetrievedContentBlock. The date is the
+            // one part that needs no wrap - documentDateClause emits digits and separators only.
+            //
+            // Placed on the `###` line rather than in the metadata block below so all THREE
+            // retrieval channels carry it in the same relative position (#2236 names only the
+            // other two; a dateless channel here would let one turn cite the same document dated
+            // via search and undated via retrieve).
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.createdAt)}\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
@@ -473,6 +498,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             fileIds: retrievedFiles.map(f => f.id),
             surface: 'chat-kb-retrieve' as const,
             ...(query ? { queryText: query } : {}),
+            questId: context.questId,
+            sessionId: context.sessionId,
           };
           if (scope) {
             // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is
@@ -486,7 +513,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           } else if (context.db.lakeAccessEvents) {
             const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
-            dynamicAccess()
+            // Deliberately NOT dynamicAccess(): that is the session-narrowed set, and attribution
+            // asks a different question - "what lake was this content", not "what may this session
+            // search". A file served by the ownership fast path consults no lake state, so under a
+            // narrowed or suppressed session it attributes to zero lakes and the row is dropped by
+            // the guard below - losing the audit trail for access that still happened.
+            getDynamicDataLakeAccess(context)
               .then(({ lakes }) => {
                 // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
                 // Path B's search is owner+shared+org+lake too), so a retrieved file with no

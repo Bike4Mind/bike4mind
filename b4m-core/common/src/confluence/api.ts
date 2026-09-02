@@ -2,7 +2,13 @@
 // Supports both v1 (search) and v2 (CRUD) API endpoints
 
 import { detectMimeType as _detectMimeType } from '../utils';
-import { parseRateLimitHeaders, isNearLimit, hasRateLimitInfo, buildRateLimitLogEntry } from '../rateLimitHeaders';
+import {
+  parseRateLimitHeaders,
+  isNearLimit,
+  hasRateLimitInfo,
+  buildRateLimitLogEntry,
+  resolveRetryAfterDelayMs,
+} from '../rateLimitHeaders';
 import { getErrorMessage } from '../atlassian/config';
 
 import {
@@ -331,9 +337,11 @@ export class ConfluenceApi {
 
     // Handle 429 Too Many Requests with single retry
     if (response.status === 429 && (options._retryCount ?? 0) < 1) {
-      // Default 5s: Atlassian docs suggest retry windows of 1-10s; 5s avoids hammering
-      // while staying well under Lambda's execution budget.
-      const retryAfterMs = rateLimitInfo.retryAfterMs ?? 5000;
+      // Default 5s: conservative middle ground - Atlassian docs suggest retry windows of 1-10s,
+      // and 5s avoids hammering while staying well under Lambda's execution budget. Applied through
+      // resolveRetryAfterDelayMs, so a Retry-After that does not ask us to wait (a literal 0, or an
+      // already-elapsed date) falls back to that default instead of collapsing the wait to jitter.
+      const retryAfterMs = resolveRetryAfterDelayMs(rateLimitInfo, 5000);
       // Add jitter (0-1s) to prevent thundering herd when multiple requests retry simultaneously
       const jitterMs = Math.floor(Math.random() * 1000);
       const delayMs = Math.min(retryAfterMs + jitterMs, 10000); // Cap at 10s for Lambda budget

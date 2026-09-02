@@ -177,6 +177,25 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+### Structured tool output (`toolPayloads`)
+
+The reply fields (`response`/`responses` synchronously, `reply`/`replies` when polling) carry the model's prose. A tool that produced machine-readable state - not just something to read - also reports it verbatim under **`toolPayloads`**, so a script can act on a turn without re-parsing English:
+
+```json
+{
+  "response": "Scheduled 3 jobs across 2 machines.",
+  "toolPayloads": [{ "type": "populateProblem", "payload": { "name": "shop", "jobs": [], "machines": [] } }]
+}
+```
+
+- Present on both read paths: the `wait: true` response above, and `GET /api/quests/{id}` when polling (which is also how you read an agent run's structured output).
+- Always an array, `[]` when the turn fired no such tool. No opt-in flag.
+- `type` tells you how to read `payload`; treat an unfamiliar `type` as "newer server than my client" and skip that entry.
+- Entries are in emission order, which matters for a multi-step turn.
+- Additive only - the prose reply is byte-for-byte what it was before, so nothing that reads `response` today needs to change.
+
+If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was *offered* to the model, which is not the same thing.
+
 ## Streaming completions API (`/api/ai/v1/completions`)
 
 `POST /api/chat` (above) is the high-level chat API. For a low-level streaming completion - one request in, a token-by-token Server-Sent Events (SSE) stream out - call `/api/ai/v1/completions`. This is the endpoint the CLI uses under the hood, and the one to target from a custom client or agent loop.
@@ -434,6 +453,27 @@ The `web_fetch` tool (reading a specific URL) and `deep_research` (which extract
 
 Without any Firecrawl config, `web_fetch` falls back to a **keyless direct fetch** that downloads the page and converts its HTML to markdown - so reading pages works out of the box with no key. That fallback has two limits versus Firecrawl: it does not run JavaScript (heavily client-rendered pages may come back sparse) and it cannot parse PDFs (upload a PDF directly instead). `deep_research` likewise runs on just a web-search provider, using the same plain-fetch reader for extraction.
 
+## Image generation and image edit
+
+There are two independent paths to an image, and they support different things:
+
+| Path | Where it runs | Models |
+|------|---------------|--------|
+| The image tools in chat (`image_generation`, `edit_image`) | inline in `chatcompletion` | provider models, plus local SD.Next (`local-image/<checkpoint>`) |
+| The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only |
+
+The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
+**Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
+
+**Image edit is limited to Gemini and BFL here.** OpenAI's edit and image-to-image endpoints
+require the input image be re-encoded to PNG under a size cap, which the hosted stack does with
+an `ImageProcessor` Lambda that self-host has no equivalent for - an OpenAI edit fails with
+`ImageProcessor Lambda name is required for image processing`. Pick a Gemini or BFL image model
+to edit locally.
+
+Local SD.Next checkpoints (below) are reachable from the **image tools only** - the queued path
+has no `local-image/` branch and would route the request to OpenAI.
+
 ## Local image generation (no API keys)
 
 Generate images on your own hardware with **no provider API keys**. The stack bundles an optional `imagegen` service (SD.Next) that exposes the AUTOMATIC1111-compatible REST API. When `IMAGE_GEN_BASE_URL` is set, its installed checkpoints appear in the image model picker automatically (as `local-image/<checkpoint>`) and work in chat like any other image model. This is the image counterpart to local models with Ollama.
@@ -551,7 +591,7 @@ Known limitations:
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
 
-- **consumes queues** - research tasks, and the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`);
+- **consumes queues** - research tasks, image generation and image edit, and the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
 - **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
 
@@ -606,6 +646,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it configured permanently, or restore the original key. Rotation is not automated, so dropping the previous key makes anything still encrypted under it unrecoverable.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
+- **Image generation or image edit never completes (the quest stays "pending")** - both are queued to the `worker` service. Check `IMAGE_GENERATION_QUEUE` and `IMAGE_EDIT_QUEUE` are set in `.env.selfhost` (added after the initial release, so an upgraded install may be missing them), then confirm the worker picked them up: its boot line names every queue it polls, e.g. `[selfHostWorker] started: polling 6 queue(s) [researchEngineQueue, ..., imageGenerationQueue, imageEditQueue]`. An unset var is warned about by name and the consumer is skipped, leaving the rest of the worker running. Also make sure the queues exist in `elasticmq.conf` and that a provider key is configured (see "Image generation and image edit"). An OpenAI **edit** fails by design here - use Gemini or BFL.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
 - **Files chunk but never get vectors / vectorize fails with a `401`** - your `OPENAI_API_KEY` (or `VOYAGE_API_KEY`) is set to an invalid or placeholder value, so embedding is routed to that cloud provider and rejected. Set a real key, or clear it and configure a local Ollama embedder (see "Offline RAG") for the airgapped path. A dummy/placeholder value is ignored automatically; a present-but-invalid key now surfaces an actionable error on the file instead of a raw 401. If you previously picked a cloud embedder in **Settings -> AI**, switch it back to a local one after clearing the key.
 - **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).

@@ -2,6 +2,7 @@ import {
   dataLakeRepository,
   dataLakeBatchRepository,
   dataLakeAccessGrantRepository,
+  dataLakeProposalRepository,
   fabFileRepository,
   fabFileChunkRepository,
   memoryLedgerRepository,
@@ -12,6 +13,7 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { createKeyProvider } from '@server/memory/factCipher';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
@@ -47,6 +49,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        dataLakeProposals: dataLakeProposalRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
@@ -75,6 +78,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           ownerUserId
         );
         logger.info('[lakeMemory] crypto-shredded the lake memory profile', { datalakeTag, ownerUserId });
+      },
+      // Release the lake's Drive folder claim as part of the purge. Wired here for the same reason as
+      // shredMemory: the revoke needs the app layer's crypto. LOG IT - the row's driveFolderId is
+      // globally unique and unreachable once the lake is gone, so "the folder is free again" is a
+      // claim an operator has to be able to check after the fact.
+      releaseDriveConnection: async ({ dataLakeId }) => {
+        const released = await releaseDriveConnectionForLake(dataLakeId);
+        if (released) {
+          logger.info('[driveLake] released the purged lake Drive connection and its folder claim', { dataLakeId });
+        }
       },
       logger,
     });

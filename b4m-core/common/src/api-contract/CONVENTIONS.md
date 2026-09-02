@@ -15,9 +15,14 @@ the build, not review. Everything else is a review rule, and the gaps are listed
 
 ## Exemptions
 
-This gate was added to an already-published surface, so a few endpoints violate it and
-cannot be fixed without breaking live callers. Those declare `conventionExemptions` on the
-contract, carrying the reason:
+**The set is empty.** No contract carries a `conventionExemptions` block today, and
+`assertContractConventions.test.ts` pins that, so re-introducing one is a deliberate, visible
+act rather than a precedent to follow. The mechanism stays documented because the next
+rule added to an already-published surface will need it.
+
+When a gate is added to an already-published surface, an endpoint that cannot conform
+without breaking live callers declares `conventionExemptions` on the contract, carrying
+the reason:
 
 ```ts
 conventionExemptions: {
@@ -39,9 +44,9 @@ that cannot be aliased the way a URL or a wire field can. "It is easier this way
 reason, and a new endpoint has no live callers to protect, so it never qualifies. An empty
 reason is not an exemption - the gate ignores it and still fails.
 
-Every entry is debt with an owner. The list should only ever shrink, each removal behind
-a published sunset. Grep `conventionExemptions` for the current set - today it is
-`/api/ai/tts` only (`402`, `scope-required`).
+Every entry is debt with an owner. The list should only ever shrink. Grep
+`conventionExemptions` for the current set - today it is empty: `/api/ai/tts` held the
+only two (`402` for credits, and no required scope) and both have since been retired.
 
 ---
 
@@ -76,9 +81,48 @@ response - a greppable escape hatch with a written reason, not a way to skip the
 quietly. The only current use is `executeTool`'s 500, where a tool that ran but failed
 returns the full `ToolExecutionResponse` (`success: false`).
 
-> **Known divergence (not yet fixed).** `errorHandler.ts` adds an undocumented `name`
-> field to every error body, so the runtime currently sends a superset of the documented
-> envelope. Tracked separately; see [What is not gated yet](#what-is-not-gated-yet).
+**On the `name` field.** `apps/client/server/middlewares/errorHandler.ts` adds `name` -
+the thrower's error *class* (`NotFoundError`, `UnprocessableEntityError`) - to every error
+body it serves, which is every route, not just the contracted ones. That is an internal
+implementation detail on a public wire, and it is going away.
+
+It is **deprecated, sunset 2026-12-01**, and documented in the envelope until then.
+Neither of the two obvious moves is right on its own:
+
+- Removing it outright today would be a silent removal, which section 7 forbids -
+  "undocumented legacy routes still count as published if they are reachable", and the
+  same reasoning covers a reachable field. An audit found no consumer in `apps/client`,
+  `packages/cli` (`extractServerMessage` reads `error` then `message`), the premium
+  overlays, or the generated client - which was never going to carry it, since
+  `ErrorResponse` never declared it. External callers cannot be audited from here, so the
+  window exists for them.
+- Documenting it *permanently* would be worse than either: it promotes a class name we
+  rename at will into public API we then owe compatibility on. So it carries
+  `deprecated: true` and a sunset in its description, not a plain field entry.
+
+Deprecate-then-remove is the combination that works: the envelope is honest **now**, and
+the field still leaves. Branch on the HTTP status, not on `name`. On the sunset date drop
+it from `errorHandler.ts`, `ApiErrorSchema`, and `ErrorResponse` together.
+
+Note that this reaches past contracts that name `ApiErrorSchema` directly. `errorHandler`
+serves every *thrown* error body regardless of which schema the contract declared for that
+status, so a bespoke error schema (`InsufficientCreditsErrorSchema`,
+`ttsErrorResponseSchema`) would omit a field the wire carries. Those derive from
+`ApiErrorSchema` via `.extend()` rather than re-declaring `error`/`request_id`, which is
+also what makes the sunset a single edit. Write a bespoke error schema from scratch only
+when the body is `res.status(...).json(...)`-ed rather than thrown and so never passes
+through the middleware - `ttsResponseTooLargeSchema` is the one such case, and says so.
+
+**[gated]** Now that the runtime and the spec agree, the middleware is pinned to the
+envelope: `errorHandler.test.ts` asserts every key `errorHandler` adds is one
+`ApiErrorSchema` declares - across all three of its branches, including the `HTTPError`
+one that spreads `additionalInfo` (the endpoint's own typed members are excluded by key,
+since those are its contract's concern). So a new undocumented field fails CI, and it
+fails again if `name` is dropped from only some of the three places above. `ApiErrorSchema`
+is the plain twin of `ErrorResponse` (the OpenAPI layer is generate-time only, so
+`apps/client` cannot import the component); `openapi/errorEnvelopeParity.test.ts` keeps the
+two copies from drifting, and pins `name`'s published `deprecated: true` and sunset date so
+the deprecation cannot quietly decay into a plain documented field.
 
 ### Status codes for shared conditions
 
@@ -97,7 +141,7 @@ re-deciding per endpoint:
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Rate limit exceeded | `429` | - |
-| Response payload exceeds the platform ceiling | `413` | `response_too_large` |
+| Response payload exceeds the platform ceiling | `413` | - (the body carries `fileUrl`) |
 | Referenced resource does not exist | `404` | - |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
@@ -114,26 +158,37 @@ The two provider classifiers are easy to invert, so to be explicit:
 `provider_not_configured` means **we** have no usable key for that provider;
 `provider_rejected` means the provider **refused** the key we sent.
 
-**On 402 vs 422 for credits.** `402 Payment Required` is the more literal reading, and
-`/api/ai/tts` uses it. We standardise on `422` anyway, because the
-`insufficient_credits` / `spend_cap_exceeded` classifier vocabulary already rides on
-`422` across chat, `/api/ai/music` and `/api/ai/sound-effects`
-(`src/insufficientCredits.ts`), and RFC 9110 still reserves `402`. TTS is the lone
-outlier, and it carries a `status-table` exemption rather than a silent pass.
+The `413` carries no classifier: the only `413` on the surface is TTS's, and what a caller
+needs from it is *where the audio it already paid for went*, which
+`ttsResponseTooLargeSchema` gives as `saved`/`fabFileId`/`fileUrl`. A classifier would
+restate the status and nothing more, so `API_ERROR_CODES` deliberately has no entry for
+it.
 
-`402` stays out of the allowed set so a *new* endpoint choosing it fails the build. TTS
-keeps it until a sunset is published: a status code cannot be aliased the way a URL or a
-field can, so `402 -> 422` breaks live callers.
+**On 402 vs 422 for credits.** `402 Payment Required` is the more literal reading. We
+standardise on `422` anyway, because the `insufficient_credits` / `spend_cap_exceeded`
+classifier vocabulary already rides on `422` across chat, `/api/ai/music` and
+`/api/ai/sound-effects` (`src/insufficientCredits.ts`), and RFC 9110 still reserves
+`402`. Every credit-metered endpoint now agrees, so one caller-side handler covers "out
+of credits" across the whole surface.
+
+`402` stays out of the allowed set so an endpoint choosing it fails the build.
+`/api/ai/tts` was the last holdout and has been moved onto `422` +
+`errorCode: "insufficient_credits"`; the uncontracted legacy routes
+`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` still answer `402` and are
+frozen pending their own deprecation (section 7).
 
 ### One error-code vocabulary
 
 Where an error carries a machine-readable classifier it is the field `errorCode`, and its
-value comes from **one** enumerated union - not a per-endpoint string union that happens
-to share a field name. Today that union is `QUEST_ERROR_CODES`
-(`src/types/entities/SessionTypes.ts`); TTS's `provider_not_configured` /
-`provider_rejected` are a second, parallel vocabulary that needs folding in.
+value comes from **one** enumerated union: `API_ERROR_CODES` (`src/apiErrorCodes.ts`).
 
-Adding a classifier means adding it to the shared union, not inventing a local one.
+Per-surface tuples may *narrow* it - `QUEST_ERROR_CODES` for the SSE frame,
+`TTS_ERROR_CODES` for the audio routes - but each declares
+`satisfies readonly ApiErrorCode[]`, so a code that is not in the shared union fails the
+build. A narrowing is fine; a second union that merely shares the field name is what this
+rule forbids, and is what the TTS provider codes were before they were folded in.
+
+Adding a classifier means adding it to `API_ERROR_CODES`, not inventing a local one.
 
 ### Why RFC 9457 is not the answer here
 
@@ -205,11 +260,10 @@ OR: a key needs any one of the listed scopes.
 enforced for those auth modes, and declaring them would publish an
 `x-required-scopes` that nothing checks.
 
-Scope-less must be a decision, not an omission. `/api/ai/tts` requires no scope while
-`/api/ai/music` and `/api/ai/sound-effects` require `ai:generate` - a gap that is an
-accident of what each route shipped with, not a design. Closing it 403s keys that work
-today, so TTS carries a `scope-required` exemption stating exactly that, and closing it
-needs the same sunset treatment as any other breaking change.
+Scope-less must be a decision, not an omission. All three audio-generation routes -
+`/api/ai/tts`, `/api/ai/music` and `/api/ai/sound-effects` - now require `ai:generate`.
+TTS shipped without one and carried a `scope-required` exemption for it; that gap was an
+accident of what the route shipped with, not a design, and it has been closed.
 
 ---
 
@@ -261,7 +315,5 @@ mistakes "CI passed" for "conventions met":
 |---|---|
 | A condition maps to the status this guide gives it | The gate checks only that a status is in the allowed *set*. Nothing checks that "no provider key configured" is the `503` the table says - and `/api/ai/tts` returns `401` for it today. Not structurally derivable: the condition lives in handler control flow, not the contract. |
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |
-| Error bodies carry no undocumented keys | `errorHandler.ts` adds `name` to every body, including internal routes. Removing it is a behavioural change well outside the contract layer. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |
-| One `errorCode` vocabulary | The TTS codes are not in the shared union yet. |
 | `202` + job resource for unbounded work | Not structurally detectable - it is a design review question. |
