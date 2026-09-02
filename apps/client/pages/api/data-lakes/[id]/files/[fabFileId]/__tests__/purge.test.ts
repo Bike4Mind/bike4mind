@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createHash } from 'crypto';
+import { createHmac } from 'crypto';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
@@ -59,6 +59,7 @@ vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
+vi.mock('sst', () => ({ Resource: { SECRET_ENCRYPTION_KEY: { value: 'test-secret-encryption-key' } } }));
 
 import handler from '../purge';
 
@@ -211,7 +212,10 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // in the lake surface. The row is immutable and floor-retained for 450 days: attributing a
     // key-driven destroy to the human as though they did it by hand cannot be corrected later.
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+    await call(
+      req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }),
+      res
+    );
 
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -358,6 +362,15 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     );
   });
 
+  it('caps the error text filed on a throw, so a long or unbounded message cannot ride into the no-TTL row', async () => {
+    h.purgeDataLakeDocument.mockRejectedValue(new Error('x'.repeat(1000)));
+    const { res } = makeRes();
+
+    await expect(call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res)).rejects.toThrow();
+    const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
+    expect(metadata.error).toHaveLength(500);
+  });
+
   it('does not file an audit record for a NotFound refusal either', async () => {
     const { NotFoundError } = await import('@bike4mind/utils');
     h.purgeDataLakeDocument.mockRejectedValue(new NotFoundError('File not found in this data lake'));
@@ -382,7 +395,9 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
     const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
     expect(metadata).not.toHaveProperty('fileName');
-    expect(metadata.fileNameHash).toBe(createHash('sha256').update('q3.pdf').digest('hex'));
+    expect(metadata.fileNameHash).toBe(
+      createHmac('sha256', 'test-secret-encryption-key').update('q3.pdf').digest('hex')
+    );
     expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
   });
 
@@ -398,6 +413,11 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
       fabFileId: FILE_ID,
     });
 
-    expect(h.shredMemoryFromSource).toHaveBeenCalledWith({}, { kind: 'lake', id: 'datalake:sales' }, 'owner-1', FILE_ID);
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
+      {},
+      { kind: 'lake', id: 'datalake:sales' },
+      'owner-1',
+      FILE_ID
+    );
   });
 });

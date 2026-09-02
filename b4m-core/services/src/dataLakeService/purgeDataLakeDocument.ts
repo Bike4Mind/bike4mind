@@ -98,7 +98,10 @@ interface PurgeDataLakeDocumentAdapters {
  *
  * Order matters and mirrors the phase-2 lake purge (`cleanupDeletedDataLake`): the retrieval
  * index goes first and strictly, so a throw there costs no progress and leaves nothing stranded
- * pointing at a row that no longer exists. See `strictIndexRemove` in ports.ts.
+ * pointing at a row that no longer exists. See `strictIndexRemove` in ports.ts. Because it runs
+ * before the storage sweep below, a refusal there on self-host OpenSearch can leave chunks whose
+ * external index entries are already gone - narrower than the pre-storage-check version of this
+ * sweep, and it matches the same tradeoff `strictIndexRemove` already makes.
  *
  * `chunksRemaining` and `documentDeleted` are READ BACK after the writes; together with
  * `storageObjectDeleted` they are what `verified` is made of. `retrievalIndexOutcome` is not: the
@@ -163,7 +166,7 @@ export const purgeDataLakeDocument = async (
   // `findByIdAndUserId` and falls into unshare otherwise); neither may this door. A lake owner who
   // wants a stranger's file out of the lake has the reversible removal.
   if (!actor.isAdmin && file.userId !== actor.userId) {
-    throw new BadRequestError('Only the file\'s owner can permanently delete this document');
+    throw new BadRequestError("Only the file's owner can permanently delete this document");
   }
 
   const chunksBefore = await db.fabFileChunks.countByFabFileId(file.id);
@@ -171,8 +174,6 @@ export const purgeDataLakeDocument = async (
 
   const scope = lakeMembershipScope(lake);
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] });
-
-  await db.fabFileChunks.deleteManyByFabFileId(file.id);
 
   // EVERY stored key, not just the current one. An AI-edited file keeps its earlier revisions in
   // `versions[]`, each under its own object key (see appendEditedVersion), and `filePath` names only
@@ -186,9 +187,10 @@ export const purgeDataLakeDocument = async (
     )
   );
 
-  // BEFORE the row, which is the only thing naming these keys: if the object store refuses, the row
-  // survives, the sweep reports `verified: false`, and a retry can still find the bytes. Deleting
-  // the row first would strand them permanently with nothing left that could name them.
+  // BEFORE the chunks and the row: those two writes are the ones a retry cannot re-derive once
+  // done (chunks feed the lake-health rollups, and the row is the only thing naming these keys).
+  // If the object store refuses, nothing destructive has happened yet, so the document, its
+  // chunks and its rollups stay consistent and a retry converges.
   const storageKeysUnreached: string[] = [];
   for (const path of storageKeys) {
     try {
@@ -204,11 +206,12 @@ export const purgeDataLakeDocument = async (
   }
   const storageObjectDeleted = storageKeysUnreached.length === 0;
 
-  // The destructive steps that cost the retry its handle are gated on the bytes having gone. A
-  // document whose objects are still stored stays intact and addressable rather than becoming an
-  // unnameable orphan; the receipt says so and the caller retries.
+  // Nothing destructive until the bytes are gone: a refusal costs zero progress, so the row, its
+  // chunks and its rollups stay consistent and a retry converges.
   let deletedByThisCall = false;
   if (storageObjectDeleted) {
+    await db.fabFileChunks.deleteManyByFabFileId(file.id);
+
     // Atomic, and it answers whether THIS call removed the row. Two concurrent purges both find the
     // gates open and both see the object-store delete succeed (deleting an absent key is a no-op),
     // so without this claim both would refund the owner's quota for the same bytes.

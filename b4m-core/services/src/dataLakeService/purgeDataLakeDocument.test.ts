@@ -121,9 +121,9 @@ describe('purgeDataLakeDocument', () => {
       }),
     };
 
-    await expect(purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), retrievalIndex })).rejects.toThrow(
-      'index down'
-    );
+    await expect(
+      purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), retrievalIndex })
+    ).rejects.toThrow('index down');
     expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
@@ -131,7 +131,10 @@ describe('purgeDataLakeDocument', () => {
   it('refuses a caller who is neither the lake owner nor an admin', async () => {
     const db = makeDb();
     await expect(
-      purgeDataLakeDocument({ userId: 'someone-else', isAdmin: false }, 'lake-1', 'file-1', { db, storage: makeStorage() })
+      purgeDataLakeDocument({ userId: 'someone-else', isAdmin: false }, 'lake-1', 'file-1', {
+        db,
+        storage: makeStorage(),
+      })
     ).rejects.toThrow(/Only the owner/);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
@@ -156,21 +159,29 @@ describe('purgeDataLakeDocument', () => {
 
     const demoted = withTransfer();
     await expect(
-      purgeDataLakeDocument({ userId: 'owner-1', isAdmin: false }, 'lake-1', 'file-1', { db: demoted, storage: makeStorage() })
+      purgeDataLakeDocument({ userId: 'owner-1', isAdmin: false }, 'lake-1', 'file-1', {
+        db: demoted,
+        storage: makeStorage(),
+      })
     ).rejects.toThrow(/Only the owner/);
     expect(demoted.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 
-  it('refuses an admin of the lake\'s organization - the org rung manages, it does not destroy', async () => {
+  it("refuses an admin of the lake's organization - the org rung manages, it does not destroy", async () => {
     // The route threads `administeredOrgIds` through, so the rule is what decides, not the wiring.
     const db = makeDb();
     db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, organizationId: 'org-1' }) as never);
 
     await expect(
-      purgeDataLakeDocument({ userId: 'org-admin-1', isAdmin: false, administeredOrgIds: ['org-1'] }, 'lake-1', 'file-1', {
-        db,
-        storage: makeStorage(),
-      })
+      purgeDataLakeDocument(
+        { userId: 'org-admin-1', isAdmin: false, administeredOrgIds: ['org-1'] },
+        'lake-1',
+        'file-1',
+        {
+          db,
+          storage: makeStorage(),
+        }
+      )
     ).rejects.toThrow(/Only the owner/);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
@@ -235,7 +246,13 @@ describe('purgeDataLakeDocument', () => {
     const db = makeDb();
     db.fabFiles.findById = vi.fn(async (id: string) =>
       id === 'file-1'
-        ? ({ ...FILE, tags: [{ name: 'datalake:sales', strength: 1 }, { name: 42, strength: 1 }] } as never)
+        ? ({
+            ...FILE,
+            tags: [
+              { name: 'datalake:sales', strength: 1 },
+              { name: 42, strength: 1 },
+            ],
+          } as never)
         : (undefined as never)
     );
     const onPurged = vi.fn(async () => {});
@@ -248,7 +265,11 @@ describe('purgeDataLakeDocument', () => {
   it('logs the filePath when a stored object cannot be removed, so the orphan can be found', async () => {
     const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const storage = { delete: vi.fn(async () => { throw new Error('s3 down'); }) };
+    const storage = {
+      delete: vi.fn(async () => {
+        throw new Error('s3 down');
+      }),
+    };
 
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage, logger });
 
@@ -308,10 +329,12 @@ describe('purgeDataLakeDocument', () => {
   it('404s when the lake itself is gone', async () => {
     const db = makeDb();
     db.dataLakes.findById = vi.fn(async () => undefined as never);
-    await expect(purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() })).rejects.toThrow('Data lake not found');
+    await expect(purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() })).rejects.toThrow(
+      'Data lake not found'
+    );
   });
 
-  it('refuses a lake owner destroying a contributor\'s document, and destroys nothing', async () => {
+  it("refuses a lake owner destroying a contributor's document, and destroys nothing", async () => {
     // The lake is the authorization scope, not a licence over other people's files: the meta-tag
     // membership arm admits a contributor's own upload, and this destruction is global.
     const db = makeDb({ userId: 'contributor-1' });
@@ -370,6 +393,10 @@ describe('purgeDataLakeDocument', () => {
 
     expect(receipt.storageObjectDeleted).toBe(false);
     expect(receipt.storageObjectsRemaining).toBe(1);
+    // Chunks (and the rollups they carry) survive too: a partial sweep must not leave the row's
+    // health rollups stale relative to chunks that no longer exist.
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(receipt.chunksRemaining).toBe(receipt.chunksBefore);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
     expect(db.sessions.findAllWithKnowledgeId).not.toHaveBeenCalled();
     expect(receipt.documentDeleted).toBe(false);
@@ -417,7 +444,11 @@ describe('purgeDataLakeDocument', () => {
   it('shreds the facts extracted from the document, only once the destruction converged', async () => {
     const shredDocumentMemory = vi.fn(async () => {});
 
-    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db: makeDb(), storage: makeStorage(), shredDocumentMemory });
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db: makeDb(),
+      storage: makeStorage(),
+      shredDocumentMemory,
+    });
 
     expect(shredDocumentMemory).toHaveBeenCalledWith({
       datalakeTag: 'datalake:sales',
