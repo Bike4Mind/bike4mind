@@ -865,7 +865,7 @@ const FileBrowserContent = () => {
               );
               const idsToAdd = Array.from(selectedIds).filter(id => !alreadyMemberIds.has(id));
               if (idsToAdd.length === 0) {
-                toast.info('The selected file(s) are already members of this lake.');
+                toast.info(t('file_browser.already_lake_members'));
                 return;
               }
               await addFilesToLake({ fileIds: idsToAdd, lake, skippedCount: alreadyMemberIds.size });

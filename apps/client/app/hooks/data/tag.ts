@@ -141,10 +141,7 @@ export function useToggleTagToFiles() {
       // to not assert a distinct-lake count it doesn't have.
       const joinedLakeCount = data.reduce((sum, f) => sum + (f.prefixArmJoinedLakeCount ?? 0), 0);
       if (joinedLakeCount > 0) {
-        toast.info(
-          `That tag also made ${data.length === 1 ? 'this file' : 'some of these files'} a member of a data lake by content prefix only - no lake tag was applied. Open the lake's manager to add the lake tag too.`,
-          { duration: 8000 }
-        );
+        toast.info(t('file_actions.prefix_arm_join_notice', { count: data.length }), { duration: 8000 });
       }
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });

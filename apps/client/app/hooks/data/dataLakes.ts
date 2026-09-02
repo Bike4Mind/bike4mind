@@ -16,6 +16,7 @@ import type {
   TaxonomyTag,
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+import { useTranslation } from 'react-i18next';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
@@ -1186,6 +1187,7 @@ export function useConvergeDataLake(dataLakeId: string | null) {
  */
 export function useAddFilesToLake() {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   return useMutation({
     mutationFn: async ({
       fileIds,
@@ -1203,11 +1205,10 @@ export function useAddFilesToLake() {
       return { files: res.data, lake, skippedCount };
     },
     onSuccess: ({ files, lake, skippedCount }) => {
-      const addedMsg = `Added ${files.length} file${files.length === 1 ? '' : 's'} to the lake.`;
       toast.success(
         skippedCount > 0
-          ? `${addedMsg} ${skippedCount} file${skippedCount === 1 ? ' was' : 's were'} already a member and left unchanged.`
-          : addedMsg
+          ? t('file_browser.added_to_lake_with_skipped', { count: files.length, skippedCount })
+          : t('file_browser.added_to_lake', { count: files.length })
       );
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
       invalidateLakeFileMembershipQueries(queryClient, lake.id);

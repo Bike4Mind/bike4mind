@@ -61,15 +61,21 @@ const FileBrowserActions: FC<FileBrowserActionsProps> = ({
 
   async function handleTagging(tag: IFileTag) {
     setLoading(true);
-    await onTag(tag);
-    setLoading(false);
+    try {
+      await onTag(tag);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleAddToLake(lake: { id: string; name: string; datalakeTag: string }) {
     if (!onAddToLake) return;
     setLakeLoading(true);
-    await onAddToLake(lake);
-    setLakeLoading(false);
+    try {
+      await onAddToLake(lake);
+    } finally {
+      setLakeLoading(false);
+    }
   }
 
   return (
