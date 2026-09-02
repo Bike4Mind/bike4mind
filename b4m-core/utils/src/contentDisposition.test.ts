@@ -1,38 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildContentDisposition, isInlineSafeMimeType } from './contentDisposition';
+import { buildContentDisposition } from './contentDisposition';
 
-describe('isInlineSafeMimeType', () => {
-  it('inlines raster images but never svg', () => {
-    expect(isInlineSafeMimeType('image/png')).toBe(true);
-    expect(isInlineSafeMimeType('image/svg+xml')).toBe(false);
-  });
-
-  it('inlines the allowlisted document types and refuses everything else', () => {
-    expect(isInlineSafeMimeType('application/pdf')).toBe(true);
-    expect(isInlineSafeMimeType('text/markdown')).toBe(true);
-    expect(isInlineSafeMimeType('text/html')).toBe(false);
-    expect(isInlineSafeMimeType('application/octet-stream')).toBe(false);
-    expect(isInlineSafeMimeType(null)).toBe(false);
-  });
-
-  it('ignores parameters and casing on the media type', () => {
-    expect(isInlineSafeMimeType('TEXT/CSV; charset=utf-8')).toBe(true);
-  });
-});
+const E_ACUTE = String.fromCharCode(0xe9); // e-acute, e.g. resume with an accent
+const A_DIAERESIS = String.fromCharCode(0xe4); // a-diaeresis
+const NEL = String.fromCharCode(0x85); // C1 control char (Next Line)
 
 describe('buildContentDisposition', () => {
   it('defaults to attachment', () => {
     expect(buildContentDisposition('report.pdf')).toBe('attachment; filename="report.pdf"');
   });
 
-  it('resolves auto against the mime type', () => {
-    expect(buildContentDisposition('a.png', { disposition: 'auto', mimeType: 'image/png' })).toBe(
-      'inline; filename="a.png"'
-    );
-    expect(buildContentDisposition('a.svg', { disposition: 'auto', mimeType: 'image/svg+xml' })).toBe(
-      'attachment; filename="a.svg"'
-    );
-    expect(buildContentDisposition('a.bin', { disposition: 'auto' })).toBe('attachment; filename="a.bin"');
+  it('honors an explicit inline disposition', () => {
+    expect(buildContentDisposition('report.pdf', { disposition: 'inline' })).toBe('inline; filename="report.pdf"');
   });
 
   it('neutralizes quotes and backslashes that would break out of the quoted-string', () => {
@@ -46,8 +25,14 @@ describe('buildContentDisposition', () => {
     expect(header).toBe('attachment; filename="a__X-Injected: 1.pdf"');
   });
 
+  it('scrubs C1 control characters (non-ASCII) so they cannot survive into filename*', () => {
+    const header = buildContentDisposition(`bad${NEL}name.pdf`);
+    expect(header).toBe('attachment; filename="bad_name.pdf"');
+    expect(header).not.toContain('filename*');
+  });
+
   it('adds an RFC 5987 filename* for non-ASCII names, keeping an ASCII fallback', () => {
-    expect(buildContentDisposition('resum\u00e9.pdf')).toBe(
+    expect(buildContentDisposition(`resum${E_ACUTE}.pdf`)).toBe(
       'attachment; filename="resum_.pdf"; filename*=UTF-8\'\'resum%C3%A9.pdf'
     );
   });
@@ -57,12 +42,23 @@ describe('buildContentDisposition', () => {
   });
 
   it('percent-encodes the characters encodeURIComponent leaves alone', () => {
-    expect(buildContentDisposition("n\u00e4me'(a)*.pdf")).toContain("filename*=UTF-8''n%C3%A4me%27%28a%29%2A.pdf");
+    expect(buildContentDisposition(`n${A_DIAERESIS}me'(a)*.pdf`)).toContain(
+      "filename*=UTF-8''n%C3%A4me%27%28a%29%2A.pdf"
+    );
   });
 
-  it('truncates long names in both parameters', () => {
-    const header = buildContentDisposition(`${'a'.repeat(300)}.pdf`);
-    expect(header).toBe(`attachment; filename="${'a'.repeat(150)}"`);
+  it('truncates long names, preserving the extension, in both parameters', () => {
+    const header = buildContentDisposition(`${E_ACUTE}${'a'.repeat(300)}.docx`);
+    expect(header).toContain(`filename="_${'a'.repeat(144)}.docx"`);
+    expect(header).toContain("filename*=UTF-8''%C3%A9");
+    expect(header).toContain('.docx');
+  });
+
+  it('does not throw when truncation lands inside a surrogate pair', () => {
+    const surrogateHeavy = 'a' + '\u{1F600}'.repeat(150) + '.pdf';
+    expect(() => buildContentDisposition(surrogateHeavy)).not.toThrow();
+    const header = buildContentDisposition(surrogateHeavy);
+    expect(header).toContain('filename*=');
   });
 
   it('falls back to a placeholder when nothing printable survives', () => {

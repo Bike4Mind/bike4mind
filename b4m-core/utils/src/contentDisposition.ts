@@ -14,42 +14,52 @@
  *     is a common miss: browsers save the literal `my%20file.pdf`.
  *  3. **`inline` is an XSS decision, not a convenience.** Serving
  *     attacker-supplied `image/svg+xml` or `text/html` inline on the app origin
- *     is stored XSS. `auto` therefore inlines only render-safe types and forces
- *     `attachment` for everything else, rather than trusting the stored MIME.
+ *     is stored XSS, so callers must opt into `inline` explicitly and only for
+ *     bytes the server itself produced. There is no MIME-sniffing `auto` mode
+ *     here: a helper that infers safety from a stored MIME type can't know
+ *     whether it is being called for a response header (app origin) or a
+ *     storage-signed URL override (storage origin), and the two have different
+ *     threat models.
  *
  * Import from the lightweight subpath (`@bike4mind/utils/contentDisposition`),
  * not the package barrel - see the note on `escapeRegex`.
  */
 
-/**
- * Non-image types `auto` may serve inline. PDF is included because the viewer
- * reads the bytes and the signed URL lives on the storage origin, not the app
- * origin, so a direct inline open is already sandboxed away from app scripts.
- * `image/svg+xml` is excluded by the image rule below and must stay excluded:
- * SVG is a script-bearing document format.
- */
-export const INLINE_SAFE_MIME_TYPES: ReadonlySet<string> = new Set([
-  'application/pdf',
-  'application/json',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-]);
-
 /** Longest filename emitted into the header; longer names are truncated. */
 const MAX_FILENAME_LENGTH = 150;
+
+/** Longest suffix treated as a preservable extension when truncating. */
+const MAX_EXTENSION_LENGTH = 20;
 
 /**
  * Control characters are scrubbed BEFORE either parameter is built, not merely
  * escaped into `filename*`: a percent-encoded CRLF is header-safe but would still
- * be decoded back into the saved filename by the browser.
+ * be decoded back into the saved filename by the browser. U+0080-U+009F (C1
+ * controls, e.g. NEL) are non-ASCII, so they'd otherwise pass through into the
+ * percent-encoded `filename*` untouched even though `filename` scrubs them to `_`.
  */
 function scrubControlChars(value: string): string {
   return Array.from(value, ch => {
     const code = ch.codePointAt(0)!;
-    return code < 0x20 || code === 0x7f ? '_' : ch;
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? '_' : ch;
   }).join('');
+}
+
+/**
+ * Truncate to `maxLength` Unicode code points (not UTF-16 units, which would
+ * split a surrogate pair and make `encodeURIComponent` throw downstream),
+ * reserving room for the extension so a long filename doesn't lose the suffix
+ * that tells the OS which app to open it with.
+ */
+function truncatePreservingExtension(fileName: string, maxLength: number): string {
+  const chars = Array.from(fileName);
+  if (chars.length <= maxLength) return chars.join('');
+
+  const dotIndex = chars.lastIndexOf('.');
+  const extLength = dotIndex > 0 ? chars.length - dotIndex : 0;
+  const ext = extLength > 0 && extLength <= MAX_EXTENSION_LENGTH ? chars.slice(dotIndex) : [];
+  const stem = chars.slice(0, Math.max(maxLength - ext.length, 0));
+  return stem.join('') + ext.join('');
 }
 
 const NON_ASCII = /[^\x20-\x7e]/;
@@ -60,22 +70,12 @@ function encodeRfc5987(value: string): string {
   return encodeURIComponent(value).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-/** True when `auto` may serve this MIME type inline. */
-export function isInlineSafeMimeType(mimeType: string | null | undefined): boolean {
-  const mime = (mimeType ?? '').split(';')[0].trim().toLowerCase();
-  if (mime.startsWith('image/')) return mime !== 'image/svg+xml';
-  return INLINE_SAFE_MIME_TYPES.has(mime);
-}
-
 export interface ContentDispositionOptions {
   /**
-   * `attachment` (the default) always downloads. `auto` inlines only when
-   * `mimeType` is render-safe. `inline` is unconditional and should be used only
-   * for bytes the server itself produced.
+   * `attachment` (the default) always downloads. `inline` is unconditional and
+   * should be used only for bytes the server itself produced.
    */
-  disposition?: 'attachment' | 'inline' | 'auto';
-  /** Required by `auto`; ignored otherwise. */
-  mimeType?: string | null;
+  disposition?: 'attachment' | 'inline';
 }
 
 /**
@@ -83,12 +83,11 @@ export interface ContentDispositionOptions {
  * header or a storage `ResponseContentDisposition` override.
  */
 export function buildContentDisposition(fileName: string, options: ContentDispositionOptions = {}): string {
-  const { disposition = 'attachment', mimeType } = options;
-  const type = disposition === 'auto' ? (isInlineSafeMimeType(mimeType) ? 'inline' : 'attachment') : disposition;
+  const { disposition = 'attachment' } = options;
 
-  const safe = scrubControlChars((fileName ?? '').slice(0, MAX_FILENAME_LENGTH));
+  const safe = scrubControlChars(truncatePreservingExtension(fileName ?? '', MAX_FILENAME_LENGTH));
   const asciiName = safe.replace(NON_ASCII_GLOBAL, '_').replace(/["\\]/g, '_').trim() || 'download';
   const extended = NON_ASCII.test(safe) ? `; filename*=UTF-8''${encodeRfc5987(safe)}` : '';
 
-  return `${type}; filename="${asciiName}"${extended}`;
+  return `${disposition}; filename="${asciiName}"${extended}`;
 }
