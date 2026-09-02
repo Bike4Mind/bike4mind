@@ -6,6 +6,7 @@ import {
   Chip,
   CircularProgress,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Option,
@@ -24,6 +25,9 @@ import type { IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { useApiKeyScopePreflight, type ScopePreflightParams } from '@client/app/hooks/data/apiKeyScopePreflight';
 
 const WINDOW_OPTIONS = [7, 30, 90];
+
+/** ApiKeyUsageLog's TTL. Only a run at this window has seen the whole logged history. */
+const FULL_WINDOW_DAYS = 90;
 
 const OutcomeChip: React.FC<{ outcome: IApiKeyScopePreflightRow['outcome'] }> = ({ outcome }) => {
   const config = {
@@ -85,6 +89,10 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
               onChange={e => setEndpointPrefix(e.target.value)}
               data-testid="scope-preflight-prefix-input"
             />
+            <FormHelperText>
+              Matched as a plain string prefix, not by path segment, so <code>/api/chat</code> also matches{' '}
+              <code>/api/chatbots</code>.
+            </FormHelperText>
           </FormControl>
 
           <FormControl sx={{ flex: 2 }}>
@@ -161,15 +169,43 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
 
           {data.truncated ? (
             <Alert color="warning" data-testid="scope-preflight-truncated">
-              Result cap reached - this list is partial. Narrow the prefix or the window before treating it as complete.
+              Result cap reached - this list is partial. Narrow the prefix before treating it as complete. Do not narrow
+              the window: that drops the low-traffic keys for good rather than paging past them.
+            </Alert>
+          ) : null}
+
+          {data.coverage.unloggedPrefixes.length > 0 ? (
+            <Alert color="warning" data-testid="scope-preflight-unlogged">
+              {data.coverage.unloggedPrefixes.join(', ')} falls under this prefix and writes no usage log. Those routes
+              authenticate through <code>verifyApiKey</code> rather than the <code>baseApi</code> gate, and only that
+              gate records API-key traffic, so calls to them are invisible here however busy they are. Read this result
+              as covering the rest of the prefix only.
             </Alert>
           ) : null}
 
           {data.rows.length === 0 ? (
-            <Alert color="success" data-testid="scope-preflight-empty">
-              No API key has called these routes in the last {data.windowDays} days. There is no grandfathered
-              population to re-mint, so the gate can be declared and enforced in one step.
-            </Alert>
+            data.coverage.fullWindow && data.coverage.unloggedPrefixes.length === 0 ? (
+              <Alert color="success" data-testid="scope-preflight-empty">
+                No API key has called these routes in the last {data.windowDays} days, the full logged history. There is
+                no grandfathered population to re-mint, so the gate can be declared and enforced in one step.
+              </Alert>
+            ) : (
+              // An empty list is only actionable when the run saw everything there
+              // was to see. Short of that it is an absence of evidence, and the
+              // "enforce in one step" advice above would license the exact
+              // one-shot rollout this tool exists to prevent.
+              <Alert color="warning" data-testid="scope-preflight-empty-inconclusive">
+                No API key called these routes in the last {data.windowDays} days, but this run did not cover enough to
+                enforce on.{' '}
+                {!data.coverage.fullWindow
+                  ? `A key that fires monthly or quarterly leaves no trace in a ${data.windowDays}-day window - re-run at ${FULL_WINDOW_DAYS} days before deciding. `
+                  : null}
+                {data.coverage.unloggedPrefixes.length > 0
+                  ? 'Unlogged routes under this prefix are not counted. '
+                  : null}
+                Do not skip the staging sequence on this result.
+              </Alert>
+            )
           ) : (
             <Table size="sm" stickyHeader data-testid="scope-preflight-results">
               <thead>

@@ -108,8 +108,8 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
 
   it('classifies each key by the real gate and puts the breakage first', async () => {
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: PASSES, userId: 'u1', requests: 5, lastUsed: new Date(), endpoints: ['/api/x/a'] },
-      { keyId: BREAKS, userId: 'u2', requests: 99, lastUsed: new Date(), endpoints: ['/api/x/b'] },
+      { keyId: PASSES, userId: 'u1', requests: 5, lastUsed: new Date() },
+      { keyId: BREAKS, userId: 'u2', requests: 99, lastUsed: new Date() },
     ]);
     find.mockResolvedValue([
       { id: PASSES, scopes: ['notebooks:read', 'admin:*'] },
@@ -128,7 +128,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
 
   it('reports a key that no longer exists as holding nothing', async () => {
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: DELETED, userId: 'u1', requests: 3, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: DELETED, userId: 'u1', requests: 3, lastUsed: new Date() },
     ]);
     find.mockResolvedValue([]);
 
@@ -141,7 +141,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
   it('marks a key as surviving only on staging when the scope is staged', async () => {
     process.env.API_KEY_SCOPE_STAGING = 'optihashi:read';
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: GRANDFATHERED, userId: 'u1', requests: 7, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: GRANDFATHERED, userId: 'u1', requests: 7, lastUsed: new Date() },
     ]);
     find.mockResolvedValue([{ id: GRANDFATHERED, scopes: [] }]);
 
@@ -154,15 +154,15 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
     // An unfiltered $in would raise a Mongoose CastError, which errorHandler
     // turns into a 404 - indistinguishable from "no data" to the operator.
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: 'not-an-objectid', userId: 'u1', requests: 2, lastUsed: new Date(), endpoints: ['/api/x/a'] },
-      { keyId: '507f1f77bcf86cd799439011', userId: 'u2', requests: 1, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: 'not-an-objectid', userId: 'u1', requests: 2, lastUsed: new Date() },
+      { keyId: '507f1f77bcf86cd799439011', userId: 'u2', requests: 1, lastUsed: new Date() },
     ]);
     find.mockResolvedValue([{ id: '507f1f77bcf86cd799439011', scopes: ['admin:*'] }]);
 
     const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
 
-    // Only the castable id reaches the query...
-    expect(find).toHaveBeenCalledWith({ _id: { $in: ['507f1f77bcf86cd799439011'] } });
+    // Only the castable id reaches the query, projected to the one field read.
+    expect(find).toHaveBeenCalledWith({ _id: { $in: ['507f1f77bcf86cd799439011'] } }, { scopes: 1 });
     // ...and the malformed row is still reported rather than dropped.
     expect(body.rows).toHaveLength(2);
     expect(body.rows.find((r: any) => r.keyId === 'not-an-objectid').outcome).toBe('deny');
@@ -170,7 +170,7 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
 
   it('does not query at all when no keyId is castable', async () => {
     findKeyTrafficByEndpointPrefix.mockResolvedValue([
-      { keyId: 'junk', userId: 'u1', requests: 1, lastUsed: new Date(), endpoints: ['/api/x/a'] },
+      { keyId: 'junk', userId: 'u1', requests: 1, lastUsed: new Date() },
     ]);
 
     const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
@@ -182,5 +182,72 @@ describe('GET /api/admin/api-keys/scope-preflight', () => {
     const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
     expect(body.rows).toEqual([]);
     expect(body.truncated).toBe(false);
+  });
+
+  describe('coverage', () => {
+    it('reports a default-window run over a logged prefix as fully covered', async () => {
+      const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
+      expect(body.coverage).toEqual({ fullWindow: true, unloggedPrefixes: [] });
+    });
+
+    it('clears fullWindow below the TTL, so an empty result cannot read as conclusive', async () => {
+      // A key that fires monthly leaves no trace in a 7-day window; an empty
+      // result there is an absence of evidence, not a clean bill of health.
+      const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*', days: '7' }))._getJSONData();
+      expect(body.windowDays).toBe(7);
+      expect(body.coverage.fullWindow).toBe(false);
+    });
+
+    it('refuses a prefix whose traffic is never logged rather than answering zero', async () => {
+      // ApiKeyUsageLog is written only by baseApi's apiKeyAuth hook. These routes
+      // authenticate through verifyApiKey and log nothing, so a "no keys" answer
+      // here would be a false statement of fact - and verifyApiKey has no staging
+      // path, so acting on it breaks live keys with no grace period.
+      for (const prefix of ['/api/ai/v1', '/api/ai/v1/tools', '/api/embed/chat']) {
+        await expect(invoke({ endpointPrefix: prefix, scopes: 'admin:*' })).rejects.toThrow(/verifyApiKey/);
+      }
+      expect(findKeyTrafficByEndpointPrefix).not.toHaveBeenCalled();
+    });
+
+    it('names the unlogged surfaces a broader prefix sweeps up, and still runs', async () => {
+      const body = (await invoke({ endpointPrefix: '/api/', scopes: 'admin:*' }))._getJSONData();
+      expect(body.coverage.unloggedPrefixes).toEqual(['/api/ai/v1', '/api/embed']);
+      expect(findKeyTrafficByEndpointPrefix).toHaveBeenCalled();
+    });
+
+    it('does not flag a sibling prefix that merely shares a stem', async () => {
+      const body = (await invoke({ endpointPrefix: '/api/notebooks', scopes: 'admin:*' }))._getJSONData();
+      expect(body.coverage.unloggedPrefixes).toEqual([]);
+    });
+  });
+
+  describe('truncation', () => {
+    const traffic = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        keyId: `k${i}`,
+        userId: 'u1',
+        requests: 1,
+        lastUsed: new Date(),
+      }));
+
+    it('does not report a complete list as partial at exactly the cap', async () => {
+      // The route asks for MAX_ROWS + 1, so a full page with no overflow row is
+      // known to be the whole population - `length === MAX_ROWS` alone could not
+      // tell the two apart and would send the operator narrowing for no reason.
+      findKeyTrafficByEndpointPrefix.mockResolvedValue(traffic(500));
+
+      const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
+      expect(findKeyTrafficByEndpointPrefix).toHaveBeenCalledWith(expect.objectContaining({ limit: 501 }));
+      expect(body.rows).toHaveLength(500);
+      expect(body.truncated).toBe(false);
+    });
+
+    it('flags truncation and drops the overflow row when there is more', async () => {
+      findKeyTrafficByEndpointPrefix.mockResolvedValue(traffic(501));
+
+      const body = (await invoke({ endpointPrefix: '/api/x', scopes: 'admin:*' }))._getJSONData();
+      expect(body.rows).toHaveLength(500);
+      expect(body.truncated).toBe(true);
+    });
   });
 });

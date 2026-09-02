@@ -81,8 +81,6 @@ export interface IApiKeyEndpointTraffic {
   userId: string;
   requests: number;
   lastUsed: Date;
-  /** Distinct endpoints this key hit under the prefix, capped for display. */
-  endpoints: string[];
 }
 
 /**
@@ -102,6 +100,23 @@ export interface IApiKeyScopePreflightRow extends IApiKeyEndpointTraffic {
 }
 
 /**
+ * What a preflight run did and did not actually look at. An empty row list only
+ * licenses enforcing in one step when BOTH hold: the window covered the full
+ * logged history, and no part of the prefix is served by a router that does not
+ * write ApiKeyUsageLog. Either one alone turns "nobody breaks" into a guess.
+ */
+export interface IApiKeyScopePreflightCoverage {
+  /** True only when the window covered ApiKeyUsageLog's full 90-day TTL. */
+  fullWindow: boolean;
+  /**
+   * Unlogged surfaces overlapping the prefix. API-key traffic to these is
+   * authenticated by `verifyApiKey`, which writes no usage log, so it is
+   * invisible to this tool no matter how busy the routes are.
+   */
+  unloggedPrefixes: string[];
+}
+
+/**
  * Result of a scope-enforcement preflight: who breaks if these scopes are
  * declared on these routes.
  */
@@ -116,6 +131,8 @@ export interface IApiKeyScopePreflight {
   rows: IApiKeyScopePreflightRow[];
   /** True when the row cap was hit, so the caller knows the list is partial. */
   truncated: boolean;
+  /** What this run could and could not see. Read before acting on zero rows. */
+  coverage: IApiKeyScopePreflightCoverage;
 }
 
 /**

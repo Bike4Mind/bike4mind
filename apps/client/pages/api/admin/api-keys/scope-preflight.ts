@@ -12,6 +12,23 @@ const MAX_WINDOW_DAYS = 90;
 const DEFAULT_WINDOW_DAYS = 90;
 const MAX_ROWS = 500;
 
+/**
+ * HTTP surfaces whose API-key traffic is NEVER in ApiKeyUsageLog.
+ *
+ * The collection has exactly one writer: `baseApi` -> `apiKeyAuth`'s `res.finish`
+ * hook (apps/client/server/middlewares/apiKeyAuth.ts). Everything authenticated
+ * through `verifyApiKey` (apps/client/server/cli/auth.ts) - public contract routes
+ * via `resolveContractAuth`, and the embed surfaces - logs nothing. A preflight
+ * over those paths returns zero rows however busy they are, which would make this
+ * tool assert the one thing it must never assert: a false "nobody calls these".
+ *
+ * Must stay in sync with the routes wired through `resolveContractAuth` and
+ * `verifyEmbedKeyById`. A path added there and not here reads as a real empty
+ * result. The runbook's "Staging applies to the `baseApi` gate only" paragraph
+ * (docs/architecture/api-key-scope-rollout.md) describes the same boundary.
+ */
+const UNLOGGED_ENDPOINT_PREFIXES = ['/api/ai/v1', '/api/embed'] as const;
+
 const ALL_SCOPES: ReadonlySet<string> = new Set<string>(Object.values(ApiKeyScope));
 
 /** Outcome ordering: the operator wants the keys that break at the top. */
@@ -23,6 +40,21 @@ const OUTCOME_RANK: Record<IApiKeyScopePreflightRow['outcome'], number> = {
 
 function readSingle(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+/** The unlogged surface `prefix` sits entirely within, if any. Zero rows there proves nothing. */
+function enclosingUnloggedSurface(prefix: string): string | undefined {
+  return UNLOGGED_ENDPOINT_PREFIXES.find(unlogged => prefix === unlogged || prefix.startsWith(`${unlogged}/`));
+}
+
+/**
+ * Unlogged surfaces swept up by a broader `prefix` (`/api/` contains both). The
+ * result is real but partial: those routes contribute no rows. The inverse case -
+ * a prefix sitting inside a surface - is rejected outright above, so it cannot
+ * reach here.
+ */
+function unloggedSurfacesUnder(prefix: string): string[] {
+  return UNLOGGED_ENDPOINT_PREFIXES.filter(unlogged => unlogged.startsWith(prefix));
 }
 
 /**
@@ -50,6 +82,13 @@ function readSingle(value: string | string[] | undefined): string | undefined {
  * `stagedAllow` rows reflect API_KEY_SCOPE_STAGING *as set on the stage serving
  * this request*, which is the stage whose rollout you are planning.
  *
+ * The one thing it must never do is report a confident zero. `ApiKeyUsageLog` is
+ * written only by `baseApi`, so a prefix served by `verifyApiKey` is rejected
+ * outright, a broader prefix that merely contains one reports the invisible
+ * surfaces in `coverage.unloggedPrefixes`, and a sub-TTL window clears
+ * `coverage.fullWindow`. An empty row list is safe to act on only when `coverage`
+ * is clean on both counts.
+ *
  * Read-only by design: it produces the list, a human rotates the keys.
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
@@ -63,6 +102,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     const endpointPrefix = readSingle(query.endpointPrefix)?.trim();
     if (!endpointPrefix || !endpointPrefix.startsWith('/')) {
       throw new BadRequestError('endpointPrefix is required and must start with "/"');
+    }
+    // Refuse rather than answer "zero keys" for a prefix that structurally cannot
+    // produce a row. Returning an empty result here would be a false statement of
+    // fact, and acting on it breaks live keys with no grace period, because the
+    // gate on these routes is enforced by `verifyApiKey`, which has no staging path.
+    const enclosingUnlogged = enclosingUnloggedSurface(endpointPrefix);
+    if (enclosingUnlogged) {
+      throw new BadRequestError(
+        `${endpointPrefix} is served by verifyApiKey, not baseApi, so no API-key traffic to it is ` +
+          `logged and this preflight can only ever return zero keys. Routes under ${enclosingUnlogged} ` +
+          `need no preflight: every scope they gate is bound to a credential minted with it, so there ` +
+          `is no grandfathered population. See docs/architecture/api-key-scope-rollout.md.`
+      );
     }
 
     const rawScopes = readSingle(query.scopes) ?? '';
@@ -88,11 +140,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     }
     const windowDays = Math.min(Math.floor(parsedDays), MAX_WINDOW_DAYS);
 
-    const traffic = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+    // Fetch one past the cap so `truncated` is exact: `length === MAX_ROWS` alone
+    // cannot tell "exactly MAX_ROWS keys" from "MAX_ROWS of more", and reporting a
+    // complete list as partial sends the operator narrowing a prefix for no reason.
+    const fetched = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
       endpointPrefix,
       days: windowDays,
-      limit: MAX_ROWS,
+      limit: MAX_ROWS + 1,
     });
+    const truncated = fetched.length > MAX_ROWS;
+    const traffic = truncated ? fetched.slice(0, MAX_ROWS) : fetched;
 
     // keyId comes from 90 days of historical log rows, so one unparseable value
     // must not sink the whole report: an unfiltered $in raises a Mongoose
@@ -101,7 +158,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     // to fail. Ids dropped here resolve to no scopes below and are still reported
     // as would-403, which is the safe direction.
     const lookupIds = traffic.map(t => t.keyId).filter(id => mongoose.Types.ObjectId.isValid(id));
-    const keyDocs = lookupIds.length ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }) : [];
+    // Project to `scopes`: this handler reads one field, and an unprojected find
+    // hydrates the whole UserApiKey document - `keyHash` included, since that
+    // schema's `toObject` has no strip transform (only `toJSON` deletes it).
+    // Nothing leaks, but a credential hash has no business in this request.
+    const keyDocs = lookupIds.length ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1 }) : [];
     const scopesByKeyId = new Map<string, ApiKeyScope[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
 
     const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
@@ -123,7 +184,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
       windowDays,
       stagedScopes: [...staged],
       rows,
-      truncated: traffic.length === MAX_ROWS,
+      truncated,
+      coverage: {
+        fullWindow: windowDays === MAX_WINDOW_DAYS,
+        unloggedPrefixes: unloggedSurfacesUnder(endpointPrefix),
+      },
     };
 
     return res.status(200).json(payload);

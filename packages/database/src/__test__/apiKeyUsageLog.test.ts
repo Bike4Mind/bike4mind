@@ -166,22 +166,55 @@ describe('ApiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test seed: partial log doc
     } as any);
 
-  it('groups matching traffic per key, busiest first, with last use and distinct endpoints', async () => {
+  it('groups matching traffic per key with its request count and last use', async () => {
     await log({ keyId: 'busy', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
     await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: new Date('2026-01-03') });
     await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: new Date('2026-01-02') });
-    await log({ keyId: 'quiet', userId: 'user-2', endpoint: '/api/thing/one' });
+    await log({ keyId: 'quiet', userId: 'user-2', endpoint: '/api/thing/one', timestamp: new Date('2026-01-02') });
 
     const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
       endpointPrefix: '/api/thing',
       days: 36500,
     });
 
-    expect(rows.map(r => r.keyId)).toEqual(['busy', 'quiet']);
-    expect(rows[0]).toMatchObject({ keyId: 'busy', userId: 'user-1', requests: 3 });
-    expect(rows[0].endpoints.sort()).toEqual(['/api/thing/one', '/api/thing/two']);
-    expect(new Date(rows[0].lastUsed).toISOString()).toBe(new Date('2026-01-03').toISOString());
-    expect(rows[1]).toMatchObject({ keyId: 'quiet', userId: 'user-2', requests: 1 });
+    expect(rows).toHaveLength(2);
+    expect(rows.find(r => r.keyId === 'busy')).toMatchObject({ userId: 'user-1', requests: 3 });
+    expect(new Date(rows.find(r => r.keyId === 'busy')!.lastUsed).toISOString()).toBe(
+      new Date('2026-01-03').toISOString()
+    );
+    expect(rows.find(r => r.keyId === 'quiet')).toMatchObject({ userId: 'user-2', requests: 1 });
+  });
+
+  it('truncates by recency, not by request count, so a quiet key outranks an older busy one', async () => {
+    // The keys this tool exists to catch are the monthly and quarterly callers.
+    // Ordering by `requests` before the limit would discard exactly those first,
+    // and narrowing the window to clear the cap would drop them for good.
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
+    await log({ keyId: 'quiet-but-recent', endpoint: '/api/thing/one', timestamp: new Date('2026-06-01') });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 36500,
+      limit: 1,
+    });
+
+    expect(rows.map(r => r.keyId)).toEqual(['quiet-but-recent']);
+  });
+
+  it('does not return an endpoints array', async () => {
+    // `endpoint` is `req.originalUrl`, so a distinct-set accumulator is effectively
+    // per-request cardinality and could blow the 16MB group-document limit on a
+    // broad prefix. Nothing renders it, so it is not collected.
+    await log({ keyId: 'busy', endpoint: '/api/thing/one' });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 36500,
+    });
+
+    expect(rows[0]).not.toHaveProperty('endpoints');
   });
 
   it('matches on prefix only, and anchors it to the start of the endpoint', async () => {

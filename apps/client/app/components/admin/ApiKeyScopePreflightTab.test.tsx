@@ -31,7 +31,6 @@ const row = (over: Partial<IApiKeyScopePreflightRow> = {}): IApiKeyScopePrefligh
   userId: 'u1',
   requests: 9,
   lastUsed: new Date('2026-08-01'),
-  endpoints: ['/api/x/a'],
   heldScopes: [],
   outcome: 'deny',
   ...over,
@@ -44,6 +43,7 @@ const result = (over: Partial<IApiKeyScopePreflight> = {}): IApiKeyScopePrefligh
   stagedScopes: [],
   rows: [],
   truncated: false,
+  coverage: { fullWindow: true, unloggedPrefixes: [] },
   ...over,
 });
 
@@ -74,9 +74,10 @@ describe('ApiKeyScopePreflightTab', () => {
     expect(screen.getByTestId('scope-preflight-run-btn')).toBeDisabled();
   });
 
-  it('reads an empty result as safe-to-enforce, not as missing data', () => {
+  it('reads a fully-covered empty result as safe-to-enforce, not as missing data', () => {
     // The distinction the tool exists for: nobody calls these routes, so the
-    // staging sequence can be skipped entirely.
+    // staging sequence can be skipped entirely. Only licensed when the run saw
+    // the whole logged history over a prefix that is actually logged.
     mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [] }) }));
     renderTab();
 
@@ -84,6 +85,50 @@ describe('ApiKeyScopePreflightTab', () => {
     expect(empty.textContent).toMatch(/No API key has called these routes/);
     expect(empty.textContent).toMatch(/enforced in one step/);
     expect(screen.queryByTestId('scope-preflight-results')).toBeNull();
+  });
+
+  it('withholds the enforce-in-one-step advice on a short-window empty result', () => {
+    // A key that fires monthly leaves no trace in 7 days. Repeating the
+    // full-window wording here would license the exact one-shot rollout this
+    // tool was built to prevent.
+    mockUseApiKeyScopePreflight.mockReturnValue(
+      state({ data: result({ rows: [], windowDays: 7, coverage: { fullWindow: false, unloggedPrefixes: [] } }) })
+    );
+    renderTab();
+
+    expect(screen.queryByTestId('scope-preflight-empty')).toBeNull();
+    const inconclusive = screen.getByTestId('scope-preflight-empty-inconclusive');
+    expect(inconclusive.textContent).toMatch(/re-run at 90 days/);
+    expect(inconclusive.textContent).toMatch(/Do not skip the staging sequence/);
+    expect(inconclusive.textContent).not.toMatch(/enforced in one step/);
+  });
+
+  it('names the unlogged surfaces a prefix sweeps up, and will not call the result clean', () => {
+    // ApiKeyUsageLog is written only by baseApi, so traffic to verifyApiKey
+    // routes is invisible here - an unqualified "nobody calls these" would be a
+    // false statement of fact, not a coverage caveat.
+    mockUseApiKeyScopePreflight.mockReturnValue(
+      state({
+        data: result({ rows: [], coverage: { fullWindow: true, unloggedPrefixes: ['/api/ai/v1', '/api/embed'] } }),
+      })
+    );
+    renderTab();
+
+    expect(screen.getByTestId('scope-preflight-unlogged').textContent).toMatch(/\/api\/ai\/v1/);
+    expect(screen.queryByTestId('scope-preflight-empty')).toBeNull();
+    expect(screen.getByTestId('scope-preflight-empty-inconclusive').textContent).toMatch(/Unlogged routes/);
+  });
+
+  it('shows the unlogged-surface warning alongside real rows too', () => {
+    // The caveat is about what the scan could not see, so it applies whether or
+    // not the visible part of the prefix turned up keys.
+    mockUseApiKeyScopePreflight.mockReturnValue(
+      state({ data: result({ rows: [row()], coverage: { fullWindow: true, unloggedPrefixes: ['/api/embed'] } }) })
+    );
+    renderTab();
+
+    expect(screen.getByTestId('scope-preflight-unlogged')).toBeTruthy();
+    expect(screen.getByTestId('scope-preflight-results')).toBeTruthy();
   });
 
   it('renders a row per key with its outcome, and counts the breakage', () => {
@@ -114,7 +159,11 @@ describe('ApiKeyScopePreflightTab', () => {
     mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ truncated: true, rows: [row()] }) }));
     renderTab();
 
-    expect(screen.getByTestId('scope-preflight-truncated').textContent).toMatch(/partial/);
+    const banner = screen.getByTestId('scope-preflight-truncated').textContent!;
+    expect(banner).toMatch(/partial/);
+    // Narrowing the window clears the cap by shrinking coverage, dropping the
+    // low-traffic keys for good rather than paging past them.
+    expect(banner).toMatch(/Do not\s+narrow the window/);
   });
 
   it('surfaces a failed preflight instead of showing an empty result', () => {
