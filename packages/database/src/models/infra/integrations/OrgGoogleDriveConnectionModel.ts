@@ -347,14 +347,19 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one,
-   * and - like adoptSyncClaim - a real compare-and-set: it writes only over its OWN chain (the batch id
-   * AND the token this run currently holds for it) or over no chain at all (the first slice, which
-   * claimed fresh and holds no token yet). The batch-id conjunct alone is not enough - it never changes
-   * across a whole chain, so it cannot tell "my own live chain" apart from "a chain I used to hold and
-   * lost to a reclaim/disconnect/reconnect" (both have the same activeIngestBatchId once a new owner
-   * renews or adopts). `expectedToken` closes that: a caller renewing after losing the claim presents
-   * the token it was issued, which the new owner's own renew/adopt has already rotated away.
+   * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one.
+   * The later-slice arm (activeIngestBatchId AND expectedToken must both still match) is a real
+   * compare-and-set for that case, for the same reason adoptSyncClaim's is: `expectedToken` closes the
+   * gap the batch id alone leaves, since the batch id never changes across a whole chain and so cannot
+   * tell "my own live chain" apart from "a chain I used to hold and lost to a reclaim/disconnect/
+   * reconnect" (both have the same activeIngestBatchId once a new owner renews or adopts).
+   *
+   * The no-chain-yet arm is NOT a compare-and-set against the caller's own `activeIngestBatchId`: it
+   * matches any doc currently sitting at null/null regardless of which batch id the caller passed in,
+   * so a stale first-slice caller (e.g. an abandoned attempt whose crash-retry already produced a fresh,
+   * unrelated claim on the same connection) can still win it and redirect the connection to ITS batch
+   * id. Known gap, tracked separately rather than closed here - not blocking because the un-chained
+   * `updateHealth` path already has an equivalent window on main.
    *
    * Always mints a fresh `ingestClaimToken` on success and returns it - the caller carries it into the
    * next slice's continuation payload for adoptSyncClaim to present.
