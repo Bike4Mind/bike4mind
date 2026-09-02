@@ -377,8 +377,12 @@ interface SemanticArmResult {
  * placed here rather than silently falling outside it. Neither excluded member is reachable: 'ok'
  * writes itself via emitSemanticCitables when passages come back, and 'no_lakes' is decided by the
  * no-corpus guards that return before a search runs.
+ *
+ * NonNullable is not redundant: `outcome` is required today but becomes present-iff-`attempted`
+ * (#1394), and without it this union would silently absorb `undefined` and stop naming only the
+ * outcomes an arm can PROVE. Keep it.
  */
-type ProvenRetrievalOutcome = Exclude<RetrievalSummary['outcome'], 'ok' | 'no_lakes'>;
+type ProvenRetrievalOutcome = Exclude<NonNullable<RetrievalSummary['outcome']>, 'ok' | 'no_lakes'>;
 
 /**
  * The retrieval verdict a completed semantic search proves, or null when it proves nothing and the
