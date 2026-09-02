@@ -49,6 +49,17 @@ The limits only appear on a real provider response, so the button spends a few t
 is pressed. It never runs on its own -- opening this page reads nothing.
 :::
 
+:::warning Re-check after a provider key rotation
+A rate limit belongs to the provider organization behind the key, so rotating that key can change
+the ceiling -- to a different tier, or to a different organization entirely. Nothing detects this on
+its own today: a value read once and typed into a lever stays there, silently describing an account
+that may no longer be the one doing the work.
+
+Press **Check provider limits** again after any embedding key rotation and reconcile the levers with
+what it reports. This matters most on environments where the key is set by an operator and not held
+by anyone day to day, which is precisely where a stale number can sit unnoticed for a long time.
+:::
+
 ### When it says the limits are unavailable
 
 - **Bedrock** publishes quotas through AWS Service Quotas rather than response headers, so they
@@ -64,6 +75,10 @@ is pressed. It never runs on its own -- opening this page reads nothing.
 **A file failed with "data-lake cost governance denied it".** Expected when a lever is doing its
 job. The message names which one: a budget, the master switch, or a throughput limit. Adjust the
 named lever, then re-index the file with **Re-process** on the file itself.
+
+**The measured ceiling changed since last time.** Expected after a provider key rotation - the new
+key may belong to a different tier or organization. Re-read the levers against the new figure; there
+is no automatic reconciliation.
 
 **A lever change did not take effect.** Settings are cached in-process for up to five minutes, so a
 running worker can keep using the previous value for a few minutes after a save. Wait it out before
