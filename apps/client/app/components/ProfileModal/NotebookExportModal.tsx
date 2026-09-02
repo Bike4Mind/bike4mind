@@ -83,7 +83,10 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
       }
     } catch (error: any) {
       console.error('Export error:', error);
-      toast.error(error.message || 'Failed to export notebooks');
+      // The server's message first: axios rejects with its own "Request failed with status code
+      // 404", so reading error.message throws away the only text that says what actually happened
+      // ("No notebooks found to export").
+      toast.error(error?.response?.data?.message || error.message || 'Failed to export notebooks');
     } finally {
       setIsExporting(false);
     }

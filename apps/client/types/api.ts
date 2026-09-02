@@ -122,7 +122,9 @@ export const NotebookExportRequestSchema = z.object({
     .positive()
     .optional()
     .prefault(10 * 1024 * 1024), // 10MB default
-  notebookIds: z.array(z.string()).optional(),
+  // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel, so one non-hex entry rejects the
+  // whole query with a CastError the route could only answer as a 500.
+  notebookIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'must be a 24-character hex notebook id')).optional(),
   fromDate: z.iso.datetime().optional(),
   toDate: z.iso.datetime().optional(),
 });

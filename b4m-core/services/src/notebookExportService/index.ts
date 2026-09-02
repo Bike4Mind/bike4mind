@@ -22,6 +22,7 @@ import type {
   IToolDocument,
 } from '@bike4mind/common';
 
+import { isObjectIdOrHexString } from 'mongoose';
 import { usableSessionIds } from '../utils/objectIds';
 
 /** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
@@ -198,6 +199,14 @@ export class NotebookExportService {
         downloadUrl,
       };
     } catch (error) {
+      // Level chosen by code, not blanket `error`. A 5xx-level line is what trips the CloudWatch
+      // filter, so logging a caller condition here would page LiveOps even though the route
+      // answers 4xx - which is the whole fault this change exists to remove.
+      if (error instanceof NotebookExportError && error.statusCode < 500) {
+        this.adapters.logger.warn('Notebook export rejected', { userId, code: error.code });
+        throw error;
+      }
+
       this.adapters.logger.error('Notebook export failed', { userId, error });
 
       if (error instanceof NotebookExportError) {
@@ -213,6 +222,17 @@ export class NotebookExportService {
 
     // Filter by specific notebook IDs
     if (options.notebookIds && options.notebookIds.length > 0) {
+      // Rejected, never dropped: exporting fewer notebooks than were named, silently, is worse.
+      // Unreachable from the API - the request schema rejects first - so this guards the exported
+      // service, which the CLI also calls.
+      const unusable = options.notebookIds.filter(id => !isObjectIdOrHexString(id));
+      if (unusable.length > 0) {
+        throw new NotebookExportError(
+          `notebookIds contains ids that cannot address a notebook: ${unusable.join(', ')}`,
+          'INVALID_NOTEBOOK_ID'
+        );
+      }
+
       query._id = { $in: options.notebookIds };
     }
 

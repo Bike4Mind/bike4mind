@@ -306,3 +306,79 @@ describe('notebook export', () => {
     expect(adapters.logger.warn).not.toHaveBeenCalled();
   });
 });
+
+describe('notebook export - notebookIds shape', () => {
+  it('rejects an id that cannot address a notebook instead of letting Mongo throw', async () => {
+    const { adapters } = makeAdapters();
+    const svc = new NotebookExportService(adapters);
+
+    await expect(
+      svc.exportNotebooks('user-1', { ...OPTIONS, notebookIds: ['not-an-objectid'] } as never)
+    ).rejects.toMatchObject({ code: 'INVALID_NOTEBOOK_ID' });
+
+    // Never dropped: the whole point is that the caller is told, not that fewer notebooks ship.
+    expect(adapters.sessionRepository.find).not.toHaveBeenCalled();
+  });
+
+  it('names the offending id, so the 400 is actionable', async () => {
+    const svc = new NotebookExportService(makeAdapters().adapters);
+
+    await expect(
+      svc.exportNotebooks('user-1', { ...OPTIONS, notebookIds: [GOOD, 'legacy-uuid'] } as never)
+    ).rejects.toThrow(/legacy-uuid/);
+  });
+
+  it('accepts uppercase hex, which addresses the same row', async () => {
+    const { adapters } = makeAdapters();
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      notebookIds: [UPPER],
+    } as never);
+
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [UPPER] } }));
+  });
+});
+
+describe('notebook export - log level', () => {
+  // The reason the status mapping exists at all: a 5xx-level line trips the CloudWatch filter and
+  // pages LiveOps. Answering 404 at the route is not enough if the service already logged `error`.
+  it('reports NO_NOTEBOOKS carrying a 404, and logs it at warn rather than error', async () => {
+    const { adapters } = makeAdapters({ sessionRepository: { find: vi.fn().mockResolvedValue([]) } });
+
+    await expect(new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS)).rejects.toMatchObject({
+      code: 'NO_NOTEBOOKS',
+      statusCode: 404,
+    });
+
+    expect(adapters.logger.error).not.toHaveBeenCalled();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Notebook export rejected',
+      expect.objectContaining({ code: 'NO_NOTEBOOKS' })
+    );
+  });
+
+  it('reports INVALID_NOTEBOOK_ID carrying a 400, and logs it at warn too', async () => {
+    const { adapters } = makeAdapters();
+
+    await expect(
+      new NotebookExportService(adapters).exportNotebooks('user-1', {
+        ...OPTIONS,
+        notebookIds: ['not-an-objectid'],
+      } as never)
+    ).rejects.toMatchObject({ code: 'INVALID_NOTEBOOK_ID', statusCode: 400 });
+
+    expect(adapters.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unexpected fault at error, so a real break stays loud', async () => {
+    const { adapters } = makeAdapters({
+      sessionRepository: { find: vi.fn().mockRejectedValue(new Error('mongo is on fire')) },
+    });
+
+    await expect(new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS)).rejects.toMatchObject({
+      code: 'EXPORT_FAILED',
+    });
+
+    expect(adapters.logger.error).toHaveBeenCalled();
+  });
+});
