@@ -71,9 +71,30 @@ describe('detectLakeInconsistencies', () => {
 
     const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
-    expect(report.sampled).toBe(true);
+    expect(report.memberSampled).toBe(true);
     expect(adapters.db.fabFileChunks.findChunkTextSample).toHaveBeenCalledTimes(INCONSISTENCY_MEMBER_SAMPLE);
-    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('lower bound'));
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('memberSampled'));
+  });
+
+  it('reports sampled on every run, because it never reads a member whole', async () => {
+    // It used to be derived from member overflow alone, so a small lake reported sampled:false -
+    // "counts are exact" - about a pass that had read five chunks per document. An owner seeing
+    // {findingCount: 0, sampled: false} reasonably concluded the corpus was read and is clean.
+    const report = await detectLakeInconsistencies(lake, 2026, makeAdapters([memberRow('a')]) as never);
+
+    expect(report.sampled).toBe(true);
+    expect(report.memberSampled).toBe(false);
+  });
+
+  it('reports a lake it never scanned as memberCount 0 rather than as an empty clean report', async () => {
+    const report = await detectLakeInconsistencies(
+      { ...lake, datalakeTag: '' } as never,
+      2026,
+      makeAdapters([memberRow('a')]) as never
+    );
+
+    expect(report.memberCount).toBe(0);
+    expect(report.findings).toEqual([]);
   });
 
   it('isolates an unreadable member instead of failing the whole report', async () => {

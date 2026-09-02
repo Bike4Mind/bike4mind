@@ -61,7 +61,17 @@ const DataLakeSchema = new mongoose.Schema(
     requiredPassageTokenTarget: { type: Number },
     // Last inconsistency report (#2242) and when it ran. `mongoose.Schema.Types.Mixed` deliberately: this is a
     // report payload the pure detector owns the shape of, and re-declaring its fields here would give
-    // two sources of truth that drift. Bounded at write time by the caller's maxFindings, never here.
+    // two sources of truth that drift.
+    //
+    // BOUNDED BY THE WRITER, and the only writer that bounds it today is
+    // `detectLakeInconsistencies`, which passes INCONSISTENCY_FINDINGS_CAP as `maxFindings` and caps
+    // evidence per finding at EVIDENCE_MAX. Nothing in this schema or in the pure detector enforces a
+    // size on a caller that omits the cap - so a second writer (a cron, a queue handler, another
+    // route) must pass it too. Said explicitly because the previous wording implied the detector
+    // enforced the persisted size, which would have let the next writer add no cap of its own.
+    //
+    // Excluded from the six list/browse projections below: this is the collection's only unbounded
+    // field, and it rides along on every unprojected lake read otherwise.
     inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
     inconsistencyComputedAt: { type: Date, default: null },
     fileTagPrefix: { type: String, required: true },
@@ -829,7 +839,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         userId,
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments');
+      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -841,7 +851,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         dataLakeId,
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments');
+      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -853,7 +863,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
       .sort({ updatedAt: 1 })
       .limit(limit)
-      .select('-files -taxonomySuggestions.fileAssignments');
+      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -1025,7 +1035,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       })
       .sort({ taxonomyStartedAt: 1 })
       .limit(limit)
-      .select('-files -taxonomySuggestions.fileAssignments');
+      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
@@ -1072,7 +1082,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         userId,
         taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments')
+      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
@@ -1094,7 +1104,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         userId,
         taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
       })
-      .select('-files -taxonomySuggestions.fileAssignments');
+      .select('-files -taxonomySuggestions.fileAssignments -inconsistencyReport');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 }

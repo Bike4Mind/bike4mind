@@ -29,9 +29,24 @@ export const INCONSISTENCY_KINDS = [
   'metric-disagreement',
   /** The same organization labelled a customer in one document and a prospect in another. */
   'relationship-conflict',
-  /** A dated claim that has silently become false. Single-document, unlike the three above. */
+  /** Dated claims that have silently become false, grouped by the year they expired in. */
   'expired-claim',
 ] as const;
+
+/**
+ * NOT IMPLEMENTED, and named here so its absence is visible rather than inferred: #2242 lists a
+ * fifth class - availability versus marketing, where one document calls a capability current and
+ * shipping while another describes it as in development with GA expected in a future year.
+ *
+ * `expired-claim` does not cover it. That rule only fires once a year has already PASSED, and this
+ * case is a present-tense contradiction between two documents with no expired year involved. It
+ * needs a rule that pairs a shipping-now assertion against a future-GA assertion on the same
+ * subject, which is a different shape from all four above.
+ *
+ * Left unbuilt deliberately: the four here are the ones whose precision could be argued from real
+ * prose. This is why the PR carrying this module does not close #2242.
+ */
+export const UNIMPLEMENTED_INCONSISTENCY_CLASS = 'availability-vs-marketing' as const;
 export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
 
 export interface CorpusDocument {
@@ -55,12 +70,32 @@ export interface InconsistencyFinding {
    * for grouping, so it is a key rather than prose.
    */
   subject: string;
-  /** Always at least 2 for the cross-document kinds; exactly 1 for `expired-claim`. */
+  /**
+   * Bounded at `EVIDENCE_MAX` entries, one per document. Read `documentCount` for how many documents
+   * the finding actually spans - a finding capped here still reports its true reach.
+   */
   evidence: InconsistencyEvidence[];
+  /**
+   * Documents this finding spans, before `EVIDENCE_MAX`. Always at least 2 for the cross-document
+   * kinds; 1 or more for `expired-claim`, which groups by year across the corpus.
+   */
+  documentCount: number;
 }
 
 /** Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list. */
 const EXCERPT_MAX = 240;
+
+/**
+ * Documents quoted per finding.
+ *
+ * A count cap on findings is not a byte cap without this. Evidence carries one entry per distinct
+ * document, each up to `EXCERPT_MAX`, so a subject shared across a large sample puts that many
+ * excerpts in a SINGLE finding - measured at ~11.8 MB for one report, against MongoDB's 16 MB
+ * document ceiling, on a corpus of per-period reports repeating the same labelled metrics. The
+ * report is stored on the lake document, so the ceiling is a real failure mode rather than a
+ * theoretical one, and `documentCount` keeps the truncation from costing the reader the number.
+ */
+const EVIDENCE_MAX = 20;
 
 /**
  * Sentence-ish split. Deliberately crude: a full NLP splitter buys nothing here, because every rule
@@ -109,11 +144,40 @@ const METRIC =
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
 const PROSPECT = /\b(prospect|pipeline|opportunity|evaluating|pilot|proof of concept|poc|trialling|trialing)\b/i;
-/** Capitalized multi-word name, the cheapest organization proxy that does not need a gazetteer. */
-const ORG = /\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Z][A-Za-z0-9&.-]+){0,3})\b/g;
+/**
+ * Capitalized MULTI-WORD name, the cheapest organization proxy that does not need a gazetteer.
+ *
+ * At least two capitalized tokens, which is what the description always claimed and what the trailing
+ * quantifier did not enforce. With `{0,3}` a single capitalized token was a complete "organization",
+ * so a sentence-initial `The` became a subject - and since CUSTOMER/PROSPECT carry generic technical
+ * vocabulary (`deployed`, `pipeline`, `pilot`), two entirely unrelated sentences produced a
+ * relationship-conflict on the subject `"the"`. It then sorted to the front of its kind and outranked
+ * real organization conflicts.
+ *
+ * The cost is single-word company names, which this rule now cannot see. That is the right side to
+ * err on: a missed finding costs a reader nothing, and a finding about `"the"` costs them the
+ * credibility of every other finding in the list.
+ *
+ * Used only with `matchAll`, which clones the regex - so the module-level `/g` cannot leak `lastIndex`
+ * between calls. Adding an `ORG.test(...)` anywhere would silently break that.
+ */
+const ORG = /\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Z][A-Za-z0-9&.-]+){1,3})\b/g;
 
-/** `through 2024`, `until 2024`, `expected in 2024`, `GA in 2024`. */
-const DATED_CLAIM = /\b(?:through|until|thru|expected\s+(?:in|by)|available\s+(?:in|by)|ga\s+in)\s+((?:19|20)\d{2})\b/i;
+/**
+ * A FORWARD-LOOKING dated claim: `supported through 2024`, `expected in 2024`, `GA in 2024`.
+ *
+ * The bare `through|until` form this used to accept does not distinguish a commitment from a
+ * retrospective statement of fact. `Revenue grew through 2024.` is permanently true and was reported
+ * as expired, as were `Data was collected through 2019.` and any changelog line. Historical
+ * narrative is among the most common shapes in a curated corpus, so that imprecision was not a
+ * rounding error - it was most of what this rule emitted.
+ *
+ * `through|until|thru` therefore now requires a lead-in that makes the claim a commitment about the
+ * future. The cost is recall on phrasings not in the list; the alternative was a rule whose findings
+ * a reader learns to skip.
+ */
+const DATED_CLAIM =
+  /\b(?:(?:supported|available|valid|effective|maintained|offered|guaranteed|current)\s+(?:through|until|thru)|expected\s+(?:in|by)|available\s+(?:in|by)|ga\s+in)\s+((?:19|20)\d{2})\b/i;
 
 type Hit = { doc: CorpusDocument; sentence: string; subject: string; detail?: string };
 
@@ -162,8 +226,13 @@ function crossDocumentGroups(
     if (distinguish && !distinguish(group)) continue;
     // One excerpt per document: three sentences from the same file are one document's position.
     const seen = new Set<string>();
-    const evidence = group.filter(h => !seen.has(h.doc.fabFileId) && (seen.add(h.doc.fabFileId), true)).map(toEvidence);
-    findings.push({ kind, subject, evidence });
+    const perDocument = group.filter(h => !seen.has(h.doc.fabFileId) && (seen.add(h.doc.fabFileId), true));
+    findings.push({
+      kind,
+      subject,
+      evidence: perDocument.slice(0, EVIDENCE_MAX).map(toEvidence),
+      documentCount: perDocument.length,
+    });
   }
   return findings;
 }
@@ -211,31 +280,87 @@ function detectRelationshipConflicts(documents: CorpusDocument[]): Inconsistency
 }
 
 /**
- * A dated claim whose year has passed. Single-document, unlike the three cross-document rules: the
- * document contradicts the calendar rather than a sibling. Listed with them because it produces the
- * same failure - retrieval serves a claim that is no longer true, confidently.
+ * Dated claims whose year has passed, grouped BY YEAR across the corpus. The corpus contradicts the
+ * calendar rather than a sibling - the only rule here that does not need two documents to disagree.
+ *
+ * Grouped rather than one finding per matching sentence, which is what it used to be and what made
+ * it the report's volume driver: a single boilerplate footer repeated across a sampled corpus
+ * produced one finding per member, and because findings sort by kind name with `expired-claim`
+ * first, those alone filled the stored cap and evicted every genuine cross-document finding the
+ * feature exists to produce. Measured at 220 findings in, 200 stored, all 20 cross-document ones
+ * discarded. Grouping collapses that to one finding per year.
+ *
+ * The meaning shifts with the shape, and the new one is the more useful of the two: "N documents
+ * carry claims that expired in 2024", with the documents listed, rather than N separate reports of
+ * the same fact. Same evidence bound as the cross-document rules, and `documentCount` carries the
+ * reach the bound truncates.
  */
 function detectExpiredClaims(documents: CorpusDocument[], nowYear: number): InconsistencyFinding[] {
-  const findings: InconsistencyFinding[] = [];
+  const byYear = new Map<string, Hit[]>();
   for (const doc of documents) {
     for (const sentence of sentences(doc.text)) {
       const year = Number(DATED_CLAIM.exec(sentence)?.[1]);
       if (!Number.isFinite(year) || year >= nowYear) continue;
-      findings.push({
-        kind: 'expired-claim',
-        subject: String(year),
-        evidence: [toEvidence({ doc, sentence, subject: String(year) })],
-      });
+      const subject = String(year);
+      const existing = byYear.get(subject);
+      if (existing) existing.push({ doc, sentence, subject });
+      else byYear.set(subject, [{ doc, sentence, subject }]);
     }
+  }
+
+  const findings: InconsistencyFinding[] = [];
+  for (const [subject, hits] of byYear) {
+    // One excerpt per document, as everywhere else: a document restating its own expiring claim in
+    // three sections holds one position, not three.
+    const seen = new Set<string>();
+    const perDocument = hits.filter(h => !seen.has(h.doc.fabFileId) && (seen.add(h.doc.fabFileId), true));
+    findings.push({
+      kind: 'expired-claim',
+      subject,
+      evidence: perDocument.slice(0, EVIDENCE_MAX).map(toEvidence),
+      documentCount: perDocument.length,
+    });
   }
   return findings;
 }
 
 export interface CorpusInconsistencyReport {
+  /**
+   * Bounded by `maxFindings`, allocated per kind - see `capPerKind`. Read `countsByKind` for the
+   * exact totals and `truncated` for whether anything was dropped.
+   */
   findings: InconsistencyFinding[];
+  /** Exact, always over ALL findings - never affected by `maxFindings`. */
   countsByKind: Record<InconsistencyKind, number>;
-  /** True when the caller sampled rather than read the whole corpus, so counts are a lower bound. */
+  /**
+   * True when the pass did not read every chunk of every member, so counts are a LOWER BOUND.
+   *
+   * Today this is unconditionally true for any lake pass: the caller reads a bounded number of
+   * chunks from the start of each member, so no run has ever examined a corpus whole. It was
+   * previously derived from member overflow alone, which meant a lake under the member cap reported
+   * `sampled: false` - "counts are not a lower bound" - about a pass that had read five chunks per
+   * document. An owner seeing `{findingCount: 0, sampled: false}` reasonably concluded the corpus
+   * was read and is clean.
+   */
   sampled: boolean;
+  /** True when `maxFindings` dropped findings. `sampled` cannot serve this - it is about members. */
+  truncated: boolean;
+}
+
+/**
+ * A corpus report plus what the LAKE pass knows that the pure detector cannot: how many members it
+ * actually read, and whether the lake outgrew the member cap.
+ *
+ * Stored on the lake document and rendered by `computeLakeHealth`, so it is the shape a surface sees.
+ */
+export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
+  /** True when the lake has more members than the pass sampled - the actionable half of `sampled`. */
+  memberSampled: boolean;
+  /**
+   * Members whose text was actually read. Zero means nothing was scanned, which a reader must be able
+   * to tell apart from "scanned and clean" - see the null-tag guard in `detectLakeInconsistencies`.
+   */
+  memberCount: number;
 }
 
 /**
@@ -266,9 +391,59 @@ export function detectCorpusInconsistencies(
   // Stable order so two runs over unchanged content produce an identical report.
   findings.sort((a, b) => a.kind.localeCompare(b.kind) || a.subject.localeCompare(b.subject));
 
+  const kept = options.maxFindings === undefined ? findings : capPerKind(findings, options.maxFindings);
+
   return {
-    findings: options.maxFindings === undefined ? findings : findings.slice(0, options.maxFindings),
+    findings: kept,
     countsByKind,
     sampled: options.sampled ?? false,
+    truncated: kept.length < findings.length,
   };
+}
+
+/**
+ * Take up to `max` findings without letting one kind starve the others.
+ *
+ * A plain `slice` could not do this: findings sort by kind NAME, so `expired-claim` sits at the front
+ * of every report and `superlative-conflict` is evicted first. Any kind that out-produces the others
+ * therefore took the whole budget, and the kinds it displaced were the cross-document ones - the
+ * thing the feature exists to find. Grouping `expired-claim` by year removed today's instance of
+ * that; allocating the cap removes the shape of the bug, so the next rule that emits in volume
+ * cannot re-create it.
+ *
+ * Round-robin by position across the kinds present. A kind that runs out simply stops contributing
+ * while the others keep drawing, so a report holding only one kind still fills the cap and no budget
+ * is left unspent. The emitted list is re-derived from the sorted input, so it keeps the report's
+ * declared ordering rather than the interleaved order it was selected in.
+ */
+function capPerKind(findings: InconsistencyFinding[], max: number): InconsistencyFinding[] {
+  if (findings.length <= max) return findings;
+
+  const queues = new Map<InconsistencyKind, InconsistencyFinding[]>();
+  for (const finding of findings) {
+    const existing = queues.get(finding.kind);
+    if (existing) existing.push(finding);
+    else queues.set(finding.kind, [finding]);
+  }
+
+  const taken = new Set<InconsistencyFinding>();
+  const lanes = [...queues.values()];
+  let cursor = 0;
+  while (taken.size < max) {
+    let progressed = false;
+    for (const lane of lanes) {
+      if (taken.size >= max) break;
+      const next = lane[cursor];
+      if (!next) continue;
+      taken.add(next);
+      progressed = true;
+    }
+    // Every lane is exhausted before the budget is: nothing left to allocate.
+    if (!progressed) break;
+    cursor += 1;
+  }
+
+  // Re-derive from the sorted input rather than from the round-robin order, so the emitted list keeps
+  // the report's declared ordering instead of interleaving kinds.
+  return findings.filter(f => taken.has(f));
 }

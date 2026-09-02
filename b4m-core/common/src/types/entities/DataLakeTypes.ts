@@ -1,4 +1,4 @@
-import type { CorpusInconsistencyReport } from '../../constants/corpusInconsistency';
+import type { LakeInconsistencyReport } from '../../constants/corpusInconsistency';
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
@@ -154,7 +154,7 @@ export interface IDataLake {
    * `converge` uses between planning and executing. A null report means "never run", which the
    * surface must distinguish from "run and found nothing".
    */
-  inconsistencyReport?: CorpusInconsistencyReport | null;
+  inconsistencyReport?: LakeInconsistencyReport | null;
   inconsistencyComputedAt?: Date | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;

@@ -133,7 +133,15 @@ function storedInconsistency(
   return {
     computedAt: lake.inconsistencyComputedAt ?? null,
     sampled: report.sampled,
-    findingCount: report.findings.length,
+    memberSampled: report.memberSampled ?? false,
+    memberCount: report.memberCount ?? 0,
+    // Summed from the EXACT counts, never `findings.length`. The stored array is capped and the
+    // counts are not, so reading the array's length put a saturated number beside exact per-kind
+    // figures that summed higher - the surface's own arithmetic then contradicted itself, and a
+    // consumer trusting `findingCount` under-reported. `affectedMemberCount` next door exists for
+    // precisely this reason, "so the UI never implies fewer".
+    findingCount: Object.values(report.countsByKind).reduce((sum, count) => sum + count, 0),
+    truncated: report.truncated ?? false,
     countsByKind: report.countsByKind,
   };
 }

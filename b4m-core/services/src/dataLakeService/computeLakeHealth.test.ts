@@ -294,6 +294,10 @@ describe('computeLakeHealth inconsistency surface (#2242)', () => {
       'expired-claim': 0,
     },
     sampled: true,
+    truncated: false,
+    memberSampled: false,
+    memberCount: 2,
+    documentCount: 2,
   } as never;
 
   const withReport = (over: Record<string, unknown> = {}) =>
@@ -326,7 +330,10 @@ describe('computeLakeHealth inconsistency surface (#2242)', () => {
     expect(result.inconsistency).toEqual({
       computedAt: new Date('2026-06-01T00:00:00Z'),
       sampled: true,
+      memberSampled: false,
+      memberCount: 2,
       findingCount: 1,
+      truncated: false,
       countsByKind: {
         'superlative-conflict': 0,
         'metric-disagreement': 0,
@@ -334,6 +341,58 @@ describe('computeLakeHealth inconsistency surface (#2242)', () => {
         'expired-claim': 0,
       },
     });
+  });
+
+  it('reports findingCount from the EXACT counts, not the length of a capped list', async () => {
+    // The stored list is capped and the counts are not, so reading the array's length put a saturated
+    // number beside exact per-kind figures that summed higher. A surface rendering both showed
+    // arithmetic that did not add up, and one trusting findingCount under-reported.
+    const truncatedReport = {
+      findings: [{ kind: 'metric-disagreement', subject: 'uptime', evidence: [], documentCount: 2 }],
+      countsByKind: {
+        'superlative-conflict': 3,
+        'metric-disagreement': 40,
+        'relationship-conflict': 7,
+        'expired-claim': 200,
+      },
+      sampled: true,
+      truncated: true,
+      memberSampled: true,
+      memberCount: 200,
+    } as never;
+
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyReport: truncatedReport }),
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency?.findingCount).toBe(250);
+    expect(result.inconsistency?.truncated).toBe(true);
+  });
+
+  it('carries memberCount so a pass that scanned nothing does not read as a clean lake', async () => {
+    const neverScanned = {
+      findings: [],
+      countsByKind: {
+        'superlative-conflict': 0,
+        'metric-disagreement': 0,
+        'relationship-conflict': 0,
+        'expired-claim': 0,
+      },
+      sampled: true,
+      truncated: false,
+      memberSampled: false,
+      memberCount: 0,
+    } as never;
+
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyReport: neverScanned }),
+      makeAdapters([], []) as never
+    );
+
+    // findingCount 0 AND memberCount 0: nothing was read, which is not the same answer as "clean".
+    expect(result.inconsistency?.findingCount).toBe(0);
+    expect(result.inconsistency?.memberCount).toBe(0);
   });
 
   it('reports null when detection has never run, which is NOT the same as clean', async () => {

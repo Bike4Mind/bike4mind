@@ -40,12 +40,12 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) }, json };
 };
-const invoke = (body: Record<string, unknown> = {}) => {
+const invoke = (body: Record<string, unknown> = {}, method = 'POST') => {
   const { res, json } = makeRes();
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1' }, body, user: { id: 'u1' }, logger: { warn: vi.fn() } },
+      { method, query: { id: 'lake1' }, body, user: { id: 'u1' }, logger: { warn: vi.fn() } },
       res
     ),
   };
@@ -54,7 +54,10 @@ const invoke = (body: Record<string, unknown> = {}) => {
 const report = (over: Record<string, unknown> = {}) => ({
   findings: [],
   countsByKind: { 'superlative-conflict': 0, 'metric-disagreement': 0, 'relationship-conflict': 0, 'expired-claim': 0 },
-  sampled: false,
+  sampled: true,
+  truncated: false,
+  memberSampled: false,
+  memberCount: 0,
   ...over,
 });
 
@@ -84,7 +87,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     expect(h.update).toHaveBeenCalledTimes(1);
     const payload = h.update.mock.calls[0][0];
     expect(payload.id).toBe('lakeDoc1');
-    expect(payload.inconsistencyReport).toMatchObject({ sampled: false });
+    expect(payload.inconsistencyReport).toMatchObject({ sampled: true });
     expect(payload.inconsistencyComputedAt).toBeInstanceOf(Date);
   });
 
@@ -97,29 +100,38 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     expect(typeof h.detectLakeInconsistencies.mock.calls[0][1]).toBe('number');
   });
 
-  it('caps what it STORES while returning the same capped payload', async () => {
-    // The lake document must not grow without bound. The counts stay exact either way, so a capped
-    // list can never imply fewer findings than exist.
-    const findings = Array.from({ length: 250 }, (_, i) => ({
-      kind: 'expired-claim',
+  it('stores what the detector returned without re-capping it', async () => {
+    // The cap lives in the detector, which allocates it PER KIND. A slice here would re-create the
+    // starvation that allocation exists to prevent: findings sort by kind name, so one prolific kind
+    // would take the whole budget again and evict the cross-document findings the feature is for.
+    const findings = Array.from({ length: 200 }, (_, i) => ({
+      kind: i < 100 ? 'expired-claim' : 'metric-disagreement',
       subject: String(i),
       evidence: [{ fabFileId: `f${i}`, fileName: null, excerpt: 'x' }],
+      documentCount: 2,
     }));
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings, countsByKind: { 'expired-claim': 250 } }));
+    h.detectLakeInconsistencies.mockResolvedValue(
+      report({ findings, truncated: true, countsByKind: { 'expired-claim': 250, 'metric-disagreement': 100 } })
+    );
 
     const { json, done } = invoke();
     await done;
 
-    expect(h.update.mock.calls[0][0].inconsistencyReport.findings).toHaveLength(200);
-    expect(json.mock.calls[0][0].findings).toHaveLength(200);
+    const stored = h.update.mock.calls[0][0].inconsistencyReport;
+    expect(stored.findings).toHaveLength(200);
+    expect(new Set(stored.findings.map((f: { kind: string }) => f.kind))).toEqual(
+      new Set(['expired-claim', 'metric-disagreement'])
+    );
+    // The counts stay exact, so a capped list can never imply fewer findings than exist.
     expect(json.mock.calls[0][0].countsByKind['expired-claim']).toBe(250);
+    expect(json.mock.calls[0][0].truncated).toBe(true);
   });
 
   it('returns the stored report with computedAt so a caller need not re-read the lake', async () => {
     const { json, done } = invoke();
     await done;
 
-    expect(json.mock.calls[0][0]).toMatchObject({ sampled: false, findings: [] });
+    expect(json.mock.calls[0][0]).toMatchObject({ sampled: true, findings: [] });
     expect(json.mock.calls[0][0].computedAt).toBeInstanceOf(Date);
   });
 
@@ -131,5 +143,43 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
 
     expect(h.detectLakeInconsistencies).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/data-lakes/[id]/inconsistencies', () => {
+  it('returns the stored report and runs no detection', async () => {
+    // Without a GET every look was a write: re-reading findings meant re-POSTing, which re-scans the
+    // corpus, overwrites the report and stamps a new computedAt - destroying the run-to-run
+    // comparability nowYear is injected to preserve.
+    const stored = report({ memberCount: 12 });
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: stored,
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.detectLakeInconsistencies).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+    expect(json.mock.calls[0][0]).toMatchObject({ memberCount: 12, computedAt: new Date('2026-06-01T00:00:00Z') });
+  });
+
+  it('returns null when detection has never run, rather than an empty report', async () => {
+    // "Never asked" and "asked and found nothing" are different answers.
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toBeNull();
+  });
+
+  it('is manage-gated too, because the payload carries document excerpts either way', async () => {
+    // It is the PROSE that decides the gate here, not the mutation. The read-gated view of this data
+    // is the counts-only summary on GET /health.
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('forbidden'));
+
+    const { done } = invoke({}, 'GET');
+    await expect(done).rejects.toThrow('forbidden');
   });
 });

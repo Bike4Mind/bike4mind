@@ -1,6 +1,6 @@
 import {
   detectCorpusInconsistencies,
-  type CorpusInconsistencyReport,
+  type LakeInconsistencyReport,
   type IDataLakeDocument,
   type IFabFileChunkRepository,
   type IFabFileRepository,
@@ -23,6 +23,13 @@ export const INCONSISTENCY_MEMBER_SAMPLE = 200;
 export const INCONSISTENCY_CHUNKS_PER_MEMBER = 5;
 /** Concurrent per-member chunk reads. Bounded so one lake's pass cannot saturate the pool. */
 const CHUNK_READ_CONCURRENCY = 8;
+/**
+ * Findings persisted per lake. Lives here rather than in the route because the detector allocates it
+ * per kind (`capPerKind`), which it can only do while it still holds every finding - a caller that
+ * sliced the returned array afterwards would re-create the starvation the allocation exists to
+ * prevent.
+ */
+export const INCONSISTENCY_FINDINGS_CAP = 200;
 
 export interface DetectLakeInconsistenciesAdapters {
   db: {
@@ -46,24 +53,31 @@ export async function detectLakeInconsistencies(
   lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
   nowYear: number,
   { db, logger }: DetectLakeInconsistenciesAdapters
-): Promise<CorpusInconsistencyReport> {
+): Promise<LakeInconsistencyReport> {
   // Same guard as computeLakeHealth's: an absent datalakeTag would serialize to null in the
   // membership `$match` and degrade the query to "files with no tags" across every tenant - and this
   // returns document EXCERPTS. Report empty rather than ever scanning on a null tag.
   if (!lake.datalakeTag) {
-    return detectCorpusInconsistencies([], { nowYear });
+    // Report nothing scanned rather than nothing found. `memberCount: 0` is what keeps a lake that
+    // was never scanned from rendering as a clean one - the same non-null-means-clean confusion
+    // lakeHealth warns about, which a fresh `computedAt` over an empty report would reintroduce.
+    return {
+      ...detectCorpusInconsistencies([], { nowYear, sampled: true }),
+      memberSampled: false,
+      memberCount: 0,
+    };
   }
 
   const members = await db.fabFiles.findDataLakeMembershipMembers(
     lakeMembershipScope(lake),
     INCONSISTENCY_MEMBER_SAMPLE
   );
-  const sampled = members.length > INCONSISTENCY_MEMBER_SAMPLE;
-  const scanned = sampled ? members.slice(0, INCONSISTENCY_MEMBER_SAMPLE) : members;
-  if (sampled) {
+  const memberSampled = members.length > INCONSISTENCY_MEMBER_SAMPLE;
+  const scanned = memberSampled ? members.slice(0, INCONSISTENCY_MEMBER_SAMPLE) : members;
+  if (memberSampled) {
     logger?.warn?.(
       `[lakeInconsistency] lake ${lake.id} exceeds ${INCONSISTENCY_MEMBER_SAMPLE} members; detection ran ` +
-        `over the first ${INCONSISTENCY_MEMBER_SAMPLE}. Findings are a lower bound - see report.sampled.`
+        `over the first ${INCONSISTENCY_MEMBER_SAMPLE}. See report.memberSampled.`
     );
   }
 
@@ -95,5 +109,19 @@ export async function detectLakeInconsistencies(
     });
   }
 
-  return detectCorpusInconsistencies(documents, { nowYear, sampled });
+  return {
+    // `sampled` is TRUE on every run, and unconditionally so: this pass reads at most
+    // INCONSISTENCY_CHUNKS_PER_MEMBER chunks from the start of each member, so it has never examined
+    // a corpus whole and its counts are always a floor. It used to be derived from member overflow
+    // alone, which told an owner of a small lake that the counts were exact about a pass that had
+    // read five chunks per document. `memberSampled` carries the overflow case, which is the half
+    // that is actionable - it means the lake outgrew the member cap.
+    ...detectCorpusInconsistencies(documents, {
+      nowYear,
+      sampled: true,
+      maxFindings: INCONSISTENCY_FINDINGS_CAP,
+    }),
+    memberSampled,
+    memberCount: documents.length,
+  };
 }

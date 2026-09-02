@@ -82,10 +82,15 @@ describe('relationship conflicts', () => {
   it('ignores a sentence carrying both labels, which describes a transition', () => {
     // "a prospect that became a customer" is a history, not a contradiction. Without this the rule
     // fires on exactly the sentences written to explain the relationship.
+    //
+    // Document `b` carries a SINGLE label on purpose. With both documents holding the both-label
+    // sentence this test passed with the guard deleted: the sentence yields `customer` for both, so
+    // `distinguish` saw one distinct label and dropped the group anyway. A differing single-label
+    // sibling is what makes the guard load-bearing - remove it and the pair conflicts.
     expect(
       kinds([
         doc('a', 'Northwind Logistics is a prospect that became a customer last year.'),
-        doc('b', 'Northwind Logistics is a prospect that became a customer last year.'),
+        doc('b', 'Northwind Logistics is a prospect.'),
       ])
     ).toEqual([]);
   });
@@ -118,6 +123,29 @@ describe('expired claims', () => {
     expect(report.findings[0].evidence).toHaveLength(1);
   });
 
+  it('groups by year across the corpus rather than emitting one finding per sentence', () => {
+    // The volume driver behind the P1. One boilerplate line repeated across a corpus is one fact
+    // about that corpus, not N findings, and as N findings it starved every other kind out of the
+    // stored cap.
+    const documents = Array.from({ length: 30 }, (_, i) => doc(`d${i}`, 'Supported until 2020.'));
+    const report = run(documents, 2026);
+
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0].subject).toBe('2020');
+    expect(report.findings[0].documentCount).toBe(30);
+  });
+
+  it('does not fire on a retrospective statement of fact', () => {
+    // "Revenue grew through 2024" is permanently true. The bare through/until form could not tell a
+    // commitment from a historical narrative, and historical narrative is among the most common
+    // shapes in a curated corpus - so most of what this rule emitted was noise.
+    expect(kinds([doc('a', 'Revenue grew through 2024.')], 2026)).toEqual([]);
+    expect(kinds([doc('a', 'Data was collected through 2019.')], 2026)).toEqual([]);
+    // Still fires on the forward-looking forms, which are the claims that actually expire.
+    expect(kinds([doc('a', 'Supported until 2020.')], 2026)).toEqual(['expired-claim']);
+    expect(kinds([doc('a', 'GA in 2021.')], 2026)).toEqual(['expired-claim']);
+  });
+
   it('reads the year from the caller, not the clock, so a report is reproducible', () => {
     expect(kinds([doc('a', 'Expected in 2025.')], 2024)).toEqual([]);
     expect(kinds([doc('a', 'Expected in 2025.')], 2026)).toEqual(['expired-claim']);
@@ -147,6 +175,55 @@ describe('report shape', () => {
   it('passes `sampled` through so counts read as a lower bound', () => {
     expect(detectCorpusInconsistencies([], { nowYear: 2026, sampled: true }).sampled).toBe(true);
     expect(detectCorpusInconsistencies([], { nowYear: 2026 }).sampled).toBe(false);
+  });
+
+  it('never lets one prolific kind evict every other kind from a capped list', () => {
+    // The P1. expired-claim used to emit one finding per sentence per document, kinds sort
+    // alphabetically with expired-claim first, and the cap was a slice applied after that sort - so
+    // one boilerplate footer across a sampled corpus filled the cap and discarded every genuine
+    // cross-document finding the feature exists to produce. Measured: 220 in, 200 stored, all 20
+    // cross-document ones gone.
+    const documents = [
+      ...Array.from({ length: 60 }, (_, i) => doc(`e${i}`, `Supported until ${2000 + i}. Uptime is 99.9%.`)),
+      doc('m', 'Uptime is 12.5%. Latency is 40 ms.'),
+      doc('n', 'Latency is 900 ms.'),
+    ];
+
+    const report = detectCorpusInconsistencies(documents, { nowYear: 2026, maxFindings: 10 });
+    const stored = new Set(report.findings.map(f => f.kind));
+
+    expect(report.findings).toHaveLength(10);
+    expect(stored.has('metric-disagreement')).toBe(true);
+    expect(stored.has('expired-claim')).toBe(true);
+    expect(report.truncated).toBe(true);
+  });
+
+  it('spends the whole budget when only one kind is present', () => {
+    // The round-robin must not under-fill: a lane running out is not a reason to leave budget unspent.
+    const documents = Array.from({ length: 12 }, (_, i) => doc(`e${i}`, `Supported until ${2000 + i}.`));
+    const report = detectCorpusInconsistencies(documents, { nowYear: 2026, maxFindings: 5 });
+
+    expect(report.findings).toHaveLength(5);
+    expect(report.findings.every(f => f.kind === 'expired-claim')).toBe(true);
+  });
+
+  it('reports truncated only when the cap actually dropped something', () => {
+    const documents = [doc('a', 'Uptime is 99.9%'), doc('b', 'Uptime is 99.5%')];
+
+    expect(detectCorpusInconsistencies(documents, { nowYear: 2026, maxFindings: 50 }).truncated).toBe(false);
+    expect(detectCorpusInconsistencies(documents, { nowYear: 2026 }).truncated).toBe(false);
+  });
+
+  it('bounds evidence per finding while keeping the true document count', () => {
+    // A count cap on findings is not a byte cap: evidence carries one entry per document, so a
+    // subject shared across a large sample put that many excerpts in a SINGLE finding - measured at
+    // ~11.8 MB for one report, against MongoDB's 16 MB ceiling, on the lake document itself.
+    const documents = Array.from({ length: 40 }, (_, i) => doc(`d${i}`, `Uptime is ${90 + i}.5%`));
+    const report = detectCorpusInconsistencies(documents, { nowYear: 2026 });
+    const finding = report.findings.find(f => f.kind === 'metric-disagreement');
+
+    expect(finding?.evidence.length).toBe(20);
+    expect(finding?.documentCount).toBe(40);
   });
 
   it('reports nothing for an empty corpus, and nothing for prose with no claims', () => {

@@ -420,9 +420,22 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    */
   inconsistency: {
     computedAt: Date | null;
-    /** True when detection sampled rather than read the whole corpus, so counts are a lower bound. */
+    /**
+     * True when detection did not read every chunk of every member, so counts are a LOWER BOUND.
+     * Unconditionally true today: the pass reads a bounded number of chunks per member.
+     */
     sampled: boolean;
+    /** True when the lake has more members than the pass sampled. The actionable half of `sampled`. */
+    memberSampled: boolean;
+    /**
+     * Members whose text was actually read. Zero with a non-null `computedAt` means the pass ran and
+     * scanned nothing, which is NOT a clean lake - the same distinction `null` carries one level up.
+     */
+    memberCount: number;
+    /** EXACT: summed from `countsByKind`, so it never implies fewer findings than were detected. */
     findingCount: number;
+    /** True when the stored finding list was capped. `findingCount` above is unaffected. */
+    truncated: boolean;
     countsByKind: Record<InconsistencyKind, number>;
   } | null;
 };
