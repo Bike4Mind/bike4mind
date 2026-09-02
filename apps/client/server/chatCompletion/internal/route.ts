@@ -101,8 +101,9 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       // alerted an operator. ErrorClass reuses the same taxonomy as tool-call telemetry
       // (categorizeToolError) rather than inventing a second one, so a rate-limit storm is visible -
       // and alarmable - by class, not just as an undifferentiated count. categorizeToolError has no
-      // rule for a credential error, so an invalid-API-key failure still lands in internal_error
-      // alongside other unclassified throws - a known gap, tracked separately.
+      // credential rule, so a credential failure scatters by wording: our own expired-key throw
+      // falls through to internal_error, a provider 401 lands in auth_error, and "invalid"/"required"
+      // phrasings land in validation_error. Tracked separately.
       //
       // Two datums, same metric name: CloudWatch keys a custom metric by namespace + name + the
       // EXACT dimension set and never rolls one up into the other, so the Stage-only point is what
@@ -111,15 +112,19 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       // dashboard breakdown. Neither double-counts the other since they are distinct series.
       const stage = Resource.App.stage;
       const errorClass = categorizeToolError(errorMessage);
-      void emitMetrics(QUESTS_CLOUDWATCH_NAMESPACE, [
-        { name: 'ProcessingFailed', value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
-        {
-          name: 'ProcessingFailed',
-          value: 1,
-          dimensions: { Stage: stage, ErrorClass: errorClass },
-          unit: StandardUnit.Count,
-        },
-      ]);
+      // emitMetrics never rejects (it catches and console.error's internally), so track() only
+      // registers this for the SIGTERM drain - it never delays the settle path below.
+      track(
+        emitMetrics(QUESTS_CLOUDWATCH_NAMESPACE, [
+          { name: 'ProcessingFailed', value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+          {
+            name: 'ProcessingFailed',
+            value: 1,
+            dimensions: { Stage: stage, ErrorClass: errorClass },
+            unit: StandardUnit.Count,
+          },
+        ])
+      );
 
       // Surface the failure to the client instead of leaving the quest 'running' forever - but only
       // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own
