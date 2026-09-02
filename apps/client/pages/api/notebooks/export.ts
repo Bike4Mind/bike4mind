@@ -117,9 +117,9 @@ const handler = baseApi().post(
     } catch (error) {
       // Status comes off the error, which is where the service already put it. Answering 500 for
       // everything is what paged LiveOps for a caller condition, since a 5xx-level log line is what
-      // trips the CloudWatch filter. Anything carrying 500 falls through and stays loud.
+      // trips the CloudWatch filter. Anything carrying 500 falls through and stays loud. No log
+      // line here: the service already wrote one at warn, through this same req.logger.
       if (error instanceof NotebookExportError && error.statusCode < 500) {
-        req.logger.warn('Notebook export rejected', { userId, code: error.code, status: error.statusCode });
         return res.status(error.statusCode).json({ success: false, message: error.message, code: error.code });
       }
 

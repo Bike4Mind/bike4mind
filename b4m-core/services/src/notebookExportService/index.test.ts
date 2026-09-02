@@ -368,6 +368,10 @@ describe('notebook export - log level', () => {
     ).rejects.toMatchObject({ code: 'INVALID_NOTEBOOK_ID', statusCode: 400 });
 
     expect(adapters.logger.error).not.toHaveBeenCalled();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Notebook export rejected',
+      expect.objectContaining({ code: 'INVALID_NOTEBOOK_ID', status: 400 })
+    );
   });
 
   it('still logs an unexpected fault at error, so a real break stays loud', async () => {

@@ -201,9 +201,14 @@ export class NotebookExportService {
     } catch (error) {
       // Level chosen by code, not blanket `error`. A 5xx-level line is what trips the CloudWatch
       // filter, so logging a caller condition here would page LiveOps even though the route
-      // answers 4xx - which is the whole fault this change exists to remove.
+      // answers 4xx - which is the whole fault this change exists to remove. This is the only
+      // line a rejection logs: the route rethrows to the caller without logging it again.
       if (error instanceof NotebookExportError && error.statusCode < 500) {
-        this.adapters.logger.warn('Notebook export rejected', { userId, code: error.code });
+        this.adapters.logger.warn('Notebook export rejected', {
+          userId,
+          code: error.code,
+          status: error.statusCode,
+        });
         throw error;
       }
 
@@ -223,8 +228,8 @@ export class NotebookExportService {
     // Filter by specific notebook IDs
     if (options.notebookIds && options.notebookIds.length > 0) {
       // Rejected, never dropped: exporting fewer notebooks than were named, silently, is worse.
-      // Unreachable from the API - the request schema rejects first - so this guards the exported
-      // service, which the CLI also calls.
+      // Unreachable through the route, whose request schema rejects first; this guards any future
+      // caller of the exported service that has no schema in front of it.
       const unusable = options.notebookIds.filter(id => !isObjectIdOrHexString(id));
       if (unusable.length > 0) {
         throw new NotebookExportError(
