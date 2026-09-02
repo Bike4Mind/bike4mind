@@ -1,3 +1,5 @@
+import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
  * `datalake:<org>:<slug>`). This meta-tag is what makes a file a MEMBER of a lake, so it is
@@ -119,25 +121,30 @@ export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix:
 
 /**
  * Which membership signal(s) a file carries for a lake: the `datalake:*` meta-tag ('meta'),
- * a `fileTagPrefix` content tag on a file the lake's creator owns ('prefix'), both, or neither
- * (null - not a member). Exact JS mirror of `buildDataLakeMembershipFilter`
- * (`@bike4mind/database`) so a UI badge and the read/lifecycle predicate can never disagree about
- * why a file is a member.
+ * a `fileTagPrefix` content tag ('prefix'), both, or neither (null - not a member). Exact JS
+ * mirror of `buildDataLakeMembershipFilter` (`@bike4mind/database`) so a UI badge and the
+ * read/lifecycle predicate can never disagree about why a file is a member.
  *
- * This closes a visibility gap: the two arms behave differently (the prefix
- * arm requires creator ownership; the meta-tag does not) but neither Files nor the lake manager UI
- * previously surfaced which one applied.
+ * This closes a visibility gap: the two arms behave differently (an OWNED lake's prefix arm
+ * requires creator ownership; a REGISTRY lake's does not, and the meta-tag never does) but
+ * neither Files nor the lake manager UI previously surfaced which one applied.
  */
 export type DataLakeMembershipArm = 'meta' | 'prefix' | 'both';
 
 export function getFileMembershipArm(
   file: { userId: string; tags?: readonly { name?: unknown }[] },
-  scope: { datalakeTag: string; fileTagPrefix?: string | null; creatorUserId?: string | null }
+  scope: DataLakeMembershipScope
 ): DataLakeMembershipArm | null {
   const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
   const hasMeta = tagNames.includes(scope.datalakeTag);
+  // Mirrors buildDataLakeMembershipFilter/satisfiesMembershipScope: a REGISTRY lake's prefix arm
+  // has no ownership conjunct (compile-time config, not user input); an OWNED lake's does.
   const hasPrefix =
-    !!scope.creatorUserId && file.userId === scope.creatorUserId && matchesTagPrefixArm(tagNames, scope.fileTagPrefix);
+    scope.kind === 'registry'
+      ? matchesTagPrefixArm(tagNames, scope.fileTagPrefix)
+      : !!scope.creatorUserId &&
+        file.userId === scope.creatorUserId &&
+        matchesTagPrefixArm(tagNames, scope.fileTagPrefix);
   if (hasMeta && hasPrefix) return 'both';
   if (hasMeta) return 'meta';
   if (hasPrefix) return 'prefix';

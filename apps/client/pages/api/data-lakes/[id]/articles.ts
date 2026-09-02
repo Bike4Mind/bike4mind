@@ -118,20 +118,15 @@ const handler = baseApi()
       }
     );
 
-    // Per-file membership arm: which signal makes this file a member, since the two
-    // arms behave differently (the prefix arm requires the lake's creator to own the file) and
-    // neither the lake manager nor the article panel previously said which one applied. A
-    // fallback/registry lake has no creator to anchor the prefix arm to, so its files are typed
-    // by the OR-membership tag alone: the meta-tag when present, the (ownership-free) prefix
-    // otherwise - there is no 'both' case for a fallback lake.
-    const data: (IFabFileDocument & { membershipArm?: DataLakeMembershipArm })[] = result.data.map(file => {
-      const membershipArm = isFallback
-        ? (file.tags ?? []).some(t => t.name === datalakeTag)
-          ? 'meta'
-          : 'prefix'
-        : (getFileMembershipArm(file, lakeMembership!) ?? undefined);
-      return { ...file, membershipArm };
-    });
+    // Per-file membership arm: which signal makes this file a member, since the two arms behave
+    // differently (an OWNED lake's prefix arm requires the lake's creator to own the file; a
+    // REGISTRY lake's does not) and neither the lake manager nor the article panel previously said
+    // which one applied. `getFileMembershipArm` is `kind`-aware on the same `lakeMembership` scope
+    // used to build this list, so it cannot disagree with which lake kind is actually in play.
+    const data: (IFabFileDocument & { membershipArm?: DataLakeMembershipArm })[] = result.data.map(file => ({
+      ...file,
+      membershipArm: getFileMembershipArm(file, lakeMembership) ?? undefined,
+    }));
 
     // Best-effort audit write, only when something was actually returned - an empty
     // page reflects no lake content read. The lake is already resolved, so no attribution needed.

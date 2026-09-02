@@ -294,7 +294,12 @@ describe('satisfiesTagPrefix', () => {
 });
 
 describe('getFileMembershipArm', () => {
-  const scope = { datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+  const scope = {
+    kind: 'owned' as const,
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    creatorUserId: 'creator-1',
+  };
 
   it('is "meta" for a file carrying only the membership tag', () => {
     const file = { userId: 'creator-1', tags: [{ name: 'datalake:acme' }] };
@@ -321,9 +326,21 @@ describe('getFileMembershipArm', () => {
     expect(getFileMembershipArm(file, scope)).toBe(null);
   });
 
-  it('is null (never "prefix") when the scope has no creator to anchor the prefix arm to', () => {
+  it('is null (never "prefix") when an owned scope has no creator to anchor the prefix arm to', () => {
     const file = { userId: 'creator-1', tags: [{ name: 'acme:legal' }] };
     expect(getFileMembershipArm(file, { ...scope, creatorUserId: undefined })).toBe(null);
+  });
+
+  it('is "prefix" for a registry lake regardless of file ownership - no ownership conjunct', () => {
+    const registryScope = { kind: 'registry' as const, datalakeTag: 'datalake:public-docs', fileTagPrefix: 'docs:' };
+    const file = { userId: 'someone-else', tags: [{ name: 'docs:legal' }] };
+    expect(getFileMembershipArm(file, registryScope)).toBe('prefix');
+  });
+
+  it('is "both" for a registry lake when a file carries the meta-tag and a content-prefix tag', () => {
+    const registryScope = { kind: 'registry' as const, datalakeTag: 'datalake:public-docs', fileTagPrefix: 'docs:' };
+    const file = { userId: 'someone-else', tags: [{ name: 'datalake:public-docs' }, { name: 'docs:legal' }] };
+    expect(getFileMembershipArm(file, registryScope)).toBe('both');
   });
 });
 

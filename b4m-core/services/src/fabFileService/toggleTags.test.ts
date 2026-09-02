@@ -15,18 +15,36 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-const file = (id: string, tags: { name: string; strength: number }[] = []) => ({ id, userId: 'owner', tags });
+// `toJSON` is non-enumerable, matching a real Mongoose document: it must not show up in a
+// structural `toEqual` diff, and the production code's `Object.assign`-onto-a-live-document bug
+// (an own-property assignment invisible to `toJSON`, dropped by `res.json`) can only be caught by
+// a mock document that actually behaves like one - a bare plain object masks it. See
+// SharableDocumentModel.findAccessibleById for the real repository's own `.toJSON()` call.
+const file = (id: string, tags: { name: string; strength: number }[] = []) => {
+  const doc = { id, userId: 'owner', tags };
+  Object.defineProperty(doc, 'toJSON', { value: () => ({ ...doc }), enumerable: false });
+  return doc;
+};
+
+/** Attaches the same non-enumerable `toJSON` to a raw file literal that doesn't already have one. */
+const withToJSON = <T extends { id: string }>(f: T): T => {
+  if (typeof (f as unknown as { toJSON?: unknown }).toJSON === 'function') return f;
+  const copy = { ...f };
+  Object.defineProperty(copy, 'toJSON', { value: () => ({ ...copy }), enumerable: false });
+  return copy;
+};
 
 const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocument | null = lake()) => {
+  const filesWithToJSON = files.map(withToJSON);
   // A mutable store so pushTagsByFabFileId/pullTagsByFabFileId mutate what findById returns next,
   // exactly as the real atomic repository methods would - the backfill step re-reads after the
   // per-tag loop, so its correctness depends on that read seeing the loop's own writes.
-  const store = new Map(files.map(f => [f.id, { ...f, tags: [...f.tags] }]));
+  const store = new Map(filesWithToJSON.map(f => [f.id, { ...f, tags: [...f.tags] }]));
 
   return {
     db: {
       fabFiles: {
-        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
+        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
         findById: vi.fn(async (id: string) => store.get(id) ?? null),
         pullTagsByFabFileId: vi.fn(async (id: string, names: string[]) => {
           const doc = store.get(id);
@@ -455,6 +473,21 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
 
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
     expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual(['lk:b']);
+  });
+
+  it('surfaces the prefix-arm join count on the returned file, and it survives a JSON round-trip', async () => {
+    // Regression test for a real bug: the count used to be assigned onto the live Mongoose
+    // document via Object.assign, which `res.json` (via the schema's toJSON) silently dropped -
+    // the caller-facing trap-defusal toast could never fire. `file()`'s mock toJSON mirrors that
+    // real serialization boundary, so this fails the same way the production code did before the
+    // fix if the count is attached the wrong way.
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
+
+    const result = await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
+
+    const serialized = JSON.parse(JSON.stringify(result));
+    expect(serialized[0].prefixArmJoinedLakeCount).toBe(1);
   });
 
   it('toggling a prefix tag ON is never a leave, and recomputes when the actor manages the lake', async () => {

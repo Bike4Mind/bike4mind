@@ -129,10 +129,17 @@ const FileBrowserContent = () => {
 
   const { mutateAsync: toggleTagToFiles } = useToggleTagToFiles();
   const { data: fileTags } = useGetFileTags();
-  // Only lakes the caller can manage are valid "Add to lake" targets - the same gate the
-  // toggle-tag write enforces server-side (see assertCanWriteDataLakeTags).
+  // "Add to lake" targets are narrowed to `l.canManage` AND what the write door itself will
+  // accept. `l.canManage` also passes on the org-admin/org-grant rungs (a broader `AccessContext`),
+  // but `/api/files/tags/toggle` resolves manage through a narrower, file-owner-centric actor
+  // ({ userId, isAdmin } - see toggleTags.ts) that does not resolve those rungs. Without this
+  // second filter, an org admin who is not the lake's creator would see the lake in the menu and
+  // get a bare "Request failed" toast on click.
   const { data: dataLakes } = useGetDataLakes(isAdminFeatureEnabled('EnableDataLakes'));
-  const manageableLakes = useMemo(() => dataLakes?.filter(l => l.canManage) ?? [], [dataLakes]);
+  const manageableLakes = useMemo(
+    () => dataLakes?.filter(l => l.canManage && (currentUser?.isAdmin || l.isOwn)) ?? [],
+    [dataLakes, currentUser?.isAdmin]
+  );
   const { mutateAsync: addFilesToLake } = useAddFilesToLake();
   const { mutateAsync: deleteFiles } = useBulkDeleteFiles();
 
@@ -850,7 +857,18 @@ const FileBrowserContent = () => {
             }}
             lakes={manageableLakes}
             onAddToLake={async lake => {
-              await addFilesToLake({ fileIds: Array.from(selectedIds), lake });
+              // /api/files/tags/toggle TOGGLES the meta-tag - reposting it for a file already a
+              // member would REMOVE that file (and its content-prefix tags with it, unrecoverably;
+              // see addFileToLake's docblock). Filter to non-members here so this door can only add.
+              const alreadyMemberIds = new Set(
+                selectedFiles.filter(f => (f.tags ?? []).some(t => t.name === lake.datalakeTag)).map(f => f.id)
+              );
+              const idsToAdd = Array.from(selectedIds).filter(id => !alreadyMemberIds.has(id));
+              if (idsToAdd.length === 0) {
+                toast.info('The selected file(s) are already members of this lake.');
+                return;
+              }
+              await addFilesToLake({ fileIds: idsToAdd, lake, skippedCount: alreadyMemberIds.size });
             }}
             hasSelectedAll={selectedIds.size === selectableFiles.length}
             selectedCount={selectedIds.size}

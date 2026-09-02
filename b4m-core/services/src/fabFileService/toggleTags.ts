@@ -59,13 +59,16 @@ const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
 const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DATALAKE_TAG_PREFIX);
 
 /**
- * A file this call joined to a lake solely by a `fileTagPrefix` content tag, with no
- * `datalake:*` meta-tag ever applied - the trap this type exists to surface. Present only on a file
- * that just joined a lake this way; consumers should show the caller what happened and offer the
- * meta-tag join, since nothing else in the response distinguishes this from an ordinary tag edit.
+ * How many lakes this call joined a file to solely by a `fileTagPrefix` content tag, with no
+ * `datalake:*` meta-tag ever applied - the trap this field exists to surface. A count, not the
+ * joined lakes' ids/tags: the batch is resolved against `shareable.findAllAccessibleByIds`, which
+ * admits read-share access, so the caller applying the tag may not be entitled to see the lake
+ * this file's OWNER was joined to (it is resolved from the file's owner, not the caller - see
+ * `loadPrefixArmCandidateLakes`). The one consumer only ever reduces this to "did anything join,
+ * and roughly how much", so a count is all it needs.
  */
 export type ToggledFabFile = IFabFileDocument & {
-  prefixArmJoinedLakes?: { lakeId: string; datalakeTag: string }[];
+  prefixArmJoinedLakeCount?: number;
 };
 
 /**
@@ -453,11 +456,19 @@ export const toggleTags = async (
   // to know that happened. Attached per-file rather than returned as a separate list, since the
   // route's response shape is an `IFabFileDocument[]` other callers already depend on - this rides
   // along as an extra property on the documents they already receive instead of changing it.
+  //
+  // `.toJSON()` FIRST: `freshFiles` are hydrated Mongoose documents (`shareable.findAllAccessibleByIds`
+  // does not lean or serialize them), and `res.json` on the route above serializes via the schema's
+  // `toJSON`, which only sees `_doc` plus declared virtuals - a bare own-property assigned onto the
+  // live document is silently dropped before it reaches the wire. Converting to a plain object first
+  // makes the property an ordinary key that survives JSON.stringify.
   return freshFiles.map(file => {
     const joins = prefixJoinsByFile.get(file.id);
-    if (!joins || joins.length === 0) return file;
-    return Object.assign(file, {
-      prefixArmJoinedLakes: joins.map(({ lake }) => ({ lakeId: lake.id, datalakeTag: lake.datalakeTag })),
-    });
+    // `IFabFileDocument` is a plain-data interface with no `toJSON` of its own - the runtime value
+    // here is the hydrated Mongoose document `shareable.findAllAccessibleByIds` actually returns.
+    const plain = (file as unknown as { toJSON(): IFabFileDocument }).toJSON() as ToggledFabFile;
+    if (!joins || joins.length === 0) return plain;
+    plain.prefixArmJoinedLakeCount = joins.length;
+    return plain;
   });
 };

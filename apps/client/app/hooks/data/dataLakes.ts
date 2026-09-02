@@ -1178,25 +1178,46 @@ export function useConvergeDataLake(dataLakeId: string | null) {
  * the same `/api/files/tags/toggle` write every other membership join uses (see toggleTags) -
  * there is no separate "add to lake" write path. Lets an owner add a file they already uploaded
  * without re-uploading it through the wizard.
+ *
+ * IMPORTANT: the endpoint TOGGLES the tag, so this must only ever be called with ids that are NOT
+ * already members - reposting the tag for an existing member would remove it (and its
+ * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
+ * down first; `skippedCount` is purely for the success toast's wording.
  */
 export function useAddFilesToLake() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ fileIds, lake }: { fileIds: string[]; lake: { id: string; datalakeTag: string } }) => {
+    mutationFn: async ({
+      fileIds,
+      lake,
+      skippedCount = 0,
+    }: {
+      fileIds: string[];
+      lake: { id: string; datalakeTag: string };
+      skippedCount?: number;
+    }) => {
       const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
         ids: fileIds,
         tags: [lake.datalakeTag],
       });
-      return { files: res.data, lake };
+      return { files: res.data, lake, skippedCount };
     },
-    onSuccess: ({ files, lake }) => {
-      toast.success(`Added ${files.length} file${files.length === 1 ? '' : 's'} to the lake.`);
+    onSuccess: ({ files, lake, skippedCount }) => {
+      const addedMsg = `Added ${files.length} file${files.length === 1 ? '' : 's'} to the lake.`;
+      toast.success(
+        skippedCount > 0
+          ? `${addedMsg} ${skippedCount} file${skippedCount === 1 ? ' was' : 's were'} already a member and left unchanged.`
+          : addedMsg
+      );
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(lake.id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      invalidateLakeFileMembershipQueries(queryClient, lake.id);
     },
     onError: (error: Error) => {
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      if (refusal) {
+        toast.error(refusal);
+        return;
+      }
       toast.error(error.message || 'Failed to add files to the data lake');
     },
   });

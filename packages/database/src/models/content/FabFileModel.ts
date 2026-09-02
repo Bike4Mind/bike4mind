@@ -1870,34 +1870,56 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * excludes files also carrying the meta-tag, so the two never double-count a file. A lake with
    * no usable prefix arm (fallback/registry lakes, or one with no creator to anchor to) reports
    * `prefixOnlyCount: 0` rather than running a query with nothing to match.
+   *
+   * Batched the same way `countDataLakeFilesByMembership` is (chunked `$facet`s at
+   * LAKE_COUNT_CONCURRENCY): this is handed the identical `membershipScopes` array in the same
+   * `Promise.all`, so an unchunked fan-out here would compete for the same bounded connection pool
+   * that method was chunked to protect.
    */
   async countDataLakeFilesByMembershipArm(
     scopes: DataLakeMembershipScope[]
   ): Promise<Record<string, { metaCount: number; prefixOnlyCount: number }>> {
     if (scopes.length === 0) return {};
-    const counts = await Promise.all(
-      scopes.map(async scope => {
-        const prefixOnlyFilter = buildDataLakePrefixOnlyMembershipFilter(scope);
-        const [metaCount, prefixOnlyCount] = await Promise.all([
-          this.fabFileModel.countDocuments({
-            'tags.name': scope.datalakeTag,
-            deletedAt: null,
-            archivedAt: null,
-            status: { $ne: 'pending' },
-          }),
-          prefixOnlyFilter
-            ? this.fabFileModel.countDocuments({
-                ...prefixOnlyFilter,
-                deletedAt: null,
-                archivedAt: null,
-                status: { $ne: 'pending' },
-              })
-            : 0,
-        ]);
-        return { metaCount, prefixOnlyCount };
-      })
+    const counts: Record<string, { metaCount: number; prefixOnlyCount: number }> = {};
+    const chunkStarts = Array.from(
+      { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
+      (_, i) => i * LAKE_COUNT_CHUNK
     );
-    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
+    await mapBounded(chunkStarts, LAKE_COUNT_CONCURRENCY, async i => {
+      const chunk = scopes.slice(i, i + LAKE_COUNT_CHUNK);
+      const exclusions = { deletedAt: null, archivedAt: null, status: { $ne: 'pending' } as const };
+      const branches = chunk.map(scope => {
+        const prefixOnlyFilter = buildDataLakePrefixOnlyMembershipFilter(scope);
+        return {
+          scope,
+          metaFilter: { 'tags.name': scope.datalakeTag, ...exclusions },
+          prefixOnlyFilter: prefixOnlyFilter ? { ...prefixOnlyFilter, ...exclusions } : null,
+        };
+      });
+      // Synthetic branch keys, same reason as countDataLakeFilesByMembership: a facet field name
+      // may not contain '.' or start with '$', and datalakeTag is a user-derived string.
+      const orFilters = branches.flatMap(branch =>
+        branch.prefixOnlyFilter ? [branch.metaFilter, branch.prefixOnlyFilter] : [branch.metaFilter]
+      );
+      const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
+        { $match: { $or: orFilters } },
+        {
+          $facet: Object.fromEntries(
+            branches.flatMap((branch, j) => [
+              [`m${j}`, [{ $match: branch.metaFilter }, { $count: 'n' }]],
+              ...(branch.prefixOnlyFilter ? [[`p${j}`, [{ $match: branch.prefixOnlyFilter }, { $count: 'n' }]]] : []),
+            ])
+          ),
+        },
+      ]);
+      branches.forEach((branch, j) => {
+        counts[branch.scope.datalakeTag] = {
+          metaCount: row?.[`m${j}`]?.[0]?.n ?? 0,
+          prefixOnlyCount: branch.prefixOnlyFilter ? (row?.[`p${j}`]?.[0]?.n ?? 0) : 0,
+        };
+      });
+    });
+    return counts;
   }
 
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared

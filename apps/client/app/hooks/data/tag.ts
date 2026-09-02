@@ -114,8 +114,8 @@ export const useDeleteFileTag = () => {
   });
 };
 
-/** A toggled file, plus the lakes it joined solely via a content-prefix tag. */
-type ToggledFile = IFabFileDocument & { prefixArmJoinedLakes?: { lakeId: string; datalakeTag: string }[] };
+/** A toggled file, plus how many lakes it joined solely via a content-prefix tag. */
+type ToggledFile = IFabFileDocument & { prefixArmJoinedLakeCount?: number };
 
 export function useToggleTagToFiles() {
   const queryClient = useQueryClient();
@@ -135,10 +135,14 @@ export function useToggleTagToFiles() {
       // membership signal for a file, with no `datalake:*` meta-tag ever applied. Silence here is
       // what let that state go unnoticed for months, so a caller who just hit it is told
       // explicitly rather than seeing an ordinary "tag added" toast and nothing else.
-      const joinedLakeCount = new Set(data.flatMap(f => f.prefixArmJoinedLakes?.map(j => j.lakeId) ?? [])).size;
+      //
+      // The response carries a per-file COUNT, not which lake(s) - see ToggledFabFile's docblock -
+      // so this sums join events rather than counting distinct lakes; the wording below is phrased
+      // to not assert a distinct-lake count it doesn't have.
+      const joinedLakeCount = data.reduce((sum, f) => sum + (f.prefixArmJoinedLakeCount ?? 0), 0);
       if (joinedLakeCount > 0) {
         toast.info(
-          `That tag also made ${data.length === 1 ? 'this file' : 'some of these files'} a member of ${joinedLakeCount === 1 ? 'a data lake' : `${joinedLakeCount} data lakes`} by content prefix only - no lake tag was applied. Open the lake's manager to add the lake tag too.`,
+          `That tag also made ${data.length === 1 ? 'this file' : 'some of these files'} a member of a data lake by content prefix only - no lake tag was applied. Open the lake's manager to add the lake tag too.`,
           { duration: 8000 }
         );
       }

@@ -72,24 +72,27 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
  * which is what lets a lake header read "48 by lake tag, 37 by content prefix" without the
  * two numbers double-counting a file that carries both signals.
  *
- * Returns null under the same fail-closed conditions as the prefix arm above (no usable
- * prefix, a reserved namespace, or no creator to anchor it to) - there is no prefix-only
+ * A REGISTRY lake's prefix arm carries no ownership conjunct (see buildDataLakeMembershipFilter),
+ * so this mirrors that: no `userId` conjunct for `kind === 'registry'`, only for an owned lake -
+ * dropping it there would double-count against the disjoint-sum guarantee this function exists
+ * to uphold.
+ *
+ * Returns null under the remaining fail-closed conditions (no usable prefix, a reserved
+ * namespace, or an owned lake with no creator to anchor it to) - there is no prefix-only
  * membership to count in that case.
  */
 export function buildDataLakePrefixOnlyMembershipFilter(
   scope: DataLakeMembershipScope
 ): Record<string, unknown> | null {
   const prefix = normalizeTagPrefix(scope.fileTagPrefix);
-  // A registry lake's prefix arm carries no ownership conjunct (see buildDataLakeMembershipFilter),
-  // so there is no prefix-ONLY population distinct from "everyone matching the prefix" to count here.
-  if (!prefix || isReservedTagPrefix(prefix) || scope.kind === 'registry' || !scope.creatorUserId) return null;
-  return {
-    $and: [
-      { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } },
-      { userId: scope.creatorUserId },
-      { 'tags.name': { $ne: scope.datalakeTag } },
-    ],
-  };
+  if (!prefix || isReservedTagPrefix(prefix)) return null;
+  const prefixArm = { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } };
+  const excludesMeta = { 'tags.name': { $ne: scope.datalakeTag } };
+  if (scope.kind === 'registry') {
+    return { $and: [prefixArm, excludesMeta] };
+  }
+  if (!scope.creatorUserId) return null;
+  return { $and: [prefixArm, { userId: scope.creatorUserId }, excludesMeta] };
 }
 
 /**
