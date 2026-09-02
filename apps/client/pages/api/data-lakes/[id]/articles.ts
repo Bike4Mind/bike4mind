@@ -27,6 +27,8 @@ interface ArticlesQuery {
   limit?: string;
   sortBy?: string;
   sortDir?: string;
+  /** 'true' narrows to the lake's Uncategorized bucket - see the filter below. */
+  uncategorized?: string | string[];
 }
 
 /**
@@ -58,6 +60,11 @@ const handler = baseApi()
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
     const sortDir = req.query.sortDir === 'desc' ? ('desc' as const) : ('asc' as const);
+    // The lake's Uncategorized bucket: members carrying no tag under its own fileTagPrefix, which
+    // is exactly what a prefix-keyed browse tree has no branch for. NARROWING only, and the prefix
+    // comes from the RESOLVED lake rather than the request, so this can never widen the scope the
+    // membership arm below already fixed - it only ever removes files from one lake's own list.
+    const uncategorizedOnly = firstQueryValue(req.query.uncategorized) === 'true';
 
     // ONE predicate for both lake kinds. For a DB lake that is meta-tag OR a prefix match on a file
     // the CREATOR owns, so this browse lists exactly what archiving or permanently deleting the
@@ -115,6 +122,7 @@ const handler = baseApi()
         userGroups: req.user.groups ?? [],
         // Single-lake browser: only this lake's files.
         restrictToDataLake: true,
+        ...(uncategorizedOnly ? { lacksContentPrefixTags: [dataLake.fileTagPrefix] } : {}),
       }
     );
 

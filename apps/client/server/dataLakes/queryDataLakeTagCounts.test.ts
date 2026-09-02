@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   countDataLakeUniqueFilesByPrefix: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
+  countDistinctDataLakeFilesByMembership: vi.fn(),
+  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -45,6 +47,8 @@ vi.mock('@bike4mind/database', async () => {
       countDataLakeUniqueFilesByPrefix: h.countDataLakeUniqueFilesByPrefix,
       countDataLakeFilesByMembership: h.countDataLakeFilesByMembership,
       countDataLakeFilesByMembershipArm: h.countDataLakeFilesByMembershipArm,
+      countDistinctDataLakeFilesByMembership: h.countDistinctDataLakeFilesByMembership,
+      countDistinctUncategorizedDataLakeFilesByMembership: h.countDistinctUncategorizedDataLakeFilesByMembership,
     },
   };
 });
@@ -67,6 +71,8 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     h.countDataLakeUniqueFilesByPrefix.mockReset().mockResolvedValue({ total: 0, byPrefix: {} });
     h.countDataLakeFilesByMembership.mockReset().mockResolvedValue({});
     h.countDataLakeFilesByMembershipArm.mockReset().mockResolvedValue({});
+    h.countDistinctDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
+    h.countDistinctUncategorizedDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
   });
 
   it('reads the lake documents in ONE call whatever the lake count', async () => {
@@ -132,7 +138,72 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
       uniqueArticleCounts: { total: 0, byPrefix: {} },
       lakeFileCounts: {},
       lakeArmCounts: {},
+      uncategorizedFileCounts: {},
+      totalLakeFileCount: 0,
+      totalUncategorizedFileCount: 0,
     });
     expect(h.findByDatalakeTags).not.toHaveBeenCalled();
+  });
+
+  it('splits the membership breakdown into the picker count and the tree bucket, per lake', async () => {
+    // One aggregate answers both, and this is the split the UI reads: `lakeFileCounts` is the
+    // number the picker shows, `uncategorizedFileCounts` the slice of it the prefix-keyed tree
+    // has no branch for and renders as an Uncategorized bucket instead (#2031).
+    h.countDataLakeFilesByMembership.mockResolvedValue({
+      'datalake:lake-0': { total: 13, uncategorized: 1 },
+      'datalake:lake-1': { total: 2, uncategorized: 0 },
+    });
+
+    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
+
+    expect(result.lakeFileCounts).toEqual({ 'datalake:lake-0': 13, 'datalake:lake-1': 2 });
+    expect(result.uncategorizedFileCounts).toEqual({ 'datalake:lake-0': 1, 'datalake:lake-1': 0 });
+  });
+
+  it('sources the all-lakes total from membership, NOT the prefix-based unique count', async () => {
+    // The bug this fixes: a lake whose files carry only the meta-tag contributes 0 to the
+    // prefix-keyed unique count, so the all-lakes row could read LOWER than a single per-lake row
+    // sitting beneath it. Both mocked here, and the membership one has to win.
+    h.countDataLakeUniqueFilesByPrefix.mockResolvedValue({ total: 0, byPrefix: {} });
+    h.countDistinctDataLakeFilesByMembership.mockResolvedValue(13);
+    h.countDataLakeFilesByMembership.mockResolvedValue({ 'datalake:lake-0': { total: 13, uncategorized: 13 } });
+
+    const result = await queryDataLakeTagCounts(req, [lake(0)]);
+
+    expect(result.totalLakeFileCount).toBe(13);
+    // Still served, still prefix-based: it sizes the tag TREE, which is prefix-keyed.
+    expect(result.uniqueArticleCounts.total).toBe(0);
+  });
+
+  it('sizes the merged bucket from a distinct count, not a sum of the per-lake figures', async () => {
+    // Summing would be wrong on both edges: it double-counts a file loose in two lakes, and counts
+    // one that another lake already files under a branch the merged tree renders.
+    h.countDataLakeFilesByMembership.mockResolvedValue({
+      'datalake:lake-0': { total: 3, uncategorized: 2 },
+      'datalake:lake-1': { total: 3, uncategorized: 2 },
+    });
+    h.countDistinctUncategorizedDataLakeFilesByMembership.mockResolvedValue(1);
+
+    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
+
+    expect(result.totalUncategorizedFileCount).toBe(1);
+  });
+
+  it('narrows the merged bucket against every accessible prefix, not just the open ones', async () => {
+    // A dynamic lake's prefix is exactly where the merged tree DOES have a branch, so leaving it
+    // out would put already reachable files back in the bucket.
+    await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
+
+    const [scopeArg, prefixArg] = h.countDistinctUncategorizedDataLakeFilesByMembership.mock.calls[0];
+    expect(scopeArg).toEqual(scopes());
+    expect(prefixArg).toEqual(expect.arrayContaining(['lake0:', 'lake1:']));
+  });
+
+  it('passes the SAME scopes to the distinct total as to the per-lake counts', async () => {
+    // The two numbers sit above and below each other in the picker; resolving them from different
+    // scope sets is exactly how they would start describing different populations again.
+    await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
+
+    expect(h.countDistinctDataLakeFilesByMembership.mock.calls[0][0]).toEqual(scopes());
   });
 });

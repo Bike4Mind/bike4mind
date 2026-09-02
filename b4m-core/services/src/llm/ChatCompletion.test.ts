@@ -38,7 +38,7 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder } from './tools/ToolBuilder';
+import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -2355,11 +2355,20 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
+      };
 
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
 
-      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+      return {
+        enabledToolsArg,
+        getAccessibleFiles,
+        contextAndSystemMessages,
+        retrieval: savedQuest?.promptMeta?.retrieval,
+        offeredTools: savedQuest?.promptMeta?.offeredTools,
+      };
     };
 
     // #2228: a file that never reached the model used to leave no trace at all - the model answered
@@ -2489,6 +2498,63 @@ describe('ChatCompletionProcess', () => {
       expect(
         contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
       ).toBe(true);
+    });
+
+    /**
+     * The denominator of the #1394 metric, asserted through the real `process()` rather than
+     * against the seed site in isolation: a turn is only in the optional population if the tool
+     * was genuinely offered AND nothing forced retrieval. Reuses this harness because it is the
+     * one place that already drives both halves of that condition.
+     */
+    describe('optional-path retrieval mode is seeded from the same turn that offers the tool', () => {
+      it('marks a turn optional when the knowledge tool is offered and nothing forces retrieval', async () => {
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        expect(enabledToolsArg).toContain('search_knowledge_base');
+        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+      });
+
+      it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
+        // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
+        // ordinary chat turn would dilute the rate toward zero.
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: [],
+          files: [],
+        });
+
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(retrieval).toBeUndefined();
+      });
+
+      it('becomes the numerator when a knowledge-tool call merges its result onto the seed', async () => {
+        // The seed lands first and says attempted:false; the tool's own write arrives later in the
+        // turn. Composing the REAL seeded value here (rather than a hand-written literal) is what
+        // ties this to the shape `process()` actually produces, and driving it through
+        // applyQuestStatusChanges - the site every tool write goes through - is what would catch
+        // that path being changed from a merge to an assignment, which would erase `mode`.
+        const { retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        const quest = { promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(quest, {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as any);
+
+        expect(quest.promptMeta.retrieval).toEqual({
+          attempted: true,
+          outcome: 'ok',
+          mode: 'optional',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags: [],
+        });
+      });
     });
   });
 
@@ -3293,6 +3359,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3307,6 +3374,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3323,6 +3391,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3344,6 +3413,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'no_lakes',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
       });

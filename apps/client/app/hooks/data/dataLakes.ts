@@ -1234,6 +1234,12 @@ export interface DataLakeArticlesParams {
   limit?: number;
   sortBy?: 'fileName' | 'createdAt';
   sortDir?: 'asc' | 'desc';
+  /**
+   * The merged tree's Uncategorized bucket: lake members categorized under none of the caller's
+   * lake prefixes. Sized by `totalUncategorizedFileCount` on the tag-counts payload. For ONE
+   * lake's bucket use useGetDataLakeUncategorizedFiles - this route has no lake-scope parameter.
+   */
+  uncategorized?: boolean;
 }
 
 /** Response shape for the tag-counts endpoint. */
@@ -1256,6 +1262,29 @@ export interface DataLakeTagCountsResponse {
    * are disjoint and sum to `lakeFileCounts[datalakeTag]`.
    */
   lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
+  /**
+   * The slice of `lakeFileCounts` a prefix-keyed tag tree has no branch for: members carrying
+   * the lake's meta-tag but no tag under its `fileTagPrefix`. Same key, same predicate, so a
+   * tree can render this as an "Uncategorized" bucket and account for every file the picker
+   * advertises instead of showing a count it cannot list (#2031).
+   */
+  uncategorizedFileCounts: Record<string, number>;
+  /**
+   * Distinct live files across EVERY reachable lake, on the same membership basis as
+   * `lakeFileCounts` - the number for an all-lakes row sitting above per-lake rows. Those rows
+   * can still sum higher than this, since a file in two lakes counts for each; what they no
+   * longer do is describe a different population than the total above them.
+   *
+   * Not `uniqueArticleCounts.total`, which is prefix-based: a lake whose files carry only the
+   * meta-tag contributes 0 there while its own row reads its full size.
+   */
+  totalLakeFileCount: number;
+  /**
+   * The merged (all-lakes) tree's bucket: distinct members categorized under NO accessible
+   * prefix. Not a sum of `uncategorizedFileCounts` - those judge each lake separately, so a file
+   * categorized in lake A but not in lake B is reachable under A's branch and must not appear.
+   */
+  totalUncategorizedFileCount: number;
 }
 
 /**
@@ -1309,6 +1338,32 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
     sales: premiumPrefix ? (unique?.byPrefix[premiumPrefix] ?? 0) : 0,
     opti: unique?.byPrefix['opti:'] ?? 0,
   };
+}
+
+/**
+ * One lake's "Uncategorized" bucket: the members carrying no tag under the lake's own
+ * `fileTagPrefix`, which is exactly what a prefix-keyed tag tree has no branch for. Fetched
+ * lazily (the bucket row's COUNT comes from tag-counts, so nothing here is needed to render it)
+ * and only once a caller opens the bucket - hence the explicit `enabled`.
+ *
+ * Separate from useDataLakeFiles rather than a param on it so the two cannot share a cache
+ * entry: they hit the same route with different scopes and the same key would serve one for
+ * the other.
+ */
+export function useGetDataLakeUncategorizedFiles(dataLakeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: dataLakeKeys.files(dataLakeId, { uncategorized: true }),
+    queryFn: async () => {
+      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
+        `/api/data-lakes/${dataLakeId}/articles`,
+        { params: { uncategorized: 'true', limit: 100 } }
+      );
+      return response.data;
+    },
+    enabled: enabled && !!dataLakeId,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 5,
+  });
 }
 
 /**
