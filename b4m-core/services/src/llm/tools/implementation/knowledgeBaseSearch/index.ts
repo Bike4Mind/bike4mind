@@ -30,11 +30,14 @@ import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
 import { describeSearchLimitations } from '../../../../dataLakeService/retrievalUnavailable';
 import {
+  comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   SemanticChunkResult,
+  type SemanticDataLakeSearchResult,
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
+import type { RetrievalSummary } from '../../retrievalSummaryMerge';
 import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { scopeForCaller } from '../../../../settings/resolveScopedSetting';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
@@ -360,9 +363,74 @@ interface SemanticArmResult {
   /** Per-chunk similarity score, index-aligned with `chunkIds` - required (not optional) so
    *  every construction site must supply it, including the empty-result ones below. */
   scores: number[];
+  /**
+   * What this arm PROVED about the corpus for `promptMeta.retrieval.outcome`, or null when it
+   * proved nothing either way. Carried separately for the same reason `skipNotice` is: on a turn
+   * the semantic arm returns no output for, the keyword arm's write is the only one this surface
+   * makes, so a verdict left here would never be recorded.
+   */
+  retrievalOutcome: ProvenRetrievalOutcome | null;
 }
 
-/** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
+/**
+ * The outcomes a semantic arm can prove, derived from the schema's enum so a new outcome has to be
+ * placed here rather than silently falling outside it. Neither excluded member is reachable: 'ok'
+ * writes itself via emitSemanticCitables when passages come back, and 'no_lakes' is decided by the
+ * no-corpus guards that return before a search runs.
+ *
+ * NonNullable is not redundant: `outcome` is required today but becomes present-iff-`attempted`
+ * (#1394), and without it this union would silently absorb `undefined` and stop naming only the
+ * outcomes an arm can PROVE. Keep it.
+ */
+type ProvenRetrievalOutcome = Exclude<NonNullable<RetrievalSummary['outcome']>, 'ok' | 'no_lakes'>;
+
+/**
+ * The retrieval verdict a completed semantic search proves, or null when it proves nothing and the
+ * keyword arm's 'ok' should stand. Shared by both arms so the taxonomy is decided once rather than
+ * at each of the write sites that ultimately stamp it.
+ *
+ * Only ever called on the zero-results path. Non-empty results imply something was scored, so both
+ * branches below are already false there.
+ *
+ * The optional reads mirror `search.alternateModelsEmbedded ?? []` at the call sites: both fields
+ * are required on the service's return type, so a real caller always supplies them, and the
+ * tolerance only guards a test double built from a partial result object. A double that omits the
+ * counters therefore keeps the pre-existing 'ok' rather than inventing a verdict from absence.
+ */
+function proveRetrievalOutcome(search: SemanticDataLakeSearchResult): ProvenRetrievalOutcome | null {
+  // The embedder failing is not an indexing gap. Nothing was compared either way, but the remedy
+  // is fixing the outage and never re-vectorizing content, which is precisely the line
+  // RetrievalSummarySchema draws between 'failed' and 'not_indexed'. Forced retrieval reaches the
+  // same verdict for free (generateEmbedding throws and its catch records 'failed'); this path
+  // returns an empty-vector report instead of throwing, so it has to be mapped by hand.
+  if (search.embeddingMismatch?.queryEmbeddingFailed) return 'failed';
+  // Files WERE in scope and not one of their passages was compared against the query. Parity with
+  // forced retrieval's `scoredCount === 0` exit, and the same reasoning: whether the cause is an
+  // unvectorized corpus, a wholly foreign-model one or a lake the kill switch emptied, the library
+  // was not searched, and reporting that as a topical zero claims it was.
+  //
+  // The scope guard is what keeps this off the abstain cases. An empty scope also compares nothing,
+  // but "no document was in scope" is an access/config state rather than evidence about the corpus
+  // - forced retrieval buckets it as 'no_lakes', and this surface's own no-corpus guards return
+  // before a search is ever run, so the honest answer here is to leave their verdict alone.
+  //
+  // Deliberately NOT keyed on `skipNotice` or on either report's `partial`, both of which look
+  // right and are not: `skipNotice` folds in the relevance-floor case, where a genuinely-ranked
+  // result set was emptied by a threshold and 'ok' is correct; `partial` means only that SOME
+  // content was withheld (`withheld.length > 0` for retrievalUnavailable), which is equally true
+  // of a withholding whose remainder really was searched. Only "not one passage was compared"
+  // separates those, and only a count can express it.
+  if (search.scan?.filesScoped > 0 && comparedNoPassages(search)) return 'not_indexed';
+  return null;
+}
+
+/**
+ * Nothing to report: dependency missing, no accessible corpus, or the arm threw. `retrievalOutcome`
+ * is null on all of them - no search completed, so none of them proves anything about whether the
+ * corpus is searchable. The throw is the one that does carry a verdict and it records its own
+ * 'failed' before returning this; the rest deliberately leave the write to the keyword arm, which
+ * really does run and complete on those paths.
+ */
 const NO_SEMANTIC_RESULT: SemanticArmResult = {
   output: null,
   skipNotice: null,
@@ -371,6 +439,7 @@ const NO_SEMANTIC_RESULT: SemanticArmResult = {
   lakeIds: [],
   chunkIds: [],
   scores: [],
+  retrievalOutcome: null,
 };
 
 /**
@@ -471,7 +540,16 @@ async function trySemanticKbSearch(
           `📚 [semantic] 0 results at relevance floor ${budgets.kbMinRelevance.toFixed(2)} (candidates existed above 0 but none cleared the floor)`
         );
       }
-      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [], scores: [] };
+      return {
+        output: null,
+        skipNotice,
+        datalakeTags: [],
+        fileHits: [],
+        lakeIds: [],
+        chunkIds: [],
+        scores: [],
+        retrievalOutcome: proveRetrievalOutcome(search),
+      };
     }
 
     // Bound by token budget (the primary lever once configured), with the passage ceiling as a
@@ -519,6 +597,9 @@ async function trySemanticKbSearch(
       ),
       chunkIds: ranked.map(r => r.chunkId),
       scores: ranked.map(r => r.score),
+      // Passages were returned, so emitSemanticCitables above already recorded the 'ok' this
+      // arm proved; there is nothing left for the keyword arm to stamp.
+      retrievalOutcome: null,
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
@@ -598,7 +679,16 @@ async function tryScopedSemanticKbSearch(
           `📚 [semantic] 0 scoped results at relevance floor ${budgets.kbMinRelevance.toFixed(2)} (candidates existed above 0 but none cleared the floor)`
         );
       }
-      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [], scores: [] };
+      return {
+        output: null,
+        skipNotice,
+        datalakeTags: [],
+        fileHits: [],
+        lakeIds: [],
+        chunkIds: [],
+        scores: [],
+        retrievalOutcome: proveRetrievalOutcome(search),
+      };
     }
 
     const bound = await boundPassagesByTokenBudget(search.results, {
@@ -630,6 +720,8 @@ async function tryScopedSemanticKbSearch(
       lakeIds: [],
       chunkIds: ranked.map(r => r.chunkId),
       scores: ranked.map(r => r.score),
+      // See the matching return in trySemanticKbSearch: the 'ok' is already recorded.
+      retrievalOutcome: null,
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
@@ -1115,6 +1207,20 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             rankedResults.map((f: IFabFileDocument) => f.fileName)
           );
 
+          // Whatever the semantic arm proved about the corpus outranks this arm's own verdict, on
+          // BOTH branches below. That is not the same claim as "the tool found nothing": this arm
+          // matches on file METADATA, so it can list documents whose text was never compared to
+          // the query, and calling that 'ok' says the library was searched when only its filenames
+          // were. The two branches differ in whether anything was FOUND, not in whether anything
+          // was SEARCHED, so a verdict that turns on the latter has to apply to both or the same
+          // field would mean different things two branches apart.
+          //
+          // 'ok' when the arm proved nothing, which is the same claim this write has always made:
+          // the semantic arm ran to completion (or never ran at all - see NO_SEMANTIC_RESULT) and
+          // this keyword pass then completed too, so retrieval happened and must stay
+          // distinguishable from "never searched" (#1867).
+          const keywordArmOutcome = semantic.retrievalOutcome ?? 'ok';
+
           // Emit citable source chips so search results appear as clickable citations
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
@@ -1172,7 +1278,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                   ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
                   retrieval: {
                     attempted: true,
-                    outcome: 'ok',
+                    outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
                   },
@@ -1189,11 +1295,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
               {
                 promptMeta: {
                   ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
-                  // Ran to completion and legitimately found nothing - must be distinguishable
-                  // from "never searched" (#1867).
+                  // Zero hits, so the outcome is the whole signal this write carries - see
+                  // `keywordArmOutcome` above for why 'ok' here is a claim about the SEARCH and
+                  // not about the empty result.
                   retrieval: {
                     attempted: true,
-                    outcome: 'ok',
+                    outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
                   },

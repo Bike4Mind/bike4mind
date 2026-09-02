@@ -194,6 +194,29 @@ export interface SemanticDataLakeSearchResult {
   alternateModelsEmbedded: string[];
 }
 
+/**
+ * Did this search compare NOTHING against the query - not one passage scored, by the scan path or
+ * by any ANN index? The counterpart of `isPartialSearch`: that one answers "did we return less
+ * than the whole corpus", this one answers "did we look at any of it at all".
+ *
+ * Keyed on `chunksScored`, which `scanAndRank` increments BEFORE the `minScore` filter, so a
+ * relevance floor that emptied a genuinely-ranked result set is correctly NOT "compared nothing" -
+ * the distinction a caller cannot make from `results.length` alone.
+ *
+ * `scan.annHits` (raw hits, pre-scope-filter) is what covers the ANN routes, and it is a sound
+ * "something was compared" signal despite being a HIT count rather than a comparison count only
+ * because of the zero-raw-hits rebucket below: a ready file whose ANN query returned nothing is
+ * moved to `scanEligible` and scanned, so it still reaches `chunksScored`. Without that rebucket
+ * this predicate could not tell an un-indexed ANN file from a genuine topical zero.
+ *
+ * Says nothing about WHY nothing was compared, deliberately - an empty scope, an unvectorized
+ * corpus and a failed query embed all satisfy it, and they carry different remedies. Callers
+ * separate them (see `proveRetrievalOutcome` in knowledgeBaseSearch); this is the raw fact.
+ */
+export function comparedNoPassages(search: Pick<SemanticDataLakeSearchResult, 'chunksScored' | 'scan'>): boolean {
+  return search.chunksScored === 0 && search.scan.annHits === 0;
+}
+
 export interface SemanticDataLakeSearchParams {
   userId: string;
   /** User's groups for org-level file sharing (forwarded to fabfiles.search). */
@@ -899,19 +922,18 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  // Warn only when NOTHING could be compared by ANY path. A few withheld chunks mid-revectorize
-  // are expected and must stay quiet - the same policy the truncation warning above applies, and
-  // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
-  // and alternateHitsReturned (not annEligible.length/outcome file counts): a lake fully served by
-  // ANN retrieval - the primary model, an alternate model, or both - legitimately scores zero
-  // chunks on the scan path, and without this the warning would false-fire on every healthy
-  // all-ANN search that also happens to have an unrelated excluded file elsewhere in scope.
-  if (
-    mismatchReport.partial &&
-    scanned.chunksScored === 0 &&
-    annResult.hitsReturned === 0 &&
-    alternateHitsReturned === 0
-  ) {
+  // Warn only when NOTHING could be compared by ANY path - `comparedNoPassages` above owns that
+  // definition, and counting the ann hits (rather than annEligible.length/outcome file counts) is
+  // why: a lake fully served by ANN retrieval - the primary model, an alternate model, or both -
+  // legitimately scores zero chunks on the scan path, and without them the warning would
+  // false-fire on every healthy all-ANN search that also happens to have an unrelated excluded
+  // file elsewhere in scope. The `partial` guard keeps this to a MISMATCH diagnosis: a few
+  // withheld chunks mid-revectorize are expected and must stay quiet, the same policy the
+  // truncation warning above applies, and the reason unlabeled files and budgets do not raise
+  // the flag either. The retrieval-outcome readers deliberately do NOT inherit that guard - see
+  // `proveRetrievalOutcome` in knowledgeBaseSearch, where an unvectorized corpus raises no
+  // mismatch at all and still has to be reported as unsearched.
+  if (mismatchReport.partial && comparedNoPassages({ chunksScored: scanned.chunksScored, scan })) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
       excludedFiles: mismatchReport.excludedFiles.count,

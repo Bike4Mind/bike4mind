@@ -352,11 +352,13 @@ export const RetrievalSummarySchema = z.object({
    *   confident-wrong-answer this field exists to catch. Distinct from 'failed' because nothing
    *   broke: the remedy is re-vectorizing, which the corpus owner can do themselves, and a retry
    *   never helps.
-   *   COVERAGE: only forced retrieval records this today. The same condition is reachable through
-   *   knowledgeBaseSearch's semantic arm, which still records 'ok' when every candidate was
-   *   withheld for having no usable vector - so a turn that used only that surface still
-   *   under-reports. Anything cutting on this field should treat 'ok' as "not proven searched"
-   *   until that arm is corrected.
+   *   COVERAGE: recorded by forced retrieval (KnowledgeRetrievalFeature's `scoredCount === 0`
+   *   exit) and by knowledgeBaseSearch, whose semantic arms carry the same verdict through to the
+   *   keyword arm's write - the two agree on "not one passage was compared against the query",
+   *   not on any withholding flag, so a relevance floor that emptied a real search and a partial
+   *   withholding alongside a real search both stay 'ok' on both surfaces.
+   *   knowledgeBaseRetrieve cannot reach this state: it fetches named files rather than ranking
+   *   against a query embedding, so it has no comparison to come up empty.
    * 'failed' - recall did not complete: it threw, OR the retrieval repository is not wired on
    *   this host (the guards in ChatCompletionFeatures / knowledgeBaseSearch / knowledgeBaseRetrieve
    *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
