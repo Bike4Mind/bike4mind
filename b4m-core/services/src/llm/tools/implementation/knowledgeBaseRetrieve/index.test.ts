@@ -177,16 +177,27 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 // caller who passes the lake gate (not only the lake's creator). Without this membership arm,
 // retrieve_knowledge_content would deny exactly the file search just returned.
 describe('retrieve_knowledge_content - by-id (Path A) dynamic-lake membership arm (#2243)', () => {
-  const LAKE_SCOPE = { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
-  const lakesWith = (scope: typeof LAKE_SCOPE | undefined) => [
+  const LAKE_SCOPE = {
+    kind: 'owned' as const,
+    datalakeTag: 'datalake:org1:acme',
+    fileTagPrefix: 'acme:',
+    creatorUserId: 'creator-1',
+  };
+  /** The same lake under a registry scope: same tags, but an UNANCHORED prefix arm. */
+  const REGISTRY_SCOPE = {
+    kind: 'registry' as const,
+    datalakeTag: LAKE_SCOPE.datalakeTag,
+    fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
+  };
+  const lakesWith = (scope: typeof LAKE_SCOPE | typeof REGISTRY_SCOPE) => [
     {
       id: 'lake1',
       name: 'Acme Docs',
       slug: 'acme',
       datalakeTag: LAKE_SCOPE.datalakeTag,
       fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
-      source: 'dynamic' as const,
-      ...(scope ? { membership: scope } : {}),
+      membership: scope,
+      source: scope.kind === 'owned' ? ('dynamic' as const) : ('registry' as const),
     },
   ];
 
@@ -226,12 +237,15 @@ describe('retrieve_knowledge_content - by-id (Path A) dynamic-lake membership ar
     expect(out).toContain(`No document found with ID "${FILE_ID}"`);
   });
 
-  it('a registry lake (no membership scope) grants no membership access on its own', async () => {
+  it('a registry lake grants no membership access on its own, scope present or not', async () => {
+    // This case used to be expressed as a lake with NO membership scope. Registry lakes carry one
+    // now (#2265), so the guard being tested is no longer "the field is absent" but "its `kind` is
+    // not creator-anchored, so `lakeMembershipsFrom` drops it". Same denial, live reason.
     getDynamicDataLakeAccessMock.mockResolvedValueOnce({
       dataLakeTags: [LAKE_SCOPE.datalakeTag],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
-      lakes: lakesWith(undefined),
+      lakes: lakesWith(REGISTRY_SCOPE),
     });
     const ctx = makeContext();
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -1207,12 +1221,20 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
     dataLakeTagPrefixes: ['mine:', 'unrel:'],
     scopedTagPrefixes: [],
     lakes: [
-      { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+      {
+        id: 'l1',
+        name: 'mine',
+        datalakeTag: 'datalake:mine',
+        fileTagPrefix: 'mine:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+        source: 'registry',
+      },
       {
         id: 'l2',
         name: 'Unrelated-Product-KB',
         datalakeTag: 'datalake:unrelated',
         fileTagPrefix: 'unrel:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:' },
         source: 'registry',
       },
     ],

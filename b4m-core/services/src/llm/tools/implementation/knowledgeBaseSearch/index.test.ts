@@ -2940,8 +2940,20 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
     dataLakeTagPrefixes: ['mine:', 'other:'],
     scopedTagPrefixes: [],
     lakes: [
-      { id: 'l1', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
-      { id: 'l2', datalakeTag: 'datalake:other', fileTagPrefix: 'other:', source: 'registry' },
+      {
+        id: 'l1',
+        datalakeTag: 'datalake:mine',
+        fileTagPrefix: 'mine:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+        source: 'registry',
+      },
+      {
+        id: 'l2',
+        datalakeTag: 'datalake:other',
+        fileTagPrefix: 'other:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:other', fileTagPrefix: 'other:' },
+        source: 'registry',
+      },
     ],
   };
 

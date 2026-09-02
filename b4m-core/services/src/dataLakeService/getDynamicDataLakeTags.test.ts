@@ -6,6 +6,7 @@ import {
   type DataLakeAccessContext,
   type ResolvedLakeAccess,
 } from './getDynamicDataLakeTags';
+import { registryMembershipScope } from './lakeMembershipScope';
 
 const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 'id'>): IDataLakeDocument =>
   ({
@@ -326,6 +327,59 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
 
 // #2243: the membership arms a retrieval query should carry - one per DYNAMIC lake, none for a
 // registry lake (no creator to anchor a prefix arm to).
+/**
+ * Link 1 of the count/browse parity chain (#2265). The count surface passes
+ * `ResolvedLakeAccess.membership` through verbatim (pinned in knowledgeBaseCount/index.test.ts) and
+ * the single-lake browse builds `registryMembershipScope(lake)` (pinned in
+ * apps/client/pages/api/data-lakes/[id]/__tests__/registryScopeParity.test.ts). What closes the
+ * chain is this: the scope the RESOLVER attaches to a registry lake is that same function's output,
+ * not a second construction that merely agrees.
+ *
+ * Asserted against `registryMembershipScope` rather than a literal on purpose - a literal here
+ * would be the third independent copy of the predicate, which is the drift this issue removed.
+ */
+describe('registry lakes carry the shared registry membership scope', () => {
+  const optiConfig = DATA_LAKES.find(dl => dl.id === 'opti-knowledge')!;
+
+  it('attaches registryMembershipScope, byte for byte, to a resolved registry lake', async () => {
+    const res = await getDynamicDataLakeAccess({
+      db: { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } },
+      user: { tags: ['Opti'] },
+    });
+
+    const opti = res.lakes.find(l => l.datalakeTag === optiConfig.datalakeTag)!;
+    expect(opti.source).toBe('registry');
+    expect(opti.membership).toEqual(registryMembershipScope(optiConfig));
+  });
+
+  it('gives it kind "registry", so the multi-lake fan-outs still drop its unanchored prefix arm', async () => {
+    const res = await getDynamicDataLakeAccess({
+      db: { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } },
+      user: { tags: ['Opti'] },
+    });
+
+    // The guard that replaced "membership is absent for registry lakes": presence proves nothing
+    // now, the discriminant is the whole check.
+    expect(res.lakes.every(l => l.membership.kind === 'registry')).toBe(true);
+    expect(lakeMembershipsFrom(res.lakes)).toEqual([]);
+  });
+
+  it('keeps a DB lake creator-anchored, so the two kinds are not collapsed', async () => {
+    const res = await getDynamicDataLakeAccess(
+      ctx([dbLake({ id: 'acme', createdByUserId: 'creator-1', isPublic: true })])
+    );
+
+    const acme = res.lakes.find(l => l.datalakeTag === 'datalake:acme')!;
+    expect(acme.membership).toEqual({
+      kind: 'owned',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    });
+    expect(lakeMembershipsFrom(res.lakes)).toEqual([acme.membership]);
+  });
+});
+
 describe('lakeMembershipsFrom', () => {
   const dynamicLake = (id: string, creatorUserId: string): ResolvedLakeAccess => ({
     id,
@@ -333,15 +387,18 @@ describe('lakeMembershipsFrom', () => {
     slug: id,
     datalakeTag: `datalake:${id}`,
     fileTagPrefix: `${id}:`,
-    membership: { datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:`, creatorUserId },
+    membership: { kind: 'owned', datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:`, creatorUserId },
     source: 'dynamic',
   });
+  // A registry lake carries a scope too, an UNANCHORED one - so what this helper drops is decided
+  // by `kind`, not by the field being absent. Fixtures that omit it can no longer express the case.
   const registryLake = (id: string): ResolvedLakeAccess => ({
     id,
     name: id,
     slug: id,
     datalakeTag: `datalake:${id}`,
     fileTagPrefix: `${id}:`,
+    membership: { kind: 'registry', datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:` },
     source: 'registry',
   });
 
