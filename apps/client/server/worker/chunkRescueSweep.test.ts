@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
   findPauseOverrides: vi.fn(async () => [] as unknown[]),
   dataLakeFind: vi.fn(async () => [] as unknown[]),
+  dataLakeSelect: vi.fn(),
   // Spied (not a bare stub) so a test can assert the sweep passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date, _opts?: unknown) => ({
@@ -21,7 +22,14 @@ vi.mock('@bike4mind/database', () => ({
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
   },
-  dataLakeRepository: { find: (...a: unknown[]) => h.dataLakeFind(...(a as [])) },
+  DataLakeModel: {
+    find: (...a: unknown[]) => ({
+      select: (projection: string) => {
+        h.dataLakeSelect(projection);
+        return { lean: async () => h.dataLakeFind(...(a as [])) };
+      },
+    }),
+  },
   scopedSettingsRepository: { findBySettingName: (...a: unknown[]) => h.findPauseOverrides(...(a as [])) },
   FabFile: { find: h.fabFileFind },
   buildDataLakeMembershipFilter: (scope: { datalakeTag: string }) => ({ membershipFor: scope.datalakeTag }),
@@ -33,6 +41,11 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     satisfiesMembershipScope: (scope: { datalakeTag: string }, file: { tags?: { name: string }[] }) =>
       (file?.tags ?? []).some(tag => tag.name === scope.datalakeTag),
+    registryMembershipScope: (config: { datalakeTag: string; fileTagPrefix?: string }) => ({
+      kind: 'registry',
+      datalakeTag: config.datalakeTag,
+      fileTagPrefix: config.fileTagPrefix,
+    }),
   },
   scopedSettingsService: {
     scopeForLake: (lake: { id: string }) => ({ lakeId: lake.id }),
@@ -50,8 +63,8 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-// Only the filter is stubbed; buildChunkScanQueuePayload stays real so the payload shape this
-// sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
+// Only the filter is stubbed; buildChunkRescueMessage stays real so the payload shape this sweep
+// sends is asserted against the shared producer, not a local copy of it. Spreading the actual
 // module also keeps the cutoff constants real, which the cutoff assertions below depend on.
 vi.mock('./chunkScan', async importActual => ({
   ...(await importActual<typeof import('./chunkScan')>()),
@@ -298,6 +311,18 @@ describe('runChunkRescueSweep convergence-pause wiring (#2120/#2157)', () => {
     expect(h.fabFileSelect).toHaveBeenLastCalledWith('_id userId');
   });
 
+  it('reads the lakes collection PROJECTED, never as whole documents', async () => {
+    // An Owner- or Organization-rung override reaches every lake under that principal; none of a
+    // lake document's prose, stats or settings is read here, and this runs every 60s on self-host.
+    withPauseFlag(false);
+    h.findPauseOverrides.mockResolvedValue(lakeOverride);
+    h.dataLakeFind.mockResolvedValue(lakeDoc);
+
+    await runSweep();
+
+    expect(h.dataLakeSelect).toHaveBeenCalledWith('_id datalakeTag fileTagPrefix createdByUserId organizationId');
+  });
+
   it.each([
     ['the hosted cron', 500],
     ['the self-host worker', 50],
@@ -366,6 +391,58 @@ describe('runChunkRescueSweep convergence-pause wiring (#2120/#2157)', () => {
       origin: 'convergence',
       lakeId: LAKE_ID,
     });
+  });
+
+  it('does NOT stamp the exempted lake when an ungraded lake also holds the file (#2167 review)', async () => {
+    // The exemption above, with a second lake that carries no override at all - so it sits at the
+    // platform value (ON) and never appears in scopedLakes. Stamping the exempted lake would
+    // un-pause the file and rewrite the frozen lake's passages, since chunks are shared per file.
+    withPauseFlag(true);
+    h.findPauseOverrides.mockResolvedValue([{ ...lakeOverride[0], settingValue: 'false' }]);
+    // Two reads: the override-reachable grading first, then the candidate-bounded widening.
+    h.dataLakeFind
+      .mockResolvedValueOnce(lakeDoc)
+      .mockResolvedValueOnce([...lakeDoc, { id: 'ungraded-1', datalakeTag: 'datalake:frozen', createdByUserId: 'c9' }]);
+    withCandidates([
+      {
+        _id: 'ff-both',
+        userId: 'u1',
+        tags: [
+          { name: 'datalake:alpha', strength: 1 },
+          { name: 'datalake:frozen', strength: 1 },
+        ],
+      },
+      { _id: 'ff-exempt-only', userId: 'u1', tags: [{ name: 'datalake:alpha', strength: 1 }] },
+    ]);
+
+    await runSweep();
+
+    // No lakeId, so the handler resolves the platform value - ON - and halts it.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff-both',
+      userId: 'u1',
+      origin: 'convergence',
+    });
+    // The exemption still works for a file only the exempted lake holds.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff-exempt-only',
+      userId: 'u1',
+      origin: 'convergence',
+      lakeId: LAKE_ID,
+    });
+  });
+
+  it('does not widen the lakes read when no lake is exempted', async () => {
+    // The widening exists only to catch an invisible PAUSED lake disagreeing with a visible running
+    // one. With every graded lake paused there is no such disagreement, so the second read is waste.
+    withPauseFlag(true);
+    h.findPauseOverrides.mockResolvedValue(lakeOverride);
+    h.dataLakeFind.mockResolvedValue(lakeDoc);
+    withCandidates([{ _id: 'ff1', userId: 'u1', tags: [{ name: 'datalake:alpha', strength: 1 }] }]);
+
+    await runSweep();
+
+    expect(h.dataLakeFind).toHaveBeenCalledTimes(1);
   });
 
   it('a failed override read aborts the sweep rather than sweeping as if nothing were paused', async () => {

@@ -5,8 +5,9 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 import {
   buildChunkRescueMessage,
   buildScopedLakeFilter,
-  pickScopedLakeId,
+  pickScopedLake,
   resolveConvergencePauseScope,
+  resolvePlatformOnlyMembership,
   toChunkScanConvergencePause,
   type ConvergencePauseScope,
   type PausableLake,
@@ -19,7 +20,6 @@ const LAKE_B = '0123456789abcdef01230002';
 const lake = (id: string, overrides: Partial<PausableLake> = {}): PausableLake =>
   ({
     id,
-    name: `lake-${id.slice(-1)}`,
     datalakeTag: `datalake:lake-${id.slice(-1)}`,
     createdByUserId: 'creator-1',
     ...overrides,
@@ -63,12 +63,10 @@ const makeDeps = (opts: {
       return (opts.rows ?? []) as never;
     }),
   },
-  dataLakes: {
-    find: vi.fn(async () => {
-      if (opts.throwOn === 'lakes') throw new Error('lakes read down');
-      return (opts.lakes ?? []) as never;
-    }),
-  },
+  findPausableLakes: vi.fn(async () => {
+    if (opts.throwOn === 'lakes') throw new Error('lakes read down');
+    return opts.lakes ?? [];
+  }),
 });
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } as never;
@@ -112,6 +110,19 @@ describe('buildScopedLakeFilter (which lakes an override set can reach)', () => 
     expect(buildScopedLakeFilter([row(SettingScopeLevel.Lake, 'not-an-object-id', 'true')])).toBeNull();
   });
 
+  it('names each dropped row, even when the batch still produces a filter', () => {
+    // The silent case: with one bad row among good ones the sweep runs normally and that lake's
+    // override is simply not honoured - "I paused it and it kept chunking", with nothing in the log
+    // to explain it. The offending scopeId has to be IN the line to be actionable.
+    const filter = buildScopedLakeFilter(
+      [row(SettingScopeLevel.Lake, 'not-an-object-id', 'true'), row(SettingScopeLevel.Lake, LAKE_A, 'true')],
+      logger
+    );
+
+    expect(filter).toEqual({ $or: [{ _id: { $in: [LAKE_A] } }] });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('not-an-object-id'));
+  });
+
   it('returns null when nothing is addressable, so the caller can skip the lakes read', () => {
     expect(buildScopedLakeFilter([])).toBeNull();
   });
@@ -134,8 +145,8 @@ describe('resolveConvergencePauseScope', () => {
 
     const scope = await resolveConvergencePauseScope(deps, logger);
 
-    expect(scope).toEqual({ platformPaused: true, scopedLakes: [] });
-    expect(deps.dataLakes.find).not.toHaveBeenCalled();
+    expect(scope).toEqual({ platformPaused: true, scopedLakes: [], platformOnlyMembership: [] });
+    expect(deps.findPausableLakes).not.toHaveBeenCalled();
   });
 
   it('says so when the switch is ON with no overrides, and stays quiet when it is OFF', async () => {
@@ -178,7 +189,11 @@ describe('resolveConvergencePauseScope', () => {
 
     const scope = await resolveConvergencePauseScope(deps, logger);
 
-    expect(scope).toEqual({ platformPaused: true, scopedLakes: [graded(lake(LAKE_B), false)] });
+    expect(scope).toEqual({
+      platformPaused: true,
+      scopedLakes: [graded(lake(LAKE_B), false)],
+      platformOnlyMembership: [],
+    });
   });
 
   it.each([
@@ -210,8 +225,8 @@ describe('resolveConvergencePauseScope', () => {
 
     const scope = await resolveConvergencePauseScope(deps, logger);
 
-    expect(scope).toEqual({ platformPaused: true, scopedLakes: [] });
-    expect(deps.dataLakes.find).not.toHaveBeenCalled();
+    expect(scope).toEqual({ platformPaused: true, scopedLakes: [], platformOnlyMembership: [] });
+    expect(deps.findPausableLakes).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -228,22 +243,109 @@ describe('resolveConvergencePauseScope', () => {
   });
 });
 
-describe('pickScopedLakeId (the lakeId the handler re-resolves against)', () => {
+describe('resolvePlatformOnlyMembership (the lakes the override set cannot see)', () => {
+  const exemptScope = (): ConvergencePauseScope => ({
+    platformPaused: true,
+    scopedLakes: [graded(lake(LAKE_A), false)],
+    platformOnlyMembership: [],
+  });
+  const candidate = { userId: 'u1', tags: [{ name: 'datalake:lake-1', strength: 1 }] };
+
+  it.each([
+    ['the platform switch is OFF, so nothing invisible is paused', { platformPaused: false, exemptPaused: true }],
+    ['no override exempts a lake, so a running verdict is impossible', { platformPaused: true, exemptPaused: true }],
+  ])('is a no-op and reads nothing when %s', async (_label, { platformPaused, exemptPaused }) => {
+    const deps = makeDeps({});
+    const scope: ConvergencePauseScope = {
+      platformPaused,
+      scopedLakes: [graded(lake(LAKE_A), exemptPaused)],
+      platformOnlyMembership: [],
+    };
+
+    await expect(resolvePlatformOnlyMembership(scope, [candidate], deps, logger)).resolves.toBe(scope);
+    expect(deps.findPausableLakes).not.toHaveBeenCalled();
+  });
+
+  it('queries by the CANDIDATES, so the read is bounded by the run and not by the install', async () => {
+    // Both arms of buildDataLakeMembershipFilter, inverted: the meta arm needs the lake's
+    // datalakeTag on a candidate's tags, the owned prefix arm needs the candidate's userId to be
+    // the lake's creator. Both fields are indexed, and both key sets come off this run's candidates.
+    const deps = makeDeps({});
+
+    await resolvePlatformOnlyMembership(
+      exemptScope(),
+      [
+        { userId: 'u1', tags: [{ name: 'datalake:lake-1', strength: 1 }, { name: 'acme:legal', strength: 1 }] },
+        { userId: 'u2', tags: [{ name: 'datalake:other', strength: 1 }] },
+      ],
+      deps,
+      logger
+    );
+
+    expect(deps.findPausableLakes).toHaveBeenCalledWith({
+      $or: [
+        // Only `datalake:`-prefixed tags - a content tag names no lake and would widen the read.
+        { datalakeTag: { $in: ['datalake:lake-1', 'datalake:other'] } },
+        { createdByUserId: { $in: ['u1', 'u2'] } },
+      ],
+    });
+  });
+
+  it('keeps the lakes the override set does NOT reach, and drops the ones it already graded', async () => {
+    const deps = makeDeps({ lakes: [lake(LAKE_A), lake(LAKE_B)] });
+
+    const scope = await resolvePlatformOnlyMembership(exemptScope(), [candidate], deps, logger);
+
+    // LAKE_A is already in scopedLakes with a real verdict; re-listing it as paused would override
+    // the very exemption this run is honouring.
+    expect(scope.platformOnlyMembership).toContainEqual({
+      kind: 'owned',
+      datalakeTag: 'datalake:lake-2',
+      fileTagPrefix: undefined,
+      creatorUserId: 'creator-1',
+    });
+    expect(scope.platformOnlyMembership).not.toContainEqual(expect.objectContaining({ datalakeTag: 'datalake:lake-1' }));
+  });
+
+  it('always includes the static registry, which no override can ever reach', async () => {
+    // Registry lakes have no document to find and can carry no override, but they hold real files -
+    // so with the switch ON they are paused and their passages need the same protection.
+    const deps = makeDeps({ lakes: [] });
+
+    const scope = await resolvePlatformOnlyMembership(exemptScope(), [candidate], deps, logger);
+
+    expect(scope.platformOnlyMembership.some(m => m.kind === 'registry')).toBe(true);
+  });
+
+  it('skips the read entirely when the candidates address no lake at all', async () => {
+    const deps = makeDeps({});
+
+    const scope = await resolvePlatformOnlyMembership(exemptScope(), [{ userId: null, tags: [] }], deps, logger);
+
+    expect(deps.findPausableLakes).not.toHaveBeenCalled();
+    // The registry still applies - it is free and independent of the candidates.
+    expect(scope.platformOnlyMembership.every(m => m.kind === 'registry')).toBe(true);
+  });
+});
+
+describe('pickScopedLake (the lakeId the handler re-resolves against)', () => {
   const scopeOf = (
     scopedLakes: ConvergencePauseScope['scopedLakes'],
-    platformPaused = false
+    platformPaused = false,
+    platformOnlyMembership: ConvergencePauseScope['platformOnlyMembership'] = []
   ): ConvergencePauseScope => ({
     platformPaused,
     scopedLakes,
+    platformOnlyMembership,
   });
 
   it('is undefined when no lake carries an override, leaving the handler on the platform value', () => {
-    expect(pickScopedLakeId({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scopeOf([]))).toBeUndefined();
+    expect(pickScopedLake({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scopeOf([])).lakeId).toBeUndefined();
   });
 
   it('resolves membership by the lake meta-tag', () => {
     const scope = scopeOf([graded(lake(LAKE_A), true)]);
-    expect(pickScopedLakeId({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scope)).toBe(LAKE_A);
+    expect(pickScopedLake({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scope).lakeId).toBe(LAKE_A);
   });
 
   it('resolves membership by the prefix arm, anchored to the lake CREATOR owning the file', () => {
@@ -251,15 +353,15 @@ describe('pickScopedLakeId (the lakeId the handler re-resolves against)', () => 
     // every file in the install carrying its prefix, including other users'.
     const scope = scopeOf([graded(lake(LAKE_A, { fileTagPrefix: 'acme:' }), true)]);
 
-    expect(pickScopedLakeId({ userId: 'creator-1', tags: [{ name: 'acme:legal' }] }, scope)).toBe(LAKE_A);
-    expect(pickScopedLakeId({ userId: 'someone-else', tags: [{ name: 'acme:legal' }] }, scope)).toBeUndefined();
+    expect(pickScopedLake({ userId: 'creator-1', tags: [{ name: 'acme:legal' }] }, scope).lakeId).toBe(LAKE_A);
+    expect(pickScopedLake({ userId: 'someone-else', tags: [{ name: 'acme:legal' }] }, scope).lakeId).toBeUndefined();
   });
 
   it('is undefined for a file in none of the overridden lakes', () => {
     const scope = scopeOf([graded(lake(LAKE_A), true)]);
-    expect(pickScopedLakeId({ userId: 'u1', tags: [{ name: 'datalake:other' }] }, scope)).toBeUndefined();
-    expect(pickScopedLakeId({ userId: 'u1', tags: [] }, scope)).toBeUndefined();
-    expect(pickScopedLakeId({ userId: 'u1' }, scope)).toBeUndefined();
+    expect(pickScopedLake({ userId: 'u1', tags: [{ name: 'datalake:other' }] }, scope).lakeId).toBeUndefined();
+    expect(pickScopedLake({ userId: 'u1', tags: [] }, scope).lakeId).toBeUndefined();
+    expect(pickScopedLake({ userId: 'u1' }, scope).lakeId).toBeUndefined();
   });
 
   it('prefers a PAUSED member lake over a running one, whichever order they arrive in', () => {
@@ -270,29 +372,68 @@ describe('pickScopedLakeId (the lakeId the handler re-resolves against)', () => 
     const running = graded(lake(LAKE_A), false);
     const paused = graded(lake(LAKE_B), true);
 
-    expect(pickScopedLakeId(candidate, scopeOf([running, paused]))).toBe(LAKE_B);
-    expect(pickScopedLakeId(candidate, scopeOf([paused, running]))).toBe(LAKE_B);
+    expect(pickScopedLake(candidate, scopeOf([running, paused])).lakeId).toBe(LAKE_B);
+    expect(pickScopedLake(candidate, scopeOf([paused, running])).lakeId).toBe(LAKE_B);
   });
 
   it('still stamps a RUNNING member lake, which is how an override of a platform pause is honoured', () => {
     // Omitting it here would leave the handler on the platform value - ON - and halt a file whose
     // lake explicitly overrode the pause back off.
     const scope = scopeOf([graded(lake(LAKE_A), false)], true);
-    expect(pickScopedLakeId({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scope)).toBe(LAKE_A);
+    expect(pickScopedLake({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scope).lakeId).toBe(LAKE_A);
+  });
+
+  it('refuses to stamp a running lake for a file an UNGRADED lake also holds', () => {
+    // The gap the "paused wins" invariant used to have: an ungraded lake carries no override, so it
+    // sits at the platform value - ON here - and is invisible to scopedLakes. Stamping the exempted
+    // lake would un-pause the file and re-chunk it, rewriting the passages the other lake froze.
+    // Chunks are keyed per file and shared, so there is no way to rebuild one lake's and not the
+    // other's. No lakeId leaves the handler on the platform value, which is the paused verdict.
+    const scope = scopeOf([graded(lake(LAKE_A), false)], true, [
+      { kind: 'owned', datalakeTag: 'datalake:frozen', creatorUserId: 'creator-9' },
+    ]);
+    const candidate = { userId: 'u1', tags: [{ name: 'datalake:lake-1' }, { name: 'datalake:frozen' }] };
+
+    // Still IN a lake, though: without that the message would carry no origin either and go out as
+    // user work, which nothing halts - the exact opposite of this verdict.
+    expect(pickScopedLake(candidate, scope)).toEqual({});
+    // ...and a file the ungraded lake does NOT hold is still exempted, or the fix would have turned
+    // the override into a no-op for every multi-lake install.
+    expect(pickScopedLake({ userId: 'u1', tags: [{ name: 'datalake:lake-1' }] }, scope).lakeId).toBe(LAKE_A);
+  });
+
+  it('marks a file held ONLY by an ungraded lake haltable, with no lakeId to resolve', () => {
+    const scope = scopeOf([graded(lake(LAKE_A), false)], true, [
+      { kind: 'owned', datalakeTag: 'datalake:frozen', creatorUserId: 'creator-9' },
+    ]);
+
+    expect(pickScopedLake({ userId: 'u1', tags: [{ name: 'datalake:frozen' }] }, scope)).toEqual({});
+  });
+
+  it('lets an explicitly PAUSED member win over an ungraded one, so the stamp keeps its provenance', () => {
+    // Both verdicts halt the file, so this is about which one the handler logs. A graded paused lake
+    // is a real lakeId the handler resolves; the ungraded path deliberately stamps nothing.
+    const scope = scopeOf([graded(lake(LAKE_A), true)], true, [
+      { kind: 'owned', datalakeTag: 'datalake:frozen', creatorUserId: 'creator-9' },
+    ]);
+    const candidate = { userId: 'u1', tags: [{ name: 'datalake:lake-1' }, { name: 'datalake:frozen' }] };
+
+    expect(pickScopedLake(candidate, scope).lakeId).toBe(LAKE_A);
   });
 
   it('ignores malformed tag entries instead of throwing on them', () => {
     const scope = scopeOf([graded(lake(LAKE_A), true)]);
     const candidate = { userId: 'u1', tags: [{ name: null }, {}, { name: 'datalake:lake-1' }] };
-    expect(pickScopedLakeId(candidate as never, scope)).toBe(LAKE_A);
+    expect(pickScopedLake(candidate as never, scope).lakeId).toBe(LAKE_A);
   });
 });
 
 describe('buildChunkRescueMessage (provenance stamped on the enqueue)', () => {
-  const noOverrides: ConvergencePauseScope = { platformPaused: false, scopedLakes: [] };
+  const noOverrides: ConvergencePauseScope = { platformPaused: false, scopedLakes: [], platformOnlyMembership: [] };
   const withPausedLake: ConvergencePauseScope = {
     platformPaused: false,
     scopedLakes: [graded(lake(LAKE_A), true)],
+    platformOnlyMembership: [],
   };
 
   it('stamps convergence origin even on a file in no lake and with no batch (#2309)', () => {
@@ -329,6 +470,15 @@ describe('buildChunkRescueMessage (provenance stamped on the enqueue)', () => {
     expect(shouldHaltConvergence(parsed.origin ?? 'user', true)).toBe(true);
   });
 
+  it('THROWS on a candidate with no userId instead of sending the string "undefined"', () => {
+    // userId is required on every FabFile, so this is a corrupt row. The sweep's per-file catch
+    // turns the throw into a counted failure with the fabFileId logged; String(undefined) instead
+    // satisfies the handler's z.string() and becomes an owner id no user has, moving the failure
+    // downstream and losing the one identifier that would locate it.
+    expect(() => buildChunkRescueMessage({ _id: 'ff9' }, noOverrides)).toThrow(/ff9/);
+    expect(() => buildChunkRescueMessage({ _id: 'ff9', userId: null }, noOverrides)).toThrow(/no userId/);
+  });
+
   it('stringifies the projected _id and userId', () => {
     const msg = buildChunkRescueMessage(
       { _id: { toString: () => 'oid-1' }, userId: { toString: () => 'uid-1' } },
@@ -346,6 +496,7 @@ describe('toChunkScanConvergencePause (the selection clause inputs)', () => {
         graded(lake(LAKE_A, { datalakeTag: 'datalake:paused-one' }), true),
         graded(lake(LAKE_B, { datalakeTag: 'datalake:running-one' }), false),
       ],
+      platformOnlyMembership: [],
     });
 
     expect(pause.platformPaused).toBe(true);
@@ -355,10 +506,11 @@ describe('toChunkScanConvergencePause (the selection clause inputs)', () => {
     expect(pause.running).toEqual([{ 'tags.name': 'datalake:running-one' }]);
   });
 
-  it('builds the prefix arm from the lake, so the clause matches the same files pickScopedLakeId does', () => {
+  it('builds the prefix arm from the lake, so the clause matches the same files pickScopedLake does', () => {
     const pause = toChunkScanConvergencePause({
       platformPaused: false,
       scopedLakes: [graded(lake(LAKE_A, { fileTagPrefix: 'acme:' }), true)],
+      platformOnlyMembership: [],
     });
 
     expect(pause.paused).toEqual([
@@ -372,7 +524,9 @@ describe('toChunkScanConvergencePause (the selection clause inputs)', () => {
   });
 
   it('is two empty arms when nothing is overridden - the platform-only shape', () => {
-    expect(toChunkScanConvergencePause({ platformPaused: true, scopedLakes: [] })).toEqual({
+    expect(
+      toChunkScanConvergencePause({ platformPaused: true, scopedLakes: [], platformOnlyMembership: [] })
+    ).toEqual({
       platformPaused: true,
       paused: [],
       running: [],

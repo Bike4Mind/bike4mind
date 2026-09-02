@@ -18,15 +18,18 @@
  * test at all: as a scheduled-task closure it was unexported and unnameable.
  */
 
-import { adminSettingsRepository, dataLakeRepository, FabFile, scopedSettingsRepository } from '@bike4mind/database';
+import { adminSettingsRepository, DataLakeModel, FabFile, scopedSettingsRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS, CHUNK_CLAIM_STALE_MS } from './chunkScan';
 import {
   buildChunkRescueMessage,
+  PAUSABLE_LAKE_FIELDS,
   resolveConvergencePauseScope,
+  resolvePlatformOnlyMembership,
   toChunkScanConvergencePause,
+  type PausableLake,
 } from '@server/dataLakes/convergencePauseScope';
 
 /**
@@ -40,6 +43,17 @@ import {
  * "abandons the tail" for "runs half as often exactly when it is needed most".
  */
 const ENQUEUE_CONCURRENCY = 10;
+
+/**
+ * The pause map's lake read, projected and lean rather than through `dataLakeRepository.find`: an
+ * Owner- or Organization-rung override reaches every lake under that principal, and none of a lake
+ * document's prose, stats or settings is read. `virtuals: true` is what yields the `id` the grading
+ * keys on (mongoose-lean-virtuals is registered globally in @bike4mind/database).
+ */
+const findPausableLakes = (filter: Record<string, unknown>): Promise<PausableLake[]> =>
+  DataLakeModel.find(filter).select(PAUSABLE_LAKE_FIELDS).lean({ virtuals: true }) as unknown as Promise<
+    PausableLake[]
+  >;
 
 export interface ChunkRescueSweepOptions {
   /** Per-run cap on files enqueued, so a large backlog drains gradually. The only thing the two drivers differ on. */
@@ -63,7 +77,7 @@ export async function runChunkRescueSweep({
     {
       adminSettings: adminSettingsRepository,
       scopedSettings: scopedSettingsRepository,
-      dataLakes: dataLakeRepository,
+      findPausableLakes,
     },
     runLogger
   );
@@ -85,6 +99,13 @@ export async function runChunkRescueSweep({
   // file is not re-sent every pass.
   const byId = new Map(candidates.map(f => [String(f._id), f]));
 
+  // The gate's second half, and the only part that needs the candidates: with the platform switch ON
+  // and some lake exempted back to running, a candidate can also belong to a lake NO override
+  // reaches - which is paused, and whose passages a re-chunk would rewrite. Deliberately after the
+  // selection query (it is keyed on what came back) and deliberately not feeding it: being selected
+  // only costs a cap slot, being enqueued costs the write. A no-op on every other run.
+  const enqueueScope = await resolvePlatformOnlyMembership(pauseScope, candidates, { findPausableLakes }, runLogger);
+
   // Bounded-concurrency fan-out with a PER-FILE catch. A throttled or unroutable send used to reject
   // out of a sequential loop and abandon every candidate behind it, and the count reported was the
   // selected size rather than the sent size. This sweep is the safety net for files the chunk
@@ -96,7 +117,7 @@ export async function runChunkRescueSweep({
   let failed = 0;
   const enqueueOne = async (id: string) => {
     try {
-      await sendToQueue(queueUrl, buildChunkRescueMessage(byId.get(id)!, pauseScope));
+      await sendToQueue(queueUrl, buildChunkRescueMessage(byId.get(id)!, enqueueScope));
       enqueued++;
     } catch (e) {
       failed++;
