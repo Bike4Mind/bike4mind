@@ -78,11 +78,15 @@ describe('FabFileRepository.countDataLakeFilesByMembershipArm', () => {
   });
 
   it('reports prefixOnlyCount 0 for an owned lake with no creator to anchor the prefix arm to', async () => {
-    await makeFile({ tags: ['datalake:registry'] });
+    // A non-empty prefix, so this actually reaches the creator guard in
+    // buildDataLakePrefixOnlyMembershipFilter rather than short-circuiting on an unusable prefix
+    // (see the registry-scope test above for that branch) - with no creator to anchor to, a
+    // stranger's prefix-tagged file must NOT count.
+    await makeFile({ tags: ['papers:draft'], userId: OTHER });
 
-    const counts = await fabFileRepository.countDataLakeFilesByMembershipArm([scope('registry', '', undefined)]);
+    const counts = await fabFileRepository.countDataLakeFilesByMembershipArm([scope('papers', 'papers:', undefined)]);
 
-    expect(counts).toEqual({ 'datalake:registry': { metaCount: 1, prefixOnlyCount: 0 } });
+    expect(counts).toEqual({ 'datalake:papers': { metaCount: 0, prefixOnlyCount: 0 } });
   });
 
   it('counts a REGISTRY lake prefix-only file with no ownership conjunct', async () => {
@@ -116,6 +120,24 @@ describe('FabFileRepository.countDataLakeFilesByMembershipArm', () => {
     const counts = await fabFileRepository.countDataLakeFilesByMembershipArm([scope('papers', 'papers:')]);
 
     expect(counts).toEqual({ 'datalake:papers': { metaCount: 0, prefixOnlyCount: 0 } });
+  });
+
+  it('sums metaCount and prefixOnlyCount to the combined total when BOTH arms have members', async () => {
+    // The prior disjoint-sum checks above each fix one arm at 0, so `total === a + 0` would pass
+    // even if the two populations overlapped. This fixture has both arms non-zero.
+    await makeFile({ tags: ['datalake:papers'] });
+    await makeFile({ tags: ['datalake:papers'] });
+    await makeFile({ tags: ['papers:draft'] });
+    await makeFile({ tags: ['papers:final'] });
+    await makeFile({ tags: ['papers:notes'] });
+
+    const counts = await fabFileRepository.countDataLakeFilesByMembershipArm([scope('papers', 'papers:')]);
+
+    expect(counts).toEqual({ 'datalake:papers': { metaCount: 2, prefixOnlyCount: 3 } });
+    const combined = await fabFileRepository.countDataLakeFilesByMembership([scope('papers', 'papers:')]);
+    expect(combined['datalake:papers'].total).toBe(
+      counts['datalake:papers'].metaCount + counts['datalake:papers'].prefixOnlyCount
+    );
   });
 
   it('returns an empty map when asked for no lakes', async () => {

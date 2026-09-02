@@ -860,10 +860,17 @@ const FileBrowserContent = () => {
               // /api/files/tags/toggle TOGGLES the meta-tag - reposting it for a file already a
               // member would REMOVE that file (and its content-prefix tags with it, unrecoverably;
               // see addFileToLake's docblock). Filter to non-members here so this door can only add.
+              // Built from selectedFiles (files this component actually resolved and inspected),
+              // never from the raw selectedIds set - a selection can outlive filesById's current
+              // page, and an unresolved id must never reach the toggle door unchecked.
+              if (selectedFiles.length !== selectedIds.size) {
+                toast.error(t('file_browser.selection_not_resolved'));
+                return;
+              }
               const alreadyMemberIds = new Set(
                 selectedFiles.filter(f => (f.tags ?? []).some(t => t.name === lake.datalakeTag)).map(f => f.id)
               );
-              const idsToAdd = Array.from(selectedIds).filter(id => !alreadyMemberIds.has(id));
+              const idsToAdd = selectedFiles.filter(f => !alreadyMemberIds.has(f.id)).map(f => f.id);
               if (idsToAdd.length === 0) {
                 toast.info(t('file_browser.already_lake_members'));
                 return;

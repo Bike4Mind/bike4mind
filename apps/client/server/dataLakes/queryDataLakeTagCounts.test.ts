@@ -160,6 +160,25 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     expect(result.uncategorizedFileCounts).toEqual({ 'datalake:lake-0': 1, 'datalake:lake-1': 0 });
   });
 
+  it('passes the arm counts through untouched, keyed by datalakeTag', async () => {
+    // The early-return case (no lakes) pins `lakeArmCounts: {}` above, which holds whether or not
+    // the field is actually wired to the repository call. This pins the field to a non-empty,
+    // non-symmetric result so a dropped wire-up (or a `{}` fallback swallowing the real value)
+    // fails here instead of shipping a badge/chip that always renders zero.
+    h.countDataLakeFilesByMembershipArm.mockResolvedValue({
+      'datalake:lake-0': { metaCount: 5, prefixOnlyCount: 2 },
+      'datalake:lake-1': { metaCount: 0, prefixOnlyCount: 3 },
+    });
+
+    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
+
+    expect(result.lakeArmCounts).toEqual({
+      'datalake:lake-0': { metaCount: 5, prefixOnlyCount: 2 },
+      'datalake:lake-1': { metaCount: 0, prefixOnlyCount: 3 },
+    });
+    expect(h.countDataLakeFilesByMembershipArm.mock.calls[0][0]).toEqual(scopes());
+  });
+
   it('sources the all-lakes total from membership, NOT the prefix-based unique count', async () => {
     // The bug this fixes: a lake whose files carry only the meta-tag contributes 0 to the
     // prefix-keyed unique count, so the all-lakes row could read LOWER than a single per-lake row

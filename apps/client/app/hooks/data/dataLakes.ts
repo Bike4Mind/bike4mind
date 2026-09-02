@@ -1176,12 +1176,19 @@ export function useConvergeDataLake(dataLakeId: string | null) {
 
 /**
  * Hook: Attach existing files to a data lake by toggling on its `datalake:*` meta-tag, through
- * the same `/api/files/tags/toggle` write every other membership join uses (see toggleTags) -
- * there is no separate "add to lake" write path. Lets an owner add a file they already uploaded
- * without re-uploading it through the wizard.
+ * the same `/api/files/tags/toggle` write every other manual membership join uses (see
+ * toggleTags). Lets an owner add a file they already uploaded without re-uploading it through
+ * the wizard.
  *
- * IMPORTANT: the endpoint TOGGLES the tag, so this must only ever be called with ids that are NOT
- * already members - reposting the tag for an existing member would remove it (and its
+ * A dedicated add-only door DOES exist (`POST /api/data-lakes/:id/files/:fabFileId`, see
+ * addFileToDataLake) - it mints a restore record and an audit row and is per-file, not batched.
+ * This hook deliberately uses the shared toggle door instead, for the batch: `addFileToLake`
+ * (which both doors ultimately call) now carries the same ownership conjunct
+ * `addFileToDataLake`'s cold-add path applies, so the two doors' access decisions agree; what
+ * this door does not get is the restore record or the per-write audit row.
+ *
+ * IMPORTANT: the toggle endpoint TOGGLES the tag, so this must only ever be called with ids that
+ * are NOT already members - reposting the tag for an existing member would remove it (and its
  * content-prefix tags with it, unrecoverably). The caller (Files browser) filters the selection
  * down first; `skippedCount` is purely for the success toast's wording.
  */
@@ -1204,14 +1211,12 @@ export function useAddFilesToLake() {
       });
       return { files: res.data, lake, skippedCount };
     },
-    onSuccess: ({ files, lake, skippedCount }) => {
+    onSuccess: ({ files, skippedCount }) => {
       toast.success(
         skippedCount > 0
           ? t('file_browser.added_to_lake_with_skipped', { count: files.length, skippedCount })
           : t('file_browser.added_to_lake', { count: files.length })
       );
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
-      invalidateLakeFileMembershipQueries(queryClient, lake.id);
     },
     onError: (error: Error) => {
       const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
@@ -1220,6 +1225,15 @@ export function useAddFilesToLake() {
         return;
       }
       toast.error(error.message || 'Failed to add files to the data lake');
+    },
+    // A mid-batch failure can still leave some of the batch's files written (toggleTags is not
+    // transactional across files - see its docblock), so invalidation must run on every outcome,
+    // not only success: an onSuccess-only invalidation left the cache reporting the pre-add state
+    // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
+    // that same cache before the next attempt.
+    onSettled: (_data, _error, { lake }) => {
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      invalidateLakeFileMembershipQueries(queryClient, lake.id);
     },
   });
 }

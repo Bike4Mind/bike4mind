@@ -393,8 +393,8 @@ export function LakeInfoPanel({
             <Tooltip
               title={
                 armCounts
-                  ? `${armCounts.metaCount} by lake tag, ${armCounts.prefixOnlyCount} by content prefix only - counted as the lake's creator would see it`
-                  : "Counted as the lake's creator would see it"
+                  ? `${armCounts.metaCount} by lake tag, ${armCounts.prefixOnlyCount} by content prefix only - counted in this lake's own membership scope`
+                  : "Counted in this lake's own membership scope"
               }
               size="sm"
             >

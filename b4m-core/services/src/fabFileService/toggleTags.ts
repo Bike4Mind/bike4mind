@@ -13,7 +13,7 @@ import {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
-import { canManageLake } from '../dataLakeService/manageRule';
+import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from '../dataLakeService/manageRule';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
@@ -272,6 +272,7 @@ export const toggleTags = async (
   // every lake it is handed, so flattening this would check file A against a lake only file B is
   // joining and invent violations that do not exist.
   if (tags.some(isDataLakeTag)) {
+    const metaJoinsByFile = new Map<string, MembershipLake[]>();
     for (const file of fabFiles) {
       const currentNames = storedTagNames(file);
       const joiningLakes: MembershipLake[] = [];
@@ -280,7 +281,35 @@ export const toggleTags = async (
         const lake = await resolveLake(tag);
         if (!currentNames.includes(lake.datalakeTag)) joiningLakes.push(lake);
       }
-      if (joiningLakes.length === 0) continue;
+      if (joiningLakes.length > 0) metaJoinsByFile.set(file.id, joiningLakes);
+    }
+    await grantResolver.prime([...metaJoinsByFile.values()].flat());
+
+    // Same cold-add ownership conjunct `addFileToDataLake` applies before its call into this same
+    // `addFileToLake` write (see its docblock): membership IS read access (the meta-tag arm of
+    // `buildDataLakeMembershipFilter` carries no ownership conjunct), so admitting any manage-gate
+    // rung to stamp the tag on a file it does not own would publish a non-consenting owner's
+    // private, merely read-shared file to every reader of the lake. `addFileToLake` itself cannot
+    // carry this check - `addFileToDataLake`'s restore path calls it deliberately WITHOUT one - so
+    // it is graded here, in the same all-or-nothing pre-write pass as the admission contract below.
+    for (const file of fabFiles) {
+      const joiningLakes = metaJoinsByFile.get(file.id);
+      if (!joiningLakes) continue;
+      for (const lake of joiningLakes) {
+        const grants = grantResolver.get(lake.id);
+        const isOwner =
+          file.userId === actor.userId ||
+          ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
+            resolveEffectiveOwnerIds(lake, grants).includes(file.userId));
+        if (!isOwner) {
+          throw new BadRequestError('You do not have permission to add files to this data lake');
+        }
+      }
+    }
+
+    for (const file of fabFiles) {
+      const joiningLakes = metaJoinsByFile.get(file.id);
+      if (!joiningLakes) continue;
       await assertLakeAdmission(
         joiningLakes,
         [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],

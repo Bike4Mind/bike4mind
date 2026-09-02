@@ -1244,9 +1244,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * The same live-member count as `countDataLakeFilesByMembership`, split into the two DISJOINT
    * arms that make up membership: `metaCount` (carries the `datalake:*` tag) and
-   * `prefixOnlyCount` (a member solely via a `fileTagPrefix` tag on a file the creator owns, with
-   * no meta-tag). `metaCount + prefixOnlyCount` always equals the combined count - see
-   * `buildDataLakePrefixOnlyMembershipFilter`. Powers the lake-manager's per-arm visibility.
+   * `prefixOnlyCount` (a member solely via a `fileTagPrefix` tag, with no meta-tag). The creator
+   * conjunct on the prefix arm applies only for an `owned`-scope lake; a `registry` scope omits
+   * it, so a registry lake's `prefixOnlyCount` can include files it does not own - see
+   * `buildDataLakePrefixOnlyMembershipFilter`. `metaCount + prefixOnlyCount` always equals the
+   * combined count. Powers the lake-manager's per-arm visibility.
    */
   countDataLakeFilesByMembershipArm(
     scopes: DataLakeMembershipScope[]
