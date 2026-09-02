@@ -107,6 +107,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   resetChunkStateByIds: vi.fn(),
   countFailedFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
+  countDistinctDataLakeFilesByMembership: vi.fn(),
+  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),

@@ -8,7 +8,7 @@ import {
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
-import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
+import { buildDataLakeMembershipFilter, buildLacksContentPrefixTagFilter } from './dataLakeLifecycleScope';
 
 /**
  * Stop words filtered out during text search to improve match quality.
@@ -349,6 +349,22 @@ export interface FabFileSearchParams {
     excludeFilenameMarkers?: string[];
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
+    /**
+     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what the browse
+     * surfaces render as an "Uncategorized" bucket. One prefix for a single-lake browser; the
+     * whole accessible set for a MERGED tree, where a file categorized under any one lake is
+     * reachable through that lake's branch and only a file categorized under none of them is
+     * invisible.
+     *
+     * NARROWING only, ANDed above the access arms: it never widens the scope. It must therefore
+     * be paired with `restrictToDataLake`, or it returns every non-lake file the caller owns
+     * that happens to lack these prefixes.
+     *
+     * Built by `buildLacksContentPrefixTagFilter`, so the bucket holds exactly the files the
+     * write-door reconciler and the backfill migration consider uncategorized. Unusable and
+     * duplicate prefixes are dropped rather than matching everything / repeating a conjunct.
+     */
+    lacksContentPrefixTags?: string[];
   };
   useDocumentDB?: boolean;
 }
@@ -465,6 +481,17 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     andConditions.push({
       $or: [{ fileSize: { $exists: true, $ne: null } }, { fileSize: 0 }],
     });
+  }
+
+  // Uncategorized bucket (opt-in): the members carrying no tag under any of these lake prefixes.
+  // Each prefix is its own $and clause rather than merged or spread onto baseFilter - every
+  // fragment's top-level key is `tags`, which the tag filter above and the session-summary clause
+  // below also name, so combining them any other way would silently drop all but the last.
+  const lacksPrefixes = [
+    ...new Set((options?.lacksContentPrefixTags ?? []).map(normalizeTagPrefix).filter((p): p is string => p !== null)),
+  ];
+  for (const prefix of lacksPrefixes) {
+    andConditions.push(buildLacksContentPrefixTagFilter(prefix));
   }
 
   // Exclude session summaries (but allow curated notebooks)

@@ -323,6 +323,37 @@ describe('DataLakeTreeView uncategorized bucket', () => {
     expect(screen.queryByText('No categories')).toBeNull();
     expect(screen.getByTestId('datalake-node-uncategorized')).toBeTruthy();
   });
+
+  it('shows a host-supplied count, so a host that fetches its files lazily can still render it', () => {
+    // The chat tree knows the size from the same tag-counts payload the lake picker reads, and
+    // fetches the files only once the bucket is opened. Falling back to files.length there would
+    // advertise 0 and hide the row - re-opening the "counted but unreachable" gap (#2031).
+    renderTree({ uncategorized: { ...uncategorized, files: [], count: 3 } });
+
+    expect(screen.getByTestId('datalake-node-uncategorized').textContent).toBe('Uncategorized (3)');
+  });
+
+  it('hides the row when the host count is 0, even though files.length would agree', () => {
+    renderTree({ uncategorized: { ...uncategorized, count: 0 } });
+
+    expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+  });
+
+  it('still falls back to files.length for hosts that hold the whole list', () => {
+    // The Viewer and the manager nav pass no count; the bucket must keep sizing itself.
+    renderTree({ uncategorized });
+
+    expect(screen.getByTestId('datalake-node-uncategorized').textContent).toBe('Uncategorized (1)');
+  });
+
+  it('renders the empty file list, not a stale row, when an opened bucket has no files yet', () => {
+    // A lazily-fetched bucket is open with count > 0 and files still in flight; the pane must
+    // read as the bucket rather than falling back to the folder list.
+    renderTree({ uncategorized: { ...uncategorized, files: [], count: 3 }, breadcrumb: [UNCATEGORIZED_KEY] });
+
+    expect(screen.getByText('No articles found')).toBeTruthy();
+    expect(screen.queryAllByTestId(/^datalake-node-/)).toHaveLength(0);
+  });
 });
 
 describe('DataLakeTreeView v2 contract', () => {

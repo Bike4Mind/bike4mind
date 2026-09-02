@@ -174,3 +174,42 @@ describe('DataLakeChatTree chrome slots (#1943)', () => {
     expect(screen.queryByTestId('host-empty')).not.toBeInTheDocument();
   });
 });
+
+describe('DataLakeChatTree uncategorized bucket', () => {
+  // The lake's members with no taxonomy tag: counted by the picker directly above this tree, and
+  // until now shown by no row in it (#2031). The count is the host's - the files arrive only once
+  // the bucket is opened.
+  const loose = { id: 'f9', fileName: 'no-tags.pdf', tags: [] } as unknown as IFabFileDocument;
+
+  it('renders the bucket row at root with the host count, and opens it on click', () => {
+    const onNavigate = vi.fn();
+    renderTree({ breadcrumb: [], onNavigate, uncategorized: { files: [], count: 3 } });
+
+    const row = screen.getByTestId('datalake-node-uncategorized');
+    expect(row).toHaveTextContent('Uncategorized');
+    expect(row).toHaveTextContent('3');
+
+    fireEvent.click(row);
+    expect(onNavigate).toHaveBeenCalledWith(['__uncategorized__']);
+  });
+
+  it('lists the bucket files once opened, with the same row actions as any other file', () => {
+    const onViewFile = vi.fn();
+    renderTree({
+      breadcrumb: ['__uncategorized__'],
+      articles: [],
+      onViewFile,
+      uncategorized: { files: [loose], count: 1 },
+    });
+
+    fireEvent.click(screen.getByTestId('datalake-file-f9'));
+    expect(onViewFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f9' }));
+    expect(screen.getByTestId('datalake-row-menu-btn-f9')).toBeInTheDocument();
+  });
+
+  it('renders no bucket row when the host passes none', () => {
+    renderTree({ breadcrumb: [] });
+
+    expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+  });
+});
