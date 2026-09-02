@@ -26,6 +26,17 @@ const h = vi.hoisted(() => ({
       )
     )
   ),
+  // Meta-tag arm only, via the same findByDatalakeTag mock - the prefix arm and the dedupe against
+  // a directly-handed purgingLake are unit-tested in shredMemoryForLakeTags.test.ts; this file is
+  // about the route's wiring, not that resolution.
+  findMemberLakesForFile: vi.fn(async (file: { tags?: { name: string }[] }) => {
+    const tagNames = (file.tags ?? []).map(t => t.name);
+    const metaTags = h.extractDataLakeMetaTags(tagNames);
+    const lakes = await Promise.all(metaTags.map((tag: string) => h.findByDatalakeTag(tag)));
+    return lakes
+      .filter((lake): lake is { id?: string; datalakeTag: string; createdByUserId: string } => Boolean(lake))
+      .map(lake => ({ ...lake, id: lake.id ?? lake.datalakeTag }));
+  }),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,6 +57,7 @@ vi.mock('@bike4mind/services', () => ({
     purgeDataLakeDocument: h.purgeDataLakeDocument,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
     extractDataLakeMetaTags: h.extractDataLakeMetaTags,
+    findMemberLakesForFile: h.findMemberLakesForFile,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -413,18 +425,27 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
   });
 
-  it('shreds the facts the lake distilled from the purged document', async () => {
+  it('shreds the facts the lake distilled from the purged document, deduped against the purging lake handoff', async () => {
     // Extracted beliefs keep reaching live system prompts through recallLakeMemory, so a document
-    // reported permanently deleted would otherwise go on speaking through them.
-    h.findByDatalakeTag.mockResolvedValueOnce({ datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' });
+    // reported permanently deleted would otherwise go on speaking through them. The tag also
+    // resolves back to the purging lake itself here - the common case - so this also covers that
+    // the direct `purgingLake` handoff and the tag-based resolution dedupe to one shred, not two.
+    h.findByDatalakeTag.mockResolvedValueOnce({
+      id: 'lake-oid-1',
+      datalakeTag: 'datalake:sales',
+      createdByUserId: 'owner-1',
+    });
     const { res } = makeRes();
     await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
       tagNames: ['datalake:sales'],
       fabFileId: FILE_ID,
+      ownerUserId: 'file-owner-1',
+      purgingLake: { id: 'lake-oid-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
 
+    expect(h.shredMemoryFromSource).toHaveBeenCalledTimes(1);
     expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
       {},
       { kind: 'lake', id: 'datalake:sales' },
@@ -439,8 +460,8 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // and recalling beliefs sourced from a document already destroyed.
     h.findByDatalakeTag.mockImplementation(async (tag: string) =>
       tag === 'datalake:sales'
-        ? { datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' }
-        : { datalakeTag: 'datalake:marketing', createdByUserId: 'owner-2' }
+        ? { id: 'lake-oid-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' }
+        : { id: 'lake-oid-2', datalakeTag: 'datalake:marketing', createdByUserId: 'owner-2' }
     );
     const { res } = makeRes();
     await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
@@ -448,6 +469,8 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
       tagNames: ['datalake:sales', 'datalake:marketing'],
       fabFileId: FILE_ID,
+      ownerUserId: 'file-owner-1',
+      purgingLake: { id: 'lake-oid-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
 
     expect(h.shredMemoryFromSource).toHaveBeenCalledWith(

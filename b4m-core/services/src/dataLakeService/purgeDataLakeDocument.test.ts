@@ -450,11 +450,11 @@ describe('purgeDataLakeDocument', () => {
       shredDocumentMemory,
     });
 
-    // The purging lake's own tag is prepended unconditionally (see the prefix-arm test below), so
-    // the file already carrying it here shows up twice - the host de-dupes through a Set.
     expect(shredDocumentMemory).toHaveBeenCalledWith({
-      tagNames: ['datalake:sales', 'datalake:sales'],
+      tagNames: ['datalake:sales'],
       fabFileId: 'file-1',
+      ownerUserId: 'owner-1',
+      purgingLake: { id: 'lake-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
   });
 
@@ -473,8 +473,10 @@ describe('purgeDataLakeDocument', () => {
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), shredDocumentMemory });
 
     expect(shredDocumentMemory).toHaveBeenCalledWith({
-      tagNames: ['datalake:sales', 'datalake:sales', 'datalake:marketing'],
+      tagNames: ['datalake:sales', 'datalake:marketing'],
       fabFileId: 'file-1',
+      ownerUserId: 'owner-1',
+      purgingLake: { id: 'lake-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
   });
 
@@ -482,7 +484,8 @@ describe('purgeDataLakeDocument', () => {
     // Lake membership has two arms (see lakeMembershipSignals): a file the lake's creator owns that
     // carries only a prefixed tag (usable prefixes end with ':', per normalizeTagPrefix) is a full
     // member with no `datalake:*` tag at all. Deriving the shred set from `file.tags` alone would
-    // shred nothing on the very lake the purge ran through.
+    // shred nothing on the very lake the purge ran through - the direct `purgingLake` handoff below
+    // is what covers it instead.
     const db = makeDb({ tags: [{ name: 'sales:q3', strength: 1 }] });
     db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, fileTagPrefix: 'sales:' }) as never);
     const shredDocumentMemory = vi.fn(async () => {});
@@ -490,8 +493,10 @@ describe('purgeDataLakeDocument', () => {
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), shredDocumentMemory });
 
     expect(shredDocumentMemory).toHaveBeenCalledWith({
-      tagNames: ['datalake:sales', 'sales:q3'],
+      tagNames: ['sales:q3'],
       fabFileId: 'file-1',
+      ownerUserId: 'owner-1',
+      purgingLake: { id: 'lake-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
   });
 
