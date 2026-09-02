@@ -1696,8 +1696,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
     const reasons: string[] = [];
     if (coverage.moreFilesBeyondCap) {
+      // Names the selection RULE, not just the shortfall: candidates come off a fileName-ascending
+      // page (see the listing above), so an over-cap library does not lose a random slice - it
+      // loses the same tail on every turn, permanently. A reader told only "some were skipped"
+      // reasonably assumes a retry or a rephrase reaches the rest. It never does.
       reasons.push(
-        `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, so some were never considered`
+        `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
+          'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
+          'of the library is never reached'
       );
     }
     if (coverage.stoppedByChunkBudget) {
@@ -2407,6 +2413,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             fileIds: sourceFileIds,
             chunkIds: injectedChunkIds,
             scores: injectedScores,
+            candidateCapReached: coverage.moreFilesBeyondCap,
             surface: 'forced-retrieval',
             queryText: query,
             questId: quest.id,

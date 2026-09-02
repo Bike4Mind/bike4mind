@@ -720,6 +720,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect(warn.mock.calls[0][0]).toContain('candidate cap');
+    // The substance, not just the label: the operator has to be able to tell "we missed some" from
+    // "we will never see those", which is what the alphabetical selection rule actually means.
+    expect(warn.mock.calls[0][0]).toContain('selected alphabetically by file name');
+    expect(warn.mock.calls[0][0]).toContain('every turn');
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
     // The structured twin of that warning - what the chat banner actually reads. `warnings` is a
     // shared channel (truncation and elision append there too), so the banner cannot key on it.
@@ -728,6 +732,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(coverage?.partial).toBe(true);
     expect(coverage?.reasons).toHaveLength(1);
     expect(coverage?.reasons[0]).toContain('candidate cap');
+    expect(coverage?.reasons[0]).toContain('selected alphabetically by file name');
+    expect(coverage?.reasons[0]).toContain('the rest of the library is never reached');
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls
@@ -1772,6 +1778,45 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         scores: [1],
       })
     );
+  });
+
+  // The audit row is the only lake-attributable record that the candidate listing was truncated:
+  // returnedChunkCount/returnedFileCount describe the post-scoring injection and say nothing about
+  // the candidate stage, so this cannot be recovered later if it is not written here.
+  it('records candidateCapReached: true when the candidate listing hit the cap', async () => {
+    const ctx = makeCtx();
+    const files = [{ id: 'fileA', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:lake1' }], vectorized: true }];
+    ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: files, hasMore: true, total: 585 });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ candidateCapReached: true }));
+  });
+
+  it('records candidateCapReached: false when the whole candidate set was considered', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    // Explicitly false, not omitted: forced retrieval always knows the answer, and an omitted
+    // field means "this surface does not report it" to every consumer downstream.
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ candidateCapReached: false }));
   });
 
   // Forced retrieval's candidate search is a MIXED corpus (owned + shared + org-shared + data
