@@ -24,7 +24,12 @@ const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-m
 // subtracts what the chain already uploaded (still `pending`, hence invisible to the ordinary diff)
 // and re-ingests the tail as new ADDs - the exact duplicate spiral chaining exists to prevent. Hence
 // a longer bound here, sized for several full-length messages queued ahead of a continuation. Still
-// finite, so an abandoned chain cannot wedge a connection in 'syncing' forever.
+// finite, so an abandoned chain cannot wedge a connection in 'syncing' forever - but the reclaim is
+// reachable only from an OPERATOR-INITIATED path (the manual Re-sync button, which calls claimForSync
+// directly), not automatically: findDueForPoll filters on status:'connected', so the scheduled poll
+// never re-enqueues onto a wedged 'syncing' connection, and an abandoned chain's own in-flight message
+// gives up first (MAX_INGEST_REDRIVES x its delay tops out under 20 min). A stuck-connection reaper
+// that reclaims automatically would be separate work, not something this bound provides.
 const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 12-min visibility windows
 
 /**
@@ -343,21 +348,31 @@ class OrgGoogleDriveConnectionRepository
 
   /**
    * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one,
-   * and - like adoptSyncClaim - a compare-and-set on the batch id: it writes only over its OWN chain's
-   * id or over no chain at all (the first slice, which claimed fresh). Without that conjunct a slow
-   * slice renewing after its claim was reclaimed would re-point the id at a chain nobody is running.
+   * and - like adoptSyncClaim - a real compare-and-set: it writes only over its OWN chain (the batch id
+   * AND the token this run currently holds for it) or over no chain at all (the first slice, which
+   * claimed fresh and holds no token yet). The batch-id conjunct alone is not enough - it never changes
+   * across a whole chain, so it cannot tell "my own live chain" apart from "a chain I used to hold and
+   * lost to a reclaim/disconnect/reconnect" (both have the same activeIngestBatchId once a new owner
+   * renews or adopts). `expectedToken` closes that: a caller renewing after losing the claim presents
+   * the token it was issued, which the new owner's own renew/adopt has already rotated away.
    *
-   * Always mints a fresh `ingestClaimToken` (there is only ever one caller of this per slice, run
-   * sequentially, so there is no concurrent-renewal race to CAS against) and returns it - the caller
-   * carries it into the next slice's continuation payload for adoptSyncClaim to present.
+   * Always mints a fresh `ingestClaimToken` on success and returns it - the caller carries it into the
+   * next slice's continuation payload for adoptSyncClaim to present.
    */
-  async renewSyncClaim(id: string, activeIngestBatchId: string): Promise<string | null> {
+  async renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null> {
     const rotatedToken = randomUUID();
     const renewed = await this.model.findOneAndUpdate(
       {
         _id: id,
         status: 'syncing',
-        $or: [{ activeIngestBatchId }, { activeIngestBatchId: { $in: [null] } }],
+        $or: [
+          // No chain yet: the first slice, right after its own fresh claimForSync (which unsets both
+          // fields). Not gated on expectedToken - a first slice never held one to present.
+          { activeIngestBatchId: { $in: [null] }, ingestClaimToken: { $in: [null] } },
+          // A later slice renewing its own still-held chain: both the id AND the token must still match
+          // what this run was issued, or the claim moved on without us.
+          ...(expectedToken ? [{ activeIngestBatchId, ingestClaimToken: expectedToken }] : []),
+        ],
       },
       { $set: { syncClaimedAt: new Date(), activeIngestBatchId, ingestClaimToken: rotatedToken } }
     );

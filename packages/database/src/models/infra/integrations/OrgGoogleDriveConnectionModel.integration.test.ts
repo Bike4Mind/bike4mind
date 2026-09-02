@@ -433,11 +433,42 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     // dead batch over the live one.
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.claimForSync(created.id);
-    await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live');
+    const token = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live');
 
-    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-dead')).toBeNull();
+    // Wrong batch id refuses outright, whatever token accompanies it.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-dead', token)).toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.activeIngestBatchId).toBe('batch-live');
-    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live')).not.toBeNull();
+    // Only the matching batch id AND its current token succeeds.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live', token)).not.toBeNull();
+  });
+
+  it('renewSyncClaim requires the current token once a chain has one, not the batch id alone', async () => {
+    // The bug this guards against: the batch id never changes for a whole chain, so matching it alone
+    // cannot tell "my own live chain" apart from "a chain I used to hold and lost" - both have the
+    // same activeIngestBatchId once a new owner renews or adopts over it.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const token = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live');
+
+    // Right batch id, no token presented: refused.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live')).toBeNull();
+    // Right batch id, wrong token: refused.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live', 'wrong-token')).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.ingestClaimToken).toBe(token);
+  });
+
+  it('a slice that already lost its claim to a reclaim cannot renew back over the new owner', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const staleToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+
+    // Someone else takes over the same chain - the chain's own next slice adopting, in practice.
+    const newToken = await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', staleToken!);
+    expect(newToken).not.toBeNull();
+
+    // The original slice, unaware it already lost the claim, tries to renew with the token it holds.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1', staleToken)).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.ingestClaimToken).toBe(newToken);
   });
 
   it('adoptSyncClaim refuses a connection that is not syncing at all', async () => {

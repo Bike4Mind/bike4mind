@@ -261,10 +261,12 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   /**
    * Hold the claim across a slice boundary: re-stamps `syncClaimedAt` (so the stale-claim window never
    * elapses mid-chain), records the batch the next slice must present to adopt it, and mints a fresh
-   * `ingestClaimToken` for that same slice to present. Guarded on 'syncing', so it no-ops rather than
-   * resurrecting a claim something else already released. Returns the minted token on success, or null.
+   * `ingestClaimToken` for that same slice to present. Guarded on 'syncing', and a real compare-and-set
+   * on `expectedToken` (the token THIS run currently holds for the chain, or omitted on a first slice
+   * that never held one) so a caller that already lost the claim to a reclaim/adopt cannot re-point it
+   * back at a chain nobody else is running. Returns the minted token on success, or null.
    */
-  renewSyncClaim(id: string, activeIngestBatchId: string): Promise<string | null>;
+  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null>;
 
   /**
    * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'
