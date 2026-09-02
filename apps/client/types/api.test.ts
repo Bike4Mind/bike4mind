@@ -41,6 +41,23 @@ describe('NotebookExportRequestSchema - notebookIds', () => {
     expect(NotebookExportRequestSchema.safeParse({ notebookIds: [] }).success).toBe(false);
   });
 
+  it('accepts the date-only value an <input type="date"> produces', () => {
+    // The export modal's Date Range sends "2026-01-15"; a datetime-only schema 400d every date a
+    // user could pick, and the toast named none of it.
+    const parsed = NotebookExportRequestSchema.parse({ fromDate: '2026-01-15', toDate: '2026-01-20' });
+    expect(parsed.fromDate).toBe('2026-01-15');
+    expect(parsed.toDate).toBe('2026-01-20');
+  });
+
+  it('still accepts a full ISO datetime, so existing API callers are unaffected', () => {
+    const parsed = NotebookExportRequestSchema.parse({ fromDate: '2026-01-15T08:30:00Z' });
+    expect(parsed.fromDate).toBe('2026-01-15T08:30:00Z');
+  });
+
+  it('still rejects a date that is neither form', () => {
+    expect(NotebookExportRequestSchema.safeParse({ fromDate: '15/01/2026' }).success).toBe(false);
+  });
+
   it('caps the batch at 50, matching the sibling curate schema', () => {
     const ids = Array.from({ length: 51 }, () => HEX);
     expect(NotebookExportRequestSchema.safeParse({ notebookIds: ids }).success).toBe(false);

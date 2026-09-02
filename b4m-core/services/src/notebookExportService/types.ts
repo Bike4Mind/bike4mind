@@ -181,9 +181,10 @@ export interface NotebookExportOptions {
   includeImages: boolean; // Embed images as base64
   maxFileSize: number; // Max size for embedded files (bytes)
 
-  // Date range filtering
-  fromDate?: string; // ISO timestamp
-  toDate?: string; // ISO timestamp
+  // Date range filtering. Either a full ISO timestamp or a bare "2026-01-15"; a bare date at
+  // `toDate` covers that whole day, so the two forms are ~24h apart at the top of the range.
+  fromDate?: string;
+  toDate?: string;
 }
 
 // Processing result types

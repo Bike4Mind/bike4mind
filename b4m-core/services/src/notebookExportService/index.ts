@@ -11,7 +11,7 @@ import {
   NotebookExportError,
   CURRENT_EXPORT_VERSION,
 } from './types';
-import { isImageServeable } from '@bike4mind/common';
+import { dayjs, isImageServeable } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import type {
   IAgentDocument,
@@ -24,6 +24,9 @@ import type {
 
 import { isObjectIdOrHexString } from 'mongoose';
 import { usableSessionIds } from '../utils/objectIds';
+
+/** Matches a bare "2026-01-15", as opposed to a full ISO datetime. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
 type ExportQuery = Record<string, unknown>;
@@ -204,10 +207,13 @@ export class NotebookExportService {
       // answers 4xx - which is the whole fault this change exists to remove. This is the only
       // line a rejection logs: the route rethrows to the caller without logging it again.
       if (error instanceof NotebookExportError && error.statusCode < 500) {
+        // `reason` carries the offending ids: they live only in the message, and this is the sole
+        // line a rejection writes - the route answers the status without logging again.
         this.adapters.logger.warn('Notebook export rejected', {
           userId,
           code: error.code,
           status: error.statusCode,
+          reason: error.message,
         });
         throw error;
       }
@@ -241,14 +247,18 @@ export class NotebookExportService {
       query._id = { $in: options.notebookIds };
     }
 
-    // Date range filtering
+    // Date range filtering. A bare "2026-01-15" parses to that day's midnight, so an inclusive
+    // `$lte` on it would return nothing from the day the caller actually named - the `<input
+    // type="date">` in the export modal sends exactly that form.
     if (options.fromDate || options.toDate) {
       query.lastUpdated = {};
       if (options.fromDate) {
         query.lastUpdated.$gte = new Date(options.fromDate);
       }
       if (options.toDate) {
-        query.lastUpdated.$lte = new Date(options.toDate);
+        query.lastUpdated.$lte = DATE_ONLY.test(options.toDate)
+          ? dayjs.utc(options.toDate).endOf('day').toDate()
+          : new Date(options.toDate);
       }
     }
 

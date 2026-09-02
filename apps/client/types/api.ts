@@ -132,8 +132,13 @@ export const NotebookExportRequestSchema = z.object({
     .min(1, 'name at least one notebook, or omit notebookIds to export all')
     .max(50, 'Maximum 50 notebooks per export request')
     .optional(),
-  fromDate: z.iso.datetime().optional(),
-  toDate: z.iso.datetime().optional(),
+  // A bare "2026-01-15" is accepted alongside a full timestamp, since that is what an
+  // `<input type="date">` produces and a datetime-only schema rejected every such value. The
+  // export modal no longer sends that form - it resolves the picked day in the viewer's own zone,
+  // the only place that zone is known - so this now serves API callers, whose bare date the
+  // service reads as a UTC day: the only defensible reading when no offset was supplied.
+  fromDate: z.union([z.iso.date(), z.iso.datetime()]).optional(),
+  toDate: z.union([z.iso.date(), z.iso.datetime()]).optional(),
 });
 
 export const NotebookCurateRequestSchema = z.object({

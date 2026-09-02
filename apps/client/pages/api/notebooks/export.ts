@@ -32,6 +32,12 @@ const handler = baseApi().post(
       validatedBody = NotebookExportRequestSchema.parse(req.body);
     } catch (error) {
       if (error instanceof z.ZodError) {
+        // The service is never reached on this path, so without this line the most common caller
+        // fault - a malformed notebook id - would 400 and leave no trace anywhere.
+        req.logger.warn('Notebook export rejected at the schema', {
+          userId,
+          fields: error.issues.map(err => err.path.join('.')),
+        });
         return res.status(400).json({
           success: false,
           message: 'Invalid request body',

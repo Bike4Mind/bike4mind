@@ -337,6 +337,38 @@ describe('notebook export - notebookIds shape', () => {
 
     expect(adapters.sessionRepository.find).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [UPPER] } }));
   });
+
+  it('covers the whole of a date-only toDate, not just its midnight', async () => {
+    // `new Date('2026-01-20')` is that day at 00:00Z, so an inclusive `$lte` on it returns nothing
+    // from the day the caller named - and a date input can only send this form.
+    const { adapters } = makeAdapters();
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      fromDate: '2026-01-15',
+      toDate: '2026-01-20',
+    } as never);
+
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastUpdated: {
+          $gte: new Date('2026-01-15T00:00:00.000Z'),
+          $lte: new Date('2026-01-20T23:59:59.999Z'),
+        },
+      })
+    );
+  });
+
+  it('leaves a full ISO datetime toDate exactly where the caller put it', async () => {
+    const { adapters } = makeAdapters();
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      toDate: '2026-01-20T08:30:00.000Z',
+    } as never);
+
+    expect(adapters.sessionRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({ lastUpdated: { $lte: new Date('2026-01-20T08:30:00.000Z') } })
+    );
+  });
 });
 
 describe('notebook export - log level', () => {
@@ -370,7 +402,12 @@ describe('notebook export - log level', () => {
     expect(adapters.logger.error).not.toHaveBeenCalled();
     expect(adapters.logger.warn).toHaveBeenCalledWith(
       'Notebook export rejected',
-      expect.objectContaining({ code: 'INVALID_NOTEBOOK_ID', status: 400 })
+      expect.objectContaining({
+        code: 'INVALID_NOTEBOOK_ID',
+        status: 400,
+        // The ids are the only actionable part of this line; they exist nowhere else in any log.
+        reason: expect.stringContaining('not-an-objectid'),
+      })
     );
   });
 

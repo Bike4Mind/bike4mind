@@ -52,6 +52,19 @@ interface ExportOptions {
   format: ExportFormat;
 }
 
+/**
+ * Resolve the calendar date an `<input type="date">` yields to an instant at the edge of that day
+ * in the viewer's own zone. A bare "2026-01-15" carries no offset, so whoever resolves it picks the
+ * zone; doing it here is the only place the user's actual zone is known. Omitting the `Z` is what
+ * makes Date parse the literal as local rather than UTC.
+ */
+const localDayBoundary = (value: string, edge: 'start' | 'end'): string | undefined => {
+  if (!value) return undefined;
+  const time = edge === 'start' ? '00:00:00.000' : '23:59:59.999';
+  const at = new Date(`${value}T${time}`);
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+};
+
 const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose }) => {
   const [options, setOptions] = useState<ExportOptions>({
     includeKnowledge: true,
@@ -64,6 +77,11 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
     maxFileSize: 10 * 1024 * 1024, // 10MB
     format: 'json',
   });
+
+  // The date and size inputs display raw text while `options` holds the submitted value. Without
+  // that split, a value the input can show but the request cannot carry (an empty size box, a
+  // local calendar date) has nowhere to live, and the field becomes uneditable.
+  const [drafts, setDrafts] = useState({ fromDate: '', toDate: '', maxFileSizeMb: '10' });
 
   const [isExporting, setIsExporting] = useState(false);
   const [exportResult, setExportResult] = useState<any>(null);
@@ -83,10 +101,14 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
       }
     } catch (error: any) {
       console.error('Export error:', error);
-      // The server's message first: axios rejects with its own "Request failed with status code
-      // 404", so reading error.message throws away the only text that says what actually happened
-      // ("No notebooks found to export").
-      toast.error(error?.response?.data?.message || error.message || 'Failed to export notebooks');
+      // Most specific first. axios's own error.message is "Request failed with status code 404",
+      // and a ZodError's message is the generic "Invalid request body" - in both cases the useful
+      // text is further in. `error` is the shared errorHandler envelope, the rest this route's own.
+      const data = error?.response?.data;
+      const fieldErrors: string | undefined = data?.errors
+        ?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`)
+        .join(', ');
+      toast.error(fieldErrors || data?.error || data?.message || error.message || 'Failed to export notebooks');
     } finally {
       setIsExporting(false);
     }
@@ -275,8 +297,12 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
               <Input
                 className="notebook-export-modal-input"
                 type="number"
-                value={Math.round(options.maxFileSize / (1024 * 1024))}
-                onChange={e => updateOption('maxFileSize', parseInt(e.target.value) * 1024 * 1024)}
+                value={drafts.maxFileSizeMb}
+                onChange={e => {
+                  setDrafts(d => ({ ...d, maxFileSizeMb: e.target.value }));
+                  const mb = parseInt(e.target.value, 10);
+                  if (mb > 0) updateOption('maxFileSize', mb * 1024 * 1024);
+                }}
                 endDecorator="MB"
                 slotProps={{
                   input: {
@@ -298,16 +324,22 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   <FormLabel>From Date</FormLabel>
                   <Input
                     type="date"
-                    value={options.fromDate || ''}
-                    onChange={e => updateOption('fromDate', e.target.value || undefined)}
+                    value={drafts.fromDate}
+                    onChange={e => {
+                      setDrafts(d => ({ ...d, fromDate: e.target.value }));
+                      updateOption('fromDate', localDayBoundary(e.target.value, 'start'));
+                    }}
                   />
                 </FormControl>
                 <FormControl sx={{ flex: 1 }}>
                   <FormLabel>To Date</FormLabel>
                   <Input
                     type="date"
-                    value={options.toDate || ''}
-                    onChange={e => updateOption('toDate', e.target.value || undefined)}
+                    value={drafts.toDate}
+                    onChange={e => {
+                      setDrafts(d => ({ ...d, toDate: e.target.value }));
+                      updateOption('toDate', localDayBoundary(e.target.value, 'end'));
+                    }}
                   />
                 </FormControl>
               </Stack>

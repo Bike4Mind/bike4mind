@@ -104,6 +104,11 @@ describe('POST /api/notebooks/export', () => {
     expect(res._getJSONData().errors).toContainEqual(
       expect.objectContaining({ field: 'notebookIds.0', message: 'must be a 24-character hex notebook id' })
     );
+    // The service is never reached here, so this is the only line that records the fault at all.
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Notebook export rejected at the schema',
+      expect.objectContaining({ userId: 'user-1', fields: ['notebookIds.0'] })
+    );
   });
 
   it('answers 400 with the service code when the export is rejected as a caller fault', async () => {
