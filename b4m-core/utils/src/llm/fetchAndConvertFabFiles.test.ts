@@ -12,7 +12,9 @@ describe('fetchAndConvertFabFiles reports ids it could not resolve', () => {
 
   const deps = (returned: Array<{ id: string }>) => ({
     db: {
-      fabfiles: { getAccessibleFiles: vi.fn().mockResolvedValue(returned.map(f => ({ ...f, userId: { toString: () => 'u1' } }))) },
+      fabfiles: {
+        getAccessibleFiles: vi.fn().mockResolvedValue(returned.map(f => ({ ...f, userId: { toString: () => 'u1' } }))),
+      },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- unused on this path
       caches: {} as any,
     },

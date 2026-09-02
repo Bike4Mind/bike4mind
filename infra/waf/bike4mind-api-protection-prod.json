@@ -9,18 +9,39 @@
       "Name": "Allow-LLM-API",
       "Priority": 0,
       "Statement": {
-        "ByteMatchStatement": {
-          "SearchString": "/api/ai/v1/completions",
-          "FieldToMatch": {
-            "UriPath": {}
-          },
-          "TextTransformations": [
+        "OrStatement": {
+          "Statements": [
             {
-              "Priority": 0,
-              "Type": "NONE"
+              "ByteMatchStatement": {
+                "SearchString": "/api/ai/v1/completions",
+                "FieldToMatch": {
+                  "UriPath": {}
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            },
+            {
+              "ByteMatchStatement": {
+                "SearchString": "/api/ai/v1/completions/",
+                "FieldToMatch": {
+                  "UriPath": {}
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
             }
-          ],
-          "PositionalConstraint": "STARTS_WITH"
+          ]
         }
       },
       "Action": {
@@ -30,33 +51,6 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "Allow-LLM-API"
-      }
-    },
-    {
-      "Name": "allow-admin-endpoints",
-      "Priority": 1,
-      "Statement": {
-        "ByteMatchStatement": {
-          "SearchString": "/api/admin/",
-          "FieldToMatch": {
-            "UriPath": {}
-          },
-          "TextTransformations": [
-            {
-              "Priority": 0,
-              "Type": "LOWERCASE"
-            }
-          ],
-          "PositionalConstraint": "STARTS_WITH"
-        }
-      },
-      "Action": {
-        "Allow": {}
-      },
-      "VisibilityConfig": {
-        "SampledRequestsEnabled": true,
-        "CloudWatchMetricsEnabled": true,
-        "MetricName": "allow-admin-endpoints"
       }
     },
     {
@@ -250,6 +244,96 @@
                           }
                         ],
                         "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/web-owasp-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/code-semgrep-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/packages-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/secrets-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/cloud-prowler-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/attack-simulation-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
                       }
                     }
                   ]

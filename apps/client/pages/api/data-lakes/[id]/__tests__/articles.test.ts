@@ -81,6 +81,7 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.isFallbackLake.mockReturnValue(false);
   h.lakeMembershipScope.mockReturnValue({
+    kind: 'owned',
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
     creatorUserId: LAKE.createdByUserId,
@@ -98,12 +99,15 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     // The creator, NOT the viewer: a viewer's own file that merely carries a colliding tag
     // prefix is not a member of someone else's lake, and a per-viewer answer could never match
     // the lake's persisted fileCount.
-    expect(serverOptions.lakeMembership).toEqual({
-      datalakeTag: 'datalake:org1:acme-docs',
-      fileTagPrefix: 'acme:',
-      creatorUserId: 'creator-1',
-    });
-    expect(serverOptions.lakeMembership.creatorUserId).not.toBe('viewer-9');
+    expect(serverOptions.lakeMemberships).toEqual([
+      {
+        kind: 'owned',
+        datalakeTag: 'datalake:org1:acme-docs',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    ]);
+    expect(serverOptions.lakeMemberships[0].creatorUserId).not.toBe('viewer-9');
   });
 
   it('passes the scope OUTSIDE the parsed params so a caller cannot forge one', async () => {
@@ -113,7 +117,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const [, params, , serverOptions] = h.search.mock.calls[0];
     // search() zod-parses params; a forgeable creatorUserId there would read anyone's files.
     // Every other scope key is out of the parsed params for the same reason.
-    expect(params.options).not.toHaveProperty('lakeMembership');
+    expect(params.options).not.toHaveProperty('lakeMemberships');
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
     expect(params.options).not.toHaveProperty('dataLakeTagPrefixes');
@@ -146,7 +150,9 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
     const [, , , serverOptions] = h.search.mock.calls[0];
-    expect(serverOptions.lakeMembership).toEqual(registryScope);
+    // #2216 routes the registry browse through a membership scope; this branch carries the
+    // singular -> plural rename, so it arrives as a one-element `lakeMemberships` array.
+    expect(serverOptions.lakeMemberships).toEqual([registryScope]);
     // The hand-rolled pair is gone - leaving it would re-open the second, divergent predicate.
     expect(serverOptions.dataLakeTagPrefixes).toBeUndefined();
     expect(serverOptions.dataLakeTags).toBeUndefined();

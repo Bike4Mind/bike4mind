@@ -1,4 +1,9 @@
-import { isChunkRebuildPending, isConvergencePausedNote, isMemberIndexingInFlight } from '@bike4mind/common';
+import {
+  isChunkRebuildPending,
+  isChunkStalledFile,
+  isMemberIndexingInFlight,
+  type ChunkStallReason,
+} from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
 import { toSingleLine } from './renderDataLakePromptBlock';
 import { describeSupersession, type SupersessionReport } from './supersession';
@@ -68,6 +73,13 @@ export type IndexStateFile = {
   chunkCount?: number;
   vectorizedChunkCount?: number | null;
   error?: string | null;
+  /** Set when the convergence kill switch stalled the file (`FabFile.chunkStallReason`). */
+  chunkStallReason?: ChunkStallReason | null;
+  /**
+   * The owner's own note. Read ONLY through `isChunkStalledFile`, as the transitional fallback for
+   * rows #2016's migration has not reached yet - see its docblock in `common`. Nothing else here
+   * may key on it, and it goes away with that arm.
+   */
   notes?: string | null;
   /** A requested-but-uncommitted passage rebuild (#1939) - see the partition below. */
   chunkRebuildRequestedAt?: Date | string | null;
@@ -109,18 +121,18 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     // The condition is EITHER marker AND zero vectorized chunks, i.e. "marked stalled and nothing of
     // it is retrievable right now". Both halves are load-bearing, and each was a live defect:
     //
-    // - Keying on the CHUNK marker alone served the vectorize arm, on the false premise that such a
+    // - Keying on the CHUNK arm alone served the vectorize arm, on the false premise that such a
     //   file "is served" and is "permanent". Neither holds. The search read path filters
     //   `vector: {$exists: true, $ne: []}`, so a file with 45 chunks and 0 vectors returns nothing
     //   while its neighbours are re-ranked into the top-K - measured live, the answer confidently
     //   contradicted the missing document. And reprocess repairs it in seconds, so it is repairable
     //   by the same prose the chunk arm already prints.
-    // - Keying on a marker alone, with no vector condition, withheld a REPAIRED file forever: the
-    //   rescue sweep enqueues without a reset, and nothing on that success path used to clear
-    //   `notes`, so a fully re-chunked and re-vectorized file kept its marker and stayed
-    //   permanently unsearchable while every search on the lake reported partial.
+    // - Keying on the marker alone, with no vector condition, withheld a REPAIRED file forever: the
+    //   rescue sweep enqueues without a reset, and nothing on that success path used to clear the
+    //   marker, so a fully re-chunked and re-vectorized file kept it and stayed permanently
+    //   unsearchable while every search on the lake reported partial.
     //
-    // Splitting on the VECTOR COUNT rather than on which marker was written is what makes both
+    // Splitting on the VECTOR COUNT rather than on which arm was stamped is what makes both
     // correct at once, and it keeps the one case that genuinely is servable servable: a partially
     // vectorized file (40 of 90) really does return its embedded passages, so it ranks normally.
     //
@@ -131,10 +143,10 @@ export function partitionByIndexAvailability<T extends IndexStateFile>(
     const hasNoRetrievablePassage = (file.vectorizedChunkCount ?? 0) === 0;
     // The pending stamp widens the `chunkCount > 0` guard rather than replacing it: it is the one
     // in-flight signal that fires on a CHUNKLESS member, and `isMemberIndexingInFlight` is still what
-    // decides (so `error` and the paused note keep their precedence there, and a stamp left behind by
+    // decides (so `error` and the stall reason keep their precedence there, and a stamp left behind by
     // a rebuild that stopped does not read as one still running).
     const rebuildPending = isChunkRebuildPending(file.chunkRebuildRequestedAt);
-    if (isConvergencePausedNote(file.notes) && hasNoRetrievablePassage) withheld.push(file);
+    if (isChunkStalledFile(file) && hasNoRetrievablePassage) withheld.push(file);
     else if ((chunkCount > 0 || rebuildPending) && isMemberIndexingInFlight({ ...file, chunkCount }))
       withheld.push(file);
     else servable.push(file);
@@ -151,8 +163,8 @@ export function buildRetrievalUnavailableReport(withheld: readonly IndexStateFil
   // tells the reader to do. Both arms are alike on that point and neither auto-resumes - a dropped
   // vectorize message has no producer that will re-send it - so bucketing the vectorize arm as
   // `indexing` would print "they will return on their own" about a file that never will.
-  const paused = withheld.filter(f => isConvergencePausedNote(f.notes));
-  const indexing = withheld.filter(f => !isConvergencePausedNote(f.notes));
+  const paused = withheld.filter(f => isChunkStalledFile(f));
+  const indexing = withheld.filter(f => !isChunkStalledFile(f));
   return {
     indexing: { count: indexing.length, sample: nameSample(indexing) },
     paused: { count: paused.length, sample: nameSample(paused) },

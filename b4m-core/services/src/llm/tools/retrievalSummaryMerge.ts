@@ -5,10 +5,15 @@ export type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
 // 'ok' outranks 'no_lakes': a turn where one surface abstained (no lakes in scope) while another
 // surface actually retrieved successfully is reachable (e.g. LakeMemoryFeature abstains but
 // search_knowledge_base succeeds independently), and the merged outcome must reflect the success,
-// not the abstain. 'failed' still outranks both -- a genuine failure on any surface is never
-// masked by a success or an abstain elsewhere in the same turn.
+// not the abstain. 'not_indexed' sits ABOVE 'ok' because an unsearchable corpus is not a topical
+// zero and must not be erased by another surface's success in the same turn -- that erasure is the
+// whole reason it cannot be modelled at 'no_lakes' severity. It sits BELOW 'failed' because a
+// genuine outage is the more urgent of the two and is never masked by an indexing gap.
+// The Record key type is load-bearing: adding an outcome to the Zod enum without ranking it here
+// is a compile error, not a silent severity-0 default.
 const OUTCOME_SEVERITY: Record<RetrievalSummary['outcome'], number> = {
-  failed: 2,
+  failed: 3,
+  not_indexed: 2,
   ok: 1,
   no_lakes: 0,
 };
@@ -23,8 +28,9 @@ const OUTCOME_SEVERITY: Record<RetrievalSummary['outcome'], number> = {
  * and llm-adapters purely for this function.
  *
  * - attempted: OR - once any surface attempted retrieval this turn, it stays true.
- * - outcome: worst-of by severity (failed > ok > no_lakes), so a single failure within a turn is
- *   never masked by a later success or abstain, and a real success is never masked by an abstain
+ * - outcome: worst-of by severity (failed > not_indexed > ok > no_lakes), so a single failure
+ *   within a turn is never masked by a later success or abstain, an unsearchable corpus is never
+ *   masked by a success on a different surface, and a real success is never masked by an abstain
  *   from a different surface in the same turn.
  * - surfaces / dataLakeTags: union, deduped.
  */

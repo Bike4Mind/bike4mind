@@ -163,6 +163,16 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
+   * The connection bound to a given lake, whatever its `enabled` state, and deliberately WITHOUT an
+   * org filter - the caller is the lake-purge teardown, which must release the folder claim from
+   * whichever org holds it and cannot re-derive that org once the lake document is gone. A disabled
+   * row still occupies the unique driveFolderId index, so `findByDataLakeId`'s enabled-only view
+   * would leave exactly the strand this exists to prevent. Excludes credentials.
+   * SECURITY: server-side teardown only; never hand the result to a cross-org caller.
+   */
+  findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
    * The connection that has claimed a given Drive folder, if any. Deliberately GLOBAL (no org
    * filter) - it answers "is this folder already claimed by ANY org", which is the whole point of
    * the global-unique index. SECURITY: server-side claim check only; the returned document (which

@@ -1,6 +1,7 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
   CitableSource,
+  describePipelineStall,
   getEmbeddingModelCost,
   IFabFileDocument,
   isSupportedEmbeddingModel,
@@ -17,6 +18,7 @@ import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import { lakeMembershipsFrom, warnIfManyLakeMemberships } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
@@ -441,7 +443,7 @@ async function trySemanticKbSearch(
     // A personal-corpus session searches with NO lake arms: `collectScopedFiles` passes
     // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
     // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
-    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+    const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
     // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
     // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
     // files), and falling through to the metadata-only keyword arm would lose content search over
@@ -456,6 +458,8 @@ async function trySemanticKbSearch(
     const adaptive = budgets.kbResultTokenBudget > 0 || budgets.kbMinRelevance > 0;
     const topK = Math.max(ceiling, adaptive ? KB_SEARCH_MAX_RESULTS : 0, KB_SEARCH_CANDIDATE_FLOOR);
 
+    const lakeMemberships = lakeMembershipsFrom(lakes);
+    warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:semantic');
     const search = await semanticDataLakeSearch(
       {
         userId: context.userId,
@@ -468,7 +472,7 @@ async function trySemanticKbSearch(
         apiKeyTable,
         dataLakeTags,
         dataLakeTagPrefixes,
-        scopedTagPrefixes,
+        lakeMemberships,
         // Without this the arm below returns empty for a suppressed session and the turn silently
         // falls to metadata-only keyword search - see ownFilesOnly.
         ownFilesOnly: context.suppressLakeArms === true,
@@ -799,11 +803,15 @@ function formatSearchResults(files: IFabFileDocument[]): string {
     const tags = toContentLabel(file.tags?.map(t => t.name).join(', ') || 'none');
     const notes = file.notes ? `\n   Notes: ${defangRetrievedContent(file.notes)}` : '';
     const fileType = file.type || 'FILE';
+    // Machine state, not owner text, so it stays out of the defanged half: without it a
+    // zero-chunk or paused file lists clean and the model reports it as readable.
+    const stall = describePipelineStall(file);
+    const pipeline = stall ? `\n   Pipeline: ${stall}` : '';
 
     return (
       `${index + 1}. **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
       `   Type: ${fileType} | MIME: ${file.mimeType}\n` +
-      `   Tags: ${tags}${notes}`
+      `   Tags: ${tags}${pipeline}${notes}`
     );
   });
 
@@ -1057,9 +1065,10 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Search files the user has access to (owned + shared + org-shared + data lake)
             // Same treatment as the semantic arm above - a fallback that re-widened to owner-wide
             // lake access would undo the scope on exactly the turns semantic search found nothing.
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } =
-              await resolveSessionLakeAccess(context);
+            const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
             keywordArmLakes = lakes;
+            const lakeMemberships = lakeMembershipsFrom(lakes);
+            warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(
               context.userId,
               query,
@@ -1088,7 +1097,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 userGroups: context.user.groups || [], // Pass user's groups for org-level sharing
                 dataLakeTags,
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
+                lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                 excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
                 // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                 ...(context.retrievalFilter ?? {}),

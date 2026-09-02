@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import {
   buildRetrievalUnavailableReport,
   describeRetrievalUnavailable,
@@ -9,6 +8,7 @@ import {
   partitionByIndexAvailability,
 } from './retrievalUnavailable';
 import { emptyEmbeddingMismatchReport } from './embeddingMismatch';
+import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
 import { buildSupersessionReport } from './supersession';
 
 /** A settled, fully-embedded file - every case below perturbs one field. */
@@ -45,7 +45,7 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
   // in practice - QA counted ~33 vectorize-arm strandings to 1 chunk-arm - so this was the hole
   // operators actually hit.
   it('withholds a kill-switch-abandoned file with zero vectors - nothing of it is retrievable', () => {
-    const paused = { ...settled, vectorizedChunkCount: 0, notes: CONVERGENCE_PAUSED_NOTE };
+    const paused = { ...settled, vectorizedChunkCount: 0, chunkStallReason: 'vectorizePaused' as const };
     expect(partitionByIndexAvailability([paused]).withheld.map(f => f.id)).toEqual(['f1']);
   });
 
@@ -53,18 +53,23 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
   // does return its embedded passages, so it ranks normally. This is why the predicate splits on the
   // vector count rather than on which marker was written.
   it('serves a partly-vectorized kill-switch-abandoned file - its embedded passages still rank', () => {
-    const partly = { ...settled, chunkCount: 90, vectorizedChunkCount: 40, notes: CONVERGENCE_PAUSED_NOTE };
+    const partly = {
+      ...settled,
+      chunkCount: 90,
+      vectorizedChunkCount: 40,
+      chunkStallReason: 'vectorizePaused' as const,
+    };
     expect(partitionByIndexAvailability([partly]).withheld).toEqual([]);
   });
 
   // The other direction, and the defect that had NO test: the marker outlives a rebuild the rescue
-  // sweep performs (it enqueues without a reset), so keying on the note alone withheld a fully
+  // sweep performs (it enqueues without a reset), so keying on the marker alone withheld a fully
   // re-chunked and re-vectorized file FOREVER, and reported the whole lake partial with it. The
   // vector count is what distinguishes repaired from stranded. commitFabFileChunks also clears the
   // marker now; this asserts the reader holds even if that clear is ever lost.
   it('serves a REPAIRED file that still carries the marker - it has vectors again', () => {
-    for (const notes of [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE]) {
-      const repaired = { ...settled, chunkCount: 8, vectorizedChunkCount: 8, notes };
+    for (const chunkStallReason of ['vectorizePaused', 'rechunkPaused'] as const) {
+      const repaired = { ...settled, chunkCount: 8, vectorizedChunkCount: 8, chunkStallReason };
       expect(partitionByIndexAvailability([repaired]).withheld).toEqual([]);
     }
   });
@@ -73,10 +78,35 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
   // "fine": a re-chunk deleted its passages and the kill switch stopped the rebuild. It is neither
   // in flight nor searchable, so without this it is silently absent while neighbours fill the top-K.
   it('withholds a file whose passages a paused re-chunk removed, though it has no chunks', () => {
-    const stranded = { ...settled, chunkCount: 0, vectorizedChunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    const stranded = { ...settled, chunkCount: 0, vectorizedChunkCount: 0, chunkStallReason: 'rechunkPaused' as const };
     const { servable, withheld } = partitionByIndexAvailability([stranded]);
     expect(servable).toEqual([]);
     expect(withheld.map(f => f.id)).toEqual(['f1']);
+  });
+
+  // The transitional legacy arm (isChunkStalledFile): between the queue stack's deploy and the
+  // #2016 migration - and after a code ROLLBACK, which nothing reverts the data for - a stalled row
+  // still carries the marker as prose in `notes` and no `chunkStallReason`. Without the fallback it
+  // reads as a plain chunkless file and is SERVED, so the turn answers around a hole and reports
+  // full coverage. Delete with the arm.
+  it('withholds a pre-migration row carrying the stall marker as legacy prose in notes', () => {
+    const legacy = {
+      ...settled,
+      chunkCount: 0,
+      vectorizedChunkCount: 0,
+      notes: CHUNK_STALL_NOTICES.rechunkPaused,
+    };
+    expect(partitionByIndexAvailability([legacy]).withheld.map(f => f.id)).toEqual(['f1']);
+    // And it is reported as PAUSED, not as indexing - "they will return on their own" is wrong advice.
+    const report = buildRetrievalUnavailableReport(partitionByIndexAvailability([legacy]).withheld);
+    expect(report.paused.count).toBe(1);
+    expect(report.indexing.count).toBe(0);
+  });
+
+  // The owner's own note must not be mistaken for a marker - only the exact handler prose counts.
+  it('serves a chunkless file whose notes merely mention the kill switch', () => {
+    const owner = { ...settled, chunkCount: 0, vectorizedChunkCount: 0, notes: 'ask ops about the kill switch' };
+    expect(partitionByIndexAvailability([owner]).withheld).toEqual([]);
   });
 
   it('serves a chunkless file (an image, a still-uploading row) rather than flagging every lake', () => {
@@ -123,7 +153,7 @@ describe('buildRetrievalUnavailableReport', () => {
   it('counts a paused-rechunk file apart from the files that are merely re-indexing', () => {
     const report = buildRetrievalUnavailableReport([
       { id: 'f1', fileName: 'indexing.pdf' },
-      { id: 'f2', fileName: 'stranded.pdf', notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+      { id: 'f2', fileName: 'stranded.pdf', chunkStallReason: 'rechunkPaused' },
     ]);
     expect(report.indexing.count).toBe(1);
     expect(report.paused.count).toBe(1);
@@ -167,7 +197,7 @@ describe('buildRetrievalUnavailableReport', () => {
   it('buckets a paused-VECTORIZE file as paused, not as merely re-indexing', () => {
     const report = buildRetrievalUnavailableReport([
       { id: 'f1', fileName: 'indexing.pdf' },
-      { id: 'f2', fileName: 'novectors.pdf', notes: CONVERGENCE_PAUSED_NOTE },
+      { id: 'f2', fileName: 'novectors.pdf', chunkStallReason: 'vectorizePaused' },
     ]);
     expect(report.indexing.count).toBe(1);
     expect(report.paused.count).toBe(1);
@@ -215,7 +245,7 @@ describe('describeRetrievalUnavailable', () => {
   // come back on its own, so telling the reader to search again later would be false reassurance.
   it('tells the reader a paused file needs an action, not more waiting', () => {
     const text = describeRetrievalUnavailable(
-      buildRetrievalUnavailableReport([{ id: 'f2', fileName: 'stranded.pdf', notes: CONVERGENCE_PAUSED_CHUNK_NOTE }])
+      buildRetrievalUnavailableReport([{ id: 'f2', fileName: 'stranded.pdf', chunkStallReason: 'rechunkPaused' }])
     );
     expect(text).toContain('stranded.pdf');
     expect(text).toContain('do NOT return on');

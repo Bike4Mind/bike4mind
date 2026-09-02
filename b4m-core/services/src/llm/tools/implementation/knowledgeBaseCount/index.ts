@@ -97,7 +97,7 @@ function lakeScope(lake: ResolvedLakeAccess, context: ToolContext): CountScope {
       includeShared: true,
       userGroups: context.user.groups ?? [],
       ...(lake.membership
-        ? { lakeMembership: lake.membership }
+        ? { lakeMemberships: [lake.membership] }
         : { dataLakeTags: [lake.datalakeTag], dataLakeTagPrefixes: [lake.fileTagPrefix] }),
     },
   };

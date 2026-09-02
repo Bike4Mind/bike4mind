@@ -29,7 +29,10 @@ import { toSingleLine } from './renderDataLakePromptBlock';
  * `attributeFileToLakeIds`' prefix arm refusing to treat a user-controlled prefix as a standalone
  * attribution signal - correct there, and the safe direction here - but it means a prefix-only
  * newer generation cannot displace a meta-tagged older one. A lake whose members are largely
- * prefix-only will report a collapse count of zero no matter how many duplicates it holds.
+ * prefix-only will report a collapse count of zero no matter how many duplicates it holds - and
+ * that shape got more common, not less, once `lakeMemberships` widened which prefix-only members
+ * reach retrieval scope at all. Closing it means giving attribution a membership-anchored arm,
+ * which is a change to `attributeFileToLakeIds` and its audit-trail caller both, not to this file.
  */
 
 /** How many suppressed files to name, so a caller can act without dumping the lake. */
