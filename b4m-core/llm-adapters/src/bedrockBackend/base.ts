@@ -39,6 +39,61 @@ interface BedrockOptions {
 const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 
 /**
+ * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
+ * here rather than imported: adding @smithy/node-http-handler to this package's manifest was
+ * measured to re-resolve the lockfile and unify the transitive copies the repo currently carries
+ * (4.8.2, 4.9.3, 4.9.4 all collapsed onto 4.9.13), which silently changes the transport version
+ * other packages' AWS clients get. That is a repo-wide change with no place in this fix - not a
+ * claim that pnpm cannot hold several versions at once, which it plainly does today.
+ * Deliberately narrow, so `satisfies` rejects an h1 knob.
+ *
+ * The names are covered at runtime by base.requestTimeout.integration.test.ts, which drives a
+ * REAL BedrockRuntimeClient built from this config against a stalled h2 server. If upstream
+ * renames one, that test fails instead of the timeout silently disarming.
+ */
+type BedrockHttp2HandlerOptions = {
+  requestTimeout: number;
+  sessionTimeout: number;
+  disableConcurrentStreams: boolean;
+};
+
+// Bound every Bedrock call so a stalled connection cannot hang forever. Without this the SDK
+// arms NO timer at all (@smithy DEFAULT_REQUEST_TIMEOUT is 0, and the defaults-mode provider
+// contributes only retryMode plus a connectionTimeout the h2 handler ignores), so a dead socket
+// never errors, never returns, and the retry config above never engages.
+//
+// CRITICAL - client-bedrock-runtime builds a NodeHttp2Handler, NOT a NodeHttpHandler, so the h1
+// knobs are silently DROPPED here: `socketTimeout`, `connectionTimeout` and
+// `throwOnRequestTimeout` configure nothing on this client. Keep the `satisfies` below, and do
+// not inline this as a bare object literal: the SDK types `requestHandler` as loosely as
+// Record<string, unknown>, so any wrong key would type-check and quietly do nothing.
+//
+// On h2 `requestTimeout` is a per-stream INACTIVITY timeout (Http2Stream.setTimeout), not a
+// total-duration cap, and it rejects with a TimeoutError. Hence it is safe for long streaming
+// chat: a completion that keeps producing tokens keeps resetting it, and the handler never
+// clears it once headers arrive, so it guards the response body too. The non-streaming Invoke
+// path has no intermediate activity, so there it effectively bounds total generation time -
+// which is what sets the value, matching the slow-model ceiling in anthropicBackend.ts.
+//
+// Caveat: a stall AFTER headers closes the stream gracefully, so it truncates the response
+// rather than raising - bounded, but silent. Only a pre-response stall throws.
+//
+// TimeoutError is retryable (@smithy TRANSIENT_ERROR_CODES), so worst-case pre-response latency
+// is maxAttempts x requestTimeout plus adaptive backoff. A caller needing a tighter deadline
+// should pass `options.abortSignal`, which every send() below forwards.
+//
+// `disableConcurrentStreams` is NOT optional: supplying our own requestHandler replaces the
+// SDK's default config object, which sets it. Dropping it would silently move Bedrock from an
+// isolated session per request to multiplexed sessions.
+export const BEDROCK_REQUEST_HANDLER = {
+  requestTimeout: 120_000,
+  // Above requestTimeout so the stream timer normally wins (clearer error); this is the
+  // backstop for a hung TCP/TLS connect, the gap h1's connectionTimeout would have covered.
+  sessionTimeout: 130_000,
+  disableConcurrentStreams: true,
+} satisfies BedrockHttp2HandlerOptions;
+
+/**
  * Detect cancellation errors so they propagate past tool-error containment to
  * the outer catch (which has dedicated abort handling). Without this, aborts
  * would be converted into tool_result strings and the model would keep
@@ -83,6 +138,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
       ...BEDROCK_RETRY_CONFIG,
+      requestHandler: BEDROCK_REQUEST_HANDLER,
     });
   }
 
@@ -123,6 +179,25 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     return [];
   }
 
+  /**
+   * Whether this adapter's `translateStreamChunk` reports `done: true` ONLY on the provider's
+   * terminal event. When true, complete() treats a stream that produced output but never
+   * reported done as a TRUNCATED response and throws instead of returning the partial text.
+   *
+   * Opt-in rather than the default because "reports done terminally" is a per-adapter contract
+   * the base class cannot infer, and getting it wrong turns every healthy completion into an
+   * error. Three groups exist today:
+   *   - terminal-only, so they override this to true: anthropic, deepseek, llama, jurassicTwo
+   *   - `done: true` on EVERY content chunk, so the check would be inert: titan, moonshot
+   *     (the better fix for those is a stopReason passthrough, as moonshot.ts already does)
+   *   - never report done, incl. the test doubles in this directory: left false
+   *
+   * A new streaming backend must opt in deliberately; silence keeps the old behaviour.
+   */
+  protected get signalsStreamTermination(): boolean {
+    return false;
+  }
+
   protected updateClientForModel(model: string): void {
     const requiredRegion = this.getRegionForModel(model);
     this._options.region = requiredRegion;
@@ -130,6 +205,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
       ...BEDROCK_RETRY_CONFIG,
+      requestHandler: BEDROCK_REQUEST_HANDLER,
     });
   }
 
@@ -369,11 +445,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the old code returned silently, so the chat had nothing to render and hung until the client
         // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
         let emittedTextChars = 0;
+        // @see signalsStreamTermination - only meaningful for adapters that opt in.
+        let sawTerminalEvent = false;
 
         for await (const streamEvent of response.body) {
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
-            const { chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            sawTerminalEvent ||= done;
             if (chunk?.stopReason) stopReason = chunk.stopReason;
 
             chunk?.choices?.forEach(choice => {
@@ -412,12 +491,46 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
         // count is deliberately NOT part of the condition: an empty response can still report phantom
         // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
+        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
+        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
+        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
+        // profile produces literally the same observable (no chunks, no terminal event), so the
+        // two are indistinguishable at this layer and the more actionable message should win.
         if (emittedTextChars === 0 && !func.some(f => f.name)) {
           throw new Error(
             `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
               `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
               `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
               `model/profile is granted in ${this._options.region}.`
+          );
+        }
+
+        // FAIL LOUD on a TRUNCATED completion. A transport stall mid-body closes the h2 stream
+        // gracefully (NGHTTP2_NO_ERROR), so the loop above just ends: the send() promise has
+        // already resolved, nothing rejects, and a half-finished answer would be delivered as a
+        // complete one. The guard above only catches a stream that produced NOTHING, and
+        // stopReason is absent on healthy turns for most adapters, so the terminal event is the
+        // only trustworthy signal that the model actually finished. @see BEDROCK_REQUEST_HANDLER
+        //
+        // A user Stop is EXCLUDED, and must stay excluded. In the h2 handler the abort callback
+        // and the requestTimeout callback do the same two things (close the stream, then reject an
+        // already-settled promise), so a cancel reaches this point looking exactly like a stall:
+        // verified against the real event-stream path, where BOTH end the body iterator cleanly
+        // with no throw. Without this check a routine cancel would discard the partial reply, log
+        // at ERROR, and trigger the retry below - re-running a completion the user just stopped.
+        //
+        // Worded to include "stream timeout" on purpose: that is the substring
+        // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
+        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
+        // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
+        // that survived a retry and a provider fallback is worth seeing.
+        if (this.signalsStreamTermination && !sawTerminalEvent && !options.abortSignal?.aborted) {
+          throw new Error(
+            `[BaseBedrockBackend] stream timeout - model "${model}" in region ${this._options.region} ` +
+              `ended after ${emittedTextChars} chars without a terminal event, so the response is ` +
+              `TRUNCATED. Usually a stalled Bedrock socket cut the stream short; the partial text is ` +
+              `withheld deliberately rather than returned as a finished answer.`
           );
         }
 

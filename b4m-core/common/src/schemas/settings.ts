@@ -489,12 +489,12 @@ export const OrchestrationDefaultsSchema = z.object({
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block. Mirrored client-side via
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
     // to expose. Mirrored client-side in
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'image_generation',
     'edit_image',
     'music_generation',
