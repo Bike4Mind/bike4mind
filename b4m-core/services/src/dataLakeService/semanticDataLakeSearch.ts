@@ -678,7 +678,7 @@ async function rankChunksForFiles(args: {
   // nothing - the choice is between reporting that and letting the top-K quietly fill up with
   // neighbours. Refusing here rather than after the scan also keeps them out of the mismatch
   // report, where a vector-less file would otherwise be miscounted as an embedding-space problem.
-  const { servable: availableFiles, withheld: reindexing } = partitionByIndexAvailability(allScopedFiles);
+  const { servable: scopedFiles, withheld: reindexing } = partitionByIndexAvailability(allScopedFiles);
   const retrievalUnavailable = buildRetrievalUnavailableReport(reindexing);
   if (reindexing.length > 0) {
     logger?.warn?.(
@@ -686,25 +686,29 @@ async function rankChunksForFiles(args: {
       { fileIds: reindexing.slice(0, 5).map(f => f.id) }
     );
   }
-  // Collapse superseded generations AFTER the availability partition, never before: a newest
-  // generation that is mid-reindex is withheld above, and suppressing its older sibling on the
-  // strength of a winner that cannot be served would leave the lake contributing nothing for that
-  // document where today the older one still ranks.
+  const { primary: modelMatchedFiles, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
+  // Collapse superseded generations AFTER BOTH partitions above, never before. The invariant is
+  // that a winner which cannot actually be served must never suppress a sibling that can, or the
+  // lake contributes NOTHING for that document where today the older generation still ranks:
+  //  - availability: a newest generation that is mid-(re)index is withheld above and carries no
+  //    vectors at all;
+  //  - embedding model: only the query model's bucket is scanned. The alternate buckets reach the
+  //    ANN phase below ONLY when `vectorSearchEnabled` is set, and that setting is off by default,
+  //    so on the default deployment a foreign-model file is a hard DROP rather than a deferral.
+  // Same ordering, for the same reason, as the forced-retrieval path in ChatCompletionFeatures.
   //
-  // `availableFiles` - not the post-`groupFilesByEmbeddingModel` set - is the right input because
-  // grouping here is not a DROP: alternate-model files can still be ANN-served below. The forced
-  // retrieval path in ChatCompletionFeatures collapses after ITS embedding-model split for the same
-  // reason inverted - there the foreign-model files genuinely never rank, so they must not win a key.
-  const { servable: scopedFiles, superseded } = args.supersession
-    ? partitionBySupersession(availableFiles, args.supersession)
-    : { servable: availableFiles, superseded: [] };
+  // Collapsing the primary bucket alone can therefore MISS a collapse (two generations that are
+  // both foreign-model and both ANN-served rank together). That is the safe direction: it serves a
+  // duplicate rather than dropping a document, which is the trade this whole module makes.
+  const { servable: rankable, superseded } = args.supersession
+    ? partitionBySupersession(modelMatchedFiles, args.supersession)
+    : { servable: modelMatchedFiles, superseded: [] };
   const supersession = buildSupersessionReport(superseded);
   if (superseded.length > 0) {
     logger?.warn?.(`[semanticSearch] suppressed ${superseded.length} superseded file(s) before ranking`, {
       superseded: supersession.sample,
     });
   }
-  const { primary: rankable, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
   // Foreign-model files no path has served (yet). Filtering `scopedFiles` (rather than
   // concatenating the grouper's alternate buckets) preserves scope order, so `excludedFiles.sample`
   // stays byte-identical to before this cutover on any lake with no served alternates. `served` is

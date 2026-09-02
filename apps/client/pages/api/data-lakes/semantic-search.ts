@@ -560,7 +560,8 @@ const handler = baseApi()
         // The single flag a caller branches on to know the answer is incomplete because content was
         // WITHHELD - either because it could not be compared (embedding space) or because it could
         // not be served (mid-re-index, #1681). scan.truncated is the separate "did we reach
-        // everything" signal.
+        // everything" signal, and a supersession collapse is deliberately NOT counted here: nothing
+        // was withheld, the corpus was deduplicated. Read `superseded` below for that.
         partial_results: dataLakeService.isPartialSearch(search),
         embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
         retrieval_unavailable: toRetrievalUnavailablePayload(search.retrievalUnavailable),

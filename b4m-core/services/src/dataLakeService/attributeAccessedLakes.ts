@@ -45,9 +45,12 @@ export function attributeFileToLakeIds(tags: string[], lakes: AttributableLake[]
   // an unnameable tag is simply not an attribution signal.
   const names = tags.filter((tag): tag is string => typeof tag === 'string');
   const ids = new Set<string>();
+  // Map, not a per-tag `find`: two lakes can carry the same `datalakeTag` (slugs are not unique
+  // across scopes), and the map's last-write-wins keeps the resolution this function has always had.
+  const lakeIdByTag = new Map(lakes.map(l => [l.datalakeTag, l.id]));
   for (const tag of datalakeTagsFrom(names)) {
-    const lake = lakes.find(l => l.datalakeTag === tag);
-    if (lake) ids.add(lake.id);
+    const id = lakeIdByTag.get(tag);
+    if (id) ids.add(id);
   }
   // A static-registry lake's files structurally cannot carry its meta-tag (no write path
   // stamps one for a fallback lake), so without this arm every retrieval of registry content

@@ -1980,7 +1980,7 @@ export const settingsMap = {
       'When a lake holds two generations of the same document (a re-upload, a Drive sync, a migration), rank only the newest and report the suppression. Off by default: the weakest identity tier is a bare file name, so two genuinely different documents sharing a name in one lake would collapse to one - turn this on only after checking the reported collapse counts on real lakes. Suppression is recoverable either way; a collapsed member is still reachable by id or name through retrieve_knowledge_content.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 94,
+    order: 97,
     dependsOn: 'EnableDataLakes',
   }),
   PauseLakeConvergence: makeBooleanSetting({

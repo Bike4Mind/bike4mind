@@ -1273,14 +1273,6 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
 });
 
 /**
- * Retrieval-scoped lake-prompt injection on the FORCED path (#1108). A lake's operating
- * instructions ride a turn ONLY when that turn actually grounds on the lake's files - identified by
- * the `datalake:` provenance tags on the injected source files. The always-on DataLakePromptFeature
- * that injected every trusted lake's prompt into every turn was removed; its defense/composition
- * behavior is covered by renderDataLakePromptBlock.test.ts and its trust rule by
- * getDataLakePrompts.test.ts. Here we lock the SCOPING: right lake, right turn, fail-safe.
- */
-/**
  * Forced retrieval's own supersession collapse. This path does its own candidate scan rather than
  * routing through semanticDataLakeSearch, so the collapse (and its ORDER relative to the two
  * partitions before it) has to be asserted here separately.
@@ -1428,6 +1420,14 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
   });
 });
 
+/**
+ * Retrieval-scoped lake-prompt injection on the FORCED path (#1108). A lake's operating
+ * instructions ride a turn ONLY when that turn actually grounds on the lake's files - identified by
+ * the `datalake:` provenance tags on the injected source files. The always-on DataLakePromptFeature
+ * that injected every trusted lake's prompt into every turn was removed; its defense/composition
+ * behavior is covered by renderDataLakePromptBlock.test.ts and its trust rule by
+ * getDataLakePrompts.test.ts. Here we lock the SCOPING: right lake, right turn, fail-safe.
+ */
 describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () => {
   const OWNER = 'u1';
   const embeddingFactory = {

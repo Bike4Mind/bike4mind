@@ -1,4 +1,5 @@
 import { attributeFileToLakeIds, type AttributableLake } from './attributeAccessedLakes';
+import { toSingleLine } from './renderDataLakePromptBlock';
 
 /**
  * Content that is in scope, authorized and servable, but SUPERSEDED: an older generation of a
@@ -21,6 +22,14 @@ import { attributeFileToLakeIds, type AttributableLake } from './attributeAccess
  * that tool does not apply this partition. Which is why the report below names suppressed ids and
  * the tier that suppressed them rather than only counting them: a bad collapse has to be
  * diagnosable from a transcript alone.
+ *
+ * KNOWN GAP, and the one to check before reading a collapse count as evidence of anything: on a
+ * DYNAMIC lake, a member carrying only the lake's content-tag prefix and no `datalake:` meta-tag
+ * attributes to no lake at all, so it groups only with itself and can never collapse. That is
+ * `attributeFileToLakeIds`' prefix arm refusing to treat a user-controlled prefix as a standalone
+ * attribution signal - correct there, and the safe direction here - but it means a prefix-only
+ * newer generation cannot displace a meta-tagged older one. A lake whose members are largely
+ * prefix-only will report a collapse count of zero no matter how many duplicates it holds.
  */
 
 /** How many suppressed files to name, so a caller can act without dumping the lake. */
@@ -66,7 +75,11 @@ export type SupersededEntry<T extends SupersedableFile = SupersedableFile> = {
   supersededBy: string;
 };
 
-// NUL-joined so a file name or path containing the separator cannot forge another file's key.
+// NUL-joined: the lake id and the tier literal sit at fixed positions, so no value can forge a key
+// belonging to another lake or another tier. Within one tier the join is not injective if a NUL is
+// ever representable in a name (`a` + `b\0c` and `a\0b` + `c` agree), which costs nothing here -
+// same lake, same owner, and the outcome is at worst one wrong collapse of the kind the file-name
+// tier already permits.
 const SEP = '\0';
 
 /**
@@ -91,7 +104,12 @@ const createdAtMillis = (file: SupersedableFile): number => {
   return Number.isFinite(ms) ? ms : -Infinity;
 };
 
-/** Newest wins; equal timestamps fall to ascending id so the choice never depends on scope order. */
+/**
+ * Newest wins; equal timestamps fall to ascending id so the choice never depends on scope order.
+ * Ascending id is arbitrary but FIXED, which is the property that matters. Note it keeps the older
+ * row when both members are undated, since ObjectId hex is time-ordered - reachable only by legacy
+ * rows inserted past `timestamps: true`, and still deterministic.
+ */
 function winsOver(candidate: SupersedableFile, incumbent: SupersedableFile): boolean {
   const a = createdAtMillis(candidate);
   const b = createdAtMillis(incumbent);
@@ -159,7 +177,13 @@ export function buildSupersessionReport(superseded: readonly SupersededEntry[]):
  */
 export function formatSupersededSample(sample: SupersessionReport['sample'], count: number): string {
   const named = sample
-    .map(f => `${f.fileName ?? f.fileId} [${f.fileId}, matched by ${f.tier}, superseded by ${f.supersededBy}]`)
+    .map(f => {
+      // Ids are server-generated and safe unescaped; the NAME is not. This prose reaches the
+      // column-0 `NOTE:` region, outside the block defangRetrievedContent guards - see the matching
+      // note in retrievalUnavailable.ts, which sanitizes the same value for the sibling report.
+      const label = f.fileName ? toSingleLine(f.fileName) : '';
+      return `${label || f.fileId} [${f.fileId}, matched by ${f.tier}, superseded by ${f.supersededBy}]`;
+    })
     .join('; ');
   return count > sample.length ? `${named}, ...` : named;
 }

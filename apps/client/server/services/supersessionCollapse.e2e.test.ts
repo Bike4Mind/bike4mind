@@ -8,7 +8,7 @@
  * @bike4mind/database as dependencies. Consumes the built dist, so `pnpm turbo:core:build` must be
  * current.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
@@ -102,6 +102,13 @@ const run = (overrides: Record<string, unknown> = {}) =>
   dataLakeService.semanticDataLakeSearch({ ...baseParams, ...overrides } as never, adapters as never);
 
 describe('supersession collapse against real Mongo', () => {
+  // In afterEach, not inline at the end of each case: these all search the same lakes unfiltered,
+  // so one failed assertion would otherwise leave its rows behind and take every later case with it.
+  afterEach(async () => {
+    await FabFile.deleteMany({});
+    await FabFileChunk.deleteMany({});
+  });
+
   it('flag off ranks both generations; flag on ranks only the newest and names it', async () => {
     const older = await makeFile({
       fileName: 'Protocol.pdf',
@@ -131,10 +138,8 @@ describe('supersession collapse against real Mongo', () => {
     const note = dataLakeService.describeSearchLimitations(on);
     expect(note).toContain(older);
     expect(note).toContain('matched by fileName');
-    expect(dataLakeService.isPartialSearch(on)).toBe(true);
-
-    await FabFile.deleteMany({});
-    await FabFileChunk.deleteMany({});
+    // Reported to the model, but not a partial corpus: nothing is missing, it is deduplicated.
+    expect(dataLakeService.isPartialSearch(on)).toBe(false);
   });
 
   it('does not collapse the same file name across two different lakes', async () => {
@@ -154,9 +159,6 @@ describe('supersession collapse against real Mongo', () => {
     const on = await run({ lakes: [LAKE_A, LAKE_B], supersessionCollapseEnabled: true });
     expect(on.results.map(r => r.fileId).sort()).toEqual([inA, inB].sort());
     expect(on.supersession.count).toBe(0);
-
-    await FabFile.deleteMany({});
-    await FabFileChunk.deleteMany({});
   });
 
   it('driveFileId wins over a differing relativePath (fields survive the real search projection)', async () => {
@@ -180,9 +182,6 @@ describe('supersession collapse against real Mongo', () => {
     const on = await run({ lakes: [LAKE_A, LAKE_B], supersessionCollapseEnabled: true });
     expect(on.results.map(r => r.fileId)).toEqual([newer]);
     expect(on.supersession.sample[0]).toMatchObject({ fileId: older, tier: 'driveFileId', supersededBy: newer });
-
-    await FabFile.deleteMany({});
-    await FabFileChunk.deleteMany({});
   });
 
   it('runs AFTER the availability partition: a mid-reindex newest generation does not erase the older one', async () => {
@@ -206,9 +205,6 @@ describe('supersession collapse against real Mongo', () => {
     expect(on.results.map(r => r.fileId)).toEqual([older]);
     expect(on.supersession.count).toBe(0);
     expect(on.retrievalUnavailable.indexing.count).toBe(1);
-
-    await FabFile.deleteMany({});
-    await FabFileChunk.deleteMany({});
   });
 
   it('leaves an unattributable member alone (tags reverse to no lake)', async () => {
@@ -232,9 +228,6 @@ describe('supersession collapse against real Mongo', () => {
     });
     expect(on.results.map(r => r.fileId).sort()).toEqual([a, b].sort());
     expect(on.supersession.count).toBe(0);
-
-    await FabFile.deleteMany({});
-    await FabFileChunk.deleteMany({});
   });
 
   it('survives a legacy row whose tag object carries no name', async () => {
@@ -255,8 +248,5 @@ describe('supersession collapse against real Mongo', () => {
     const on = await run({ lakes: [LAKE_A, LAKE_B], supersessionCollapseEnabled: true });
     expect(on.results.map(r => r.fileId)).toEqual([newer]);
     expect(on.supersession.sample[0]).toMatchObject({ fileId: older, tier: 'fileName' });
-
-    await FabFile.deleteMany({});
-    await FabFileChunk.deleteMany({});
   });
 });

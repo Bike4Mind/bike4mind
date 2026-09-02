@@ -622,6 +622,65 @@ describe('semanticDataLakeSearch supersession collapse', () => {
     expect(result.supersession.partial).toBe(true);
   });
 
+  it('spends the recovered top-K on another document instead of returning fewer passages', async () => {
+    // Both generations out-score the unrelated file, so at topK 2 they fill the result set between
+    // them. The collapse must hand the freed slot to `other`, not shorten the output.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const chunks = [
+      { id: 'ch-1old', fabFileId: 'old', vector: [1, 0.9], text: 'old' },
+      { id: 'ch-2new', fabFileId: 'new', vector: [1, 0.9], text: 'new' },
+      { id: 'ch-3other', fabFileId: 'other', vector: [1, 0.5], text: 'other' },
+    ];
+    const run = (params: SemanticDataLakeSearchParams) =>
+      semanticDataLakeSearch(
+        { ...params, topK: 2 },
+        adaptersFor(twoGenerations(), pagingChunkMock(chunks as never)) as never
+      );
+
+    const off = await run({ ...baseParams(), lakes: LAKES });
+    expect(off.results.map(r => r.fileId).sort()).toEqual(['new', 'old']);
+
+    const on = await run(collapseParams());
+    expect(on.results).toHaveLength(off.results.length);
+    expect(on.results.map(r => r.fileId).sort()).toEqual(['new', 'other']);
+  });
+
+  /**
+   * Ordering guard, and the reason the collapse sits after `groupFilesByEmbeddingModel` rather than
+   * before it: the alternate-model buckets reach the ANN phase only when vector search is enabled,
+   * which is off by default, so a foreign-model file is a hard drop on the default deployment. If it
+   * could win an identity key the lake would serve NEITHER generation of that document.
+   */
+  it('collapses AFTER the embedding-model split: a foreign-model newest generation does not suppress the older one', async () => {
+    const files = [
+      {
+        id: 'old',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2024-01-01'),
+        embeddingModel: 'text-embedding-ada-002',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+      },
+      {
+        id: 'new',
+        fileName: 'Protocol.pdf',
+        tags: [{ name: 'datalake:x' }],
+        vectorized: true,
+        createdAt: new Date('2025-01-01'),
+        embeddingModel: 'text-embedding-3-small',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+      },
+    ];
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(collapseParams(), adaptersFor(files, findVectors) as never);
+    expect(findVectors.mock.calls[0][0]).toEqual(['old']);
+    expect(result.supersession.count).toBe(0);
+    expect(result.embeddingMismatch.excludedFiles.count).toBe(1);
+  });
+
   it('no two ranked chunks come from members sharing a source identity within one lake', async () => {
     const chunkFor = (fileId: string) => ({ id: `ch-${fileId}`, fabFileId: fileId, vector: [1, 0], text: fileId });
     const findVectors = pagingChunkMock(twoGenerations().map(f => chunkFor(f.id)) as never);
@@ -640,7 +699,8 @@ describe('semanticDataLakeSearch supersession collapse', () => {
     expect(prose).toContain('old');
     expect(prose).toContain('new');
     expect(prose).toContain('fileName');
-    expect(isPartialSearch(result)).toBe(true);
+    // Reported, but NOT partial: the corpus is complete, just deduplicated. See isPartialSearch.
+    expect(isPartialSearch(result)).toBe(false);
   });
 
   it('flag off (the shipped default): nothing collapses even with lakes resolved', async () => {

@@ -253,7 +253,11 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(searchParams().supersessionCollapseEnabled).toBe(true);
     // Both halves are needed for the collapse to run at all - the flag alone cannot attribute a
     // file to a lake, so a caller that passes one without the other silently gets today's behaviour.
-    expect(searchParams().lakes).toBeDefined();
+    // Asserted with toEqual rather than toBeDefined because an EMPTY array is the value the search
+    // treats as "off", so a presence check alone would stay green through that regression.
+    expect(searchParams().lakes).toEqual([
+      { id: 'lake-acme', slug: 'acme-handbook', name: 'Acme Handbook', datalakeTag: 'datalake:acme-handbook' },
+    ]);
   });
 
   it('defaults supersessionCollapseEnabled to false when the setting is unset', async () => {

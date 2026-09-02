@@ -26,7 +26,7 @@ import {
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
-import { describeSearchLimitations } from '../../../../dataLakeService/retrievalUnavailable';
+import { describeSearchLimitations, isPartialSearch } from '../../../../dataLakeService/retrievalUnavailable';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -62,6 +62,15 @@ function prettyFileName(fn: string): string {
 }
 
 /**
+ * A limitation notice the model must hear, plus whether it means the CORPUS itself came back
+ * incomplete. The two used to be the same thing and no longer are - see `formatSkipNotice`.
+ */
+interface SkipNotice {
+  text: string;
+  partial: boolean;
+}
+
+/**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
  * Passage text is untrusted: a lake can serve content its owner did not author (a shared source
@@ -84,7 +93,7 @@ function formatSemanticResults(
   results: SemanticChunkResult[],
   maxChunkChars: number,
   scan?: SemanticSearchScanAccounting,
-  skipNotice?: string | null,
+  skipNotice?: SkipNotice | null,
   logger?: Logger,
   bounding?: { budgetBound: boolean; droppedCount: number }
 ): string {
@@ -154,9 +163,35 @@ function formatSemanticResults(
  * could be COMPARED. Phrased as an instruction because a bare fact tends to be paraphrased into a
  * claim of completeness.
  */
-function formatSkipNotice(skipNotice?: string | null): string {
+function formatSkipNotice(skipNotice?: SkipNotice | null): string {
   if (!skipNotice) return '';
-  return `NOTE: ${skipNotice} Tell the user the knowledge base may be returning partial results.\n\n`;
+  // The trailing instruction is conditional because not every notice means a partial corpus: a
+  // supersession collapse reports that a newer generation displaced an older one, which is a
+  // COMPLETE corpus deduplicated. Telling the model to warn about partial results there would be
+  // false, and false often enough (every search against any lake holding a re-upload) to teach it
+  // to discount the warning on the searches where it is true.
+  const partial = skipNotice.partial ? ' Tell the user the knowledge base may be returning partial results.' : '';
+  return `NOTE: ${skipNotice.text}${partial}\n\n`;
+}
+
+/**
+ * Compose the one notice channel that survives the fall-through to keyword search.
+ *
+ * The relevance-floor reason leads and is COMPOSED with (not replaced by) the search limitations:
+ * when the floor emptied the result set it is the reason there are zero results, and a limitation
+ * notice that merely says an older version was not ranked would point the model at a superseded
+ * document instead of the actual cause.
+ */
+function buildSkipNotice(
+  search: Parameters<typeof describeSearchLimitations>[0],
+  floorEmptiedResults: boolean
+): SkipNotice | null {
+  const reasons = [
+    floorEmptiedResults ? 'a configured relevance threshold filtered out every candidate passage for this query' : null,
+    describeSearchLimitations(search),
+  ].filter((r): r is string => r !== null);
+  if (reasons.length === 0) return null;
+  return { text: reasons.join('. '), partial: isPartialSearch(search) || floorEmptiedResults };
 }
 
 /**
@@ -295,7 +330,7 @@ async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
   corpusLabel: string,
-  skipNotice?: string | null,
+  skipNotice?: SkipNotice | null,
   dataLakeTags: string[] = []
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
@@ -323,14 +358,14 @@ async function emitSemanticCitables(
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
   // Appended to the one found-status rather than a second update, which would read as a bug.
   // warnings also accretes onto promptMeta so the notice survives in the quest record.
-  const partial = skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+  const partial = skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
     // does not narrow to this literal. Pre-existing pattern in this file.
     {
       promptMeta: {
         citables,
-        ...(skipNotice ? { warnings: [skipNotice] } : {}),
+        ...(skipNotice ? { warnings: [skipNotice.text] } : {}),
         retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
       },
     } as any,
@@ -348,7 +383,7 @@ async function emitSemanticCitables(
  */
 interface SemanticArmResult {
   output: string | null;
-  skipNotice: string | null;
+  skipNotice: SkipNotice | null;
   datalakeTags: string[];
   /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
    *  whenever `output` is null (nothing matched, or the arm never ran). */
@@ -463,11 +498,7 @@ async function trySemanticKbSearch(
     // `skipNotice` here, not just a server log, or the model reads a bare metadata listing as
     // "the knowledge base has nothing on this topic".
     const floorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
-    const skipNotice =
-      describeSearchLimitations(search) ??
-      (floorEmptiedResults
-        ? 'a configured relevance threshold filtered out every candidate passage for this query'
-        : null);
+    const skipNotice = buildSkipNotice(search, floorEmptiedResults);
     if (search.results.length === 0) {
       if (floorEmptiedResults) {
         context.logger.log(
@@ -590,11 +621,7 @@ async function tryScopedSemanticKbSearch(
 
     // See the matching branch in trySemanticKbSearch above for why this folds into skipNotice.
     const scopedFloorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
-    const skipNotice =
-      describeSearchLimitations(search) ??
-      (scopedFloorEmptiedResults
-        ? 'a configured relevance threshold filtered out every candidate passage for this query'
-        : null);
+    const skipNotice = buildSkipNotice(search, scopedFloorEmptiedResults);
     if (search.results.length === 0) {
       if (scopedFloorEmptiedResults) {
         context.logger.log(
@@ -875,7 +902,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     const injectedLakeTags = new Set<string>();
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
-    let lastSkipNotice: string | null = null;
+    let lastSkipNotice: SkipNotice | null = null;
     // Resolved at most once per completion, same discipline as searchCallCount above - a settings
     // (+ scoped-overlay) read on every search_knowledge_base call would cost a real DB round-trip
     // for no benefit, since every call in a completion shares the same caller scope. Resolved only
@@ -1161,13 +1188,13 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // has to land here too: when semantic finds nothing to say, this keyword status is the
             // ONLY user-visible write for the turn, so a total-withholding warning would otherwise
             // never reach the promptMeta inspector or the status line.
-            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+            const skipSuffix = semantic.skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
             await context.statusUpdate(
               {
                 promptMeta: {
                   citables,
-                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice.text] } : {}),
                   retrieval: {
                     attempted: true,
                     outcome: 'ok',
@@ -1182,11 +1209,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
-            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+            const skipSuffix = semantic.skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
               {
                 promptMeta: {
-                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice.text] } : {}),
                   // Ran to completion and legitimately found nothing - must be distinguishable
                   // from "never searched" (#1867).
                   retrieval: {
