@@ -183,6 +183,18 @@ async function waitForEvent(capture: Capture, timeoutMs = 5_000): Promise<Record
  * touches - a narrower context than the real one would silently change behavior, a wider one would
  * just be noise.
  */
+/**
+ * The ToolContext the search tool runs on.
+ *
+ * The double cast is deliberate: ToolContext is shaped for a live chat turn and carries many fields
+ * (session, quest, streaming, config) that a headless probe has no analogue for, so satisfying it
+ * honestly would mean fabricating a turn. Only the fields the search path actually reads are wired.
+ *
+ * The cost is that the compiler cannot tell us when a field the search path DOES read is missing -
+ * it silently reads `undefined` and the tool degrades instead of failing. That is exactly how the
+ * lake-access gap produced a clean 0% across every question. The canary search in `preflight` is
+ * the compensating control for this cast; do not remove one without the other.
+ */
 function buildToolContext(user: IUserDocument, capture: Capture) {
   return {
     userId: user.id,
@@ -293,8 +305,13 @@ async function preflight(user: IUserDocument, capture: Capture): Promise<{ lakeI
   //
   // Empirical rather than a re-derivation of the access rules: this is a live end-to-end search, so
   // it also catches an unusable embedding credential, a tag drift, or an unvectorized corpus - any
-  // reason the candidate set comes back empty, not just the one that bit us. Run before any config
-  // is applied, so the stage's own settings cannot be what suppresses it.
+  // reason the candidate set comes back empty, not just the one that bit us.
+  //
+  // It runs at whatever the stage already has configured, since the sweep has not applied anything
+  // yet - so a stage carrying an aggressive floor of its own can fail this check on a lake that is
+  // in fact reachable. That is the right trade: the canary's job is to turn a silent stage-wide
+  // zero into a loud stop, and a false stop costs one legible error message while a false pass
+  // costs a plausible, entirely wrong results table.
   const canary = await runQuestion(CANARY_QUESTION, user, capture);
   if (canary.served.length === 0) {
     throw new Error(
@@ -302,7 +319,9 @@ async function preflight(user: IUserDocument, capture: Capture): Promise<{ lakeI
         `user ${user.id} and every question would score 0% at every configuration.\n` +
         `Most likely cause: no access grant. "${HELP_LAKE_SLUG}" is gateless, org-less and not ` +
         `public, so the only arm that admits anyone is the owner bypass - run as the account in the ` +
-        `lake's createdByUserId, or grant access via isPublic / requiredUserTag / organizationId.`
+        `lake's createdByUserId, or grant access via isPublic / requiredUserTag / organizationId.\n` +
+        `Otherwise check this stage's existing ${MIN_RELEVANCE_SETTING}: the canary runs before the ` +
+        `sweep applies anything, so a floor already set on the stage can suppress it.`
     );
   }
 
