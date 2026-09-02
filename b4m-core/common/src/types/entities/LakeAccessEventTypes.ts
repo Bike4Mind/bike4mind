@@ -128,6 +128,26 @@ export interface ILakeAccessEvent {
   returnedChunkCount: number;
   returnedFileCount: number;
   identifiersTruncated: boolean;
+  /**
+   * Whether the surface's CANDIDATE listing was truncated by its own cap before scoring - not
+   * whether the returned set was trimmed. `returnedChunkCount`/`returnedFileCount` describe what
+   * was injected after scoring and carry no information about the candidate stage, which is why
+   * this cannot be derived from them.
+   *
+   * Tri-state, and the third state carries meaning:
+   * - `true`  - the listing hit the cap, so part of the readable corpus was never scored at all;
+   * - `false` - the surface considered its whole candidate set;
+   * - ABSENT  - the surface does not report this (every surface but forced retrieval today), or
+   *   the row predates the field. NEVER read absent as `false`; that would claim full candidate
+   *   coverage for a surface that never measured it. Consumers count presence separately from
+   *   truth (see `LakeCandidateCapPressure.turnsWithSignal`).
+   *
+   * ATTRIBUTION IS APPROXIMATE. The cap applies to the turn's whole mixed candidate listing
+   * (owned + shared + org + every accessible lake), while the row attributes it to the lakes the
+   * turn actually grounded on. The honest reading is "a turn that read this lake hit the cap",
+   * never "this lake caused the cap".
+   */
+  candidateCapReached?: boolean;
   surface: LakeAccessSurface;
   /**
    * The turn this retrieval happened during, for joining this audit row back to its Quest. A
@@ -169,6 +189,9 @@ export interface RecordLakeAccessEventInput {
    * `ILakeAccessEvent.scores`'s doc comment for the full rationale. `record()` re-validates and
    * re-slices this itself rather than trusting the alignment holds. */
   scores?: number[];
+  /** See `ILakeAccessEvent.candidateCapReached` - tri-state. Omit it entirely on a surface that
+   * does not measure its candidate stage; passing `false` asserts full candidate coverage. */
+  candidateCapReached?: boolean;
   surface: LakeAccessSurface;
   /** See `ILakeAccessEvent.questId`'s doc comment - diagnostic join key, not authorization data. */
   questId?: string;

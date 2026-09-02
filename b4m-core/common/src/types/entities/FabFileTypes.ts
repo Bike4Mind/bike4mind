@@ -710,6 +710,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to void.
    */
   deleteManyInIds(ids: string[]): Promise<void>;
+  /**
+   * Soft-delete the given ids, scoped to BOTH an owner and an upload batch, in one write. Exists for
+   * the upload-complete cleanup of browser-failed presign orphans: the scope is the security
+   * property (a stale or retried client sending stray ids must not be able to delete the caller's
+   * other files), and doing it as one `updateMany` rather than two queries per id keeps a large
+   * failure list from timing the request out before the batch is finalized. Returns how many rows
+   * were actually deleted.
+   */
+  softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number>;
 
   /**
    * Find all files in the given IDs.
@@ -1008,6 +1017,27 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
    */
   findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
+   * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
+   * actually landed - `status: 'pending'` alone does not prove that (every fresh row is minted
+   * pending and stays that way until an S3 objectCreated event, or the ingester's own markUploaded
+   * call, confirms the upload; see the model comment). Without the exclusion, a throw between
+   * minting the FabFile and finishing `storage.upload` would strand that driveFileId as
+   * permanently "already ingested" - invisible to every future slice's walk - with no bytes ever
+   * uploaded for it. A brand-new file's superseded copy is excluded the same way a vectorized one
+   * is included: both signal the SAME thing, that this driveFileId's current attempt is durable.
+   */
+  findDriveFileIdsByBatchId(batchId: string): Promise<string[]>;
+  /**
+   * Confirm a FabFile's bytes have landed, synchronously from the uploader itself - the same
+   * `pending` -> `complete` transition the S3 objectCreated handler makes asynchronously off the
+   * bucket event, done here instead so a resumed ingest slice's findDriveFileIdsByBatchId does not
+   * have to race that event to tell "uploaded" apart from "row minted, never uploaded". Idempotent
+   * with objectCreated's own transition (both guard on `status !== 'complete'`), so it is harmless
+   * if the S3 event flips it first or flips it again after.
+   */
+  markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
   /**
    * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the

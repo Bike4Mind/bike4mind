@@ -84,11 +84,11 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
     expect(withheld.map(f => f.id)).toEqual(['f1']);
   });
 
-  // The transitional legacy arm (isChunkStalledFile): between the queue stack's deploy and the
-  // #2016 migration - and after a code ROLLBACK, which nothing reverts the data for - a stalled row
-  // still carries the marker as prose in `notes` and no `chunkStallReason`. Without the fallback it
-  // reads as a plain chunkless file and is SERVED, so the turn answers around a hole and reports
-  // full coverage. Delete with the arm.
+  // The transitional legacy arm (isChunkStalledFile): between the queue stack's deploy and the #2016
+  // migration a stalled row still carries the marker as prose in `notes` and no `chunkStallReason`.
+  // Without the fallback it reads as a plain chunkless file and is SERVED, so the turn answers around
+  // a hole and reports full coverage. Delete with the arm. (A code ROLLBACK is the opposite shape and
+  // is NOT covered here - it needs `migrate down`; see the chunking.ts docblock.)
   it('withholds a pre-migration row carrying the stall marker as legacy prose in notes', () => {
     const legacy = {
       ...settled,

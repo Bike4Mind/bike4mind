@@ -677,6 +677,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.fabFileModel.findOne({ _id: id, userId });
   }
 
+  async softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    // The three-clause filter IS the guard - `userId` and `batchId` are not optional refinements.
+    // `deletedAt: null` keeps this idempotent, so a client retry does not restamp an already-deleted
+    // row with a later date.
+    const res = await this.fabFileModel.updateMany(
+      { _id: { $in: ids }, userId, batchId, deletedAt: null },
+      { $set: { deletedAt: new Date() } }
+    );
+    return res.modifiedCount;
+  }
+
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
@@ -1299,6 +1311,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       status: { $ne: 'pending' },
     });
     return docs.map(d => d.toJSON());
+  }
+
+  async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
+    // Excludes 'pending' - a row this slice's own createFabFile minted but whose storage.upload
+    // never confirmed (see the interface docs and markUploaded). `distinct` keeps this a projection
+    // over the { batchId: 1 } index rather than loading a whole slice's documents.
+    const ids = await this.fabFileModel.distinct('driveFileId', {
+      batchId,
+      driveFileId: { $ne: null },
+      status: { $ne: 'pending' },
+    });
+    return ids.filter((id): id is string => typeof id === 'string');
+  }
+
+  async markUploaded(fabFileId: string): Promise<void> {
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId, status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
   }
 
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter

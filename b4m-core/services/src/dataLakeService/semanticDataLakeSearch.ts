@@ -96,6 +96,17 @@ export interface SemanticChunkResult {
   fileTags: string[];
   chunkText: string;
   score: number;
+  /**
+   * The parent document's `createdAt`, rendered by `documentDateClause` into the passage header
+   * (#2236). Required, not optional, so every producer (this module's scan, annVectorSearch) has
+   * to supply it: a producer that omitted it would serve dateless passages from one retrieval
+   * backend and dated ones from another, and nothing would fail. `null` when the parent carries
+   * no date.
+   *
+   * NOTE: this interface is a public export of @bike4mind/services, so this required field is a
+   * source break for any out-of-repo code that CONSTRUCTS one. Readers are unaffected.
+   */
+  fileCreatedAt: Date | string | null;
 }
 
 /** Tuning + hard limits. All optional; the module defaults apply when omitted. */
@@ -209,6 +220,29 @@ export interface SemanticDataLakeSearchResult {
   alternateModelsEmbedded: string[];
 }
 
+/**
+ * Did this search compare NOTHING against the query - not one passage scored, by the scan path or
+ * by any ANN index? The counterpart of `isPartialSearch`: that one answers "did we return less
+ * than the whole corpus", this one answers "did we look at any of it at all".
+ *
+ * Keyed on `chunksScored`, which `scanAndRank` increments BEFORE the `minScore` filter, so a
+ * relevance floor that emptied a genuinely-ranked result set is correctly NOT "compared nothing" -
+ * the distinction a caller cannot make from `results.length` alone.
+ *
+ * `scan.annHits` (raw hits, pre-scope-filter) is what covers the ANN routes, and it is a sound
+ * "something was compared" signal despite being a HIT count rather than a comparison count only
+ * because of the zero-raw-hits rebucket below: a ready file whose ANN query returned nothing is
+ * moved to `scanEligible` and scanned, so it still reaches `chunksScored`. Without that rebucket
+ * this predicate could not tell an un-indexed ANN file from a genuine topical zero.
+ *
+ * Says nothing about WHY nothing was compared, deliberately - an empty scope, an unvectorized
+ * corpus and a failed query embed all satisfy it, and they carry different remedies. Callers
+ * separate them (see `proveRetrievalOutcome` in knowledgeBaseSearch); this is the raw fact.
+ */
+export function comparedNoPassages(search: Pick<SemanticDataLakeSearchResult, 'chunksScored' | 'scan'>): boolean {
+  return search.chunksScored === 0 && search.scan.annHits === 0;
+}
+
 export interface SemanticDataLakeSearchParams {
   userId: string;
   /** User's groups for org-level file sharing (forwarded to fabfiles.search). */
@@ -297,6 +331,8 @@ export interface SemanticDataLakeSearchAdapters {
 interface RankableFile {
   fileName: string;
   fileTags: string[];
+  /** Parent-document date for the passage header (#2236). Both builders below must carry it. */
+  createdAt?: Date | string | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -322,13 +358,15 @@ interface RankableFile {
    *  member carries, so omitting it here would silently return a member being rebuilt to `servable`. */
   chunkRebuildRequestedAt?: Date | string | null;
   /**
-   * The next three are the source-identity key supersession collapse groups on, read ONLY by
-   * `partitionBySupersession`. Both builders below populate them even though only the lake-scoped
-   * entrypoint opts into the collapse - see the note at each builder.
+   * These two, plus `createdAt` above, are the source-identity key supersession collapse groups on,
+   * read there ONLY by `partitionBySupersession`. `createdAt` is shared with the passage header
+   * rather than declared twice - it is the recency signal here and the document date there, and one
+   * field serving both is why a builder that drops it breaks two features at once. Both builders
+   * below populate all three even though only the lake-scoped entrypoint opts into the collapse -
+   * see the note at each builder.
    */
   relativePath?: string;
   driveFileId?: string;
-  createdAt?: Date | string | null;
 }
 
 /**
@@ -504,6 +542,7 @@ async function scanAndRank(args: {
           fileTags: file.fileTags,
           chunkText: chunk.text ?? '',
           score,
+          fileCreatedAt: file.createdAt ?? null,
         });
       }
 
@@ -972,19 +1011,18 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  // Warn only when NOTHING could be compared by ANY path. A few withheld chunks mid-revectorize
-  // are expected and must stay quiet - the same policy the truncation warning above applies, and
-  // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
-  // and alternateHitsReturned (not annEligible.length/outcome file counts): a lake fully served by
-  // ANN retrieval - the primary model, an alternate model, or both - legitimately scores zero
-  // chunks on the scan path, and without this the warning would false-fire on every healthy
-  // all-ANN search that also happens to have an unrelated excluded file elsewhere in scope.
-  if (
-    mismatchReport.partial &&
-    scanned.chunksScored === 0 &&
-    annResult.hitsReturned === 0 &&
-    alternateHitsReturned === 0
-  ) {
+  // Warn only when NOTHING could be compared by ANY path - `comparedNoPassages` above owns that
+  // definition, and counting the ann hits (rather than annEligible.length/outcome file counts) is
+  // why: a lake fully served by ANN retrieval - the primary model, an alternate model, or both -
+  // legitimately scores zero chunks on the scan path, and without them the warning would
+  // false-fire on every healthy all-ANN search that also happens to have an unrelated excluded
+  // file elsewhere in scope. The `partial` guard keeps this to a MISMATCH diagnosis: a few
+  // withheld chunks mid-revectorize are expected and must stay quiet, the same policy the
+  // truncation warning above applies, and the reason unlabeled files and budgets do not raise
+  // the flag either. The retrieval-outcome readers deliberately do NOT inherit that guard - see
+  // `proveRetrievalOutcome` in knowledgeBaseSearch, where an unvectorized corpus raises no
+  // mismatch at all and still has to be reported as unsearched.
+  if (mismatchReport.partial && comparedNoPassages({ chunksScored: scanned.chunksScored, scan })) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
       excludedFiles: mismatchReport.excludedFiles.count,
@@ -1089,6 +1127,7 @@ export async function semanticDataLakeSearch(
       {
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
+        createdAt: f.createdAt,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1103,13 +1142,12 @@ export async function semanticDataLakeSearch(
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
         chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
-        // Source identity for the supersession collapse (relativePath/driveFileId/createdAt). Same
-        // both-builders rule as above: only the lake-scoped entrypoint opts into the collapse today,
-        // but a builder that quietly stopped carrying these would make the collapse a silent no-op
-        // rather than an error.
+        // Source identity for the supersession collapse - with `createdAt` above, which the passage
+        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
+        // the collapse today, but a builder that quietly stopped carrying these would make the
+        // collapse a silent no-op rather than an error.
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
-        createdAt: f.createdAt,
       },
     ])
   );
@@ -1205,6 +1243,7 @@ export async function fileScopedSemanticSearch(
       {
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
+        createdAt: f.createdAt,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1219,13 +1258,12 @@ export async function fileScopedSemanticSearch(
         // ranking map below still names it) is exactly the omission this comment warns about, and it
         // fails silently - the member reads as an image and is served.
         chunkRebuildRequestedAt: f.chunkRebuildRequestedAt,
-        // Source identity for the supersession collapse (relativePath/driveFileId/createdAt). Same
-        // both-builders rule as above: only the lake-scoped entrypoint opts into the collapse today,
-        // but a builder that quietly stopped carrying these would make the collapse a silent no-op
-        // rather than an error.
+        // Source identity for the supersession collapse - with `createdAt` above, which the passage
+        // header shares. Same both-builders rule as above: only the lake-scoped entrypoint opts into
+        // the collapse today, but a builder that quietly stopped carrying these would make the
+        // collapse a silent no-op rather than an error.
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
-        createdAt: f.createdAt,
       },
     ])
   );

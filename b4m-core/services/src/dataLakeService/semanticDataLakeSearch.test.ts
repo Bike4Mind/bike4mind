@@ -33,6 +33,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 import {
+  comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   type SemanticDataLakeSearchParams,
@@ -1868,5 +1869,44 @@ describe('semanticDataLakeSearch withholds mid-(re)index members (#1681)', () =>
 
     expect(result.retrievalUnavailable.indexing.count).toBe(1);
     expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+});
+
+/**
+ * `comparedNoPassages` is the seam that separates "we looked at none of the corpus" from "we
+ * looked and it did not match" - the distinction `results.length` cannot make, and the one a
+ * retrieval outcome is graded on (see proveRetrievalOutcome in knowledgeBaseSearch).
+ *
+ * Both routes have to count, and each was a plausible one-sided implementation: keying on the scan
+ * count alone reports every healthy all-ANN deployment as unsearched, and keying on the ann hits
+ * alone reports every DocumentDB/self-host deployment the same way.
+ */
+describe('comparedNoPassages', () => {
+  const scanOf = (over: Partial<{ annHits: number }> = {}) => ({
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 0,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    annModelsQueried: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+    ...over,
+  });
+
+  it('is true only when neither route compared anything', () => {
+    expect(comparedNoPassages({ chunksScored: 0, scan: scanOf() })).toBe(true);
+  });
+
+  it('is false once the scan path scored a chunk, even with no ann hits', () => {
+    expect(comparedNoPassages({ chunksScored: 1, scan: scanOf() })).toBe(false);
+  });
+
+  it('is false once an ann index returned a hit, even with nothing scored on the scan path', () => {
+    expect(comparedNoPassages({ chunksScored: 0, scan: scanOf({ annHits: 1 }) })).toBe(false);
   });
 });

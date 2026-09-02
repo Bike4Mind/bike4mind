@@ -64,10 +64,11 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' }, fabFileChunkQueue: { url: 'http://sqs/fabFileChunkQueue' } },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('@server/worker/chunkScan', () => ({
+// Only the filter is stubbed (so the call args are assertable); the payload builder stays real so
+// these tests pin the provenance the sweep actually sends.
+vi.mock('@server/worker/chunkScan', async importActual => ({
+  ...(await importActual<typeof import('@server/worker/chunkScan')>()),
   buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date, unknown])),
-  CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
-  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
@@ -192,19 +193,20 @@ describe('dataLakeBatchReconcile cron handler', () => {
       h.reconcile.mockResolvedValue([]);
     });
 
-    it('CLAIMS then re-enqueues only the ids it won, tagging each with its claim token', async () => {
+    it('re-enqueues what the filter selected, with both scan cutoffs and a convergence stamp', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       h.fabFileFind.mockReturnValue({
         select: () => ({
           limit: () => ({
             lean: async () => [
-              { _id: 'ff1', userId: 'u1' }, // plain upload, no lake batch
-              { _id: 'ff2', userId: 'u2', batchId: 'batch-9' }, // data-lake file
+              { _id: 'ff1', userId: 'u1' },
+              { _id: 'ff2', userId: 'u2' },
             ],
           }),
         }),
       });
-      // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
+      // No producer-side claim and no batchId: the projection reads only _id and userId now, so a
+      // batch is invisible here - which is the point, both files are stamped the same way.
 
       const res = await handler();
 
@@ -217,22 +219,40 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(staleClaimBefore).toBeInstanceOf(Date);
       expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
 
-      // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
-      // the worker can reject a duplicate/superseded delivery.
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-      // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
+      // EVERY message is stamped convergence, with or without a batch: a scheduled sweep is
+      // background work, so it must stay haltable by the kill switch. An un-stamped re-enqueue
+      // reads as `user` and would re-chunk a file the switch had just parked as paused.
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        origin: 'convergence',
       });
-      // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
-      // sweep carries no lakeId (platform switch only).
+      // A global sweep carries no lakeId, so only the platform-scope switch halts it.
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',
         origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
+    });
+
+    it('projects userId as well as _id - the lean() fixtures would otherwise mask a trimmed projection', async () => {
+      h.getSettingsValue.mockResolvedValue(true);
+      const selectSpy = vi.fn();
+      h.fabFileFind.mockReturnValue({
+        select: (projection: string) => {
+          selectSpy(projection);
+          return { limit: () => ({ lean: async () => [{ _id: 'ff1', userId: 'u1' }] }) };
+        },
+      });
+
+      await handler();
+
+      // Every fixture here supplies userId whatever is projected, so a trim back to '_id' alone
+      // stays green while production enqueues `userId: 'undefined'`. This is the only assertion
+      // that fails on that.
+      expect(selectSpy).toHaveBeenCalledWith('_id userId');
     });
 
     it('enqueues every id the filter selected - duplicates are the worker CAS to resolve', async () => {
@@ -256,6 +276,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
@@ -289,7 +310,11 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       // All four attempted - the ones behind a failure are not abandoned.
       expect(h.sendToQueue).toHaveBeenCalledTimes(4);
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff4', userId: 'u4' });
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff4',
+        userId: 'u4',
+        origin: 'convergence',
+      });
       // And the counts are honest: two really were rescued, two really were not.
       const body = JSON.parse(res.body);
       expect(body.rescuedChunkFiles).toBe(2);

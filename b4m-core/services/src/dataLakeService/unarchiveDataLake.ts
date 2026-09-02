@@ -21,7 +21,10 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
   // that into a compile error.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'claimUnarchiving'>;
+    dataLakes: Pick<
+      IDataLakeRepository,
+      'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimUnarchiving'
+    >;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -37,7 +40,8 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
 /**
  * Restores an archived data lake with a dedup pass: if a file was re-uploaded while
  * the lake was archived, the live copy wins and the archived duplicate is discarded
- * (not restored). Owner or admin only. Uses transitional 'restoring' state.
+ * (not restored). Owner or admin only. Uses transitional 'unarchiving' state - the archive axis's
+ * own, distinct from the delete axis's 'restoring' (see DATA_LAKE_STATUSES).
  *
  * Both the dedup read and the reversal are bounded by `filesArchivedAt`, this lake's own archive
  * stamp: it stops the dedup pass from reading (and, on a hash match, soft-deleting) a sibling or
@@ -59,9 +63,11 @@ export const unarchiveDataLake = async (
   if (!canManageLake(existing, actor, grants)) {
     throw new BadRequestError('You do not have permission to restore this data lake');
   }
-  // Allow re-entry from the transitional 'restoring' state so a crashed prior attempt
-  // can be retried (the dedup + undelete + recompute below are idempotent).
-  if (existing.status !== 'archived' && existing.status !== 'restoring') {
+  // Allow re-entry from the transitional 'unarchiving' state so a crashed prior attempt can be
+  // retried (the dedup + undelete + recompute below are idempotent). The legacy shared 'restoring'
+  // is admitted for the same reason, for lakes caught mid-reversal by the deploy that split the two
+  // axes apart - claimUnarchiving converts those onto 'unarchiving'.
+  if (existing.status !== 'archived' && existing.status !== 'unarchiving' && existing.status !== 'restoring') {
     throw new BadRequestError(`Cannot restore a data lake in '${existing.status}' status`);
   }
 
@@ -105,8 +111,26 @@ export const unarchiveDataLake = async (
     const liveHashes = new Set(live.map(f => f.contentHash));
     const duplicateIds = archived.filter(f => f.contentHash && liveHashes.has(f.contentHash)).map(f => f.id);
     if (duplicateIds.length > 0) {
-      await db.fabFiles.deleteManyInIds(duplicateIds);
-      skippedDuplicates = duplicateIds.length;
+      // The only HARD delete in the lifecycle family, so it is the one side effect that must not
+      // run on a lost claim: everything else here is reversible, but rows removed while another
+      // caller is un-deleting them are gone for good. Re-read the status immediately before it and
+      // skip if this caller no longer holds 'unarchiving' - the settle below would refuse anyway,
+      // and the duplicates it leaves behind are the same benign outcome as a prefix-only re-upload
+      // (see the meta-tag note above).
+      //
+      // Narrows the window rather than closing it: there is no transaction spanning the status
+      // document and the file rows, so a claim lost in the microseconds after this read still lets
+      // the delete through. Worth doing anyway - the unguarded window was the whole dedup pass.
+      const holder = await db.dataLakes.findById(dataLakeId);
+      if (holder?.status !== 'unarchiving') {
+        logger?.warn?.('[dataLakes] unarchive lost its claim before the dedup pass; leaving duplicates in place', {
+          dataLakeId,
+          status: holder?.status,
+        });
+      } else {
+        await db.fabFiles.deleteManyInIds(duplicateIds);
+        skippedDuplicates = duplicateIds.length;
+      }
     }
   }
 
@@ -116,16 +140,24 @@ export const unarchiveDataLake = async (
   // Explicit null, not undefined (mongoose drops undefined): a later re-archive claims a FRESH
   // stamp via claimFilesArchivedAt's set-if-unset, rather than reusing this spent one.
   // Terminal transition only - see the note on archiveDataLake's settle step.
-  const updated = await db.dataLakes.update({
-    id: dataLakeId,
+  const updated = await db.dataLakes.settleLifecycleStatus(dataLakeId, 'unarchiving', {
     status: 'active',
     filesArchivedAt: null,
     ...lakeConfigWriteStamp(actor),
   });
-  // `updated` is null only if the lake vanished mid-operation (BaseModel.update is a
-  // findOneAndUpdate that resolves null rather than throwing); there is nothing to diff against
-  // then, and this path deliberately does not turn that into a failure - it never did.
-  if (updated) {
+  // Null now covers two cases the caller must tell apart, so the loss path re-reads. A lake that
+  // MOVED means a delete or purge won mid-operation: reported, because settling 'active' anyway is
+  // exactly the write that used to leave a lake reading live with every member soft-deleted. A lake
+  // that VANISHED keeps the lenient behavior this path has always had - there is nothing to diff
+  // against and nothing to conflict with.
+  if (!updated) {
+    const current = await db.dataLakes.findById(dataLakeId);
+    if (current) {
+      throw new BadRequestError(
+        `This data lake moved to '${current.status}' while it was being restored; the restore did not complete`
+      );
+    }
+  } else {
     await recordLakeConfigChange(
       {
         actor,
