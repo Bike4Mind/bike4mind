@@ -678,6 +678,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.fabFileModel.findOne({ _id: id, userId });
   }
 
+  async softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    // The three-clause filter IS the guard - `userId` and `batchId` are not optional refinements.
+    // `deletedAt: null` keeps this idempotent, so a client retry does not restamp an already-deleted
+    // row with a later date.
+    const res = await this.fabFileModel.updateMany(
+      { _id: { $in: ids }, userId, batchId, deletedAt: null },
+      { $set: { deletedAt: new Date() } }
+    );
+    return res.modifiedCount;
+  }
+
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
