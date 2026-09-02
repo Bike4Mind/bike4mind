@@ -68,8 +68,7 @@ describe('FabFileRepository.bulkUpdateTags', () => {
     // So modifiedCount is NOT a change-detector on this path, and `skipped = updates.length -
     // filesUpdated` only means "lost a CAS race" because no-op merges are filtered out BEFORE the
     // write. Suppressing them is what keeps that arithmetic honest - and what stops a re-apply
-    // rewriting updatedAt on every file for nothing, which reshuffles the `updatedAt: -1` tail of
-    // the fileName text index and reorders the user's file list.
+    // rewriting updatedAt on every file for nothing.
     //
     // This fails loudly the day someone adds `timestamps: false` here as an obvious churn
     // optimisation, which would silently turn modifiedCount into a change-detector.

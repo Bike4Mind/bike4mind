@@ -121,8 +121,7 @@ export const applyTaxonomySuggestions = async (
     // therefore genuinely modified (pinned in FabFileModel.bulkUpdateTags.test.ts).
     //
     // 1. Writing them rewrites `updatedAt` on every file in the batch for a write that changes no
-    //    tags, which reshuffles the `updatedAt: -1` tail of the fileName text index and reorders
-    //    the user's file list for nothing.
+    //    tags.
     // 2. It makes `skipped` below mean something. Because modifiedCount counts the timestamp bump,
     //    it is NOT a change-detector here; the subtraction only isolates lost CAS races once the
     //    no-op merges are excluded from `updates` in the first place.
