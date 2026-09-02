@@ -87,10 +87,13 @@ describe('PromptMetaInspector warnings', () => {
 });
 
 describe('PromptMetaInspector tools reporting: absent is not empty', () => {
-  // `tools` is not part of PromptMetaZodSchema, so it is routinely absent. The report used to read
-  // `tools?.length > 0`, which is falsy for undefined, and printed a confident "NONE (empty array)"
-  // with count 0 - accusing the tool pipeline when the real signal was "nothing was captured".
-  const withTools = (tools?: unknown) => show({ ...(tools === undefined ? {} : { tools }) } as Partial<PromptMeta>);
+  // offeredTools is IS part of PromptMetaZodSchema and IS written server-side, but is routinely
+  // absent on turns from before that write existed. The report used to read
+  // `offeredTools?.length > 0`, which is falsy for undefined, and printed a confident
+  // "NONE (empty array)" with count 0 - accusing the tool pipeline when the real signal was
+  // "nothing was captured".
+  const withTools = (offeredTools?: string[]) =>
+    show({ ...(offeredTools === undefined ? {} : { offeredTools }) } as Partial<PromptMeta>);
 
   const copiedMarkdown = () => {
     const writeText = vi.fn();
@@ -104,11 +107,11 @@ describe('PromptMetaInspector tools reporting: absent is not empty', () => {
     usePromptMetaInspector.getState().setPromptMeta(null);
   });
 
-  it('reports an absent tools field as not captured, never as an empty array', () => {
+  it('reports an absent offeredTools field as not captured, never as an empty array', () => {
     withTools(undefined);
     const md = copiedMarkdown();
 
-    expect(md).toContain('**Tools Sent to Model**: not captured (promptMeta.tools absent)');
+    expect(md).toContain('**Tools Sent to Model**: not captured (promptMeta.offeredTools absent)');
     expect(md).toContain('**Tools Count**: not captured');
     expect(md).not.toContain('NONE (empty array)');
     // The Issues section must point at the real cause instead of staying silent, which is what made
@@ -127,7 +130,7 @@ describe('PromptMetaInspector tools reporting: absent is not empty', () => {
   });
 
   it('still lists tool names when tools were captured', () => {
-    withTools([{ toolSchema: { name: 'search_knowledge_base' } }, { name: 'web_search' }]);
+    withTools(['search_knowledge_base', 'web_search']);
     const md = copiedMarkdown();
 
     expect(md).toContain('**Tools Sent to Model**: search_knowledge_base, web_search');
@@ -148,5 +151,36 @@ describe('PromptMetaInspector tools reporting: absent is not empty', () => {
     expect(screen.getByTestId('prompt-meta-tools-count-chip').textContent).toBe('0 tools');
     expect(screen.getByTestId('prompt-meta-tools-empty-chip')).toBeTruthy();
     expect(screen.queryByTestId('prompt-meta-tools-absent-chip')).toBeNull();
+  });
+
+  it('renders the panel honestly when offeredTools was actually recorded on the wire', () => {
+    withTools(['search_knowledge_base']);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('prompt-meta-tools-count-chip').textContent).toBe('1 tools');
+    expect(screen.getByText('search_knowledge_base')).toBeTruthy();
+  });
+});
+
+describe('PromptMetaInspector timestamps', () => {
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  it('renders generatedAt from the real schema field without a cast-and-hope', () => {
+    show({ generatedAt: '2026-01-15T10:00:00.000Z' } as Partial<PromptMeta>);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    expect(screen.getByText(/Generated: 2026-01-15/)).toBeTruthy();
+  });
+
+  it('falls back to the spliced-on quest createdAt when generatedAt is absent', () => {
+    show({ createdAt: '2026-02-20T10:00:00.000Z' } as unknown as Partial<PromptMeta>);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    expect(screen.getByText(/Generated: 2026-02-20/)).toBeTruthy();
+  });
+
+  it('renders the spliced-on quest updatedAt', () => {
+    show({ updatedAt: '2026-03-10T10:00:00.000Z' } as unknown as Partial<PromptMeta>);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    expect(screen.getByText(/Updated: 2026-03-10/)).toBeTruthy();
   });
 });

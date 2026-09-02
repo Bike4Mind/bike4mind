@@ -4,6 +4,7 @@ import {
   RETRIEVAL_EXCLUDE_MARKERS_MAX,
 } from '@bike4mind/utils/retrievalExclusion';
 import {
+  DATA_LAKE_GROUNDING_MODES,
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
@@ -11,7 +12,10 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
+import { usableObjectIds } from '../utils/objectIds';
 import { projectService } from '..';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
@@ -26,6 +30,11 @@ const createSessionParametersSchema = z.object({
   disableUserIntegrations: z.boolean().optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // Resolved from the lake at the create route (resolveLakeSessionDefaults), NOT client-supplied:
+  // the route deletes any client-sent value before merging, so the lake is authoritative for it.
+  // secureParameters strips unknown keys, so it MUST be declared here or the resolved grounding mode
+  // is silently dropped and the completion path falls back to size-only behavior.
+  corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   // secureParameters strips unknown keys, so these MUST be declared here or a surface's
   // retrieval-exclusion opt-in is silently dropped at create time.
   retrievalExcludeFilenameMarkers: z
@@ -54,6 +63,10 @@ export interface CreateSessionAdapters {
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
   };
+  /** Optional so existing callers compile; without it a failed lake-tag derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
 }
 
 export const createSession = async (
@@ -63,12 +76,27 @@ export const createSession = async (
 ) => {
   const { db } = adapters;
   const {
-    knowledgeIds = [],
+    knowledgeIds: rawKnowledgeIds = [],
     artifactIds = [],
-    agentIds = [],
+    agentIds: rawAgentIds = [],
     projectId,
     ...rest
   } = secureParameters(parameters, createSessionParametersSchema);
+
+  // Both arrays reference ObjectId-keyed collections; artifactIds does not. See usableObjectIds.
+  // NOTE: notebookImportService writes sessions through sessionRepository.create directly, so it
+  // does NOT pass through here - the read-side guards still carry rows it produces.
+  const dropLogger = adapters.logger ?? Logger.globalInstance;
+  const knowledgeIds = usableObjectIds(rawKnowledgeIds, 'knowledge', dropLogger);
+  const agentIds = usableObjectIds(rawAgentIds, 'agent', dropLogger);
+
+  // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
+  // tags is authoritative, so derivation runs only for a file-seeded session that named neither.
+  // Derives from the filtered ids: an unusable one addresses no file, and fabFiles is _id-keyed.
+  const retrievalTags =
+    rest.retrievalTags?.length || knowledgeIds.length === 0
+      ? rest.retrievalTags
+      : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
 
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
@@ -81,6 +109,8 @@ export const createSession = async (
 
     ...rest,
 
+    // After ...rest so the derived value wins over the (absent) request value it stands in for.
+    ...(retrievalTags?.length ? { retrievalTags } : {}),
     userId: user.id,
     knowledgeIds,
     artifactIds,

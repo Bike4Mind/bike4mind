@@ -38,16 +38,12 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerDocument, classifyQueryComplexity } from '@bike4mind/common';
+import { B4MLLMTools, IMcpServerDocument } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useTheme } from '@mui/joy';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { useChatInput } from '@client/app/hooks/useChatInput';
-import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
-import { commandHandlers } from '@client/app/components/Session/SessionBottom/sessionBottomConstants';
-import { isImageModel, isVideoModel, type CommandKey } from '@client/app/utils/commands';
 import { brand, gray, green } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
@@ -55,7 +51,6 @@ import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionM
 import {
   getToolDisplayName,
   getToolDescription,
-  isToolAvailableInAgentMode,
   isToolKeyMissing,
   filterToolsForDisplay,
 } from '@client/app/utils/toolMapping';
@@ -116,6 +111,10 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
   const content = (
     <Box
       className="tool-container"
+      // Every gated tool row is addressable by its own id. Hand-added per-tool testids drifted
+      // (image/music/audio had one, deep_research did not), which is exactly the tool an e2e run
+      // for a cancellation change needs to reach.
+      data-testid={toolId ? `tool-row-${toolId}` : undefined}
       sx={theme => {
         const baseStyles = {
           // The row needs its own frame colour, distinct from the surface behind it. Dark mode
@@ -278,7 +277,6 @@ const ToolsSection = ({
   const toolMode = useLLM(state => state.toolMode);
   const isQuestMasterEnabled = useLLM(state => state.isQuestMasterEnabled);
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
-  const agentMode = useLLM(state => state.agentMode);
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const researchMode = useLLM(state => state.researchMode);
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
@@ -461,86 +459,10 @@ const ToolsSection = ({
     [setLLM, setTools, tools, toolAvailability]
   );
 
-  // Agent mode runs the agent executor (fixed toolset, ignoring Smart Tools) when
-  // the composer bolt is ON and the feature is available. Mirrors the real routing
-  // gate in useSendMessage (`agentToggleActive` = isFeatureEnabled('agentMode') &&
-  // agentMode.enabled && !isRealSlashCommand), so it must use the RESOLVED feature
-  // flag (checkFeatureEnabled, which honors the admin EnableAgentModeDefault), NOT
-  // the raw experimentalFeatures.agentMode pref: an account enabled via the admin
-  // default has a working bolt but an unset raw pref, so keying on the raw pref
-  // left the bolt visibly ON yet the tools ungreyed. This is NOT enableAgents /
-  // isAgentsEnabled (the unrelated "@help Agent Detection" feature); gating on that
-  // would no-op the dimming for dogfooders with agentMode on but enableAgents off.
-  const agentModeActive = checkFeatureEnabled('agentMode') && (agentMode?.enabled ?? false);
-
-  // Predict whether the CURRENT draft prompt would silently auto-route to the
-  // agent via the rule-based complexity path (mirrors `autoRouteEnabled &&
-  // complexity === 'complex'` in routeQuery). When it would, the agent runs its
-  // fixed toolset and ignores the user's Smart Tools, so we grey the ignored
-  // tools here, BEFORE send, exactly like the explicit-toggle dimming. The LLM
-  // intent-classifier's decision isn't knowable client-side (it only fires at
-  // send), so this hint covers the rule-based complexity path only.
-  const chatDraft = useChatInput(s => s.chatInputValue);
-  const disableAutoRouteForThisSession = useLLM(s => s.disableAutoRouteForThisSession);
-  // Mirrors the send path's `liveAI` flag - the send only injects a generation
-  // command on image/video models when liveAI is on (see the image/video guard).
-  const liveAI = useAdvancedAISettings(state => state.liveAI);
-  const autoRouteEnabled = checkFeatureEnabled('agentMode') && userSettings.agentModeDefault === 'auto';
-  const predictedComplexityRoute = useMemo(() => {
-    if (!isAgentsEnabled || !autoRouteEnabled || disableAutoRouteForThisSession) return false;
-    const draft = chatDraft?.trim();
-    if (!draft) return false;
-    // Real slash commands (e.g. `/gen_image ...`) run their own handler and
-    // never auto-route, mirroring the `!isRealSlashCommand` gate in
-    // useSendMessage. Skip the prediction for them so the panel doesn't grey
-    // tools that will actually run. `/llm` is the implicit default, not a real
-    // command, so it stays subject to auto-routing (matches useSendMessage).
-    const firstToken = draft.split(/\s+/)[0];
-    if (firstToken !== '/llm' && commandHandlers[firstToken as CommandKey] !== undefined) return false;
-    // On image/video models the send path (extractCommandAndParams) injects
-    // `/gen_image` / `/gen_video` for a non-command draft, turning it into a
-    // real slash command that runs generation and never auto-routes. Mirror
-    // that here so a plain complex-scoring draft on an image/video model isn't
-    // greyed for a send that won't reroute. Gated on `liveAI` because the send
-    // only injects when `liveAI && !startsWithCommand` (commands.ts) - with
-    // liveAI off there's no injection, so a complex draft WOULD auto-route and
-    // the tools should still grey. Uses the same isImageModel/isVideoModel
-    // predicates the send path uses, keeping the two in lockstep.
-    // activeModel, not the resolved one: this predicts what the NEXT SEND will do, and the send
-    // always runs the model that is actually selected, never one being previewed.
-    if (liveAI && (isImageModel(activeModel) || isVideoModel(activeModel))) return false;
-    // Session file / agent context isn't available in this component, so those
-    // args are passed empty - omitting them can only lower the score, never
-    // raise it, so it won't grey spuriously on that account. (The tools /
-    // researchMode signals ARE passed: an enabled forcing tool - recharts /
-    // image_generation / deep_research / chess / research mode - makes
-    // classifyQueryComplexity return 'complex' regardless of draft text, which
-    // is correct and matches routeQuery, not an over-count bug.)
-    //
-    // Limitation: this prediction is draft-only and history-agnostic,
-    // while the real send can decline to auto-route for session-state reasons
-    // (e.g. `isAgentsEnabled` resolves false in a continued session after a
-    // model switch). So the greying can occasionally over-predict on follow-up
-    // messages - the copy says the request "may" auto-route rather than "will",
-    // and the badge/normal-chat outcome is the source of truth.
-    return classifyQueryComplexity(draft, [], [], tools, researchMode) === 'complex';
-  }, [
-    chatDraft,
-    tools,
-    researchMode,
-    activeModel,
-    liveAI,
-    isAgentsEnabled,
-    autoRouteEnabled,
-    disableAutoRouteForThisSession,
-  ]);
-
-  // The agent runs its fixed toolset (ignoring Smart Tools) when either the
-  // explicit toggle is on OR the draft would auto-route on complexity.
-  const agentWillRunFixedToolset = agentModeActive || predictedComplexityRoute;
-
   // Per-tool availability for the current mode. Fast mode uses no tools at all;
-  // Agent mode honors only its fixed toolset. Smart mode allows everything.
+  // Smart mode allows everything. Agent mode is deliberately NOT a gate here: an
+  // agentless run carries the user's Smart Tools unioned with the agent-mode
+  // defaults (see `resolveDispatchTools`), so nothing below is ignored.
   const getToolGate = useCallback(
     (toolId: B4MLLMTools): { reason: string } | null => {
       // A missing API key is a hard, mode-independent blocker: without it the
@@ -552,16 +474,9 @@ const ToolsSection = ({
       if (toolMode === 'fast') {
         return { reason: 'Disabled in Fast mode. Switch to Smart mode to let the AI use tools.' };
       }
-      if (agentWillRunFixedToolset && !isToolAvailableInAgentMode(toolId)) {
-        return {
-          reason: agentModeActive
-            ? 'Not available in Agent mode. Agent mode runs a fixed toolset and ignores this Smart Tool.'
-            : 'This request may auto-route to Agent mode, which runs a fixed toolset that would ignore this Smart Tool.',
-        };
-      }
       return null;
     },
-    [toolMode, agentWillRunFixedToolset, agentModeActive, toolAvailability]
+    [toolMode, toolAvailability]
   );
 
   const toggleQuestMaster = () => {
@@ -642,16 +557,6 @@ const ToolsSection = ({
   const funPinnedCount = displayTools.filter(t => FUN_NOVELTY_TOOLS.includes(t)).length;
   const individualToolsCount = displayTools.length - funPinnedCount;
   const pinnedCount = individualToolsCount + enabledMcpServerCount + specialToolsCount;
-
-  // Second line appended to the Smart tools description in Smart mode, only when Agent-mode
-  // routing would ignore the Smart Tools below; null otherwise so it stays a single line.
-  // (Fast mode has its own dedicated two-line description - see the master switch below.)
-  const agentModeNote =
-    toolMode === 'smart' && agentWillRunFixedToolset
-      ? agentModeActive
-        ? 'Agent mode is on and runs a fixed toolset - the tools below are ignored.'
-        : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
-      : null;
 
   // One instance, placed differently per host: on the title row where the header stacks,
   // in the column on the right otherwise. Rendering it twice would duplicate its test id.
@@ -773,17 +678,8 @@ const ToolsSection = ({
                 </Typography>
               </>
             ) : (
-              <Typography
-                sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}
-                data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
-              >
+              <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}>
                 AI uses enabled tools as needed. Off is fastest.
-                {agentModeNote && (
-                  <>
-                    <br />
-                    {agentModeNote}
-                  </>
-                )}
               </Typography>
             ))}
         </Box>

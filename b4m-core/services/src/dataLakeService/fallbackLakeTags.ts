@@ -9,6 +9,16 @@ import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefi
  */
 export const UNCATEGORIZED_TAG_SUFFIX = 'uncategorized';
 
+/**
+ * Relevance weight this reconciler stamps on a minted `<prefix>uncategorized` tag, and the one
+ * `setDataLakeFileTags` (the lake-scoped tag-write door) stamps on a caller-authored addition.
+ * Prefix-arm content tags in this codebase are overwhelmingly `1` (folder tags, this stamp, the
+ * backfill migration), so a shared constant is right here - do NOT reuse `DATALAKE_TAG_STRENGTH`
+ * (constants/dataLakes.ts), which is the MEMBERSHIP meta-tag's own weight and, by its own doc, "a
+ * constant, not a score" for a different tag entirely.
+ */
+export const LAKE_CONTENT_TAG_STRENGTH = 1;
+
 type FileTag = { name: string; strength: number };
 
 type LakeTagAdapters = {
@@ -54,12 +64,17 @@ const satisfiesPrefix = (tags: readonly FileTag[], prefix: string): boolean =>
 /**
  * Why a lake gets no automatic content tag, or the prefix to stamp under.
  *
- * `overlapCheckFailed` rides along with a PERMITTED decision rather than refusing, because the
- * two callers want opposite directions and only they can choose. The write doors stamp anyway -
- * a diagnostic lookup must never be the thing that fails a file write, and stamping is the
- * pre-existing behavior. A bulk backfill refuses instead: it mints across every legacy row at
- * once, so an unverified overlap there could hand a whole lake's files to another lake's
- * teardown. See the migration that consumes this.
+ * `overlapCheckFailed` rides along with a PERMITTED decision rather than refusing, because there
+ * are now THREE callers and they want TWO different directions, and only each caller can choose
+ * which is right for it. The live write doors (this reconciler) stamp anyway - a diagnostic
+ * lookup must never be the thing that fails a file write, and stamping is the pre-existing
+ * behavior. The bulk backfill migration and `setDataLakeFileTags` (the lake-scoped tag-write
+ * door) both refuse instead, for related but distinct reasons: the migration mints across every
+ * legacy row at once, so an unverified overlap there could hand a whole lake's files to another
+ * lake's teardown; the tag-write door mints CALLER-AUTHORED names rather than a fixed
+ * placeholder, so an unverified overlap there could mint prefix-arm membership - and therefore
+ * read access - in a lake the caller may hold no rights over. See the migration and that door for
+ * how each consumes this.
  */
 export type LakeStampDecision =
   | { stamp: true; prefix: string; overlapCheckFailed?: boolean }
@@ -233,7 +248,7 @@ export const createDataLakeFallbackTagger = ({ db, logger }: LakeTagAdapters): D
     const additions: FileTag[] = [];
     for (const prefix of [...currentPrefixes].sort()) {
       if (satisfiesPrefix([...kept, ...additions], prefix)) continue;
-      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: 1 });
+      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: LAKE_CONTENT_TAG_STRENGTH });
     }
 
     if (additions.length === 0 && retractions.size === 0) return tags as (T | FileTag)[];

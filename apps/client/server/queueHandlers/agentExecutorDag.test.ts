@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { IDagSpec, AgentExecutionStatus } from '@bike4mind/database';
 
 vi.mock('sst', () => ({
@@ -76,17 +78,25 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 const findByIdMock = vi.fn();
 const findDagChildrenLeanMock = vi.fn();
 const markFailedMock = vi.fn().mockResolvedValue(undefined);
+const createMock = vi.fn().mockImplementation(async () => ({ id: 'child-1' }));
 
 vi.mock('@bike4mind/database', () => ({
   agentExecutionRepository: {
     findById: (...args: unknown[]) => findByIdMock(...args),
     findDagChildrenLean: (...args: unknown[]) => findDagChildrenLeanMock(...args),
     markFailed: (...args: unknown[]) => markFailedMock(...args),
+    create: (...args: unknown[]) => createMock(...args),
   },
 }));
 
 // Import AFTER mocks are registered so the module picks up our stubs.
-const { buildDagResumeReport, onDagNodeTerminal } = await import('./agentExecutorDag');
+const {
+  buildDagResumeReport,
+  clampMaxIterationsForOverCapAggregationWake,
+  isDagAggregationWake,
+  makeDagDispatcher,
+  onDagNodeTerminal,
+} = await import('./agentExecutorDag');
 
 const spec: IDagSpec = {
   toolUseId: 'tool_use_1',
@@ -208,6 +218,82 @@ describe('buildDagResumeReport', () => {
     expect(report.failedNodes).toContain('explore');
     expect(report.summary).toContain('Failed Tasks (1)');
     expect(report.summary).toMatch(/Aborted|Unknown error/);
+  });
+});
+
+describe('isDagAggregationWake', () => {
+  it('is true only when resuming a DAG wake with both dagSpec and waitingOnDagChildren present', () => {
+    expect(
+      isDagAggregationWake({ isDagResume: true, dagSpec: spec, waitingOnDagChildren: { toolUseId: 'tool_use_1' } })
+    ).toBe(true);
+  });
+
+  it('is false when not a DAG resume, even with a stale dagSpec/waitingOnDagChildren left on the doc', () => {
+    expect(
+      isDagAggregationWake({ isDagResume: false, dagSpec: spec, waitingOnDagChildren: { toolUseId: 'tool_use_1' } })
+    ).toBe(false);
+  });
+
+  it('is false when resuming but dagSpec is missing', () => {
+    expect(
+      isDagAggregationWake({ isDagResume: true, dagSpec: undefined, waitingOnDagChildren: { toolUseId: 'tool_use_1' } })
+    ).toBe(false);
+  });
+
+  it('is false when resuming but waitingOnDagChildren is missing', () => {
+    expect(isDagAggregationWake({ isDagResume: true, dagSpec: spec, waitingOnDagChildren: undefined })).toBe(false);
+  });
+
+  it('is false when both are missing', () => {
+    expect(isDagAggregationWake({ isDagResume: true, dagSpec: undefined, waitingOnDagChildren: undefined })).toBe(
+      false
+    );
+  });
+});
+
+describe('clampMaxIterationsForOverCapAggregationWake', () => {
+  it('caps to the next iteration when the wake is aggregation-only and the member is over cap', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: true,
+        isOverCap: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(8);
+  });
+
+  it('never raises the ceiling above the original maxIterations', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: true,
+        isOverCap: true,
+        maxIterations: 5,
+        iterationIndex: 20,
+      })
+    ).toBe(5);
+  });
+
+  it('leaves maxIterations untouched when not an aggregation-only wake, even if over cap', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: false,
+        isOverCap: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+  });
+
+  it('leaves maxIterations untouched on an aggregation-only wake when under cap', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: true,
+        isOverCap: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
   });
 });
 
@@ -371,5 +457,79 @@ describe('onDagNodeTerminal', () => {
     });
     expect(findByIdMock).not.toHaveBeenCalled();
     expect(sqsSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('makeDagDispatcher artifact opt-out inheritance', () => {
+  const nodeDefaultsBase = {
+    userId: 'u1',
+    organizationId: 'o1',
+    sessionId: 's1',
+    questId: 'q1',
+  };
+  const node = { id: 'explore', description: 'Search code', dependsOn: [] as string[] };
+
+  async function createNodeWith(enableArtifacts?: boolean): Promise<void> {
+    createMock.mockClear();
+    const dispatcher = makeDagDispatcher({
+      connectionId: 'c1',
+      nodeDefaults: { ...nodeDefaultsBase, ...(enableArtifacts !== undefined && { enableArtifacts }) },
+      logger: silentLogger,
+    });
+    await dispatcher.createNode({
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick',
+      agentName: 'worker',
+      model: 'm1',
+      maxIterations: 3,
+    });
+  }
+
+  it('passes the parent artifact opt-out down to each DAG node', async () => {
+    // The PR's headline design claim: the flag is a caller opt-OUT, not a grant, so a delegating
+    // agent must not be able to route around it by fanning out.
+    await createNodeWith(false);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: false }));
+  });
+
+  it('leaves the key absent when the parent expressed no preference', async () => {
+    // `undefined` vs `false` is the load-bearing distinction: absence means "admin setting decides",
+    // so a stamped `false` here would strip artifacts from every internal dispatch.
+    //
+    // Asserted on the key list, not via `not.objectContaining({ enableArtifacts: expect.anything() })`:
+    // `expect.anything()` does not match an explicit `undefined`, so that form passes even if the
+    // conditional spread is replaced by a bare `enableArtifacts: nodeDefaults.enableArtifacts`.
+    await createNodeWith(undefined);
+    expect(Object.keys(createMock.mock.calls[0][0] as Record<string, unknown>)).not.toContain('enableArtifacts');
+  });
+
+  it('passes an explicit opt-in through unchanged', async () => {
+    await createNodeWith(true);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: true }));
+  });
+});
+
+/**
+ * Static-analysis guard on the PRODUCER hops, not the dispatcher.
+ *
+ * The cases above lock what `makeDagDispatcher` does with the `enableArtifacts` it is handed. What
+ * hands it over lives in `processExecution`, which has no test harness (same situation as
+ * `agentExecutor.resolveQuestId.test.ts`, and the same string-parsing answer): delete the key from
+ * the `nodeDefaults` literal, or the `inheritedArtifactFields` spread from the subagent `create`
+ * payload, and every unit test in this directory stays green while a caller's opt-out silently stops
+ * crossing the dispatch boundary - the PR's headline design claim.
+ */
+describe('artifact opt-out producer hops in agentExecutor', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('stamps the caller intent onto the DAG nodeDefaults', () => {
+    const call = source.match(/makeDagDispatcher\(\{[\s\S]*?\n {4}\}\);/);
+    expect(call, 'makeDagDispatcher call site not found in agentExecutor.ts').not.toBeNull();
+    expect(call![0]).toContain('enableArtifacts: callerEnableArtifacts');
+  });
+
+  it('spreads the inherited fields into the subagent create payload', () => {
+    expect(source).toContain('...inheritedArtifactFields(callerEnableArtifacts)');
   });
 });

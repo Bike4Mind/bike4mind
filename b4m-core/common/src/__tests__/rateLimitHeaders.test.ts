@@ -4,6 +4,7 @@ import {
   isNearLimit,
   buildRateLimitLogEntry,
   normalizeEndpoint,
+  resolveRetryAfterDelayMs,
   type RateLimitInfo,
 } from '../rateLimitHeaders';
 
@@ -293,6 +294,46 @@ describe('buildRateLimitLogEntry', () => {
     expect(entry.resetAt).toBeNull();
     expect(entry.limit).toBeNull();
     expect(entry.remaining).toBeNull();
+  });
+});
+
+describe('resolveRetryAfterDelayMs (#2160)', () => {
+  const info = (retryAfterMs: number | null): RateLimitInfo =>
+    ({ limit: null, remaining: null, resetAt: null, retryAfterMs, usagePercent: null }) as RateLimitInfo;
+
+  it('honours a positive hint over the default', () => {
+    expect(resolveRetryAfterDelayMs(info(2000), 5000)).toBe(2000);
+  });
+
+  it('falls back to the default when there was no Retry-After at all', () => {
+    expect(resolveRetryAfterDelayMs(info(null), 5000)).toBe(5000);
+  });
+
+  // The defect: `?? 5000` only replaces null/undefined, so a literal zero passed straight through
+  // and the 429 retry fired after jitter alone (0-1s) against a service that had just asked for
+  // room - bypassing a default whose own comment exists to "avoid hammering".
+  it.each([
+    ['an explicit zero', 0],
+    ['a negative delay', -3000],
+  ])('falls back to the default for %s rather than skipping the wait', (_label, value) => {
+    expect(resolveRetryAfterDelayMs(info(value), 5000)).toBe(5000);
+  });
+
+  it('leaves the parsed value alone, so a zero is still visible to the logs', () => {
+    // Deliberately not fixed in parseRateLimitHeaders: hasRateLimitInfo and buildRateLimitLogEntry
+    // both read retryAfterMs, so nulling a zero there would make "the server sent Retry-After: 0"
+    // indistinguishable from "the server sent none".
+    const parsed = parseRateLimitHeaders({ 'retry-after': '0' });
+    expect(parsed.retryAfterMs).toBe(0);
+    expect(resolveRetryAfterDelayMs(parsed, 5000)).toBe(5000);
+  });
+
+  it('falls back for an HTTP date that has already elapsed', () => {
+    const past = new Date(Date.now() - 4000).toUTCString();
+    const parsed = parseRateLimitHeaders({ 'retry-after': past });
+    // Math.max(0, ...) in the parser floors an elapsed date to zero.
+    expect(parsed.retryAfterMs).toBe(0);
+    expect(resolveRetryAfterDelayMs(parsed, 5000)).toBe(5000);
   });
 });
 

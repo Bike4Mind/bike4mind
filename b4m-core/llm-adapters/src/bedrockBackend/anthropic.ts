@@ -21,6 +21,7 @@ import {
 } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { getCachingAdapter } from '../caching/adapters';
+import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
 
@@ -71,8 +72,23 @@ interface ClaudeChunkContentBlockStartToolUse extends BaseClaudeChunk {
 interface ClaudeChunkContentBlockStartThinking extends BaseClaudeChunk {
   type: ClaudeChunkTypes.CONTENT_BLOCK_START;
   index: number;
-  content_block: { type: 'thinking' };
+  content_block: { type: 'thinking'; thinking?: string; signature?: string };
 }
+
+interface ClaudeChunkContentBlockStartRedactedThinking extends BaseClaudeChunk {
+  type: ClaudeChunkTypes.CONTENT_BLOCK_START;
+  index: number;
+  content_block: { type: 'redacted_thinking'; data: string };
+}
+
+/**
+ * A reasoning block of the assistant turn being streamed. Anthropic requires these be
+ * replayed unmodified - signature included - in the assistant message that carries
+ * `tool_use`, whenever extended thinking is active on the turn.
+ * @see AnthropicBedrockBackend.takeReasoningBlocks
+ */
+type ClaudeReasoningBlock =
+  { type: 'thinking'; thinking: string; signature?: string } | { type: 'redacted_thinking'; data: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
@@ -85,17 +101,29 @@ function isToolUseContentBlock(
   );
 }
 
-function isThinkingContentBlock(content_block: unknown): content_block is { type: 'thinking' } {
+function isThinkingContentBlock(
+  content_block: unknown
+): content_block is { type: 'thinking'; thinking?: string; signature?: string } {
   return isRecord(content_block) && content_block.type === 'thinking';
 }
 
+function isRedactedThinkingContentBlock(
+  content_block: unknown
+): content_block is { type: 'redacted_thinking'; data: string } {
+  return isRecord(content_block) && content_block.type === 'redacted_thinking';
+}
+
 type ClaudeChunkContentBlockStart =
-  ClaudeChunkContentBlockStartText | ClaudeChunkContentBlockStartToolUse | ClaudeChunkContentBlockStartThinking;
+  | ClaudeChunkContentBlockStartText
+  | ClaudeChunkContentBlockStartToolUse
+  | ClaudeChunkContentBlockStartThinking
+  | ClaudeChunkContentBlockStartRedactedThinking;
 
 enum ClaudeChunkDeltaTypes {
   TEXT = 'text_delta',
   INPUT_JSON = 'input_json_delta',
   THINKING = 'thinking_delta',
+  SIGNATURE = 'signature_delta',
 }
 
 interface ClaudeChunkDeltaBase {
@@ -103,6 +131,7 @@ interface ClaudeChunkDeltaBase {
   text?: string;
   partial_json?: string;
   thinking?: string;
+  signature?: string;
 }
 
 interface ClaudeChunkDeltaText extends ClaudeChunkDeltaBase {
@@ -120,6 +149,11 @@ interface ClaudeChunkDeltaThinking extends ClaudeChunkDeltaBase {
   thinking: string;
 }
 
+interface ClaudeChunkDeltaSignature extends ClaudeChunkDeltaBase {
+  type: ClaudeChunkDeltaTypes.SIGNATURE;
+  signature: string;
+}
+
 // Type guard functions for delta types
 function isTextDelta(delta: unknown): delta is ClaudeChunkDeltaText {
   return isRecord(delta) && delta.type === ClaudeChunkDeltaTypes.TEXT && 'text' in delta;
@@ -133,7 +167,12 @@ function isThinkingDelta(delta: unknown): delta is ClaudeChunkDeltaThinking {
   return isRecord(delta) && delta.type === ClaudeChunkDeltaTypes.THINKING && 'thinking' in delta;
 }
 
-type ClaudeChunkDelta = ClaudeChunkDeltaText | ClaudeChunkDeltaInputJson | ClaudeChunkDeltaThinking;
+function isSignatureDelta(delta: unknown): delta is ClaudeChunkDeltaSignature {
+  return isRecord(delta) && delta.type === ClaudeChunkDeltaTypes.SIGNATURE && 'signature' in delta;
+}
+
+type ClaudeChunkDelta =
+  ClaudeChunkDeltaText | ClaudeChunkDeltaInputJson | ClaudeChunkDeltaThinking | ClaudeChunkDeltaSignature;
 
 interface ClaudeChunkContentBlockDelta extends BaseClaudeChunk {
   type: ClaudeChunkTypes.CONTENT_BLOCK_DELTA;
@@ -192,13 +231,42 @@ const TEMPERATURE_ONLY_MODELS = [
 ];
 
 export default class AnthropicBedrockBackend extends BaseBedrockBackend {
+  /** Reports done only on message_stop (anthropic.ts translateStreamChunk), so a missing terminal event means a truncated stream. */
+  protected override get signalsStreamTermination(): boolean {
+    return true;
+  }
+
   // Track thinking block state
   private isInThinkingBlock = false;
+  /**
+   * Reasoning blocks of the assistant turn currently being translated, indexed by the
+   * stream's content-block index. Reset at `message_start` and consumed by
+   * `takeReasoningBlocks` when that turn is rebuilt for a tool continuation.
+   */
+  private assistantReasoningBlocks: Array<ClaudeReasoningBlock | undefined> = [];
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
   setDispatchModel(info: ModelInfo): void {
     this._dispatch.set(info);
+  }
+
+  /**
+   * The reasoning blocks the last translated assistant turn produced, cleared as they
+   * are taken. Anthropic requires a `tool_use` assistant turn to replay its own signed
+   * thinking blocks whenever extended thinking is active on the turn, and an adaptive
+   * model thinks on every turn whether or not the request asked it to - so dropping
+   * them is what makes the synthesis round of a multi-round tool turn come back empty.
+   *
+   * Taken once per provider turn. base.ts takes them before its tool loop and hands the
+   * same array to every assistant message it rebuilds for that round, because a parallel
+   * round splits one provider turn across several synthetic turns and each of them has to
+   * carry the reasoning.
+   */
+  protected override takeReasoningBlocks(): ClaudeReasoningBlock[] {
+    const blocks = this.assistantReasoningBlocks.filter((b): b is ClaudeReasoningBlock => b != null);
+    this.assistantReasoningBlocks = [];
+    return blocks;
   }
 
   /**
@@ -661,17 +729,28 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       })
       .filter(m => m.content !== '' && (Array.isArray(m.content) ? m.content.length > 0 : true));
 
-    let systemMessage = messages
+    // Kept as discrete blocks, not joined immediately, because a mid-stack cache breakpoint
+    // needs a block boundary to attach to. The joined string below is still what the
+    // non-caching path sends.
+    const systemBlocks = messages
       .filter(m => m.role === 'system' && m.content)
-      .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
-      .join('\n');
+      .map(m => ({ text: systemContentToText(m.content), cache: m.cache === true }))
+      // A block array carrying no text flattens to '', which would otherwise
+      // contribute a blank line to the joined prompt. Trim-checked because
+      // Bedrock rejects a text block with no non-whitespace content (see the
+      // user/assistant sanitizer above, which system messages never reach).
+      .filter(block => block.text.trim() !== '');
 
     // Append model identity so the model correctly identifies itself when asked.
     // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
     // with the same flag in anthropicBackend.
-    if (!options.omitIdentityReminder) {
-      const modelIdentity = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-      systemMessage = systemMessage ? `${systemMessage}\n${modelIdentity}` : modelIdentity;
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+
+    let systemMessage = systemBlocks.map(block => block.text).join('\n');
+    if (identityReminder) {
+      systemMessage = systemMessage ? `${systemMessage}\n${identityReminder}` : identityReminder;
     }
 
     // Check if model ID needs to be transformed
@@ -688,8 +767,40 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       messages: filteredMessages,
     };
 
-    // Only add system message if it's not empty
-    if (systemMessage) {
+    // A `cache: true` system message declares a breakpoint part-way down the stack (the
+    // deployment-wide shareable prefix - see markShareablePrefixBoundary in @bike4mind/services).
+    // Bedrock takes the native Anthropic body, so the array-of-blocks `system` form carries
+    // cache_control here exactly as it does on the direct API; the joined string above collapses
+    // the whole stack into one block, which leaves nowhere to put a breakpoint except the end and
+    // makes the flag a silent no-op. Gated on the same two checks as applyCaching below so a model
+    // that rejects cache_control never sees one. Must stay in sync with anthropicBackend, which
+    // makes the same string-vs-blocks choice.
+    const cacheStrategy = options.cacheStrategy;
+    const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
+    const emitSystemCacheBreakpoint =
+      Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching && systemBlocks.some(block => block.cache);
+
+    if (emitSystemCacheBreakpoint) {
+      // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
+      // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
+      const cacheControl = {
+        type: 'ephemeral' as const,
+        ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
+      };
+      const blocks: Array<Record<string, unknown>> = systemBlocks.map(block =>
+        block.cache
+          ? { type: 'text', text: block.text, cache_control: cacheControl }
+          : { type: 'text', text: block.text }
+      );
+      // Identity reminder stays last and carries no breakpoint of ours: it holds the model id, so
+      // anchoring the shared head on it would bust that prefix on every model change. applyCaching
+      // still marks the final block as the end-of-system breakpoint, exactly as it did when this
+      // was one joined string.
+      if (identityReminder) {
+        blocks.push({ type: 'text', text: identityReminder });
+      }
+      body.system = blocks;
+    } else if (systemMessage) {
       body.system = systemMessage;
     }
 
@@ -772,8 +883,6 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Skip models known to reject `cache_control` (e.g. the OG Claude 3 Haiku / Claude 3.5
     // Sonnet v1 on Bedrock) - sending it causes a Bedrock deserialization error and the
     // assistant turn never resolves.
-    const cacheStrategy = options.cacheStrategy;
-    const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
     if (cacheStrategy?.enableCaching && modelSupportsCaching) {
       const adapter = getCachingAdapter(ModelBackend.Bedrock);
       const cachedBody = adapter.applyCaching(body as Record<string, unknown>, cacheStrategy);
@@ -814,11 +923,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 
-      // Check if the previous message has the same role as the current message
-      if (previousMessage && value.role === previousMessage.role) {
+      // A message carrying a cache breakpoint ENDS its run: merging the next one into it would
+      // drag content past the boundary and the breakpoint would no longer describe the shared
+      // prefix. getPayload emits each surviving system message as its own `system` block, so the
+      // split here is what gives the breakpoint somewhere to land.
+      if (previousMessage && value.role === previousMessage.role && previousMessage.cache !== true) {
         // if the previous message is the same
         // then skip the current message
         if (previousMessage.content === value.content) {
+          if (value.cache === true) previousMessage.cache = true;
           return cur;
 
           // if the previous message content is a text
@@ -847,6 +960,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
               cur[lastIndex].content = contentArray;
             }
           }
+          if (value.cache === true) cur[lastIndex].cache = true;
 
           // if not
           // then add the current message to the previous message content
@@ -872,6 +986,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           if (textContent) {
             previousMessage.content = [...content, { type: 'text', text: textContent }];
           }
+          if (value.cache === true) previousMessage.cache = true;
         }
 
         return cur;
@@ -896,7 +1011,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         id: string;
         type: string;
         role: string;
-        content: Array<{ type: string; text?: string; thinking?: string }>;
+        content: Array<{ type: string; text?: string; thinking?: string; signature?: string; data?: string }>;
         model: string;
         stop_reason: string;
         usage: {
@@ -907,13 +1022,16 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         };
       };
 
-      // Warn if thinking blocks are present when they shouldn't be
-      const thinkingBlocks = response.content.filter(c => c.type === 'thinking');
-      if (thinkingBlocks.length > 0) {
-        console.warn(`[AnthropicBedrockBackend] Unexpected thinking blocks in response`, {
-          thinkingBlockCount: thinkingBlocks.length,
-          thinkingLengths: thinkingBlocks.map(b => b.thinking?.length || 0),
-        });
+      // Keep the turn's reasoning blocks for the tool-continuation replay. An adaptive
+      // model returns them whether or not the request asked for thinking, so their mere
+      // presence is not an anomaly - see takeReasoningBlocks.
+      this.assistantReasoningBlocks = response.content.filter(
+        c => c.type === 'thinking' || c.type === 'redacted_thinking'
+      ) as ClaudeReasoningBlock[];
+      if (this.assistantReasoningBlocks.length > 0) {
+        console.log(
+          `[AnthropicBedrockBackend] Captured ${this.assistantReasoningBlocks.length} reasoning block(s) for tool continuation`
+        );
       }
 
       // Extract text content from the response
@@ -995,6 +1113,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       if (isMessageStart(chunk)) {
         // Reset thinking block state at the start of a new message
         this.isInThinkingBlock = false;
+        this.assistantReasoningBlocks = [];
         choice = {
           chunkText: '',
           usage: {
@@ -1019,7 +1138,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           };
         } else if (isThinkingContentBlock(contentBlock)) {
           this.isInThinkingBlock = true;
+          // thinking_delta / signature_delta accumulate into this block for the replay.
+          this.assistantReasoningBlocks[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
           choice.chunkText = '<think>';
+        } else if (isRedactedThinkingContentBlock(contentBlock)) {
+          // Arrives whole and carries no readable text, so it opens no <think> markers -
+          // but it still has to be replayed alongside its turn's tool_use block.
+          this.assistantReasoningBlocks[chunk.index] = { ...contentBlock };
         }
       } else if (isContentBlockDelta(chunk)) {
         choice = {
@@ -1036,6 +1161,14 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           choice.chunkText = delta.partial_json;
         } else if (isThinkingDelta(delta)) {
           choice.chunkText = delta.thinking;
+          const block = this.assistantReasoningBlocks[chunk.index];
+          if (block?.type === 'thinking') block.thinking += delta.thinking;
+        } else if (isSignatureDelta(delta)) {
+          // Cryptographic signature for the open thinking block, arriving just before
+          // content_block_stop. Carries no user-visible text - it exists only so the
+          // block can be replayed on a tool continuation and still validate.
+          const block = this.assistantReasoningBlocks[chunk.index];
+          if (block?.type === 'thinking') block.signature = delta.signature;
         }
       } else if (isContentBlockStop(chunk)) {
         choice = {
@@ -1108,9 +1241,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       input: JSON.parse(tool.parameters || '{}'),
     };
 
+    // Blocks the caller supplies win: base.ts's tool loop takes them once per round and
+    // passes the same array for every tool in it, and the executeTools: false path knows
+    // its own. Falling back covers a direct call with neither - an assistant turn that
+    // reasoned must not reach the provider as a bare tool_use. See takeReasoningBlocks.
+    const reasoningBlocks = thinkingBlocks?.length ? thinkingBlocks : this.takeReasoningBlocks();
+
     const assistantContent: IMessage['content'] =
-      thinkingBlocks && thinkingBlocks.length > 0
-        ? [...(thinkingBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>), toolUseBlock]
+      reasoningBlocks.length > 0
+        ? [...(reasoningBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>), toolUseBlock]
         : [toolUseBlock];
 
     messages.push({

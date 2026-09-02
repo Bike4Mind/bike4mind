@@ -50,6 +50,10 @@ const SideNavHeader = () => {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        // Pinned rather than derived from the logo box: the docked chat header
+        // and the mission-deck header line up against this number.
+        height: '56px',
+        boxSizing: 'border-box',
         p: '10px',
       })}
     >

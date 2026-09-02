@@ -15,6 +15,7 @@ vi.mock('@bike4mind/database', () => ({
   ingestedEmailRepository: {},
   fabFileRepository: {},
   adminSettingsRepository: {},
+  dataLakeRepository: {},
 }));
 
 const mockProcessIngestedEmail = vi.fn();

@@ -7,8 +7,8 @@ import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSession
 import DockedChatPanel from './DockedChatPanel';
 
 // The control cluster reaches SessionsContext/react-query through useCopySessionMarkdown,
-// which is irrelevant to the header's minimize wiring.
-vi.mock('./ChatPanelControls', () => ({ default: () => null }));
+// which is irrelevant to the header's Hide chat wiring.
+vi.mock('./ChatPanelControls', () => ({ default: () => null, chatHeaderToolButtonSx: {} }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -17,10 +17,10 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('DockedChatPanel', () => {
   beforeEach(() => {
-    setSessionLayout({ layout: 'dockRight', floatingChatMinimized: false, previousLayout: undefined });
+    setSessionLayout({ layout: 'dockRight', floatingChatMinimized: false });
   });
 
-  it('minimizes to the AI Chat launcher instead of switching to the floating window', () => {
+  it('hides to the AI Chat launcher instead of switching to the floating window', () => {
     render(
       <Wrapper>
         <DockedChatPanel>chat</DockedChatPanel>
@@ -32,18 +32,5 @@ describe('DockedChatPanel', () => {
     const state = useSessionLayout.getState();
     expect(state.floatingChatMinimized).toBe(true);
     expect(state.layout).toBe('floatingChat');
-  });
-
-  it('records the dock it was minimized from so the float window can close back to it', () => {
-    setSessionLayout({ layout: 'dockBottom' });
-    render(
-      <Wrapper>
-        <DockedChatPanel>chat</DockedChatPanel>
-      </Wrapper>
-    );
-
-    fireEvent.click(screen.getByTestId('docked-chat-close'));
-
-    expect(useSessionLayout.getState().previousLayout).toBe('dockBottom');
   });
 });

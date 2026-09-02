@@ -258,9 +258,20 @@ jobs:
               ephemeral; we are not running typecheck or tests as part of
               this review.
             - Restoring the original branch at the end is unnecessary in CI — skip it.
+            - This step is a single non-interactive process: nothing external
+              will notify you or re-invoke you later, no matter how the skill
+              is written. Treat every Agent/Task dispatch as synchronous: wait
+              for and read each one's result in the same exchange it was
+              dispatched in before moving on. Never call ScheduleWakeup, and
+              never end a turn assuming a background agent will report back:
+              this run just ends, unreviewed, if you do.
           claude_args: |
             --model ${{ steps.size_check.outputs.model }}
             --allowedTools Bash(gh:*),Bash(git:*),Read,Grep,Glob,Agent,Task
+            # ScheduleWakeup makes sense only in an interactive session; this
+            # process is single-shot, so hard-block the tool call itself
+            # rather than relying on the prompt bullet above alone.
+            --disallowedTools ScheduleWakeup
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, gh pr view/diff, linked issues, fan-out, classify,
@@ -274,6 +285,13 @@ jobs:
         # process exited 0". A run can end its turn without posting anything and
         # still report success (observed: 18 turns, is_error false, 0 reviews
         # posted), which left the author with a green check and no review.
+        # A second, distinct cause of the same symptom: the skill fans out
+        # background review agents, then waits for a completion notification
+        # that this single-shot process can never deliver, so the run ends
+        # cleanly, well under the turn budget, with nothing posted. The
+        # "Context for automation" block above the review step now tells the
+        # model not to do that; the transcript step below flags a run whose
+        # own history still shows the pattern.
         # FAIL-CLOSED: an API error resolves to "not posted", because the whole
         # point of this step is to never claim a review happened without evidence.
         if: always() && (steps.bot_review.outcome == 'success' || steps.bot_review.outcome == 'failure')
@@ -338,18 +356,35 @@ jobs:
           DEST: ${{ runner.temp }}/review-transcript-redacted.json
         run: |
           set -uo pipefail
+          WAKEUP=false
           if [ -z "$EXECUTION_FILE" ] || [ ! -s "$EXECUTION_FILE" ]; then
             echo "::warning::no execution output file to upload"
             echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! python3 "${GITHUB_WORKSPACE}/.github/scripts/redact-review-transcript.py" \
                  "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
             echo "::warning::transcript redaction failed; not uploading"
             echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "uploadable=true" >> "$GITHUB_OUTPUT"
+
+          # Flags the async-wait failure mode: the transcript's own tool-call
+          # history still shows it waiting on a background agent, so "Report
+          # incomplete review" can name the likely cause instead of just
+          # "errored or ran out of turns". redact-review-transcript.py passes
+          # through whichever shape the action gave it (a JSON array, or
+          # JSONL) - slurp first and flatten any array-typed element so both
+          # shapes land on the same flat list of entries.
+          if jq -s -e 'map(if type == "array" then .[] else . end)
+                       | any(.[]; (.message.content? // []) | any(.[]?; .type == "tool_use" and .name == "ScheduleWakeup"))' \
+                 "$DEST" >/dev/null 2>&1; then
+            WAKEUP=true
+          fi
+          echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
 
       - name: Upload review transcript
         if: always() && steps.transcript.outputs.uploadable == 'true'
@@ -376,10 +411,17 @@ jobs:
         if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WAKEUP_DETECTED: ${{ steps.transcript.outputs.schedule_wakeup_detected }}
         run: |
+          BODY="🤖 Automated review did not complete — no review from this run was detected on the PR (the run errored, exhausted its turn budget, or ended without posting). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details; a redacted transcript is attached to it as an artifact when one was captured. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+          # WAKEUP_DETECTED is set from the uploaded transcript's own tool-call
+          # history, so this note is evidence-based, not a guess.
+          if [ "$WAKEUP_DETECTED" = "true" ]; then
+            BODY="$BODY"$'\n\n'"This run's transcript shows it waiting on a background agent via ScheduleWakeup, which nothing in this single-shot process can ever deliver."
+          fi
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "🤖 Automated review did not complete — no review from this run was detected on the PR (the run errored, exhausted its turn budget, or ended without posting). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details; a redacted transcript is attached to it as an artifact when one was captured. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+            --body "$BODY"
           # Red the job too. A success-with-no-post used to leave a green check,
           # which reads as "the review happened" - the failure mode this guards.
           exit 1

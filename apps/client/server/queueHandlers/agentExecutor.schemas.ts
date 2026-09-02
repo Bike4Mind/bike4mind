@@ -43,6 +43,11 @@ export const StartExecutionSchema = z.object({
   // the WS `start` payload; also persisted on the AgentExecution doc so it
   // survives Lambda handoffs.
   enableLattice: z.boolean().optional(),
+  // The caller's per-request artifact intent (parity with chat_completion's `enableArtifacts`).
+  // ANDed with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`; absent means the
+  // admin setting is the only gate. Forwarded from the WS `start` payload and also persisted on the
+  // AgentExecution doc so it survives Lambda handoffs.
+  enableArtifacts: z.boolean().optional(),
 });
 
 /** Payload for continuation (SQS or direct re-invocation after permission response). */

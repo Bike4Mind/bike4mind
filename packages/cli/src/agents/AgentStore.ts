@@ -15,6 +15,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import matter from 'gray-matter';
+import { findMarkdownFiles } from '../utils/findMarkdownFiles.js';
 import { ChatModels } from '@bike4mind/common';
 import type { AgentDefinition, AgentSource, AgentHooks } from './types.js';
 import {
@@ -287,7 +288,7 @@ export class AgentStore {
         return;
       }
 
-      const files = await this.findAgentFiles(directory);
+      const files = await findMarkdownFiles(directory);
 
       for (const filePath of files) {
         try {
@@ -306,32 +307,6 @@ export class AgentStore {
         console.warn(`Error accessing agents directory ${directory}`);
       }
     }
-  }
-
-  /**
-   * Recursively find all .md files in directory
-   */
-  private async findAgentFiles(directory: string): Promise<string[]> {
-    const files: string[] = [];
-
-    try {
-      const entries = await fs.readdir(directory, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(directory, entry.name);
-
-        if (entry.isDirectory()) {
-          const subFiles = await this.findAgentFiles(fullPath);
-          files.push(...subFiles);
-        } else if (entry.isFile() && entry.name.endsWith('.md')) {
-          files.push(fullPath);
-        }
-      }
-    } catch (error) {
-      console.warn(`Error reading directory ${directory}:`, error instanceof Error ? error.message : String(error));
-    }
-
-    return files;
   }
 
   /**

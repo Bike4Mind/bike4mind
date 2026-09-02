@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
+import { withSubmitMutex } from './withSubmitMutex';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 
@@ -30,6 +31,7 @@ import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
 import { resolveDispatchTools } from './resolveDispatchTools';
+import { agentModeDefaultToolNames } from '@client/app/utils/agentOrchestration';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -70,7 +72,7 @@ import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 
-// Sentinel statusMessage written by `handleSendClick` to render the Stop
+// Sentinel statusMessage written by the send path to render the Stop
 // affordance the instant the user clicks Send, masking backend cold-start
 // latency before the WS handler has emitted a real stream event. The real
 // stream overwrites this on first event; the error path detects it via strict
@@ -176,6 +178,15 @@ export function useSendMessage({
   const intentClassifierAdminEnabled =
     getSettingObject<{ intentClassifier?: { enabled?: boolean } }>('orchestrationDefaults', {})?.intentClassifier
       ?.enabled !== false;
+  // Union base for an agentless agent-executor dispatch. Read from admin
+  // settings rather than the schema seed because a non-empty `enabledTools`
+  // payload REPLACES `profile.allowedTools` server-side - see
+  // `agentModeDefaultToolNames`. Memoized so the set identity is stable.
+  const orchestrationDefaultsSetting = getSettingObject<unknown>('orchestrationDefaults', undefined);
+  const agentModeDefaultTools = useMemo(
+    () => agentModeDefaultToolNames(orchestrationDefaultsSetting),
+    [orchestrationDefaultsSetting]
+  );
   const classifyIntent = useIntentClassifier();
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { data: availableAgents = [] } = useGetAgents();
@@ -195,7 +206,6 @@ export function useSendMessage({
     isArtifactsEnabled,
     isAgentsEnabled,
     isLatticeEnabled,
-    tools,
     safety_tolerance,
     prompt_upsampling,
     seed,
@@ -222,7 +232,6 @@ export function useSendMessage({
       s.isArtifactsEnabled,
       s.isAgentsEnabled,
       s.isLatticeEnabled,
-      s.tools,
       s.safety_tolerance,
       s.prompt_upsampling,
       s.seed,
@@ -267,7 +276,7 @@ export function useSendMessage({
   const [submitting, setSubmittingState] = useState<boolean>(false);
   // Ref-based mutex: React state updates are batched, so two rapid calls can
   // both read `submitting === false` from their closure. The ref flips
-  // synchronously, making the guard at the top of handleSendClick airtight.
+  // synchronously, making the guard at the top of runSendClick airtight.
   const submittingRef = useRef(false);
   const setSubmitting = useCallback((value: boolean) => {
     submittingRef.current = value;
@@ -308,7 +317,9 @@ export function useSendMessage({
 
     try {
       await stopChatMessage(currentSessionId);
-      toast.success('Generation cancelled successfully');
+      // No success toast here: the inline statusMessage below already surfaces the
+      // cancellation, and a bottom-right toast covers the whole prompt area on
+      // narrow layouts (e.g. chat docked to the right).
       setChatCompletion(prev => ({
         ...prev,
         completed: true,
@@ -326,7 +337,9 @@ export function useSendMessage({
     }
   };
 
-  const handleSendClick = async (
+  // Body of the send. Always call it through `handleSendClick` below, never
+  // directly: the wrapper is what releases the submit mutex if this throws.
+  const runSendClick = async (
     newPrompt?: string,
     options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
   ): Promise<IChatHistoryItemDocument | undefined> => {
@@ -485,12 +498,20 @@ export function useSendMessage({
       toast.warning("An image couldn't be added — it may violate our content policy.");
     }
     const messageFileIdsForRouting = sendableMessageFileIds;
-    const complexity = classifyQueryComplexity(
+    // Routing verdict ONLY - `tools`/`researchMode` are deliberately omitted.
+    // Passing them trips the classifier's tool short-circuit, which is a
+    // session-level setting: with any of recharts / image generation / deep
+    // research / chess / research mode toggled on, EVERY prompt scores
+    // 'complex' and auto-routes for the rest of the session. The tool-aware
+    // verdict is computed separately where it is actually consumed (LLMCommand
+    // for rapid reply, ChatCompletionProcess for feature selection and
+    // reasoning effort); nothing in this hook ships this value to the server.
+    const routingComplexity = classifyQueryComplexity(
       prompt,
       sessionFabFileIdsForRouting,
       messageFileIdsForRouting,
-      tools,
-      researchMode,
+      undefined,
+      undefined,
       sessionAgents.map(a => a.id)
     );
     // Real slash commands (e.g. `/gen_image`, `/roll`, `/gen_video`) must run
@@ -530,7 +551,7 @@ export function useSendMessage({
     const classifierEligible =
       agentModeFeatureEnabled &&
       agentModeDefault === 'auto' &&
-      complexity === 'contextual' &&
+      routingComplexity === 'contextual' &&
       !shortCircuit.shortCircuit;
 
     if (classifierEligible) {
@@ -557,12 +578,12 @@ export function useSendMessage({
 
     const userOverride: 'force_agent' | undefined =
       agentToggleActive || agentDefaultOn || classifierUpgraded ? 'force_agent' : undefined;
-    // Heuristic auto-routing (`complexity === 'complex'` -> agent_executor) is
-    // opt-in via the `'auto'` default - never the 'off' default or a bare
-    // feature flag. Without this gate, a query the classifier deems 'complex'
-    // (e.g. the recharts tool is enabled -> "generate random charts") dispatched
-    // the executor while the composer toggle read OFF. Slash-command-bypassed
-    // for the same reason as the toggle/default overrides above.
+    // Heuristic auto-routing (`routingComplexity === 'complex'` ->
+    // agent_executor) is opt-in via the `'auto'` default - never the 'off'
+    // default or a bare feature flag. Without this gate, a query the classifier
+    // deems 'complex' on its text alone dispatched the executor while the
+    // composer toggle read OFF. Slash-command-bypassed for the same reason as
+    // the toggle/default overrides above.
     //
     // Also honor the session-scoped opt-out. Dismissing the
     // AutoRouteBadge sets `disableAutoRouteForThisSession`, which already gates
@@ -573,14 +594,14 @@ export function useSendMessage({
       agentModeFeatureEnabled && agentModeDefault === 'auto' && !isRealSlashCommand && !disableAutoRouteForThisSession;
     const routeTarget = routeQuery({
       message: prompt,
-      complexity,
+      complexity: routingComplexity,
       agentExecutorEnabled: isAgentsEnabled,
       userOverride,
       hasOrchestrationAgent: orchestrationAgent !== null,
       autoRouteEnabled,
     });
     perfLogger.log(
-      `🧭 routeQuery → ${routeTarget} (complexity=${complexity}, toggle=${agentToggleActive}, ` +
+      `🧭 routeQuery → ${routeTarget} (routingComplexity=${routingComplexity}, toggle=${agentToggleActive}, ` +
         `default=${agentModeDefault}, classifier=${classifierUpgraded})`
     );
 
@@ -603,7 +624,7 @@ export function useSendMessage({
       // NOT imply the complexity path won - e.g. with `agentModeDefault === 'on'`
       // a complex prompt still resolves to `'user-default'` (see
       // pickRoutingSource.test.ts). Precedence decides; this only feeds it.
-      complexityUpgraded: complexity === 'complex',
+      complexityUpgraded: routingComplexity === 'complex',
     });
     // Local-only `effectiveAgentMode` - no Zustand write on the send hot path.
     // Nothing in the current UI reads `agentMode.source`; the value only
@@ -916,7 +937,8 @@ export function useSendMessage({
         const enabledTools = resolveDispatchTools(
           options?.toolsOverride,
           effectiveTools,
-          orchestrationAgent?.allowedTools
+          orchestrationAgent?.allowedTools,
+          agentModeDefaultTools
         );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
@@ -987,6 +1009,11 @@ export function useSendMessage({
           // dispatchers above send, so agent-mode runs get the same
           // context-window optimization when the user has the feature on.
           enableLattice: isLatticeEnabled,
+          // Artifact parity with chat_completion. Mirrors the
+          // `enableArtifacts: isArtifactsEnabled` payload the chat-completion
+          // dispatchers above send, so an agent run is only told to emit
+          // artifacts when this user's preference actually asks for them.
+          enableArtifacts: isArtifactsEnabled,
           // Propagate provenance so persisted IChatHistoryItem carries the
           // tag the AutoRouteBadge reads.
           routingSource,
@@ -1078,16 +1105,20 @@ export function useSendMessage({
       // rendering; `SessionMiddle` clears the `pendingFirstMessage` overlay once
       // the failed quest lands in `flattenQuests`, so the chat shows prompt +
       // error reply in context.
-      setWorkBenchAgents([]);
-      setSubmitting(false);
-      // Roll back the optimistic Stop affordance only when no real stream
+      // Roll back the optimistic Stop affordance FIRST, only when no real stream
       // event landed - `statusMessage` strict-equals the sentinel iff the WS
       // handler never overwrote it. Leaves a real in-flight stream untouched.
+      // Ordering is load-bearing: if either state write below throws, a skipped
+      // rollback leaves `completed: false` with the generating sentinel, so
+      // `shouldShowStopButton` stays true and the composer renders Stop and
+      // swallows Enter for good - dead in a way releasing the mutex cannot fix.
       setChatCompletion(prev =>
         prev.statusMessage === OPTIMISTIC_GENERATING_STATUS
           ? { ...prev, completed: true, statusMessage: undefined }
           : prev
       );
+      setWorkBenchAgents([]);
+      setSubmitting(false);
       return;
     }
 
@@ -1125,6 +1156,46 @@ export function useSendMessage({
       lexicalInputRef.current?.blur();
     }, 100);
   };
+
+  // Latest-ref so the exported `handleSendClick` below can be permanently
+  // stable. The body closes over most of this hook's state, so a `useCallback`
+  // with real dependencies would change identity every render anyway (and a
+  // truncated dep array would send stale state). Same pattern as
+  // `useProgrammaticSubmit`.
+  const runSendClickRef = useRef(runSendClick);
+  // eslint-disable-next-line react-hooks/refs
+  runSendClickRef.current = runSendClick;
+
+  /**
+   * The composer's send entry point. Stable across renders: consumers hand it to
+   * lexical plugins and zustand registrations that key on the identity, so an
+   * unstable one re-registers a command per keystroke.
+   *
+   * `withSubmitMutex` guarantees the submit mutex is released if the body throws,
+   * which is what stops a single failure from latching the composer dead. An
+   * unexpected throw is surfaced and consumed here rather than rethrown: every
+   * caller drops the rejection, so rethrowing only bought an unhandled rejection
+   * with no error visible to the user.
+   */
+  const handleSendClick = useCallback(
+    async (
+      newPrompt?: string,
+      options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+    ): Promise<IChatHistoryItemDocument | undefined> => {
+      try {
+        return await withSubmitMutex(submittingRef, setSubmittingState, () =>
+          runSendClickRef.current(newPrompt, options)
+        );
+      } catch (error) {
+        // Reached only on an unexpected throw: `runSendClick` already handles
+        // send failures itself (LLMCommand toasts, optimistic rollback).
+        console.error('Unexpected error sending message:', error);
+        toast.error("Couldn't send your message - please try again.");
+        return undefined;
+      }
+    },
+    []
+  );
 
   // Auto-submit quest goal when websocket is ready (from /quests New Quest modal)
   useEffect(() => {

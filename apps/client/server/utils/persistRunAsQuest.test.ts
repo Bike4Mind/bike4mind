@@ -133,6 +133,48 @@ describe('persistRunAsQuest finishReason (#293)', () => {
   });
 });
 
+describe('persistRunAsQuest retrieval (#1867)', () => {
+  const retrieval = {
+    attempted: true,
+    outcome: 'ok' as const,
+    surfaces: ['knowledgeBaseSearch'],
+    dataLakeTags: ['datalake:x'],
+  };
+
+  describe('UPDATE branch (existing Quest patched)', () => {
+    beforeEach(() => {
+      findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' }); // truthy -> update path taken
+    });
+
+    it('sets promptMeta.retrieval in $set when retrieval is passed', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, undefined, undefined, retrieval);
+
+      const [, update] = findOneAndUpdateMock.mock.calls[0];
+      expect(update.$set['promptMeta.retrieval']).toEqual(retrieval);
+    });
+
+    it('omits promptMeta.retrieval when retrieval is absent', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+      const [, update] = findOneAndUpdateMock.mock.calls[0];
+      expect(update.$set).not.toHaveProperty('promptMeta.retrieval');
+    });
+  });
+
+  describe('CREATE branch (no existing Quest)', () => {
+    beforeEach(() => {
+      findOneAndUpdateMock.mockResolvedValue(null); // falsy -> create path taken
+    });
+
+    it('writes promptMeta.retrieval on create, composed with finishReason', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, 'end_turn', undefined, retrieval);
+
+      const [doc] = createMock.mock.calls[0];
+      expect(doc.promptMeta).toEqual({ finishReason: 'end_turn', retrieval });
+    });
+  });
+});
+
 describe('persistRunAsQuest creditsUsed persistence', () => {
   it('copies execution.totalCreditsUsed into the $set on the update branch', async () => {
     findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
@@ -168,6 +210,7 @@ describe('persistRunAsQuest agent artifact persistence', () => {
   const CREATED_AT = new Date(1700000000000);
 
   it('hands the persisted quest and the reply text to the artifact writer (update branch)', async () => {
+    stubExecution({ enableArtifacts: false });
     findOneAndUpdateMock.mockResolvedValue({ _id: 'q1', createdAt: CREATED_AT });
 
     await persistRunAsQuest(EXECUTION_ID, 'reply with <artifact>', logger);
@@ -181,6 +224,10 @@ describe('persistRunAsQuest agent artifact persistence', () => {
       sessionId: 's1',
       userId: 'u1',
       executionId: EXECUTION_ID,
+      // The caller opt-out must reach the durable rows, not only the emission prompt. Absent from
+      // this list, dropping the `enableArtifacts` hand-off reverts persistence to admin-only with
+      // every test still green.
+      enableArtifacts: false,
     });
   });
 

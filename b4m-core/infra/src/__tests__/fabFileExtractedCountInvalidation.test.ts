@@ -81,6 +81,31 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
   it('clears with null rather than undefined', () => {
     const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
 
-    expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{\s*extractedCharCount:\s*null\s*\}/);
+    expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*extractedCharCount:\s*null[^}]*\}/);
+  });
+
+  it('the shared patch also clears every chunk-derived rollup a rewrite invalidates', () => {
+    const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
+    // The patch object literal spans from the const to its first closing brace.
+    const patch = source.match(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*\}/)?.[0] ?? '';
+    // A rewrite invalidates the chunks these rollups were computed from, so all must be nulled - a
+    // stale one would grade lake health (#1666) against the previous content.
+    for (const field of ['chunkedCharCount', 'maxChunkCharLength', 'embeddedChunkCount', 'embeddedCharCount']) {
+      expect(patch).toMatch(new RegExp(`${field}:\\s*null`));
+    }
+  });
+
+  // The admission-contract text hash (#1679) is content-derived too, so a byte rewrite must clear it
+  // rather than leave a fingerprint that claims text the file no longer holds.
+  it('the shared patch also clears the server-verified text hash (serverTextHash)', () => {
+    const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
+    expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*serverTextHash:\s*null[^}]*\}/);
+  });
+
+  // Terminal for the chunk rescue sweep (buildFabFileChunkScanFilter), so a stamp left over a byte
+  // rewrite excludes the new content from repair forever.
+  it('the shared patch also clears the no-extractable-text stamp (noExtractableTextAt)', () => {
+    const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
+    expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*noExtractableTextAt:\s*null[^}]*\}/);
   });
 });

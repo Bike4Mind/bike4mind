@@ -22,33 +22,40 @@ export default function useCreateDataLakeSession() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  return useCallback(async (): Promise<ISessionDocument> => {
-    const res = await api.post<ISessionDocument>('/api/sessions/create', {
-      name: 'New Notebook',
-      forceKnowledgeRetrieval: true,
-      ...(routerProjectId ? { projectId: routerProjectId } : {}),
-    });
-    const created = res.data;
-    queryClient.setQueryData(['sessions', created.id], created);
-    updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
-    setCurrentSession(created);
-    setCurrentSessionId(created.id);
-    if (location.pathname === '/new') {
-      navigate({
-        to: '/notebooks/$id',
-        params: { id: created.id },
-        search: routerProjectId ? { projectId: routerProjectId } : {},
-        replace: true,
+  return useCallback(
+    async (extras?: { knowledgeIds?: string[] }): Promise<ISessionDocument> => {
+      const res = await api.post<ISessionDocument>('/api/sessions/create', {
+        name: 'New Notebook',
+        forceKnowledgeRetrieval: true,
+        // Files the session must be born holding (the explorer's open/attach-on-/new path):
+        // adoption rehydrates the workbench FROM the session's knowledgeIds, so a file added
+        // client-side after creation loses that race on slower adoption paths.
+        ...(extras?.knowledgeIds?.length ? { knowledgeIds: extras.knowledgeIds } : {}),
+        ...(routerProjectId ? { projectId: routerProjectId } : {}),
       });
-    }
-    // Match the invalidation set in `useGenerateNewSession.onSuccess` so a session created
-    // while viewing a project refreshes that project's session list + activity feed
-    // immediately, instead of waiting for the next unrelated refetch.
-    if (routerProjectId) {
-      queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', routerProjectId] });
-      queryClient.invalidateQueries({ queryKey: ['projects', routerProjectId] });
-      queryClient.invalidateQueries({ queryKey: ['activities'] });
-    }
-    return created;
-  }, [routerProjectId, location.pathname, navigate, queryClient, setCurrentSession, setCurrentSessionId]);
+      const created = res.data;
+      queryClient.setQueryData(['sessions', created.id], created);
+      updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
+      setCurrentSession(created);
+      setCurrentSessionId(created.id);
+      if (location.pathname === '/new') {
+        navigate({
+          to: '/notebooks/$id',
+          params: { id: created.id },
+          search: routerProjectId ? { projectId: routerProjectId } : {},
+          replace: true,
+        });
+      }
+      // Match the invalidation set in `useGenerateNewSession.onSuccess` so a session created
+      // while viewing a project refreshes that project's session list + activity feed
+      // immediately, instead of waiting for the next unrelated refetch.
+      if (routerProjectId) {
+        queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', routerProjectId] });
+        queryClient.invalidateQueries({ queryKey: ['projects', routerProjectId] });
+        queryClient.invalidateQueries({ queryKey: ['activities'] });
+      }
+      return created;
+    },
+    [routerProjectId, location.pathname, navigate, queryClient, setCurrentSession, setCurrentSessionId]
+  );
 }

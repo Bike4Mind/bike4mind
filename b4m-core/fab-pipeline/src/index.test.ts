@@ -13,6 +13,12 @@ describe('@bike4mind/fab-pipeline public exports', () => {
     'validateUrlForFetch',
     'isPrivateIP',
     'isPrivateOrInternalHostname',
+    // The connect-time pin. Pinned by name because the Developer Notes advertise `ssrfSafeLookup` as a
+    // reusable primitive for other http/https callers, so it is public surface, not an internal detail.
+    'ssrfSafeLookup',
+    'ssrfSafeHttpAgent',
+    'ssrfSafeHttpsAgent',
+    'SSRF_BLOCKED_CODE',
     'EmbeddingFactory',
     'EmbeddingService',
     'EmbeddingModelProvider',

@@ -10,6 +10,11 @@ const {
   mockGetSettingsValue,
   mockResolveSearchBudgets,
   mockGetProviderFromModel,
+  mockFindOrgById,
+  mockGetSettingsMap,
+  mockRecordOperationalUsage,
+  mockRecordLakeAccessEvent,
+  mockCountTokens,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -19,6 +24,11 @@ const {
   mockGetSettingsValue: vi.fn(),
   mockResolveSearchBudgets: vi.fn(),
   mockGetProviderFromModel: vi.fn(),
+  mockFindOrgById: vi.fn(),
+  mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
+  mockRecordOperationalUsage: vi.fn(),
+  mockRecordLakeAccessEvent: vi.fn().mockResolvedValue(undefined),
+  mockCountTokens: vi.fn(async () => 3),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -43,8 +53,13 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   getProviderFromModel: mockGetProviderFromModel,
 }));
 vi.mock('@bike4mind/utils', () => ({
-  createTokenizer: () => ({ countTokens: vi.fn(async () => 3) }),
+  createTokenizer: () => ({ countTokens: mockCountTokens }),
   getSettingsByNames: vi.fn(),
+  getSettingsMap: mockGetSettingsMap,
+  // Real lookup semantics over whatever map getSettingsMap returned - the billing gate is a
+  // plain read of two keys, and stubbing the read would only prove the stub.
+  getSettingsValue: (name: string, settings: Record<string, unknown>) => settings?.[name],
+  normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
@@ -52,9 +67,10 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   creditTransactionRepository: {},
-  organizationRepository: { findById: vi.fn() },
+  organizationRepository: { findById: mockFindOrgById },
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
+  lakeAccessEventRepository: { record: mockRecordLakeAccessEvent },
 }));
 // The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
 // check, so a reimplementation here would prove nothing. Imported from source because the module
@@ -72,9 +88,33 @@ vi.mock('@bike4mind/services', async () => ({
     describeEmbeddingMismatch: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).describeEmbeddingMismatch,
+    // Same rule as the mismatch helpers above - real, because the wording and the partial_results
+    // mapping are exactly what these tests check.
+    describeSearchLimitations: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
+    ).describeSearchLimitations,
+    isPartialSearch: (await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable'))
+      .isPartialSearch,
     emptyEmbeddingMismatchReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
+    emptyRetrievalUnavailableReport: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable')
+    ).emptyRetrievalUnavailableReport,
+    // Real implementations (pure, already unit-tested on their own) so this suite can assert on
+    // the actual lakeAccessEventRepository.record call args rather than a reimplementation.
+    attributeAccessedLakeIds: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/attributeAccessedLakes')
+    ).attributeAccessedLakeIds,
+    recordLakeAccessEvent: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
+    lakeMembershipsFrom: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/getDynamicDataLakeTags')
+    ).lakeMembershipsFrom,
+    warnIfManyLakeMemberships: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/getDynamicDataLakeTags')
+    ).warnIfManyLakeMemberships,
     resolveSearchBudgets: mockResolveSearchBudgets,
     // A distinct, identifiable value (not a real adapter) so a test can assert reference
     // equality without depending on openSearchChunkAdapter's own implementation.
@@ -88,20 +128,40 @@ vi.mock('@bike4mind/services', async () => ({
       filesScanned: 0,
       chunksScanned: 0,
       chunksSkippedDimensionMismatch: 0,
+      annFilesQueried: 0,
+      annHits: 0,
+      annModelsQueried: 0,
       budgets: { maxFiles: b?.maxFiles ?? 20000, maxChunks: b?.maxChunks ?? 100000 },
     }),
   },
-  recordOperationalUsage: vi.fn(),
+  recordOperationalUsage: mockRecordOperationalUsage,
+  // Real per-member cap predicate - it is the shared billing decision under test, so a
+  // reimplementation here would prove nothing.
+  creditService: await import('../../../../../../b4m-core/services/src/creditService/memberCreditCap'),
 }));
 
-import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
+import { BedrockEmbeddingModel, getQuestErrorCode, ModelBackend, OllamaEmbeddingModel } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
+import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
+
+const ACME_MEMBERSHIP = { datalakeTag: 'datalake:acme-handbook', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
 
 const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
   dataLakeTagPrefixes: ['opti:'],
   scopedTagPrefixes: ['acme:'],
+  lakes: [
+    {
+      id: 'lake-acme',
+      name: 'Acme Handbook',
+      slug: 'acme-handbook',
+      datalakeTag: 'datalake:acme-handbook',
+      fileTagPrefix: 'acme:',
+      membership: ACME_MEMBERSHIP,
+      source: 'dynamic' as const,
+    },
+  ],
 };
 
 const FULL_SCAN = {
@@ -122,12 +182,16 @@ const EMPTY_RESULT = {
   chunksScored: 0,
   embeddingModel: 'text-embedding-ada-002',
   embeddingMismatch: emptyEmbeddingMismatchReport(),
+  retrievalUnavailable: emptyRetrievalUnavailableReport(),
   scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
 };
 
 // req.on is required by the client-disconnect listener; the logger by the usage-recording catch.
-const makeReq = (body: unknown, user: Record<string, unknown> = { id: 'u1', tags: [] }) =>
-  ({ user, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn() } }) as never;
+const makeReq = (
+  body: unknown,
+  user: Record<string, unknown> = { id: 'u1', tags: [] },
+  apiKeyInfo?: Record<string, unknown>
+) => ({ user, apiKeyInfo, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
 
 const makeRes = () => {
   const res: Record<string, unknown> = { writableEnded: false };
@@ -146,7 +210,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
-    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     // Null user short-circuits the best-effort usage recording, keeping these tests on the
@@ -247,26 +311,30 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
-  it('forwards all three lake buckets to the search service verbatim', async () => {
+  it('forwards the meta/OPEN buckets verbatim and derives lakeMemberships from lakes', async () => {
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
     expect(searchParams()).toMatchObject({
       dataLakeTags: DYNAMIC_SCOPE.dataLakeTags,
       dataLakeTagPrefixes: DYNAMIC_SCOPE.dataLakeTagPrefixes,
-      scopedTagPrefixes: DYNAMIC_SCOPE.scopedTagPrefixes,
+      lakeMemberships: [ACME_MEMBERSHIP],
     });
+    expect(searchParams()).not.toHaveProperty('scopedTagPrefixes');
   });
 
-  it('forwards an EMPTY scopedTagPrefixes rather than omitting it', async () => {
+  it('forwards an EMPTY lakeMemberships rather than omitting it, for a lake with no membership scope', async () => {
     // The service defaults the field to [], so omission is invisible unless the empty case is
     // asserted for presence rather than truthiness.
-    mockResolveScope.mockResolvedValue({ ...DYNAMIC_SCOPE, scopedTagPrefixes: [] });
+    mockResolveScope.mockResolvedValue({
+      ...DYNAMIC_SCOPE,
+      lakes: [{ ...DYNAMIC_SCOPE.lakes[0], membership: undefined }],
+    });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
-    expect(searchParams()).toHaveProperty('scopedTagPrefixes');
-    expect(searchParams().scopedTagPrefixes).toEqual([]);
+    expect(searchParams()).toHaveProperty('lakeMemberships');
+    expect(searchParams().lakeMemberships).toEqual([]);
   });
 
   it('hands the live request to the scope resolver, preserving its entitlement memo', async () => {
@@ -281,7 +349,8 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(searchParams().dataLakeTagPrefixes).not.toContain('acme:');
-    expect(searchParams().scopedTagPrefixes).toContain('acme:');
+    // The dynamic lake's prefix arm travels only inside its creator-anchored membership scope.
+    expect(JSON.stringify(searchParams().lakeMemberships)).toContain('acme:');
   });
 
   it('proceeds when the caller holds only dynamic lakes (no open prefixes)', async () => {
@@ -289,6 +358,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       dataLakeTags: ['datalake:acme-handbook'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: ['acme:'],
+      lakes: DYNAMIC_SCOPE.lakes,
     });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
@@ -313,10 +383,15 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
         // The short-circuit must carry the SAME shape as the success path: the RLM loopback
         // forwards this JSON verbatim, so a missing `scan` would be an inconsistent contract.
         scan: expect.objectContaining({ truncated: false, files_matching: 0, chunks_scanned: 0 }),
+        // Same contract, and the field #2096 was missing here: the RLM prompt documents
+        // `retrieval_unavailable` as always present, so REPL code reading
+        // `retrieval_unavailable.indexing_files` TypeErrored for any caller with no lakes - the
+        // most likely state for a new user.
+        retrieval_unavailable: { indexing_files: 0, paused_files: 0, partial: false },
       })
     );
     // Without these the test still passes with the short-circuit deleted.
-    expect(mockGetEffectiveApiKey).not.toHaveBeenCalled();
+    expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
@@ -347,7 +422,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }, { id: 'admin', tags: [], isAdmin: true }), makeRes());
 
     expect(mockResolveScope).toHaveBeenCalledTimes(1);
-    expect(searchParams()).toMatchObject({ scopedTagPrefixes: DYNAMIC_SCOPE.scopedTagPrefixes });
+    expect(searchParams()).toMatchObject({ lakeMemberships: [ACME_MEMBERSHIP] });
   });
 
   it('maps chunk results onto the response contract the RLM loopback consumes', async () => {
@@ -365,6 +440,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       totalChunksSearched: 12,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -396,7 +472,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
-    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     mockFindUserById.mockResolvedValue(null);
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
@@ -408,6 +484,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       totalChunksSearched: 12,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -429,6 +506,7 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
       totalChunksSearched: 100000,
       chunksScored: 12,
       embeddingMismatch: emptyEmbeddingMismatchReport(),
+      retrievalUnavailable: emptyRetrievalUnavailableReport(),
       filesInScope: 2314,
       embeddingModel: 'text-embedding-ada-002',
       scan: {
@@ -491,7 +569,7 @@ describe('POST /api/data-lakes/semantic-search embedding-mismatch reporting', ()
     vi.clearAllMocks();
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
-    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     mockFindUserById.mockResolvedValue(null);
   });
@@ -550,7 +628,7 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
 
   it('searches with a Bedrock model on an environment holding no provider key at all', async () => {
     // The environments where Bedrock is most attractive are exactly the ones with no OpenAI key.
-    mockGetEffectiveApiKey.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({});
     const res = makeRes();
 
     await handler(makeReq({ query: 'onboarding' }), res);
@@ -559,20 +637,25 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
   });
 
-  it('never resolves a provider key for a keyless provider', async () => {
-    mockGetEffectiveApiKey.mockResolvedValue('an-openai-key-that-is-irrelevant-here');
+  it('calls getEffectiveLLMApiKeys even for a keyless primary provider', async () => {
+    // Post-#1474: this now runs unconditionally (not gated on the primary provider needing a
+    // key), because the mixed-embeddingModel ANN cutover may need OTHER providers' credentials
+    // for alternate models even when the primary model itself is keyless.
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'an-openai-key-a-voyage-alternate-could-use' });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
-    expect(mockGetEffectiveApiKey).not.toHaveBeenCalled();
+    expect(mockGetEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
   });
 
-  it('hands the search an empty key table rather than another provider credential', async () => {
-    mockGetEffectiveApiKey.mockResolvedValue('an-openai-key-that-is-irrelevant-here');
+  it('hands the search the FULL multi-provider key table, not narrowed to the (keyless) primary provider', async () => {
+    // Post-#1474: an alternate model from a different provider than the keyless primary can still
+    // be attempted, so the table must carry every provider's key, not collapse to {}.
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k-openai', voyageai: 'k-voyage', ollama: null });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
-    expect(searchParams().apiKeyTable).toEqual({});
+    expect(searchParams().apiKeyTable).toEqual({ openai: 'k-openai', voyageai: 'k-voyage', ollama: null });
   });
 
   it('still rejects a keyed provider whose credential is genuinely absent', async () => {
@@ -580,12 +663,432 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     // not about making every missing credential silent.
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
-    mockGetEffectiveApiKey.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: null });
     const res = makeRes();
 
     await handler(makeReq({ query: 'onboarding' }), res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search alternate-model billing', () => {
+  const VOYAGE_3 = 'voyage-3';
+  const SMALL_3 = 'text-embedding-3-small';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k-openai', voyageai: 'k-voyage' });
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    // A real user (with no organizationId) so recordEmbeddingUsage's short-circuit doesn't skip
+    // recording - the opposite of every OTHER describe block's null-user setup here.
+    mockFindUserById.mockResolvedValue({ id: 'u1' });
+  });
+
+  it('bills one usage event per alternate model actually embedded, in addition to the primary', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, alternateModelsEmbedded: [SMALL_3, VOYAGE_3] });
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockRecordOperationalUsage).toHaveBeenCalledTimes(3);
+    expect(mockRecordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'text-embedding-ada-002', provider: ModelBackend.OpenAI }),
+      expect.anything()
+    );
+    expect(mockRecordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ model: SMALL_3 }),
+      expect.anything()
+    );
+    expect(mockRecordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ model: VOYAGE_3 }),
+      expect.anything()
+    );
+  });
+
+  it('bills only the primary model when no alternates were embedded', async () => {
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockRecordOperationalUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('still returns the search response when resolving the user for billing throws', async () => {
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockFindUserById.mockRejectedValueOnce(new Error('db unavailable'));
+    const req = makeReq({ query: 'onboarding' });
+    const res = makeRes();
+
+    await handler(req, res);
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ results: [] }));
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to resolve user/organization'),
+      expect.any(Error)
+    );
+  });
+
+  it('still records the alternate model when the primary recording fails first', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, alternateModelsEmbedded: [SMALL_3] });
+    // recordEmbeddingUsage awaits the primary before looping alternates, so a rejection here hits
+    // the primary call - it must be caught (not propagate) and must not skip the alternate after it.
+    mockRecordOperationalUsage.mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    const req = makeReq({ query: 'onboarding' });
+    await handler(req, makeRes());
+
+    expect(mockRecordOperationalUsage).toHaveBeenCalledTimes(2);
+    expect(mockRecordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ model: SMALL_3 }),
+      expect.anything()
+    );
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('text-embedding-ada-002'), expect.any(Error));
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockFindUserById.mockResolvedValue(null);
+  });
+
+  it('serializes ann_models_queried and alternate_model_served on the wire', async () => {
+    const report = emptyEmbeddingMismatchReport();
+    report.alternateModelServed = { files: 2, models: ['text-embedding-3-small'] };
+    mockSemanticSearch.mockResolvedValue({
+      ...EMPTY_RESULT,
+      embeddingMismatch: report,
+      scan: { ...FULL_SCAN, annFilesQueried: 5, annHits: 6, annModelsQueried: 2 },
+    });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.scan.ann_models_queried).toBe(2);
+    expect(body.embedding_mismatch.alternate_model_served).toEqual({
+      files: 2,
+      models: ['text-embedding-3-small'],
+    });
+  });
+
+  it('empty-scope short-circuit still carries the new fields at their zero state', async () => {
+    mockResolveScope.mockResolvedValue({ dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.scan.ann_models_queried).toBe(0);
+    expect(body.embedding_mismatch.alternate_model_served).toEqual({ files: 0, models: [] });
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search access-event audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsValue.mockResolvedValue(undefined);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockFindUserById.mockResolvedValue(null); // billing resolution is not under test here
+  });
+
+  const RESULT_WITH_LAKE_TAG = {
+    results: [
+      {
+        chunkId: 'c1',
+        fileId: 'f1',
+        fileName: 'handbook.md',
+        fileTags: ['datalake:acme-handbook'],
+        chunkText: 'pto policy',
+        score: 0.82,
+      },
+    ],
+    totalChunksSearched: 12,
+    chunksScored: 12,
+    embeddingMismatch: emptyEmbeddingMismatchReport(),
+    retrievalUnavailable: emptyRetrievalUnavailableReport(),
+    filesInScope: 3,
+    embeddingModel: 'text-embedding-ada-002',
+    scan: FULL_SCAN,
+  };
+
+  it('records an event attributed to the tag-matched lake, with chunk/file ids and the query text', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+
+    await handler(makeReq({ query: 'pto policy' }, { id: 'u1', tags: [] }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake-acme'],
+        chunkIds: ['c1'],
+        fileIds: ['f1'],
+        surface: 'data-lake-semantic-search',
+        queryText: 'pto policy',
+        // #1867 similarity scores: this is a quest-less HTTP route, so no questId/sessionId,
+        // but the semantic search result carries a real per-chunk score, index-aligned with
+        // chunkIds.
+        scores: [0.82],
+      })
+    );
+  });
+
+  // baseApi() accepts both a session and a b4m_live_ API key on this route - the audit row must
+  // name the KEY as principal (not the human owner it authenticates), or an API-key-driven read
+  // is permanently indistinguishable from an in-app human one in this immutable, floor-retained
+  // trail. Confirms the route actually wires req.apiKeyInfo through, not just the pure helper.
+  it('records the API key as principal, with the human owner preserved separately, when authenticated by key', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+
+    await handler(makeReq({ query: 'pto policy' }, { id: 'u1', tags: [] }, { keyId: 'key-abc' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'apiKey',
+        principalId: 'key-abc',
+        onBehalfOfUserId: 'u1',
+      })
+    );
+  });
+
+  // semanticDataLakeSearch's own file search is a MIXED corpus (includeShared: true, no
+  // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside the
+  // lake arms), despite ranking by a lake-scoped embedding query - a hit with no recoverable tag
+  // may be the caller's own private file, so this must NOT fall back to the full authorized scope.
+  it('does not record when no result carries a recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      ...RESULT_WITH_LAKE_TAG,
+      results: [{ ...RESULT_WITH_LAKE_TAG.results[0], fileTags: ['opti:policy'] }],
+    });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event on the empty-scope short-circuit (nothing was read)', async () => {
+    mockResolveScope.mockResolvedValue({ dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [], lakes: [] });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when the caller has accessible lakes but the search finds nothing', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...RESULT_WITH_LAKE_TAG, results: [] });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('still returns the search response when the audit write rejects', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+    mockRecordLakeAccessEvent.mockRejectedValueOnce(new Error('mongo blip'));
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'pto policy' }), res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
+  });
+
+  it('still records the event when the client disconnects right after the search resolves', async () => {
+    // The audit write happens as soon as search results are in hand, not after the later
+    // isAborted() gate - the read already happened server-side by then regardless of whether the
+    // client is still around to receive the response.
+    let closeCallback: (() => void) | undefined;
+    const req = {
+      user: { id: 'u1', tags: [] },
+      body: { query: 'pto policy' },
+      on: vi.fn((event: string, cb: () => void) => {
+        if (event === 'close') closeCallback = cb;
+      }),
+      logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+    } as never;
+    mockSemanticSearch.mockImplementation(async () => {
+      // Simulate the client going away between the search resolving and the response being sent.
+      closeCallback?.();
+      return RESULT_WITH_LAKE_TAG;
+    });
+    const res = makeRes() as unknown as { json: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+
+    await handler(req, res as never);
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake-acme'] }));
+    // The abort still short-circuits the actual response, confirming the abort really fired.
+    expect(res.json).not.toHaveBeenCalled();
+    expect(res.end).toHaveBeenCalled();
+  });
+});
+
+// The endpoint spends org credits on the query embedding, so it has to answer the same two
+// questions the other standalone spend paths do before doing any work: is this member capped,
+// and is there a pool to draw from.
+describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
+  const BILLING_ON = { billOperationalUsage: true, enforceCredits: true };
+  const user = (over: Record<string, unknown> = {}) => ({ id: 'u1', currentCredits: 1000, ...over });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsMap.mockResolvedValue(BILLING_ON);
+    mockFindUserById.mockResolvedValue(user());
+    mockFindOrgById.mockResolvedValue(null);
+  });
+
+  it('rejects a member who has spent their organization cap, before embedding anything', async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'u1', usedCredits: 500 }],
+    });
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(/member credit limit/i);
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the organization pool is exhausted', async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({ id: 'org1', currentCredits: 0, userDetails: [] });
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
+      /organization does not have enough credits/i
+    );
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('rejects an org-less user with no credits of their own', async () => {
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
+      /you do not have enough credits/i
+    );
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('rejects with the 422 insufficient-credits classifier the Add Credits CTA keys off', async () => {
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    const err = await handler(makeReq({ query: 'onboarding' }), makeRes()).catch((e: unknown) => e);
+
+    expect(getQuestErrorCode(err)).toBe('insufficient_credits');
+    expect((err as { statusCode?: number }).statusCode).toBe(422);
+  });
+
+  it('lets a funded member through and settles the spend', async () => {
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'u1', usedCredits: 1 }],
+    });
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not gate a deployment that never bills, however empty the balance', async () => {
+    // The debit needs billOperationalUsage AND enforceCredits; with either off nothing is
+    // charged, so a zero balance must not start refusing searches.
+    mockGetSettingsMap.mockResolvedValue({ billOperationalUsage: false, enforceCredits: true });
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('still searches when the caller has no user record to bill', async () => {
+    mockFindUserById.mockResolvedValue(null);
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse a zero-cost embedder to a caller with no credits', async () => {
+    // Ollama models are priced at exactly 0, so they settle 0 credits; gating on
+    // usdToCredits' 1-credit floor would refuse a search that costs the operator nothing.
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
+    mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
+
+    await handler(makeReq({ query: 'onboarding', embedding_model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refuse a zero-cost embedder to a member already at their cap', async () => {
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
+    mockFindOrgById.mockResolvedValue({
+      id: 'org1',
+      currentCredits: 0,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'u1', usedCredits: 500 }],
+    });
+
+    await handler(makeReq({ query: 'onboarding', embedding_model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('searches on the length estimate when the tokenizer fails, rather than 500ing', async () => {
+    // 200 chars estimates to 50, which the happy-path tokenizer mock (3) can never return -
+    // so the settled token count proves the fallback ran, not just that the search survived.
+    const query = 'o'.repeat(200);
+    mockCountTokens.mockRejectedValueOnce(new Error('tiktoken encoder unavailable'));
+
+    await handler(makeReq({ query }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 50 }),
+      expect.anything()
+    );
+  });
+
+  it('bills nobody when the organization read fails, rather than charging the member personally', async () => {
+    // A half-resolved pair would skip the member cap and land org usage on the member's own
+    // balance, which is worse than the pre-existing behaviour of charging nobody.
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'org1', currentCredits: 0 }));
+    mockFindOrgById.mockRejectedValue(new Error('organizations read failed'));
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
   });
 });

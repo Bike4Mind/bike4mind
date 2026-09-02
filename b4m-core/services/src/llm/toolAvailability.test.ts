@@ -136,6 +136,45 @@ describe('resolveToolAvailability - search_knowledge_base embedding-key gate', (
   });
 });
 
+describe('resolveToolAvailability - injected llmKeys (caller already holds the table)', () => {
+  const savedSelfHost = process.env.B4M_SELF_HOST;
+
+  beforeEach(() => {
+    delete process.env.B4M_SELF_HOST;
+  });
+  afterEach(() => {
+    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+    else process.env.B4M_SELF_HOST = savedSelfHost;
+  });
+
+  it('uses the injected table and skips the internal key read entirely', async () => {
+    // The agent executor fetches this table for its own backend, so re-reading it here was a second
+    // identical DB round-trip per invocation.
+    getEffectiveLLMApiKeys.mockResolvedValue(null);
+    const availability = await resolveToolAvailability(
+      'user-1',
+      { db },
+      { llmKeys: { openai: 'sk-1234567890abcdefABCDEF' } as never }
+    );
+    expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(availability.search_knowledge_base).toBe(true);
+  });
+
+  it('honors an injected null (no keys) without falling back to a fetch', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-1234567890abcdefABCDEF' });
+    const availability = await resolveToolAvailability('user-1', { db }, { llmKeys: null });
+    expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(availability.search_knowledge_base).toBe(false);
+  });
+
+  it('still fetches internally when the option is omitted (every other caller)', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-1234567890abcdefABCDEF' });
+    const availability = await resolveToolAvailability('user-1', { db });
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+    expect(availability.search_knowledge_base).toBe(true);
+  });
+});
+
 describe('resolveToolAvailability - per-lookup failure isolation', () => {
   it('available policy (default): a failing sub-lookup degrades only its own tool, others resolve normally', async () => {
     getWolframAlphaKey.mockRejectedValue(new Error('admin settings read timed out'));

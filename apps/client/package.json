@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.62",
+  "version": "0.1.66",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -25,6 +25,7 @@
     "typecheck:native": "tsgo --noEmit",
     "typecheck:fast": "tsgo --noEmit || NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "test": "vitest run",
+    "test:integration": "CLIENT_TEST_LANE=integration vitest run",
     "test:e2e:setup": "node scripts/setup-e2e.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

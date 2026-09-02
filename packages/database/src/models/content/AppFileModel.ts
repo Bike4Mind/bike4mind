@@ -40,6 +40,12 @@ const AppFileSchema = new Schema<IAppFileDocument, IAppFileModel>(
   }
 );
 
+// Owner-scoped reads are the only way this collection is queried in app code, and `userId` had no
+// index at all - the sole index was the `unique` on `path`, which a userId predicate cannot use. The
+// published-artifact tag vocabulary (GET /api/publish/tags) made that a collection scan over every
+// file in the deployment on a hot path, but the index is worth having regardless.
+AppFileSchema.index({ userId: 1 });
+
 export const AppFile =
   (mongoose.models.AppFile as IAppFileModel) ??
   mongoose.model<IAppFileDocument, IAppFileModel>('AppFile', AppFileSchema);

@@ -60,10 +60,26 @@ describe('opti profile x pickEffectiveEnabledTools', () => {
     expect(pickEffectiveEnabledTools(undefined, profile)).toEqual(OPTI_AGENT_TOOLS);
   });
 
-  it('strips denied tools even when a payload override tries to re-add image generation', () => {
+  // The exclusivity is what fixes the production failure this guards: a classifier-routed
+  // send carries the chat surface's tool selection in the payload, and replacing the
+  // walk's toolset with it left the agent unable to decompose the scenario it was asked
+  // to break down. Pinned as a flag assertion too, so deleting the flag from the profile
+  // turns a test red rather than only changing behaviour.
+  it('declares its toolset exclusive, so a payload selection cannot narrow the walk', () => {
     const profile = buildOptiOrchestrationProfile();
-    const effective = pickEffectiveEnabledTools(['optihashi_formulate', 'image_generation'], profile);
-    expect(effective).toContain('optihashi_formulate');
-    expect(effective).not.toContain('image_generation');
+    expect(profile.toolsetIsExclusive).toBe(true);
+    expect(pickEffectiveEnabledTools(['optihashi_formulate'], profile)).toEqual(OPTI_AGENT_TOOLS);
+  });
+
+  // NOT a subtraction test: OPTI_AGENT_TOOLS never contained image_generation, and the
+  // exclusive toolset ignores the payload, so the denylist has nothing visible to remove
+  // here (a previous version of this case passed with OPTI_DENIED_TOOLS emptied). The
+  // denylist's real job on this profile is downstream - agentExecutor subtracts it from
+  // the run's final toolbelt after the mission/lattice appends - so what this file can
+  // honestly pin is the config itself, which the 'denies image generation and multi-agent
+  // delegation' case above already does.
+  it('yields the full optimizer toolset even when the payload names a denied tool', () => {
+    const profile = buildOptiOrchestrationProfile();
+    expect(pickEffectiveEnabledTools(['image_generation'], profile)).toEqual(OPTI_AGENT_TOOLS);
   });
 });
