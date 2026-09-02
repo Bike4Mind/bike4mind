@@ -47,15 +47,19 @@ interface PurgeDataLakeDocumentAdapters {
    */
   storage: { delete: (path: string) => Promise<unknown> };
   /**
-   * Crypto-shred the facts this document contributed to the lake's memory ledger. Optional only
+   * Crypto-shred the facts this document contributed to the memory ledger of EVERY lake that
+   * extracted it - not just the lake the purge was authorized through. Extraction
+   * (`extractLakeMemory`) runs per lake, so a file belonging to two lakes produces beliefs on both
+   * ledgers under the same `fabFileId`; scoping the shred to one lake would leave the other lake
+   * folding and recalling beliefs sourced from a document it was told is gone. Optional only
    * because the service cannot reach the ledger repository itself; a host that leaves it unwired
-   * keeps recalling beliefs distilled from a document it told the owner was destroyed. Called once,
-   * after the destruction converged, with the lake principal the extractor wrote under.
+   * keeps recalling those beliefs. Called once, after the destruction converged, with every
+   * `datalake:*` meta-tag the file carried - the host resolves each to its lake, the same way
+   * `onPurged`'s other-lakes stats rebuild does.
    */
   shredDocumentMemory?: (args: {
-    datalakeTag: string;
-    /** The lake principal's owner - the lake's creator, matching the whole-lake shred. */
-    ownerUserId: string;
+    /** Every data-lake meta-tag the file carried before deletion, pre-lowercased filtering done by the host. */
+    tagNames: string[];
     /** The `sources` entry every extracted fact carries. */
     fabFileId: string;
   }) => Promise<void>;
@@ -163,7 +167,7 @@ export const purgeDataLakeDocument = async (
   // `findByIdAndUserId` and falls into unshare otherwise); neither may this door. A lake owner who
   // wants a stranger's file out of the lake has the reversible removal.
   if (!actor.isAdmin && file.userId !== actor.userId) {
-    throw new BadRequestError('Only the file\'s owner can permanently delete this document');
+    throw new BadRequestError("Only the file's owner can permanently delete this document");
   }
 
   const chunksBefore = await db.fabFileChunks.countByFabFileId(file.id);
@@ -237,6 +241,10 @@ export const purgeDataLakeDocument = async (
   // not take.
   const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db });
 
+  // Captured once and shared by shredDocumentMemory and onPurged below: both need every lake the
+  // document belonged to, and both resolve it the same way, from the tags the row carried pre-delete.
+  const tagNames = (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string');
+
   const receipt: DataLakeDocumentPurgeReceipt = {
     dataLakeId: lake.id,
     datalakeTag: lake.datalakeTag,
@@ -266,12 +274,8 @@ export const purgeDataLakeDocument = async (
 
   // Only once the document is genuinely gone: shredding the beliefs of a document that survived a
   // failed sweep would destroy recall for content still in the lake.
-  if (verified && lake.datalakeTag && lake.createdByUserId) {
-    await shredDocumentMemory?.({
-      datalakeTag: lake.datalakeTag,
-      ownerUserId: lake.createdByUserId,
-      fabFileId: file.id,
-    });
+  if (verified) {
+    await shredDocumentMemory?.({ tagNames, fabFileId: file.id });
   }
 
   await onPurged?.({
@@ -280,7 +284,7 @@ export const purgeDataLakeDocument = async (
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
     fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
-    tagNames: (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string'),
+    tagNames,
   });
 
   return receipt;

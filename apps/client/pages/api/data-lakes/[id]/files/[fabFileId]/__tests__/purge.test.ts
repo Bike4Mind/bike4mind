@@ -15,6 +15,17 @@ const h = vi.hoisted(() => ({
   userFindById: vi.fn(),
   storageDelete: vi.fn(async () => {}),
   shredMemoryFromSource: vi.fn(async () => 2),
+  findByDatalakeTag: vi.fn(),
+  extractDataLakeMetaTags: vi.fn((tagNames: readonly unknown[]) =>
+    Array.from(
+      new Set(
+        tagNames
+          .filter((name): name is string => typeof name === 'string')
+          .map(name => name.toLowerCase())
+          .filter(name => name.startsWith('datalake:'))
+      )
+    )
+  ),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -34,10 +45,11 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeWritable: h.assertLakeWritable,
     purgeDataLakeDocument: h.purgeDataLakeDocument,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
+    extractDataLakeMetaTags: h.extractDataLakeMetaTags,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
@@ -211,7 +223,10 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     // in the lake surface. The row is immutable and floor-retained for 450 days: attributing a
     // key-driven destroy to the human as though they did it by hand cannot be corrected later.
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+    await call(
+      req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }),
+      res
+    );
 
     expect(h.logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -389,15 +404,51 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   it('shreds the facts the lake distilled from the purged document', async () => {
     // Extracted beliefs keep reaching live system prompts through recallLakeMemory, so a document
     // reported permanently deleted would otherwise go on speaking through them.
+    h.findByDatalakeTag.mockResolvedValueOnce({ datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' });
     const { res } = makeRes();
     await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
-      datalakeTag: 'datalake:sales',
-      ownerUserId: 'owner-1',
+      tagNames: ['datalake:sales'],
       fabFileId: FILE_ID,
     });
 
-    expect(h.shredMemoryFromSource).toHaveBeenCalledWith({}, { kind: 'lake', id: 'datalake:sales' }, 'owner-1', FILE_ID);
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
+      {},
+      { kind: 'lake', id: 'datalake:sales' },
+      'owner-1',
+      FILE_ID
+    );
+  });
+
+  it('fans the shred out to every other lake the document belonged to, not only the purging one', async () => {
+    // A file in two lakes has beliefs on both ledgers under the same fabFileId (extraction runs per
+    // lake): shredding only the lake the purge was authorized through leaves the other lake folding
+    // and recalling beliefs sourced from a document already destroyed.
+    h.findByDatalakeTag.mockImplementation(async (tag: string) =>
+      tag === 'datalake:sales'
+        ? { datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' }
+        : { datalakeTag: 'datalake:marketing', createdByUserId: 'owner-2' }
+    );
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+
+    await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
+      tagNames: ['datalake:sales', 'datalake:marketing'],
+      fabFileId: FILE_ID,
+    });
+
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
+      {},
+      { kind: 'lake', id: 'datalake:sales' },
+      'owner-1',
+      FILE_ID
+    );
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
+      {},
+      { kind: 'lake', id: 'datalake:marketing' },
+      'owner-2',
+      FILE_ID
+    );
   });
 });

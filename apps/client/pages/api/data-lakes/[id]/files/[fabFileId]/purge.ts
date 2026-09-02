@@ -22,8 +22,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
-import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
-import { memoryLedgerRepository } from '@bike4mind/database';
+import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
 
 /**
@@ -36,7 +35,12 @@ import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
  */
 const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
   const { fileName, ...rest } = receipt;
-  return { ...rest, fileNameHash: createHash('sha256').update(fileName ?? '').digest('hex') };
+  return {
+    ...rest,
+    fileNameHash: createHash('sha256')
+      .update(fileName ?? '')
+      .digest('hex'),
+  };
 };
 
 /**
@@ -52,8 +56,7 @@ const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
 // `fabFileRepository.findById` hands a malformed id straight to Mongoose, which throws a CastError:
 // not one of the gate errors below, so it would file an unverified-purge audit row for a request
 // that never wrote anything.
-const isValidObjectId = (id: string): boolean =>
-  Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
+const isValidObjectId = (id: string): boolean => Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -117,24 +120,14 @@ const handler = baseApi()
           );
         },
         // Facts the lake-memory extractor distilled from this document are stamped with its
-        // fabFileId in `sources` and keep reaching live system prompts through recallLakeMemory.
-        // The lake's DEK cannot be destroyed here - the lake's other documents need it - so the
-        // shred is scoped to this source instead. Without it a "permanently deleted" document keeps
-        // speaking through the beliefs it produced.
-        shredDocumentMemory: async ({ datalakeTag, ownerUserId, fabFileId: source }) => {
-          const shredded = await shredMemoryFromSource(
-            memoryLedgerRepository,
-            { kind: 'lake', id: datalakeTag },
-            ownerUserId,
-            source
-          );
-          // Logged for the same reason the whole-lake shred is: an unwired adapter and a document
-          // that produced no facts are otherwise indistinguishable from the outside.
-          req.logger.info('[lakeMemory] shredded the facts extracted from a purged lake document', {
-            datalakeTag,
-            fabFileId: source,
-            shredded,
-          });
+        // fabFileId in `sources` and keep reaching live system prompts through recallLakeMemory -
+        // on EVERY lake that extracted it, since extraction runs per lake. The lake's DEK cannot be
+        // destroyed here - each lake's other documents need it - so the shred is scoped to this
+        // source, fanned across every `datalake:*` tag the file carried, same as the other-lakes
+        // stats rebuild below. Without it a "permanently deleted" document keeps speaking through
+        // the beliefs it produced on any lake other than the one the purge was authorized through.
+        shredDocumentMemory: async ({ tagNames, fabFileId: source }) => {
+          await shredMemoryForLakeTags(tagNames, source, { logger: req.logger });
         },
         onPurged: async ({ ownerUserId, fileSize, tagNames }) => {
           // Return the bytes, mirroring the +size that the upload event added. Every other
