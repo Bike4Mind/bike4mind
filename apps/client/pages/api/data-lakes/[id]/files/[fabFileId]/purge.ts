@@ -23,6 +23,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
 import { memoryLedgerRepository } from '@bike4mind/database';
@@ -80,12 +81,17 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
+    // A key-driven purge can auto-activate a draft lake (recomputeLakeStats); auditPrincipal is
+    // what keeps that config-change row from being recorded as the human, matching the sibling
+    // removal route on this same path.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+
     // Distinguishes the two ways a `verified: false` row can be reached: a sweep that threw
     // part-way (nothing yet filed) from one that completed and then threw in the bookkeeping after
     // it. Without it an auditor cannot tell a partly-destroyed document from an intact one.
     let receiptFiled = false;
     try {
-      const receipt = await dataLakeService.purgeDataLakeDocument(ctx, lake.id, fabFileId, {
+      const receipt = await dataLakeService.purgeDataLakeDocument(actor, lake.id, fabFileId, {
         db: {
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,

@@ -249,7 +249,7 @@ export const purgeDataLakeDocument = async (
   // through `onPurged` - resolving a tag back to its lake needs repositories this service does
   // not take. `actor` threaded so a draft-lake auto-activation this purge triggers is attributed
   // to whoever (or whatever key) authorized the destruction, not filed as `system`.
-  const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db }, { actor });
+  const { fileCount, totalSizeBytes } = await recomputeLakeStats(lake, { db, logger }, { actor });
 
   const receipt: DataLakeDocumentPurgeReceipt = {
     dataLakeId: lake.id,

@@ -954,6 +954,10 @@ describe('usePurgeDataLakeDocument', () => {
     expect(keys).toContain(JSON.stringify(['file-tags']));
     // The document leaves the owner's Files list too, so that cache is stale as well.
     expect(keys).toContain(JSON.stringify(['fabFiles']));
+    // Scoped to the purged-FROM lake: a purge can move its rebuild badge and, via
+    // recomputeLakeStats' draft -> active flip, write a config-history row.
+    expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
   });
 
   it("surfaces the server's refusal, not axios' status line, on the irreversible door", async () => {

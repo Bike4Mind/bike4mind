@@ -960,6 +960,13 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       // The document is gone globally, not just from this lake, so the Files list is stale too.
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      if (dataLakeId) {
+        // Purging an under-chunked document can move the purged lake's rebuild badge, and can
+        // reach recomputeLakeStats' draft -> active flip, which writes a config-history row - same
+        // two keys invalidateLakeFileMembershipQueries refreshes for a membership change.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+      }
     },
     onError: (error: Error) => {
       // Same extraction as the other lake doors: this is the irreversible one, and a mid-sweep
