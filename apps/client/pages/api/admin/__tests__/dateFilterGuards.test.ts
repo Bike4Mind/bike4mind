@@ -114,9 +114,10 @@ describe.each(cases)('$name - date filter guard', ({ handler, params, queried })
     expect(queried()).not.toHaveBeenCalled();
   });
 
-  it('still runs the query for a parseable date', async () => {
-    const [first] = params;
-    const { promise } = run(handler, { id: 'job1', [first]: '2026-08-01T00:00:00.000Z' });
+  // Per param, not just the first: an over-strict guard on a route's second date would
+  // otherwise ship green.
+  it.each(params)('still runs the query for a parseable %s', async param => {
+    const { promise } = run(handler, { id: 'job1', [param]: '2026-08-01T00:00:00.000Z' });
     await promise;
     expect(queried()).toHaveBeenCalled();
   });

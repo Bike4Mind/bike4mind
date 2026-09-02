@@ -97,7 +97,7 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
   // 404 would report an expected client error where there is really a server bug.
   const castError = (path?: string) => ({
     name: 'CastError',
-    message: `Cast to ObjectId failed for value "junk" at path "${path ?? 'unknown'}"`,
+    message: `Cast to ObjectId failed for value "junk" at path "${path ?? 'unknown'}" for model "Feedback"`,
     ...(path === undefined ? {} : { path }),
   });
 
@@ -110,6 +110,7 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     // The NotFoundError substitution is what keeps the junk id and the model name off a
     // 404 body; without it the raw cast message would ship on the wire.
     expect(json.mock.calls[0][0]).toMatchObject({ name: 'NotFoundError', error: 'Resource not found' });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
   });
 
   it('leaves a cast on any other field a 500 and logs it as a server error', () => {
@@ -124,6 +125,7 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     const { req, res } = makeReqRes();
     errorHandler(castError('userId'), req, res);
     expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('userId'), expect.anything());
+    expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('Feedback'), expect.anything());
   });
 
   it('does not treat a CastError with no path as a missing resource', () => {
@@ -139,6 +141,7 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     // used to mask those; the narrowing must not put them on a public wire instead.
     expect(json.mock.calls[0][0]).toMatchObject({ name: 'CastError', error: 'Server Error' });
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('userId');
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
     for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
       expect(Object.keys(ApiErrorSchema.shape)).toContain(key);
     }
