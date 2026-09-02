@@ -53,7 +53,10 @@ import { type MigrationFile } from './index';
  * them. A row left migrated reads as unstalled to every pre-#2016 reader - no `abandonedByKillSwitch`
  * health signal, a permanent "still indexing" from `partitionByIndexAvailability`, and no "Rebuild
  * passages" repair from `findConvergencePausedFilesByScope`. Run `down()` FIRST: the transitional
- * arms honor the prose it restores, so the still-new stack keeps working until it is gone.
+ * arms honor the prose it restores, so the still-new stack keeps working until it is gone. It is a
+ * PARTIAL restore by design (see its comment): a row whose owner typed a note after `up()` keeps
+ * that note and loses its marker with the dropped field, so audit those rather than assume `down()`
+ * recovered every row.
  */
 
 /** Applied to the two stall notes only; they are fixed literals but contain a regex metacharacter ('.'). */

@@ -217,7 +217,9 @@ export function isConvergencePausedNote(notes?: string | null): boolean {
  * `up` and `migrate down` is a manual CLI step - so `migrate down` is a REQUIRED step of any
  * rollback past #2016, not an optional tidy-up. What this arm does buy is that `down()` is safe to
  * run FIRST: whichever stack is still new keeps honoring the prose it restores, so a staggered
- * rollback has no window where a stalled file reads as servable.
+ * rollback has no window where a restored marker is invisible. `down()` is a PARTIAL restore
+ * though - it skips a row whose owner typed a note after `up()`, and that row grades as unstalled
+ * on both stacks once the field is dropped. See its own comment.
  *
  * Deliberately NOT used by the grading/health/UI readers: they are gated behind the web stack, and
  * a legacy row there renders the notice line AND the identical text as the owner's note.
