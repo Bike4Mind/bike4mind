@@ -64,7 +64,7 @@ describe('FabFileRepository.countDataLakeFilesByMembershipArm', () => {
     expect(counts).toEqual({ 'datalake:papers': { metaCount: 1, prefixOnlyCount: 0 } });
     // The two counts sum to the same total countDataLakeFilesByMembership would report.
     const combined = await fabFileRepository.countDataLakeFilesByMembership([scope('papers', 'papers:')]);
-    expect(combined['datalake:papers']).toBe(
+    expect(combined['datalake:papers'].total).toBe(
       counts['datalake:papers'].metaCount + counts['datalake:papers'].prefixOnlyCount
     );
   });
@@ -103,7 +103,7 @@ describe('FabFileRepository.countDataLakeFilesByMembershipArm', () => {
 
     expect(counts).toEqual({ 'datalake:public-docs': { metaCount: 1, prefixOnlyCount: 0 } });
     const combined = await fabFileRepository.countDataLakeFilesByMembership([registryScope('public-docs', 'docs:')]);
-    expect(combined['datalake:public-docs']).toBe(
+    expect(combined['datalake:public-docs'].total).toBe(
       counts['datalake:public-docs'].metaCount + counts['datalake:public-docs'].prefixOnlyCount
     );
   });
