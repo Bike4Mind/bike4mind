@@ -2,6 +2,7 @@ import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   findDuplicateMembers,
   resolveLakeHealthPolicy,
+  selectLakeHealthMembers,
   summarizeLakeHealth,
   type IAdminSettingsRepository,
   type IDataLakeDocument,
@@ -21,6 +22,16 @@ import { resolveScopedSetting, scopeForLake } from '../settings/resolveScopedSet
 const MEMBER_SCAN_LIMIT = 25_000;
 /** How many failing members the report carries for the drill-down. The count is always exact. */
 const AFFECTED_MEMBERS_RETURNED = 200;
+/**
+ * How many duplicate-fileName groups, and how many members per group, the report carries. Both the
+ * group count and each group's member count stay exact regardless. Bounded because neither dimension
+ * of `groups` is capped by MEMBER_SCAN_LIMIT: a connector-synced lake full of generic names (`scan.pdf`,
+ * `index.html`) can produce thousands of groups, and one giant group can hold every scanned member -
+ * uncapped, either shape can push the response into multiple megabytes on a lake this endpoint (an
+ * `isPublic` lake is reader-visible app-wide) can be asked to report on repeatedly.
+ */
+const DUPLICATE_GROUPS_RETURNED = 50;
+const DUPLICATE_MEMBERS_PER_GROUP = 20;
 
 export interface ComputeLakeHealthAdapters {
   db: {
@@ -46,6 +57,8 @@ export interface ComputeLakeHealthAdapters {
  * vectorized, chunk-consistent, vector-bearing, under the serve cap - while carrying two upload
  * generations of the same documents, which is measurably healthy and wrong. `findDuplicateMembers`
  * groups this same member scan by exact fileName; report-only, same as the rest of this module.
+ * `groups` and each group's `members` are capped here for payload size (`DUPLICATE_GROUPS_RETURNED`,
+ * `DUPLICATE_MEMBERS_PER_GROUP`); the counts stay exact regardless.
  */
 export async function computeLakeHealth(
   lake: Pick<
@@ -78,7 +91,7 @@ export async function computeLakeHealth(
       affectedMembers: [],
       affectedMemberCount: 0,
       scanTruncated: false,
-      duplicateMembers: { memberCount: 0, groups: [] },
+      duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
     };
   }
 
@@ -93,12 +106,22 @@ export async function computeLakeHealth(
   }
 
   const report = summarizeLakeHealth(members, policy);
-  const duplicateMembers = findDuplicateMembers(members);
+  // Same admitted-members filter `summarizeLakeHealth` grades over, applied here explicitly rather
+  // than relied on implicitly: the raw scan and the health report agree on membership by
+  // construction, not because the DB `$match` happens to already filter it.
+  const duplicates = findDuplicateMembers(selectLakeHealthMembers(members));
   return {
     ...report,
     affectedMembers: report.affectedMembers.slice(0, AFFECTED_MEMBERS_RETURNED),
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
-    duplicateMembers,
+    duplicateMembers: {
+      memberCount: duplicates.memberCount,
+      groupCount: duplicates.groupCount,
+      groups: duplicates.groups.slice(0, DUPLICATE_GROUPS_RETURNED).map(g => ({
+        ...g,
+        members: g.members.slice(0, DUPLICATE_MEMBERS_PER_GROUP),
+      })),
+    },
   };
 }

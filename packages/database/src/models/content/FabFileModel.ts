@@ -1363,9 +1363,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * membership + liveness filter as computeDataLakeStats, and only members that produced chunks
    * (`chunkCount > 0`): a chunkless image or a still-pending upload carries no retrievable content.
    *
-   * `fileSize` also feeds `findDuplicateMembers`: a same-fileName pair whose sizes differ is
-   * confirmed to differ in content, which is the only discriminator this row shape can offer without
-   * a second read (see that function's doc for why chunkCount cannot serve the same purpose).
+   * `fileSize` and `serverTextHash` both feed `findDuplicateMembers`: a same-fileName pair whose
+   * sizes disagree, or whose hashes disagree, is confirmed to differ in content; a pair whose hashes
+   * match is confirmed IDENTICAL, which size alone can never prove. Both come back for free in this
+   * same `$project` - no second read - and `chunkCount` cannot serve either purpose (see that
+   * function's doc).
    *
    * ONE exception, and it is the case this report exists for: a member the convergence kill switch
    * stopped mid-rewrite is chunkless because its passages were DELETED, not because it never had
@@ -1384,6 +1386,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       fabFileId: string;
       fileName?: string;
       fileSize: number | null;
+      serverTextHash: string | null;
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
@@ -1425,6 +1428,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           fabFileId: { $toString: '$_id' },
           fileName: 1,
           fileSize: { $ifNull: ['$fileSize', null] },
+          // Server-verified SHA-256 over normalized extracted text, stamped at chunk time. Equal hash
+          // is PROOF of identity - the thing `fileSize` cannot give (see the doc comment above).
+          serverTextHash: { $ifNull: ['$serverTextHash', null] },
           chunkCount: { $ifNull: ['$chunkCount', 0] },
           // Preserve null (UNMEASURED) rather than coalescing to 0 - the evaluator must tell "not yet
           // measured" from "measured as zero". $ifNull with null keeps an ABSENT field as null too.

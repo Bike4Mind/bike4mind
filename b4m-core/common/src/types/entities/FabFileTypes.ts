@@ -1049,6 +1049,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       // confirmed to differ in content (a same-length substitution can still hide behind equal
       // size, so equality is evidence, not proof).
       fileSize: number | null;
+      // Server-verified content hash, for the same check: a same-fileName pair with matching hashes
+      // is confirmed IDENTICAL, and with differing hashes is confirmed to differ - proof `fileSize`
+      // alone cannot offer either direction of.
+      serverTextHash: string | null;
       chunkCount: number;
       // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
       // omitting them here would silently disable that gate (rows arrive without them -> treated as
