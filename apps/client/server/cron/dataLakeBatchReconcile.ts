@@ -148,10 +148,21 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
   let sent = 0;
   for (const file of candidates) {
     try {
-      await sendToQueue(
-        Resource.fabFileChunkQueue.url,
-        buildChunkScanQueuePayload({ fabFileId: String(file._id), userId: String(file.userId) })
-      );
+      // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
+      // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
+      // already-chunked resume. Stamping `origin: convergence` would therefore route a healthy
+      // chunked file into that branch with the switch on, writing `chunkStallReason: 'rechunkPaused'`
+      // and nulling `chunkRebuildRequestedAt` over committed passages, then throwing - so the resume
+      // never runs, `vectorizeEnqueueFailedAt` is never cleared, and this sweep re-sends the file
+      // every tick until each message has burned its retry ladder into the DLQ. The un-chunked sweep
+      // is safe to stamp because its filter carries `excludeConvergencePaused` and its files have no
+      // chunks to damage; this filter has no paused-file exclusion, which is what would make the
+      // re-fire unbounded rather than one-shot. Finishing an already-committed hand-off is not the
+      // background work the kill switch exists to stop.
+      await sendToQueue(Resource.fabFileChunkQueue.url, {
+        fabFileId: String(file._id),
+        userId: String(file.userId),
+      });
       sent += 1;
     } catch (err) {
       logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue send failed for ${file._id}: ${err}`);

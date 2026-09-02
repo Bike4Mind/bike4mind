@@ -421,11 +421,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       const res = await handler();
 
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
-        fabFileId: 'ff9',
-        userId: 'u9',
-        origin: 'convergence',
-      });
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff9', userId: 'u9' });
       expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(1);
 
       // Both cutoffs, same as the un-chunked sweep: a one-arg call drops the stale-claim arm, and a
@@ -457,17 +453,19 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenLastCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff3',
         userId: 'u3',
-        origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(2);
     });
 
-    it('tags a stranded file as convergence work even without a batch, so the switch can halt it', async () => {
-      // #2309's rule, and this sweep is bound by it too: a scheduled rescue is background work
-      // whatever the file's batch, and an un-stamped message reads as `user` (isConvergenceHalted
-      // fails soft) - which is how a file the switch had just parked got rescued and re-embedded
-      // anyway. The projection no longer even reads batchId, so there is nothing to key a
-      // conditional stamp on.
+    it('sends a stranded file UNSTAMPED, so the kill switch cannot route it into the rebuild door', async () => {
+      // The inverse of the un-chunked sweep's rule (#2309), and the asymmetry is the point. These
+      // files are already chunked, and the handler's halt branch sits above the already-chunked
+      // resume: an `origin: convergence` stamp would make the switch write
+      // `chunkStallReason: 'rechunkPaused'` over committed passages, null `chunkRebuildRequestedAt`,
+      // and throw - so the resume never runs, `vectorizeEnqueueFailedAt` is never cleared, and this
+      // sweep (whose filter has no paused-file exclusion) re-sends every tick until each message has
+      // burned its retry ladder into the DLQ. Asserting the exact payload rather than just the
+      // absence of `origin`, so re-adding the stamp cannot pass here.
       h.getSettingsValue.mockResolvedValue(false);
       routeFind([], [{ _id: 'ff9', userId: 'u9' }]);
 
@@ -476,10 +474,8 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff9',
         userId: 'u9',
-        origin: 'convergence',
       });
-      // A global sweep carries no lakeId, so only the platform-scope switch halts it.
-      expect(h.sendToQueue.mock.calls[0][1]).not.toHaveProperty('lakeId');
+      expect(h.sendToQueue.mock.calls[0][1]).not.toHaveProperty('origin');
     });
   });
 });
