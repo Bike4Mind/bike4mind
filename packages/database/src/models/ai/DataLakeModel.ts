@@ -773,6 +773,10 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // accounting; upload-complete.ts's browser-reported failures never touch it.
     processingFailedFiles: { type: Number, default: 0 },
     skippedFiles: { type: Number, default: 0 },
+    // Drive-ingest-only: the driveFileIds skip() has already counted into skippedFiles, so a later
+    // slice of the same chain can subtract them (see IDataLakeBatch.skippedDriveFileIds) instead of
+    // re-fetching and re-skipping (and re-incrementing) the same permanently-unsupported file.
+    skippedDriveFileIds: [{ type: String }],
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },
     // Embedding spend metered against this run, integer micro-USD - see IDataLakeBatch.
@@ -915,6 +919,22 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   /**
+   * Drive-ingest-only: record a skipped driveFileId and increment `skippedFiles` in one atomic
+   * write, gated on that driveFileId not already being recorded. Without the gate, a chain that
+   * re-diffs the same permanently-unsupported file on every slice (skip() mints no FabFile, so the
+   * ordinary alreadyIngested subtraction can't see it) would increment skippedFiles once per slice
+   * for one file. Returns false when the driveFileId was already recorded (a genuine no-op, not an
+   * error) so the caller can tell a fresh skip from a repeat.
+   */
+  async recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES }, skippedDriveFileIds: { $ne: driveFileId } },
+      { $addToSet: { skippedDriveFileIds: driveFileId }, $inc: { skippedFiles: 1 } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  /**
    * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
    * incrementCounter calls can never leave a caller's counters partially applied (e.g.
    * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
@@ -1001,6 +1021,17 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // the queue finalizer) write a settled batch back to a non-terminal status - resurrecting it into
     // findActiveByUserId, where reconcileStuckBatches would later force-fail a batch that succeeded.
     return this.guardedActiveUpdate(batchId, fields as Record<string, unknown>);
+  }
+
+  /**
+   * Re-plan a still-active batch's expected file count. Only the multi-run Drive ingest needs this:
+   * its batch is created from the first slice's candidate list, and later slices re-walk a folder that
+   * may have grown, so `totalFiles` has to be raised before the chain can overrun it (finalizing the
+   * batch mid-chain) and set exactly once the chain ends. Guarded like every other write here, so it
+   * cannot re-plan a batch someone already settled.
+   */
+  async setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null> {
+    return this.guardedActiveUpdate(batchId, { totalFiles });
   }
 
   async touchIfActive(batchId: string): Promise<void> {
