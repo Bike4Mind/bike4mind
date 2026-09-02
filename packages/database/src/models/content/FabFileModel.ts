@@ -1,8 +1,9 @@
 import {
-  CONVERGENCE_PAUSED_CHUNK_NOTE,
-  CONVERGENCE_PAUSED_NOTES,
+  CHUNK_STALL_REASONS,
+  type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  type DataLakeMembershipFileCounts,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
@@ -11,9 +12,10 @@ import {
   IFabFileVersion,
   FabFileSourceType,
   KnowledgeType,
+  normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
 } from '@bike4mind/common';
-import mongoose, { Model, Schema } from 'mongoose';
+import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
@@ -23,6 +25,7 @@ import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '
 import {
   buildDataLakeMembershipFilter,
   buildDataLakeMembershipQuery,
+  buildLacksContentPrefixTagFilter,
   buildNoOtherLakeMetaTagFilter,
 } from '../../queries/dataLakeLifecycleScope';
 
@@ -532,10 +535,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
-      /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
-      lakeMembership?: DataLakeMembershipScope;
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
       skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
@@ -678,6 +680,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.fabFileModel.findOne({ _id: id, userId });
   }
 
+  async softDeleteByIdsForUserBatch(ids: string[], userId: string, batchId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    // The three-clause filter IS the guard - `userId` and `batchId` are not optional refinements.
+    // `deletedAt: null` keeps this idempotent, so a client retry does not restamp an already-deleted
+    // row with a later date.
+    const res = await this.fabFileModel.updateMany(
+      { _id: { $in: ids }, userId, batchId, deletedAt: null },
+      { $set: { deletedAt: new Date() } }
+    );
+    return res.modifiedCount;
+  }
+
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
@@ -727,7 +741,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]> {
@@ -789,7 +802,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -846,7 +858,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -956,7 +967,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
-      scopedTagPrefixes?: string[];
       excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]> {
@@ -1306,6 +1316,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d.toJSON());
   }
 
+  async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
+    // Excludes 'pending' - a row this slice's own createFabFile minted but whose storage.upload
+    // never confirmed (see the interface docs and markUploaded). `distinct` keeps this a projection
+    // over the { batchId: 1 } index rather than loading a whole slice's documents.
+    const ids = await this.fabFileModel.distinct('driveFileId', {
+      batchId,
+      driveFileId: { $ne: null },
+      status: { $ne: 'pending' },
+    });
+    return ids.filter((id): id is string => typeof id === 'string');
+  }
+
+  async markUploaded(fabFileId: string): Promise<void> {
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId, status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.
@@ -1387,7 +1416,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       chunkRebuildRequestedAt: Date | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
@@ -1410,7 +1439,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never enqueued. It grades as in-flight, not as a failure; see evaluateMemberHealth.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkStallReason: 'rechunkPaused' },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
         }),
@@ -1432,10 +1461,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // hidden as still-indexing. Preserve null so "no error" stays distinct.
           error: { $ifNull: ['$error', null] },
           // The SECOND terminal-stall marker. The convergence kill switch abandons a vectorize by
-          // writing CONVERGENCE_PAUSED_NOTE to `notes` and never sets `error`, so omitting this here
-          // would leave the evaluator's arm reading undefined and silently never firing - the same
-          // shape as the contract gap that disabled the vectorizedChunkCount gate.
-          notes: { $ifNull: ['$notes', null] },
+          // stamping `chunkStallReason` and never sets `error`, so omitting this here would leave the
+          // evaluator's arm reading undefined and silently never firing - the same shape as the
+          // contract gap that disabled the vectorizedChunkCount gate.
+          chunkStallReason: { $ifNull: ['$chunkStallReason', null] },
           // The FOURTH stall/in-flight input. A member reset by a wave carries none of the three
           // above, so omitting this would admit it at the $match and then grade it as a settled
           // zero - worse than dropping it, because it would fail P3 on a rebuild that is merely
@@ -1466,7 +1495,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
-      notes: string | null;
+      chunkStallReason: ChunkStallReason | null;
       chunkRebuildRequestedAt: Date | null;
       maxChunkCharLength: number | null;
       chunkedPassageTokenTarget: number | null;
@@ -1490,7 +1519,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // never-enqueued rebuild disappear from the plan that would have re-driven it.
           $or: [
             { chunkCount: { $gt: 0 } },
-            { notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+            { chunkStallReason: 'rechunkPaused' },
             { chunkRebuildRequestedAt: { $ne: null } },
           ],
           // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
@@ -1516,7 +1545,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // #1665 backfill has not run.
           vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
           error: { $ifNull: ['$error', null] },
-          notes: { $ifNull: ['$notes', null] },
+          chunkStallReason: { $ifNull: ['$chunkStallReason', null] },
           // See findDataLakeHealthMembers: without it a member admitted by the stamp above would be
           // graded on stale facts instead of being reported as `indexingInFlight`.
           chunkRebuildRequestedAt: { $ifNull: ['$chunkRebuildRequestedAt', null] },
@@ -1687,14 +1716,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    *    (#1939). The producer died between the reset and its sends, or the message was lost; either
    *    way there is no marker to upgrade and nothing scheduled to rebuild it. Shaped like the CHUNK
    *    arm and invisible in exactly the same way, so it belongs behind the same door - it is simply
-   *    identified by an OLD stamp instead of a note. The age bound is what keeps this door off a
+   *    identified by an OLD stamp instead of a stall reason. The age bound is what keeps this door off a
    *    rebuild that is merely in flight; REBUILD_PENDING_STALE_MS derives it from the chunk queue's
    *    visibility timeout, so a message still awaiting its first redelivery is never re-driven.
    *
    * Selected by the marker plus "nothing of it is retrievable", the same condition
    * `partitionByIndexAvailability` withholds on, rather than by chunk count - so this door offers a
    * repair for exactly the population search refuses to serve. `$in` over the shared
-   * CONVERGENCE_PAUSED_NOTES so it cannot drift from `isConvergencePausedNote`.
+   * CHUNK_STALL_REASONS so it cannot drift from `isChunkStalled`.
    */
   async findConvergencePausedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
     const docs = await this.fabFileModel
@@ -1706,8 +1735,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           deletedAt: null,
           archivedAt: null,
           $or: [
-            { notes: { $in: [...CONVERGENCE_PAUSED_NOTES] } },
-            // `error` empty on this arm, unlike the note arm where it is empty by construction: a
+            { chunkStallReason: { $in: [...CHUNK_STALL_REASONS] } },
+            // `error` empty on this arm, unlike the stall-reason arm where it is empty by construction: a
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
@@ -1768,8 +1797,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 chunkCount: 0,
                 vectorized: false,
                 vectorizedChunkCount: 0,
-                notes: '',
                 error: null,
+                // The two machine-written pipeline markers, and NOT `notes` (#2016). `notes` is the
+                // owner's own text: blanking it here silently deleted whatever they had typed on
+                // every "Rebuild passages" wave and every per-file reprocess. Clearing these two is
+                // what makes reprocess the documented way back in for a file the rescue sweep has
+                // written off (`noExtractableTextAt`) or the kill switch halted (`chunkStallReason`).
+                chunkStallReason: null,
+                noExtractableTextAt: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
@@ -1786,8 +1821,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // file's passages away on paper; this is what says so. Without it the gap between
                 // this reset and the caller's queue send carries no marker at all, and a producer
                 // that dies in that gap - or a consumer whose own marker write is lost - leaves a
-                // chunkless, error-less, note-less file that health, convergence, the retrieval
-                // withhold and the rebuild door all read as an image.
+                // chunkless, error-less, marker-less file that health, convergence, the retrieval
+                // withhold and the rebuild door all read as an image. (`notes` is deliberately NOT
+                // one of the fields this reset touches - it is the owner's own text, #2016.)
                 chunkRebuildRequestedAt: new Date(),
               },
             }
@@ -1817,13 +1853,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * Per-lake live file counts, keyed by membership tag. A lake with no members counts 0 rather
-   * than dropping out of the map.
+   * Per-lake live file counts, keyed by membership tag, split into the whole lake and the slice
+   * of it a prefix-keyed tag tree structurally cannot render:
+   *   `total`         - every member (meta-tag arm OR prefix arm). What a lake picker shows.
+   *   `uncategorized` - the members carrying no tag under the lake's `fileTagPrefix`, so a
+   *                     browse tree can offer them as an "Uncategorized" bucket rather than
+   *                     counting files it never lists. A lake with no usable prefix reports 0:
+   *                     with no prefix there is no taxonomy to be outside of, and the tree
+   *                     renders no branches for it either.
+   * Both come from the SAME membership predicate, one narrowed by the shared uncategorized rule
+   * (`buildLacksContentPrefixTagFilter`, whose in-memory twin `satisfiesTagPrefix` is what the
+   * write-door reconciler and the backfill migration stamp on), so a surface can subtract one
+   * from the other and get exactly the files its prefix-keyed branches do cover. A lake with no
+   * members reports zeros rather than dropping out of the map.
    *
    * Batched into `$facet` aggregates rather than one `countDocuments` per scope: the tag-count
    * surface hands this every lake an ADMIN can see - every lake of every tenant - and a fan-out
    * that wide is thousands of round trips through a pool that defaults to two connections
-   * (b4m-core/db-core/src/utils/mongo.ts), which is what times the request out.
+   * (b4m-core/db-core/src/utils/mongo.ts), which is what times the request out. The two figures
+   * ride ONE pass for the same reason: a second fan-out of this shape would double the round
+   * trips this batching exists to avoid, where a second branch per scope is one more in-memory
+   * pass over a union the aggregate already matched.
    *
    * Each facet branch re-applies its OWN scope filter to the chunk's union, so the counts stay
    * per-scope INDEPENDENT: a file that belongs to two lakes (co-owned meta-tags, or a colliding
@@ -1833,9 +1883,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * Chunks run at LAKE_COUNT_CONCURRENCY, the same bound countDataLakeUniqueFilesByPrefix uses:
    * these two legs are issued concurrently with each other, so neither may fan out freely.
    */
-  async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
+  async countDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, DataLakeMembershipFileCounts>> {
     if (scopes.length === 0) return {};
-    const counts: Record<string, number> = {};
+    const counts: Record<string, DataLakeMembershipFileCounts> = {};
     const chunkStarts = Array.from(
       { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
       (_, i) => i * LAKE_COUNT_CHUNK
@@ -1848,17 +1900,82 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         archivedAt: null,
         status: { $ne: 'pending' },
       }));
+      // $and, never a spread: the membership half can carry a top-level `tags` key (the prefix
+      // arm) and so does the uncategorized half, and the later spread would silently DELETE the
+      // earlier - widening the branch to every file in the install.
+      const uncategorizedFilters = chunk.map((scope, j) => {
+        const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+        return prefix ? { $and: [filters[j], buildLacksContentPrefixTagFilter(prefix)] } : null;
+      });
       // Synthetic branch keys: a facet field name may not contain a '.' or start with a '$',
       // and `datalakeTag` is a user-derived string. Mapped back positionally.
+      const branches: Record<string, PipelineStage.FacetPipelineStage[]> = {};
+      filters.forEach((filter, j) => {
+        branches[`s${j}`] = [{ $match: filter }, { $count: 'n' }];
+        const uncategorized = uncategorizedFilters[j];
+        if (uncategorized) branches[`u${j}`] = [{ $match: uncategorized }, { $count: 'n' }];
+      });
       const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
         { $match: { $or: filters } },
-        { $facet: Object.fromEntries(filters.map((filter, j) => [`s${j}`, [{ $match: filter }, { $count: 'n' }]])) },
+        { $facet: branches },
       ]);
       chunk.forEach((scope, j) => {
-        counts[scope.datalakeTag] = row?.[`s${j}`]?.[0]?.n ?? 0;
+        counts[scope.datalakeTag] = {
+          total: row?.[`s${j}`]?.[0]?.n ?? 0,
+          uncategorized: row?.[`u${j}`]?.[0]?.n ?? 0,
+        };
       });
     });
     return counts;
+  }
+
+  /**
+   * DISTINCT live files across every scope - the honest "all my lakes" figure, where the per-lake
+   * counts above deliberately count a file once per lake it belongs to. So those can sum to MORE
+   * than this, which is dedupe rather than disagreement; what they can no longer do is describe a
+   * different POPULATION than the total shown above them.
+   *
+   * One `countDocuments`, no chunking: unlike `countDataLakeUniqueFilesByPrefix` there is no
+   * per-lake `$facet` branch to repeat an O(lakes) filter into, so the query document stays
+   * linear in the scope count. Each arm is a rooted `$or` member, the shape the planner bounds
+   * per arm against the `tags.name` index.
+   */
+  async countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number> {
+    if (scopes.length === 0) return 0;
+    return this.fabFileModel.countDocuments({
+      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
+      deletedAt: null,
+      archivedAt: null,
+      status: { $ne: 'pending' },
+    });
+  }
+
+  /**
+   * The same distinct count, narrowed to the files categorized under NONE of the caller's lake
+   * prefixes - the bucket for a MERGED tree, where a file categorized under any one lake is
+   * already reachable through that lake's branch.
+   *
+   * Deliberately not a sum of the per-lake `uncategorized` figures: those judge each lake
+   * separately, so a file uncategorized in two lakes would count twice, and one uncategorized in
+   * A but categorized in B would count despite already being reachable under B's branch.
+   *
+   * Each prefix is its own `$and` conjunct - every fragment's top-level key is `tags`, so merging
+   * them into one object would keep only the last and the count would silently widen. Prefixes
+   * are deduped and unusable ones dropped, matching the browse query this sizes.
+   */
+  async countDistinctUncategorizedDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[],
+    tagPrefixes: string[]
+  ): Promise<number> {
+    if (scopes.length === 0) return 0;
+    const prefixes = usableTagPrefixes(tagPrefixes);
+    return this.fabFileModel.countDocuments({
+      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
+      ...(prefixes.length > 0 ? { $and: prefixes.map(buildLacksContentPrefixTagFilter) } : {}),
+      deletedAt: null,
+      archivedAt: null,
+      status: { $ne: 'pending' },
+    });
   }
 
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
@@ -1985,7 +2102,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
-    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: at } });
+    // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
+    // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
+    // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
+    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
+    // return stays the ids this call selected, which is what the index removal and its re-run want.
+    await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
     return ids;
   }
 
@@ -2243,6 +2365,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     fileUrlExpireAt: { type: Date },
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
+    // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
+    // IFabFile.notes. The enum documents the allowed values but does NOT enforce them at runtime:
+    // mongoose skips validators on update paths unless the caller passes `runValidators: true`, and
+    // no writer here does. TypeScript is what actually stops a typo producing a value
+    // `isChunkStalled` silently reads as "not stalled".
+    chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
+    noExtractableTextAt: { type: Date, default: null },
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from

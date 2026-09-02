@@ -155,10 +155,9 @@ export function pickEffectiveMaxIterations(
  * briefcase-override contract (`resolveDispatchTools` on the client) depends on a pinned
  * selection surviving whatever profile the run resolves - EXCEPT for a profile whose
  * `toolsetIsExclusive`: there the profile's toolset IS the toolbelt and the payload is
- * ignored, which is the promise the client's "your tool selection was replaced by the
- * agent toolset" banner already makes. The profile's `deniedTools` ALWAYS wins as a final
- * subtraction so an admin denylist can't be bypassed by shipping `enabledTools` in the
- * payload.
+ * ignored - an agent whose toolset is declared exclusive means it. The profile's
+ * `deniedTools` ALWAYS wins as a final subtraction so an admin denylist can't be bypassed
+ * by shipping `enabledTools` in the payload.
  *
  * An EMPTY payload array is treated as "use profile" rather than "explicitly
  * no tools" because the chat dispatch path can ship `[]` when no per-message

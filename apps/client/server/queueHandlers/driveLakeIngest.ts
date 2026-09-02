@@ -14,6 +14,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import {
+  BATCH_NON_TERMINAL_STATUSES,
   DATALAKE_TAG_STRENGTH,
   KnowledgeType,
   FabFileSourceType,
@@ -38,7 +39,19 @@ import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
 
-const Payload = z.object({ connectionId: z.string(), redriveCount: z.number().int().min(0).default(0) });
+const Payload = z.object({
+  connectionId: z.string(),
+  redriveCount: z.number().int().min(0).default(0),
+  // Set only on a self-re-enqueued continuation: the batch the previous slice was filling, and the
+  // record of what has already been ingested. Absent on every externally-triggered sync, so those
+  // always start a fresh chain.
+  resumeBatchId: z.string().optional(),
+  // The one-time CAS token adoptSyncClaim must present alongside resumeBatchId - see
+  // OrgGoogleDriveConnection.ingestClaimToken. Always set together with resumeBatchId.
+  claimToken: z.string().optional(),
+  // Continuation depth, incremented per self-re-enqueue and bounded by MAX_INGEST_SLICES.
+  slice: z.number().int().min(0).default(0),
+});
 
 // A claim loser re-enqueues itself (with a delay) so a GENUINE second sync - files added to the
 // folder while a long run is mid-loop - isn't silently dropped until the next scheduled poll.
@@ -55,16 +68,51 @@ const INGEST_REDRIVE_DELAY_SECONDS = 90;
 // genuinely large files is the "very large folders" follow-up.
 const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 
-// Per-sync candidate cap. A folder whose candidate count (adds + re-ingests) can't be fetched+uploaded
-// within the queue Lambda's hard 10-minute ceiling would time out mid-loop EVERY run - a deterministic
-// (not transient) failure - and since the retry re-creates FabFiles for the un-uploaded tail (dedup
-// excludes `pending`), the duplicates accumulate without the ingest ever converging. Refuse such a
-// folder up front, BEFORE any membership write, batch, or FabFile exists, so no partial state is ever
-// created (not even a premature removal). Full support for very large folders
-// (batch adoption / a streaming path) is the documented #1589 follow-up; until then this fails fast with
-// a clear message instead of spiralling. Sized well under the ~600-1800 files a 10-min sequential run
-// could realistically move.
-const MAX_INGEST_CANDIDATES = 1500;
+// Stop starting another file once the invocation has less than this left, and yield to a continuation
+// slice instead of being killed mid-file. Sized for the slowest realistic single file: a
+// MAX_INGEST_FILE_BYTES download plus its upload, plus a retire that may run a full deleteFabFile
+// (chunks, search-index docs, S3 object, quota). Getting killed instead of yielding is what used to
+// duplicate the tail, so this buffer is the thing that actually keeps a large folder converging.
+const INGEST_DEADLINE_BUFFER_MS = 90_000;
+
+// Wall-clock budget when the caller cannot supply the Lambda's real remaining time (tests, the
+// self-host worker, any non-Lambda host). Keeps the guard active by default rather than silently
+// absent. Mirrors extractLakeMemory's DEFAULT_RUN_BUDGET_MS, against the same 10-minute ceiling.
+const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
+
+// Hard ceiling on how many slices ONE ingest chain runs before it stops re-enqueuing itself, so a
+// pathological folder cannot turn one sync into an unbounded run of invocations. Coverage is not lost
+// when it trips: the files earlier slices uploaded become durable, non-`pending` lake members, so the
+// next scheduled poll's walk no longer proposes them and the remainder ingests in a fresh chain. That
+// holds because the chunk pipeline each upload enqueues has drained by then - the same durability the
+// claim's staleness bound leans on, and the reason a chained claim must not be stolen mid-chain.
+export const MAX_INGEST_SLICES = 20;
+
+// Cap on the un-sliceable part of a sync: the folder walk and the diff against this connection's
+// stored set, both of which hold a full listing in memory in EVERY slice and must complete inside one
+// invocation before any file is touched - a folder-wide constant regardless of how small any one
+// slice's delta is. This is NO LONGER a throughput bound on the ingestable count - the deadline guard
+// above yields to a continuation slice rather than timing out mid-loop, so that count is bounded by
+// MAX_INGEST_SLICES x a slice's throughput (tens of thousands of files) and not by one invocation.
+// Checked against walked.length and existingDocs.length (see the enforcement below), not the delta
+// between them - gating on the delta would let a folder with a huge stable listing and a tiny delta
+// pay the walk+diff cost on every slice with the cap never tripping. Enforced up front, before any
+// membership write, so an over-cap folder is refused with nothing changed. Beyond it the folder should
+// be split into subfolders connected separately.
+//
+// Memory headroom at this value is not yet independently measured. findByDriveConnectionIdInDataLake
+// has no projection or limit, so existingDocs at the cap hydrates up to 20000 full FabFile documents
+// (previously 1500, ~13x) on the ingest queue Lambda's 1024 MB default (infra/queues.ts sets no
+// override for it, unlike most of its siblings there). If that turns out to be tight, either project
+// the query down to the fields the diff actually reads (driveFileId, md5Checksum, modifiedTime) or set
+// an explicit memory override on the Lambda - both are cheaper than lowering this constant.
+//
+// Also, indirectly, a bound on the size of ONE batch document: every candidate a chain ingests gets a
+// manifest entry in `files[]` on this same DataLakeBatch doc, and both claimFileStatus's positional
+// update and every finalize check read the whole document. Raising this constant further raises that
+// document's worst-case size (and, with failedFileNames also accumulating, moves it closer to the 16MB
+// BSON ceiling) as well as the walk+diff cost the comment above is about.
+export const MAX_INGEST_CANDIDATES = 20000;
 
 /**
  * Has a Drive file changed since it was ingested? `md5Checksum` is exact, but Google Editors files
@@ -95,7 +143,7 @@ export function hasDriveFileChanged(
  * vectorize -> finalize pipeline do the rest. Both the manual Re-sync button and the scheduled poll
  * cron (driveLakeResyncPoll) enqueue onto this one handler, so there is a single delta-aware apply path.
  *
- * Apply order is deliberate. The single-sync cap is enforced FIRST, before any membership write, so an
+ * Apply order is deliberate. The candidate cap is enforced FIRST, before any membership write, so an
  * over-cap folder is refused with nothing changed (an early removal on a run that then bails would evict
  * files it never re-ingests). Genuine deletes (gone from the folder) are then unpicked up front - they
  * have no replacement pending, so nothing is lost by removing them early. An EDITED file's stale copy is
@@ -162,31 +210,123 @@ export function hasDriveFileChanged(
  * skipped` still reaches totalFiles exactly (finalizeBatchIfComplete's gate) without the ingestable
  * count being known up front. Removals happen outside the batch (immediate lake-membership pulls).
  *
- * KNOWN GAP (#1589 follow-up): a throw part-way through the loop is rethrown for SQS retry, and the
- * retry re-walks and re-creates FabFiles for files it had not uploaded yet (the dedup excludes
- * `pending` rows), so a transient mid-loop failure can duplicate the un-uploaded tail. The
- * per-connection `syncing` claim below closes the concurrent double-run case; full retry-idempotency
- * (adopting the in-flight batch) is deferred.
+ * A folder too large for one invocation ingests across SEVERAL, as a chain of slices. The loop yields
+ * on the Lambda deadline (INGEST_DEADLINE_BUFFER_MS) rather than being killed, then re-enqueues itself
+ * carrying the batch it was filling. Three things make that converge where a plain SQS retry did not:
+ *
+ *   - The next slice ADOPTS the batch instead of creating one, and subtracts the Drive ids that batch
+ *     has already UPLOADED or permanently skipped a FabFile for (findDriveFileIdsByBatchId,
+ *     skippedDriveFileIds) from its own fresh walk. That subtraction is load-bearing and cannot be
+ *     replaced by the ordinary diff: a file an earlier slice uploaded is still `pending` (so invisible
+ *     to findByDriveConnectionIdInDataLake) and its superseded copy has already been retired, which
+ *     makes it look like a brand-new ADD. Re-ingesting it is exactly the duplicate-tail spiral this
+ *     chain exists to avoid.
+ *   - The `syncing` claim is HANDED from slice to slice (renewSyncClaim -> adoptSyncClaim) and never
+ *     returns to 'connected' in between, so the re-sync poll cannot slip in and start a competing walk
+ *     mid-chain. The batch id names WHICH chain, but the actual CAS is a one-time `ingestClaimToken`
+ *     rotated on every hand-off - the batch id alone cannot be consumed (it has to stay fixed for the
+ *     whole chain to keep naming the same batch), so two deliveries of one continuation message would
+ *     otherwise both match it and both adopt. The batch id is also what tells claimForSync's staleness
+ *     arm to hold a chained claim for much longer than an unchained one - a continuation's un-refreshed
+ *     interval is its queue wait, not its run length.
+ *   - `totalFiles` is re-planned as the chain goes (raised when a later walk finds more, set exactly
+ *     when the chain ends), so the finalize gate is still reached exactly and the batch never settles
+ *     mid-chain or strands in `processing` afterwards.
+ *
+ * A throw part-way through a CONTINUATION slice is rethrown for SQS retry as before, and that retry
+ * redelivers the same message - resumeBatchId included - so it adopts the batch and resumes instead of
+ * re-creating the un-uploaded tail. The remaining gap is unchanged from #1589: a throw inside the FIRST
+ * slice retries a message that names no batch, and can still duplicate what that slice had not uploaded.
+ * Resuming that too would need the batch pointer to survive the claim release, which reopens the
+ * stale-continuation race the claim token exists to close; the stuck-batch reconciler settles the
+ * abandoned batch meanwhile.
  */
-export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
+export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   let connectionId: string | undefined;
   let claimed = false;
   try {
     const payload = Payload.parse(JSON.parse(event.Records[0].body));
     connectionId = payload.connectionId;
-    const { redriveCount } = payload;
+    const { redriveCount, resumeBatchId, slice } = payload;
     logger.updateMetadata({ handler: 'driveLakeIngest', connectionId });
+
+    // The CAS token this run currently holds for the chain, if any - reassigned to the freshly
+    // rotated value on a successful adopt, and again on every renewSyncClaim before a continuation
+    // is enqueued. See OrgGoogleDriveConnection.ingestClaimToken for why the batch id alone can't
+    // serve as this token.
+    let ingestClaimToken = payload.claimToken;
+
+    // `?? ` alone is not enough: a non-finite reading is not nullish and every comparison against it
+    // is false, which would disable the deadline guard silently rather than fall back to the budget.
+    const runStartedAt = Date.now();
+    const remainingMs = () => {
+      const reported = context?.getRemainingTimeInMillis?.();
+      return typeof reported === 'number' && Number.isFinite(reported)
+        ? reported
+        : DEFAULT_RUN_BUDGET_MS - (Date.now() - runStartedAt);
+    };
+
+    /**
+     * Close out the batch a chain shares across its slices: re-plan `totalFiles` to what the chain
+     * ACTUALLY produced (manifest entries + skips) and nudge the finalize gate. A chain plans that
+     * total a slice at a time - the first from its own candidate list, later ones raising it as the
+     * folder grows - so a chain that ends having ingested fewer files than planned would otherwise sit
+     * in `processing` until the stuck-batch reconciler force-failed it.
+     *
+     * Defined up here, ahead of the connection/lake/user lookups below, so every early-return exit
+     * reachable by a continuation (including ones that fire before the connection, lake, or connecting
+     * user can even be resolved - a deleted connection, a purged lake) can still settle the batch it
+     * was adopting. Takes only a batch id, not the resolved `adoptedBatch`, for exactly that reason.
+     */
+    const settleChainedBatch = async (batchId: string) => {
+      const current = await dataLakeBatchRepository.findById(batchId);
+      if (!current) return;
+      // A manifest entry and a skippedFiles increment are NOT disjoint: objectCreated.ts marks an
+      // audio file (or every file with enableAutoChunk off) 'skipped' on an entry THIS handler already
+      // appended before upload, incrementing skippedFiles on top of it. Counting entries.length whole
+      // would double-count that file - once via the manifest, once via the counter - and the re-planned
+      // totalFiles would then sit one too high for the finalize gate to ever reach it. Only THIS
+      // handler's own skip() (drive-side: oversized/unsupported/fetch-failed) mints no manifest entry
+      // at all, so those are the only skippedFiles that need adding back in.
+      const produced = (current.files?.filter(f => f.status !== 'skipped').length ?? 0) + (current.skippedFiles ?? 0);
+      const settled =
+        produced === current.totalFiles
+          ? current
+          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced);
+      await finalizeBatchIfComplete(settled ?? current, logger);
+    };
 
     const connection = await orgGoogleDriveConnectionRepository.findById(connectionId);
     if (!connection) {
       logger.warn('[driveLakeIngest] connection not found; dropping', { connectionId });
+      // Reachable by a continuation whose connection was deleted mid-chain (e.g. a lake purge) - its
+      // adopted batch still needs settling or it strands in `processing` until the reconciler force-fails it.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       return;
     }
 
     // Serialize ingest per connection: two rapid POSTs (a double-clicked button, a retried request)
     // both walk and both create a full set of FabFiles otherwise, since the driveFileId dedup can't
     // help while the first run's rows are still `pending`. The loser here is a cheap no-op.
-    claimed = await orgGoogleDriveConnectionRepository.claimForSync(connectionId);
+    // A continuation takes over the claim its own previous slice is still holding, matched on the
+    // batch id AND its one-time claim token, so the connection never passes through 'connected'
+    // mid-chain, and a redelivered duplicate of THIS SAME continuation message (which presents the
+    // same already-consumed token) loses rather than racing this run. Falling back to a fresh claim
+    // covers the one case where the chain's claim is genuinely gone: the previous slice threw,
+    // released, and SQS redelivered its message.
+    claimed = false;
+    if (resumeBatchId && ingestClaimToken) {
+      const adopted = await orgGoogleDriveConnectionRepository.adoptSyncClaim(
+        connectionId,
+        resumeBatchId,
+        ingestClaimToken
+      );
+      if (adopted) {
+        claimed = true;
+        ingestClaimToken = adopted;
+      }
+    }
+    if (!claimed) claimed = await orgGoogleDriveConnectionRepository.claimForSync(connectionId);
     if (!claimed) {
       // Someone else holds the claim. If a real ingest is in flight ('syncing'), DEFER this run by
       // re-enqueuing with a delay so a genuine second sync (new files added mid-run) isn't dropped -
@@ -196,12 +336,21 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       if (current?.status === 'syncing' && redriveCount < MAX_INGEST_REDRIVES) {
         await sendToQueue(
           Resource.driveLakeIngestQueue.url,
-          { connectionId, redriveCount: redriveCount + 1 },
+          {
+            connectionId,
+            redriveCount: redriveCount + 1,
+            // Forward the continuation's own identity, if this run had one: a continuation that
+            // loses this race must not come back as a FRESH first-slice sync, which would carry no
+            // resumeBatchId, subtract nothing, and re-ingest the chain's already-`pending` tail as
+            // duplicate ADDs - the exact spiral chaining exists to prevent.
+            ...(resumeBatchId && { resumeBatchId, slice, claimToken: payload.claimToken }),
+          },
           INGEST_REDRIVE_DELAY_SECONDS
         );
         logger.info('[driveLakeIngest] another sync in flight; deferred', {
           connectionId,
           redriveCount: redriveCount + 1,
+          resumeBatchId,
         });
       } else {
         logger.info('[driveLakeIngest] could not claim (not syncing or redrive exhausted); skipping', {
@@ -216,6 +365,9 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
     if (!lake) {
       logger.warn('[driveLakeIngest] target data lake not found; dropping', { connectionId });
+      // Same reasoning as the connection-not-found exit above: a continuation reaching here still
+      // owns an adopted batch that needs settling.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
         lastPolledAt: new Date(),
@@ -225,6 +377,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     const user = await User.findById(connection.connectedBy);
     if (!user) {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
         lastPolledAt: new Date(),
@@ -296,9 +449,41 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       removed = [];
     }
 
+    // The batch a previous slice of this chain was filling, if this run is a continuation of one. Only
+    // adopted when it is still non-terminal and still belongs to this lake: the stuck-batch reconciler
+    // may have settled it while the message waited, and appending to a settled batch would strand
+    // manifest entries nothing will ever finalize. A rejected adoption is not fatal - the run simply
+    // starts a fresh batch, which converges because the earlier slices' files are durable by then.
+    const adoptedBatch = resumeBatchId
+      ? await dataLakeBatchRepository.findById(resumeBatchId).then(prior => {
+          if (!prior) return null;
+          if (prior.dataLakeId !== connection.targetDataLakeId) return null;
+          return BATCH_NON_TERMINAL_STATUSES.includes(prior.status) ? prior : null;
+        })
+      : null;
+    if (resumeBatchId && !adoptedBatch) {
+      logger.warn('[driveLakeIngest] continuation could not adopt its batch; starting a fresh one', {
+        connectionId,
+        resumeBatchId,
+        slice,
+      });
+    }
+
     // Adds and edited files both ingest fresh; an edited file's stale copy is retired in the loop
     // below, only after its replacement is uploaded (never up front - see the header for why).
-    const candidates = [...pureAdds, ...changed];
+    //
+    // On a continuation, subtract every driveFileId the adopted batch has already DEALT WITH - either
+    // uploaded (still `pending`, its superseded copy already retired, so invisible to the diff above)
+    // or permanently skipped (skip() mints no FabFile at all, so it is invisible the same way). Without
+    // this every one of them reads as a fresh ADD and the chain would duplicate its own tail, or
+    // re-fetch-and-re-skip a file that can never succeed - see the header and skip()'s own comment.
+    const alreadyIngested = adoptedBatch
+      ? new Set([
+          ...(await fabFileRepository.findDriveFileIdsByBatchId(adoptedBatch.id)),
+          ...(adoptedBatch.skippedDriveFileIds ?? []),
+        ])
+      : new Set<string>();
+    const candidates = [...pureAdds, ...changed].filter(f => !alreadyIngested.has(f.id));
 
     // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
     // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
@@ -533,20 +718,31 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       }
     };
 
-    // 3) Enforce the single-sync cap FIRST, before any membership write. An over-cap folder would time
-    //    out mid-loop every attempt and accumulate duplicates (see MAX_INGEST_CANDIDATES); refusing here
-    //    - a deterministic condition, so return cleanly rather than DLQ-ing a retry - guarantees nothing
-    //    is changed on a run that cannot ingest, not even an early removal that would strand files.
-    if (candidates.length > MAX_INGEST_CANDIDATES) {
-      logger.warn('[driveLakeIngest] folder exceeds single-sync ingest cap; refusing', {
+    // 3) Enforce the candidate cap FIRST, before any membership write. Gated on walked.length and
+    //    existingDocs.length - not candidates.length - because those are the two quantities that are
+    //    actually un-sliceable: EVERY slice holds the whole folder listing and this connection's whole
+    //    stored set in memory before any file is touched, regardless of how small the delta between
+    //    them turns out to be. Gating on the delta would let a folder with tens of thousands of
+    //    unchanged files and a five-file delta through, paying that walk+diff cost every slice with
+    //    nothing to show the cap ever ran. A deterministic refusal - return cleanly rather than
+    //    DLQ-ing a retry - and refusing here guarantees nothing is changed on a run that cannot ingest,
+    //    not even an early removal that would strand files.
+    const walkAndDiffSize = Math.max(walked.length, existingDocs.length);
+    if (walkAndDiffSize > MAX_INGEST_CANDIDATES) {
+      logger.warn('[driveLakeIngest] folder exceeds the ingest walk/diff cap; refusing', {
         connectionId,
+        walked: walked.length,
+        existing: existingDocs.length,
         candidates: candidates.length,
         cap: MAX_INGEST_CANDIDATES,
       });
+      // A folder that grew past the cap mid-chain still owes its adopted batch a settlement - the
+      // same exit this cap refusal shares with the zero-candidate and admission-refusal returns below.
+      if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
         lastPolledAt: new Date(),
-        lastError: `Folder has ${candidates.length} files to sync (new + re-synced), over the ${MAX_INGEST_CANDIDATES}-file limit for a single sync. Split it into subfolders and connect them separately.`,
+        lastError: `Folder has ${walkAndDiffSize} files (folder listing or connection's stored set), over the ${MAX_INGEST_CANDIDATES}-file limit for one sync. Split it into subfolders and connect them separately.`,
       });
       return;
     }
@@ -593,6 +789,9 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
           updated: changed.length,
           retired,
         });
+        // A chain whose last slice happened to consume the remainder exactly lands here, with its
+        // batch still open on the previous slice's plan. Settle it rather than leaving it processing.
+        if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
         await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
           status: 'connected',
           lastPolledAt: new Date(),
@@ -628,6 +827,9 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
           dataLakeId: lake.id,
           candidates: candidates.length,
         });
+        // A lever flipped mid-chain refuses the remainder; the slices already ingested still have to
+        // settle their shared batch rather than leave it processing.
+        if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
         await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
           status: 'connected',
           lastPolledAt: new Date(),
@@ -636,29 +838,46 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         return;
       }
 
-      // 5) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
-      //    skippedFiles as it happens (see the loop below), so the finalize gate is still reached exactly.
-      //    totalSizeBytes is best-effort - Google Editors files carry no size at list time.
-      const batch = await dataLakeBatchRepository.create({
-        dataLakeId: connection.targetDataLakeId,
-        userId: connection.connectedBy,
-        status: 'processing',
-        conflictResolution: 'skip',
-        totalFiles: candidates.length,
-        totalSizeBytes: candidates.reduce((sum, f) => sum + (f.size ?? 0), 0),
-        uploadedFiles: 0,
-        chunkedFiles: 0,
-        vectorizedFiles: 0,
-        failedFiles: 0,
-        processingFailedFiles: 0,
-        skippedFiles: 0,
-        uploadedSizeBytes: 0,
-        files: [],
-        appliedTags: [],
-        startedAt: new Date(),
-        wantsTaxonomy: false,
-        taxonomyStatus: 'none',
-      });
+      // 5) Adopt this chain's batch, or create one. totalFiles is the candidate count; a per-file skip
+      //    is folded into skippedFiles as it happens (see the loop below), so the finalize gate is still
+      //    reached exactly. totalSizeBytes is best-effort - Google Editors files carry no size at list time.
+      //
+      //    On adoption the plan is RAISED, never lowered: a later slice re-walks a folder that may have
+      //    gained files, and letting the recorded total fall behind what this chain will actually produce
+      //    would let the gate fire mid-chain and finalize a batch still being appended to. The exact set
+      //    happens once, when the chain ends (settleChainedBatch).
+      const batch =
+        adoptedBatch ??
+        (await dataLakeBatchRepository.create({
+          dataLakeId: connection.targetDataLakeId,
+          userId: connection.connectedBy,
+          status: 'processing',
+          conflictResolution: 'skip',
+          totalFiles: candidates.length,
+          totalSizeBytes: candidates.reduce((sum, f) => sum + (f.size ?? 0), 0),
+          uploadedFiles: 0,
+          chunkedFiles: 0,
+          vectorizedFiles: 0,
+          failedFiles: 0,
+          processingFailedFiles: 0,
+          skippedFiles: 0,
+          uploadedSizeBytes: 0,
+          files: [],
+          appliedTags: [],
+          startedAt: new Date(),
+          wantsTaxonomy: false,
+          taxonomyStatus: 'none',
+        }));
+
+      if (adoptedBatch) {
+        // alreadyIngested already includes every driveFileId this chain has uploaded OR permanently
+        // skipped (see how it's built above), so it alone covers what earlier slices produced -
+        // adding adoptedBatch.skippedFiles on top would double-count them.
+        const planned = alreadyIngested.size + candidates.length;
+        if (planned > adoptedBatch.totalFiles) {
+          await dataLakeBatchRepository.setTotalFilesIfActive(adoptedBatch.id, planned);
+        }
+      }
 
       const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
         db: { dataLakes: dataLakeRepository },
@@ -668,16 +887,31 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       let uploaded = 0;
       let skipped = 0;
 
+      // Idempotent per driveFileId within this chain (recordSkippedDriveFile), so a file that keeps
+      // failing the same deterministic gate on every slice (see skip()'s own callers) is counted and
+      // subtracted exactly once instead of once per slice.
       const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
-        skipped++;
-        await dataLakeBatchRepository.incrementCounter(batch.id, 'skippedFiles');
-        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, ...extra });
+        const recorded = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, driveFileId);
+        if (recorded) skipped++;
+        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, recorded, ...extra });
       };
 
       // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
       //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
       //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
-      for (const file of candidates) {
+      let deferred = 0;
+      for (const [index, file] of candidates.entries()) {
+        // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
+        // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
+        // walk+diff already ate the invocation (the large-folder case slicing exists for) can reach
+        // here with seconds left, and starting a file it cannot finish is worse than an empty slice.
+        // An all-deferred slice is bounded and self-announcing (at most MAX_INGEST_SLICES of them, then
+        // the ceiling's lastError), which is a better failure mode than a hard kill mid-upload.
+        if (remainingMs() < INGEST_DEADLINE_BUFFER_MS) {
+          deferred = candidates.length - index;
+          break;
+        }
+
         // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
         // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
         // (surfaced as export_too_large) plus the post-fetch guard below.
@@ -738,6 +972,12 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         await storage.upload(bytes, fileKey, { ContentType: mimeType });
         uploaded++;
 
+        // Confirm the upload SYNCHRONOUSLY, right here - not left to the async S3 objectCreated
+        // event. findDriveFileIdsByBatchId (what a resumed slice subtracts) excludes 'pending' rows
+        // precisely so a FabFile whose storage.upload threw is not mistaken for an uploaded one; a
+        // continuation enqueued moments after this call cannot be trusted to race that event first.
+        await fabFileRepository.markUploaded(fabFile.id);
+
         // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
         // (see retireSupersededCopy, and the header for the invariants it keeps). Done PER-FILE right
         // after the upload, not batched at the end: a later file throwing then leaves every
@@ -754,24 +994,82 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {
         connectionId,
         batchId: batch.id,
+        slice,
         walked: walked.length,
         existing: existingDocs.length,
         removed: removed.length,
         updated: changed.length,
         uploaded,
         skipped,
+        deferred,
         retired,
       });
 
+      // 7) Out of time with files left: hand the claim and the batch to another slice rather than
+      //    finishing here. The claim is renewed (never released) so the connection stays 'syncing' and
+      //    no poll can start a competing walk in the gap, and the batch stays open so the next slice
+      //    appends to it instead of starting a second one.
+      if (deferred > 0 && slice + 1 < MAX_INGEST_SLICES) {
+        const renewedToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(
+          connectionId,
+          batch.id,
+          ingestClaimToken
+        );
+        if (renewedToken) {
+          await sendToQueue(Resource.driveLakeIngestQueue.url, {
+            connectionId,
+            resumeBatchId: batch.id,
+            slice: slice + 1,
+            claimToken: renewedToken,
+          });
+          logger.info('[driveLakeIngest] out of time; enqueued continuation slice', {
+            connectionId,
+            batchId: batch.id,
+            slice: slice + 1,
+            deferred,
+          });
+          // Deliberately NOT releasing the claim, and NOT finalizing: the chain owns both until it ends.
+          return;
+        }
+        // The claim went while this slice ran (a stale-claim reclaim, a disconnect). Someone else owns
+        // the connection now: settle the batch, but touch NOTHING on the connection - healing it to
+        // 'connected' here would release a claim this run no longer holds.
+        logger.warn('[driveLakeIngest] lost the sync claim mid-slice; ending the chain', {
+          connectionId,
+          batchId: batch.id,
+          slice,
+          deferred,
+        });
+        claimed = false;
+        await settleChainedBatch(batch.id);
+        return;
+      } else if (deferred > 0) {
+        // Chain ceiling. Coverage is not lost - the files this chain uploaded stop being candidates
+        // once they vectorize, so the next scheduled poll picks the remainder up in a fresh chain.
+        logger.warn('[driveLakeIngest] continuation chain hit the slice ceiling; stopping', {
+          connectionId,
+          batchId: batch.id,
+          slice,
+          deferred,
+          maxSlices: MAX_INGEST_SLICES,
+        });
+      }
+
       // A batch that only skipped (or whose uploads all vectorized before the loop ended) has already
       // crossed the finalize gate, but nothing re-checks it - our skip increments don't fire the
-      // pipeline's finalize. Nudge it once; a guarded no-op if uploads are still in flight.
-      await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
+      // pipeline's finalize. Nudge it once; a guarded no-op if uploads are still in flight. A chained
+      // batch is re-planned to what the chain actually produced first (see settleChainedBatch),
+      // because its recorded total is a plan made slice by slice, not a count.
+      if (adoptedBatch || deferred > 0) await settleChainedBatch(batch.id);
+      else await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
 
       // Releases the syncing claim (syncing -> connected).
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
         lastPolledAt: new Date(),
+        ...(deferred > 0 && {
+          lastError: `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`,
+        }),
       });
     } finally {
       await flushReclaimedStorage();
@@ -783,9 +1081,10 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       // unrelated write happens to fix them. Swallowed like the flush above, and because a throw
       // raised here would replace the original error on its way to SQS.
       //
-      // The freshly-uploaded replacements are still 'pending' and excluded from the stats aggregate
-      // until the pipeline vectorizes them and finalizeBatchIfComplete recomputes again, exactly as a
-      // plain add already does.
+      // The freshly-uploaded replacements are already 'complete' by this point (markUploaded confirms
+      // the upload synchronously, right after storage.upload, rather than waiting on the async S3
+      // objectCreated event), so this recompute already counts them - unlike a plain add on `main`,
+      // which stays 'pending' until objectCreated flips it and has to wait for that later recompute.
       if (removed.length > 0 || retired > 0) {
         await recomputeStats().catch(e =>
           logger.error('[driveLakeIngest] failed to recompute lake stats', {

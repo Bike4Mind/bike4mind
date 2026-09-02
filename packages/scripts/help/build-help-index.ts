@@ -112,11 +112,10 @@ function buildCategoryTree(entries: HelpIndexEntry[]): HelpCategory[] {
     }
   }
 
-  // Sort categories and their entries
   const sortCategories = (categories: HelpCategory[]): void => {
-    categories.sort((a, b) => a.sidebarPosition - b.sidebarPosition);
+    categories.sort((a, b) => a.sidebarPosition - b.sidebarPosition || a.name.localeCompare(b.name));
     for (const cat of categories) {
-      cat.entries.sort((a, b) => a.sidebarPosition - b.sidebarPosition);
+      cat.entries.sort(compareEntries);
       sortCategories(cat.subcategories);
     }
   };
@@ -124,6 +123,29 @@ function buildCategoryTree(entries: HelpIndexEntry[]): HelpCategory[] {
   sortCategories(rootCategories);
 
   return rootCategories;
+}
+
+/**
+ * Total order on entries within a category: sidebar position, then slug depth, then slug.
+ *
+ * The tie-breaks are what keep a regeneration diff meaningful. `sidebarPosition` is far
+ * from unique - Docusaurus scopes `sidebar_position` per directory, while this index
+ * flattens all of `features/**` into one category, so seven articles share position 1 -
+ * and without a tie-break the order fell through to glob traversal: stable on one
+ * machine, different on the next, so the list flipped every time a different contributor
+ * regenerated. That is not cosmetic; HelpPanel renders the first five entries per
+ * category as its featured list.
+ *
+ * Depth precedes slug so a nested article cannot displace a top-level one it merely
+ * shares a number with (slug alone ranks `features/integrations/*` above
+ * `features/overview`, pushing the landing article off the featured list).
+ */
+function compareEntries(a: HelpIndexEntry, b: HelpIndexEntry): number {
+  return (
+    a.sidebarPosition - b.sidebarPosition ||
+    a.slug.split('/').length - b.slug.split('/').length ||
+    a.slug.localeCompare(b.slug)
+  );
 }
 
 /**
@@ -149,13 +171,7 @@ async function buildHelpIndex(): Promise<void> {
 
   console.log(`Processed ${entries.length} valid entries`);
 
-  // Sort entries by category and sidebar position
-  entries.sort((a, b) => {
-    if (a.category !== b.category) {
-      return a.category.localeCompare(b.category);
-    }
-    return a.sidebarPosition - b.sidebarPosition;
-  });
+  entries.sort((a, b) => a.category.localeCompare(b.category) || compareEntries(a, b));
 
   // Build category tree
   const categories = buildCategoryTree(entries);

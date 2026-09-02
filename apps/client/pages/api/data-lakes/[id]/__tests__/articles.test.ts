@@ -81,6 +81,7 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.isFallbackLake.mockReturnValue(false);
   h.lakeMembershipScope.mockReturnValue({
+    kind: 'owned',
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
     creatorUserId: LAKE.createdByUserId,
@@ -98,12 +99,15 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     // The creator, NOT the viewer: a viewer's own file that merely carries a colliding tag
     // prefix is not a member of someone else's lake, and a per-viewer answer could never match
     // the lake's persisted fileCount.
-    expect(serverOptions.lakeMembership).toEqual({
-      datalakeTag: 'datalake:org1:acme-docs',
-      fileTagPrefix: 'acme:',
-      creatorUserId: 'creator-1',
-    });
-    expect(serverOptions.lakeMembership.creatorUserId).not.toBe('viewer-9');
+    expect(serverOptions.lakeMemberships).toEqual([
+      {
+        kind: 'owned',
+        datalakeTag: 'datalake:org1:acme-docs',
+        fileTagPrefix: 'acme:',
+        creatorUserId: 'creator-1',
+      },
+    ]);
+    expect(serverOptions.lakeMemberships[0].creatorUserId).not.toBe('viewer-9');
   });
 
   it('passes the scope OUTSIDE the parsed params so a caller cannot forge one', async () => {
@@ -113,7 +117,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const [, params, , serverOptions] = h.search.mock.calls[0];
     // search() zod-parses params; a forgeable creatorUserId there would read anyone's files.
     // Every other scope key is out of the parsed params for the same reason.
-    expect(params.options).not.toHaveProperty('lakeMembership');
+    expect(params.options).not.toHaveProperty('lakeMemberships');
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
     expect(params.options).not.toHaveProperty('dataLakeTagPrefixes');
@@ -146,11 +150,48 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
     const [, , , serverOptions] = h.search.mock.calls[0];
-    expect(serverOptions.lakeMembership).toEqual(registryScope);
+    // #2216 routes the registry browse through a membership scope; this branch carries the
+    // singular -> plural rename, so it arrives as a one-element `lakeMemberships` array.
+    expect(serverOptions.lakeMemberships).toEqual([registryScope]);
     // The hand-rolled pair is gone - leaving it would re-open the second, divergent predicate.
     expect(serverOptions.dataLakeTagPrefixes).toBeUndefined();
     expect(serverOptions.dataLakeTags).toBeUndefined();
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
+  });
+
+  it('narrows to the Uncategorized bucket on ?uncategorized=true, using the RESOLVED lake prefix', async () => {
+    // The bucket is the lake's members carrying no tag under its own prefix - what the picker
+    // counted but the prefix-keyed tree had no branch for (#2031). The prefix comes from the
+    // lake this request already resolved, never from the query string, so the flag can only ever
+    // REMOVE files from one lake's list.
+    const { res } = makeRes();
+    const req = { ...makeReq(), query: { id: 'lake1', uncategorized: 'true' } };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    const [, params, , serverOptions] = h.search.mock.calls[0];
+    expect(serverOptions.lacksContentPrefixTags).toEqual(['acme:']);
+    // Still scoped to the one lake: the flag narrows, it does not replace the membership arm.
+    expect(serverOptions.restrictToDataLake).toBe(true);
+    expect(serverOptions.lakeMemberships).toHaveLength(1);
+    // Out of the parsed params with the rest of the scope, so nothing here is forgeable.
+    expect(params.options).not.toHaveProperty('lacksContentPrefixTags');
+  });
+
+  it('leaves the browse unnarrowed without the flag, and for any value other than true', async () => {
+    for (const query of [
+      { id: 'lake1' },
+      { id: 'lake1', uncategorized: 'false' },
+      { id: 'lake1', uncategorized: '1' },
+    ]) {
+      h.search.mockClear();
+      const { res } = makeRes();
+
+      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)({ ...makeReq(), query }, res);
+
+      const [, , , serverOptions] = h.search.mock.calls[0];
+      expect(serverOptions).not.toHaveProperty('lacksContentPrefixTags');
+    }
   });
 
   it('still returns an empty page for a lake with no meta-tag, without searching', async () => {

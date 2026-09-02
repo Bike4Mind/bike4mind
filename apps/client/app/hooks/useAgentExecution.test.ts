@@ -507,7 +507,8 @@ describe('useAgentExecutionSubscriptions -- sweep hygiene', () => {
     useAgentExecutionStore.getState().startExecution('exec-1', 'sess-1');
     ws.readyState = 1; // OPEN
     const { rerender } = mountSubscriptions();
-    const sent = () => ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect');
+    const sent = () =>
+      ws.sendJsonMessage.mock.calls.filter(c => (c[0] as { command?: string }).command === 'reconnect');
     expect(sent()).toHaveLength(1);
 
     // The token refresh case: `sendJsonMessage` gets a new identity every refresh,

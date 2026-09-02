@@ -19,6 +19,13 @@ import { processQuest } from '@server/queueHandlers/questProcessor';
  */
 
 /**
+ * Last-resort reply for a quest whose processing threw before anything specific was persisted.
+ * Only ever written when `settleIfUnfinished` finds the quest still unfinished - see the catch in
+ * `registerInternalRoutes`.
+ */
+export const GENERIC_PROCESSING_FAILURE_REPLY = 'Something went wrong while processing your request. Please try again.';
+
+/**
  * Shared-secret bearer check. Both the frontend Lambda and this service link
  * CHAT_COMPLETION_INTERNAL_SECRET (a dedicated internal-dispatch secret, NOT the AES
  * SECRET_ENCRYPTION_KEY), so the caller proves it's the frontend (not arbitrary internet
@@ -78,13 +85,21 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
 
     const task = processQuest(params, logger).catch(async err => {
       logger.error('Quest processing failed', { error: err instanceof Error ? err.message : String(err) });
-      // Surface the failure to the client instead of leaving the quest 'running' forever.
+      // Surface the failure to the client instead of leaving the quest 'running' forever - but only
+      // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own
+      // message (`quest.reply = err.message`) and marks the quest terminal before it rethrows, so an
+      // unconditional write here replaces a specific, actionable diagnostic with this generic one.
       try {
-        await questRepository.update({
-          id: params.questId,
+        const settled = await questRepository.settleIfUnfinished(params.questId, {
           status: 'stopped',
-          replies: ['Something went wrong while processing your request. Please try again.'],
+          type: 'error',
+          reply: GENERIC_PROCESSING_FAILURE_REPLY,
         });
+        if (!settled) {
+          logger.info('Quest already settled by the processor; kept its own error reply', {
+            questId: params.questId,
+          });
+        }
       } catch (updateErr) {
         logger.error('Failed to mark quest stopped after processing error', {
           error: updateErr instanceof Error ? updateErr.message : String(updateErr),
