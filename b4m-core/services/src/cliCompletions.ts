@@ -291,8 +291,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // past an administrator-configured cap. Settlement below charges actual usage.
     //
     // `?? DEFAULT_OUTPUT_MAX_TOKENS` must stay: with no explicit budget, maxTokens can be up to
-    // 64K on an adaptive reasoner, and reservationOutputTokens alone would still let a
-    // ceiling-sized hold through and reject short prompts outright for anyone near their
+    // 64K on an adaptive reasoner, and reservationOutputTokens alone would still let a 32K hold
+    // through - 8x what this keeps - and reject short prompts outright for anyone near their
     // balance. That also makes the reservationOutputTokens term inert on this no-budget path -
     // it only binds once a caller passes an explicit options.maxTokens above the ceiling.
     const estimatedInputTokens = estimateInputTokens(messages);
