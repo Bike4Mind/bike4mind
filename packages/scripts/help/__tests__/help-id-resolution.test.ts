@@ -30,7 +30,7 @@ const HELP_EMBEDDINGS_PATH = path.resolve(__dirname, '../../../../apps/client/ap
  * as a production one, and a made-up slug in a fixture should be allowlisted rather
  * than invisible.
  */
-const SLUG_LITERAL_PATTERNS = [/helpId=["']([^"']+)["']/g, /openHelpPanel\(['"]([^'"]+)["']/g];
+const SLUG_LITERAL_PATTERNS = [/helpId=["']([^"']+)["']/g, /openHelpPanel\(['"]([^'"]+)['"]/g];
 
 /**
  * Help ids with no article yet. Each needs content authored (or the id corrected)

@@ -181,7 +181,7 @@ async function buildHelpIndex(): Promise<void> {
 
   console.log(`Processed ${entries.length} valid entries`);
 
-  entries.sort((a, b) => a.category.localeCompare(b.category) || compareEntries(a, b));
+  entries.sort((a, b) => compareStrings(a.category, b.category) || compareEntries(a, b));
 
   // Build category tree
   const categories = buildCategoryTree(entries);
