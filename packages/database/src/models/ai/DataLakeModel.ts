@@ -562,18 +562,39 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
+  async claimArchiving(id: string): Promise<boolean> {
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving'], 'archiving');
+  }
+
+  async claimDeleting(id: string): Promise<boolean> {
+    // 'restoring' is deliberately absent: a teardown must lose to an unarchive or restore already
+    // in flight rather than plain-write over it, which is what left a lake 'active' with every one
+    // of its files soft-deleted. 'deleted'/'purging' are handled by deleteDataLake's own guards.
+    //
+    // 'archiving' IS admitted, and that is a deliberate asymmetry rather than an oversight: a
+    // delete may take the lake out from under an in-flight archive. It is safe only because that
+    // archive's own sweep is write-once, but its terminal settle is unconditional, so the pair
+    // still converges on 'archived' rather than 'deleted' - the one lifecycle pair this claim set
+    // does not close. Tracked separately; do not read the admitted set as covering it.
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
+  }
+
   async claimUnarchiving(id: string): Promise<boolean> {
     // The archive-axis twin of claimRestoring. What the filter EXCLUDES is the point: deleteDataLake
     // also accepts 'archived', so a delete accepted between unarchiveDataLake's status read and this
     // write must win. Losing here yields the same refusal the caller's guard would have given, where
     // a plain $set would instead leave the lake 'active' with every member soft-deleted and
     // restoreDeletedDataLake refusing it - unreachable files with no route back.
-    const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: { $in: ['archived', 'restoring'] } },
-      { $set: { status: 'restoring' } }
-    );
-    // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
-    // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
+    return this.claimLifecycleStatus(id, ['archived', 'restoring'], 'restoring');
+  }
+
+  /**
+   * Conditional status hop: `$set` the new status only for a lake still sitting in one of `from`.
+   * matchedCount, not modifiedCount, so a re-entry that changes nothing (retrying a crashed
+   * transitional attempt) still reports as won - see claimRestoring's note.
+   */
+  private async claimLifecycleStatus(id: string, from: DataLakeStatus[], to: DataLakeStatus): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: { $in: from } }, { $set: { status: to } });
     return res.matchedCount === 1;
   }
 

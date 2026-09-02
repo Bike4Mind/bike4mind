@@ -774,8 +774,16 @@ export function useReprocessFabFile(dataLakeId: string | null) {
  * membership, so a caller left stale by one is left stale by the other. Kept in one place so
  * `useRemoveFileFromDataLake` and `useAddFileToDataLake` cannot drift apart on what "membership
  * changed" invalidates.
+ *
+ * Exported so a future hook for `PUT /api/data-lakes/:id/files/:fabFileId/tags`
+ * (`setDataLakeFileTags`) can reuse it: that door can also change a file's tags under this lake's
+ * prefix (and, via a prefix-arm join, another lake's membership), which is exactly the same
+ * invalidation shape.
  */
-function invalidateLakeFileMembershipQueries(queryClient: ReturnType<typeof useQueryClient>, dataLakeId: string) {
+export function invalidateLakeFileMembershipQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  dataLakeId: string
+) {
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
   // Membership changes the lake's reachable-content denominator and predicate tallies.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });

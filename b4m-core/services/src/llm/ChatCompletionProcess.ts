@@ -97,6 +97,7 @@ import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
   type ResolvedLakeAccess,
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
@@ -789,7 +790,6 @@ export class ChatCompletionProcess {
     | {
         dataLakeTags: string[];
         dataLakeTagPrefixes: string[];
-        scopedTagPrefixes: string[];
         lakes: ResolvedLakeAccess[];
       }
     | undefined;
@@ -923,7 +923,6 @@ export class ChatCompletionProcess {
   private async getAccessibleDataLakeAccess(): Promise<{
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
     lakes: ResolvedLakeAccess[];
   }> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
@@ -941,7 +940,6 @@ export class ChatCompletionProcess {
         this.accessibleDataLakeAccessMemo = {
           dataLakeTags: [],
           dataLakeTagPrefixes: [],
-          scopedTagPrefixes: [],
           lakes: [],
         };
       }
@@ -969,6 +967,8 @@ export class ChatCompletionProcess {
     try {
       const access = await this.getAccessibleDataLakeAccess();
       if (access.dataLakeTags.length === 0) return null;
+      const lakeMemberships = lakeMembershipsFrom(access.lakes);
+      warnIfManyLakeMemberships(lakeMemberships, this.logger, 'countLakeReachableAttachments');
       const res = await this.db.fabfiles!.search(
         this.user.id,
         '',
@@ -992,7 +992,7 @@ export class ChatCompletionProcess {
           //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
           //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
           //   full-resolution guard first, so this count is never reached at all.
-          lakeMemberships: lakeMembershipsFrom(access.lakes),
+          lakeMemberships,
           restrictToDataLake: true,
           excludeContent: true,
         }

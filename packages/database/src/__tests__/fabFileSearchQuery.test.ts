@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_NOTES } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 import {
   buildFabFileSearchQuery,
   buildOwnershipConditions,
@@ -305,37 +305,24 @@ describe('buildFabFileSearchQuery', () => {
         expect('$and' in openArm).toBe(false);
       });
 
-      it('SCOPED prefix is ANDed with base access — never a bare bypass', () => {
-        const conditions = buildOwnershipConditions('user1', {
-          userGroups: ['g1'],
-          scopedTagPrefixes: ['acme:'],
-        });
-        const scopedArm = conditions[conditions.length - 1] as { $and?: object[] };
-        expect(scopedArm.$and).toBeDefined();
-        // arm[0] = the prefix regex; arm[1] = an $or of the SAME base access conditions
-        // (owned / shared / group) - so a colliding prefix can't bypass ownership.
-        const [prefixCond, accessCond] = scopedArm.$and as [Record<string, unknown>, { $or: object[] }];
-        expect(prefixCond).toEqual({ tags: { $elemMatch: { name: { $regex: /^(acme:)/ } } } });
-        expect(accessCond.$or).toEqual([
-          { userId: 'user1' },
-          { users: { $elemMatch: { userId: 'user1', permissions: { $in: ['read', 'write'] } } } },
-          { groups: { $elemMatch: { groupId: { $in: ['g1'] }, permissions: { $in: ['read', 'write'] } } } },
-        ]);
-      });
-
-      it('keeps open and scoped arms distinct when both are present', () => {
+      // The caller-anchored SCOPED prefix option (#2243) was deleted once retrieval moved to
+      // `lakeMemberships` (creator-anchored per lake): it was provably inert everywhere except
+      // one call site (see fabFileSearchQuery.ts's docblock), and kept it would have been a
+      // second, driftable door to the exact asymmetry the option's removal closes.
+      it('keeps the open arm and a lakeMemberships arm distinct when both are present', () => {
         const conditions = buildOwnershipConditions('user1', {
           dataLakeTagPrefixes: ['opti:'], // open
-          scopedTagPrefixes: ['acme:'], // scoped
+          lakeMemberships: [
+            { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+          ],
         });
-        // owned, shared, open-arm, scoped-arm (RegExp can't be JSON-serialized, so read .source)
+        // owned, shared, membership-arm, open-arm
         expect(conditions).toHaveLength(4);
-        const openArm = conditions[2] as { $and?: unknown; tags: { $elemMatch: { name: { $regex: RegExp } } } };
+        const membershipArm = conditions[2] as { $or: Array<{ 'tags.name'?: string; $and?: unknown }> };
+        expect(JSON.stringify(membershipArm)).toContain('creator-1');
+        const openArm = conditions[3] as { $and?: unknown; tags: { $elemMatch: { name: { $regex: RegExp } } } };
         expect(openArm.$and).toBeUndefined();
         expect(openArm.tags.$elemMatch.name.$regex.source).toBe('^(opti:)');
-        const scopedArm = conditions[3] as { $and: [{ tags: { $elemMatch: { name: { $regex: RegExp } } } }, object] };
-        expect(scopedArm.$and).toBeDefined();
-        expect(scopedArm.$and[0].tags.$elemMatch.name.$regex.source).toBe('^(acme:)');
       });
     });
 
@@ -351,22 +338,6 @@ describe('buildFabFileSearchQuery', () => {
         });
         expect(conditions).toEqual([{ tags: { $elemMatch: { name: { $in: ['datalake:acme'] } } } }]);
         expect(conditions.some(c => 'userId' in (c as Record<string, unknown>))).toBe(false);
-      });
-
-      it('still ANDs a scoped prefix with base access (ownership never bypassed)', () => {
-        const conditions = buildOwnershipConditions('user1', {
-          dataLakeTags: ['datalake:acme'],
-          scopedTagPrefixes: ['acme:'],
-          restrictToDataLake: true,
-        });
-        // [meta-tag arm, scoped-prefix arm] - still no bare ownership arms.
-        expect(conditions).toHaveLength(2);
-        expect(conditions.some(c => 'userId' in (c as Record<string, unknown>))).toBe(false);
-        const scopedArm = conditions[1] as { $and: [Record<string, unknown>, { $or: object[] }] };
-        expect(scopedArm.$and[1].$or).toEqual([
-          { userId: 'user1' },
-          { users: { $elemMatch: { userId: 'user1', permissions: { $in: ['read', 'write'] } } } },
-        ]);
       });
 
       it('default (no flag) still keeps the broad owner/shared arms', () => {
@@ -410,15 +381,15 @@ describe('buildFabFileSearchQuery', () => {
         // Dropping the broad arms with no lake arm would build `{ $or: [] }`, which MongoDB
         // rejects at query time. Fail fast with a descriptive error instead.
         expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true })).toThrow(
-          /requires lakeMemberships, dataLakeTags or scopedTagPrefixes/
+          /requires lakeMemberships, dataLakeTags or dataLakeTagPrefixes/
         );
         // An empty-string prefix doesn't count (validPrefixes filters it), so still throws.
         expect(() =>
-          buildOwnershipConditions('user1', { restrictToDataLake: true, scopedTagPrefixes: [''] })
+          buildOwnershipConditions('user1', { restrictToDataLake: true, dataLakeTagPrefixes: [''] })
         ).toThrow();
         // An empty lakeMemberships array is likewise not an arm - same failure, named field.
         expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true, lakeMemberships: [] })).toThrow(
-          /requires lakeMemberships, dataLakeTags or scopedTagPrefixes/
+          /requires lakeMemberships, dataLakeTags or dataLakeTagPrefixes/
         );
       });
 
@@ -454,10 +425,10 @@ describe('buildFabFileSearchQuery', () => {
         expect(conditions[3]).toEqual(buildDataLakeMembershipFilter(SCOPE_B));
       });
 
-      it('with lakeMemberships and no scopedTagPrefixes, no arm conjoins a prefix regex with base access', () => {
+      it('with lakeMemberships, no arm conjoins a prefix regex with base access', () => {
         const conditions = buildOwnershipConditions('user1', { lakeMemberships: [SCOPE_A] });
-        // The old caller-anchored SCOPED arm ANDs a prefix regex with `{ $or: baseAccess }` - the
-        // membership arm never does; it ANDs the prefix with the LAKE'S creator instead.
+        // The deleted caller-anchored SCOPED arm ANDed a prefix regex with `{ $or: baseAccess }` -
+        // the membership arm never does; it ANDs the prefix with the LAKE'S creator instead.
         for (const c of conditions) {
           const asAnd = (c as { $and?: unknown[] }).$and;
           if (!asAnd) continue;
@@ -800,12 +771,12 @@ describe('buildFabFileSearchQuery', () => {
     const findMarkerClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(c => 'fileNameLower' in c) as
         { fileNameLower: { $not: RegExp } } | undefined;
-    // Structural, not a hardcoded literal: the clause's `notes` arm is asserted against
-    // CONVERGENCE_PAUSED_NOTES in the test below, so adding a stall marker fails there rather than
+    // Structural, not a hardcoded literal: the clause's stall-reason arm is asserted against
+    // CHUNK_STALL_REASONS in the test below, so adding a stall reason fails there rather than
     // making this matcher silently stop finding the clause.
     const findVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
       ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(
-        (c): c is { $or: [{ vectorized: boolean }, { notes: { $in: string[] } }] } =>
+        (c): c is { $or: [{ vectorized: boolean }, { chunkStallReason: { $in: string[] } }, ...unknown[]] } =>
           Array.isArray((c as { $or?: unknown[] }).$or) &&
           (c as { $or: Record<string, unknown>[] }).$or.some(arm => 'vectorized' in arm)
       );
@@ -852,19 +823,24 @@ describe('buildFabFileSearchQuery', () => {
       // partitionByIndexAvailability - so a vectorizedOnly lake would answer around the hole and
       // report full coverage. Must stay in sync with isRetrievalExcluded's own arm.
       //
-      // Asserted against CONVERGENCE_PAUSED_NOTES itself rather than a literal, so adding a third
-      // stall marker cannot leave this passing while the query silently stops exempting it.
+      // Asserted against CHUNK_STALL_REASONS itself rather than a literal, so adding a third stall
+      // reason cannot leave this passing while the query silently stops exempting it.
       const result = buildFabFileSearchQuery(makeParams({ options: { vectorizedOnly: true } }));
       const clause = findVectorizedClause(result);
       expect(clause).toBeDefined();
       expect(clause!.$or[0]).toEqual({ vectorized: true });
-      expect(clause!.$or[1].notes.$in).toEqual([...CONVERGENCE_PAUSED_NOTES]);
-      expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_CHUNK_NOTE);
-      expect(clause!.$or[1].notes.$in).toContain(CONVERGENCE_PAUSED_NOTE);
-      // Third arm (#1939): the window between the reset and the consumer's marker carries NO note,
-      // so the two arms above cannot cover it. `$ne: null` also excludes a missing field, which is
+      expect(clause!.$or[1].chunkStallReason.$in).toEqual([...CHUNK_STALL_REASONS]);
+      expect(clause!.$or[1].chunkStallReason.$in).toContain('rechunkPaused');
+      expect(clause!.$or[1].chunkStallReason.$in).toContain('vectorizePaused');
+      // Transitional third arm: the queue stack does not wait on #2016's migrator, so this query can
+      // run against rows still carrying the marker as prose in `notes`. Asserted against
+      // LEGACY_CHUNK_STALL_NOTES so it cannot drift from the in-memory `isChunkStalledFile`. Deleted
+      // with that arm.
+      expect(clause!.$or[2]).toEqual({ notes: { $in: [...LEGACY_CHUNK_STALL_NOTES] } });
+      // Fourth arm (#1939): the window between the reset and the consumer's marker carries no reason,
+      // so the arms above cannot cover it. `$ne: null` also excludes a missing field, which is
       // what keeps this from matching every legacy row.
-      expect(clause!.$or[2]).toEqual({ chunkRebuildRequestedAt: { $ne: null } });
+      expect(clause!.$or[3]).toEqual({ chunkRebuildRequestedAt: { $ne: null } });
     });
 
     it('does NOT clobber a plain-search fileName filter (markers push to $and, not baseFilter)', () => {

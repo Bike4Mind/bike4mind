@@ -53,6 +53,26 @@ function uriPathMatches(scopeDown: any): UriPathMatch[] {
         textTransformations: (byteMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
       });
     }
+    // A regex exemption has the same effect on traffic as a byte match and was invisible here, so
+    // the same bypass spelled as a RegexMatchStatement passed every assertion in this file.
+    const regexMatch = node.RegexMatchStatement;
+    if (regexMatch?.FieldToMatch?.UriPath && typeof regexMatch.RegexString === 'string') {
+      found.push({
+        searchString: regexMatch.RegexString,
+        positionalConstraint: 'REGEX',
+        textTransformations: (regexMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
+      });
+    }
+    // A pattern set keeps its patterns in a separate AWS resource, so nothing in this repo can
+    // read them. Returning silently would read as a pass, which is the failure mode this whole
+    // walker exists to prevent - so refuse to answer instead.
+    if (node.RegexPatternSetReferenceStatement?.FieldToMatch?.UriPath) {
+      throw new Error(
+        'RegexPatternSetReferenceStatement: patterns live in a separate AWS resource and cannot be ' +
+          'inspected from this repo, so path assertions here cannot cover it. Assert on the pattern ' +
+          'set directly, or do not use one in a policy these tests are meant to guard.'
+      );
+    }
     Object.values(node).forEach(walk);
   };
   walk(scopeDown);
@@ -446,6 +466,120 @@ describe('wafPolicy', () => {
         expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
           None: {},
         });
+      }
+    });
+  });
+
+  // A terminating Allow evaluated before emergency-ip-block exempts its paths from the
+  // break-glass control and from every managed rule group, not just from a rate limit. Production
+  // used to carry two of them; /api/admin/ has been removed in favour of the pattern staging has
+  // run since July, and the surviving one is deliberate and documented below.
+  describe('terminating Allow rules', () => {
+    it('leaves only the completions endpoint exempted ahead of the emergency IP block', () => {
+      const rules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const emergency = rules.find(r => r.Name === 'emergency-ip-block');
+      const allowsBefore = rules
+        .filter(r => r.Action && 'Allow' in r.Action && r.Priority < emergency!.Priority)
+        .map(r => r.Name);
+
+      // The completions path is a long-lived SSE POST carrying user prompt text, which the SQLi
+      // and XSS signatures false-positive on, so this exemption stays until there is evidence for
+      // removing it - and staging cannot supply that, since it runs the same rule.
+      expect(allowsBefore).toEqual(['Allow-LLM-API']);
+    });
+
+    // /api/admin/ was exempted from everything by a terminating Allow at priority 1. Staging has
+    // never had that rule and handles the same traffic surgically instead: the specific ingest
+    // paths are excluded from CommonRuleSet and AdminProtection_URIPATH is set to Count. Measured
+    // before porting it: 10,981 /api/admin/ requests over 14 days on staging, every one ALLOW via
+    // Default_Action, none blocked by any rule.
+    // Both stages: the dev policy is what staging and every preview stage actually run, and this
+    // guard being production-only meant a blanket /api/admin/ Allow could be re-added to dev and
+    // pass. The sibling test above deliberately stays production-only, because dev carries
+    // Allow-ZAP-Scanner ahead of the emergency block and that is tracked separately.
+    it('subjects /api/admin/ to the managed rules rather than exempting it', () => {
+      for (const stage of ['dev', 'production']) {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+        expect(
+          rules.find(r => r.Name === 'allow-admin-endpoints'),
+          stage
+        ).toBeUndefined();
+
+        // Matched with includes rather than startsWith on purpose: a regex spelling carries an
+        // anchor, so '^/api/admin/' does not start with '/api/admin' and the obvious check reads
+        // as a pass. Any Allow rule mentioning the admin prefix at all is what needs flagging.
+        const exemptedPaths = rules
+          .filter(r => r.Action && 'Allow' in r.Action)
+          .flatMap(r => uriPathMatches(r.Statement).map(m => m.searchString));
+        const adminExemptions = exemptedPaths.filter(path => path.includes('/api/admin'));
+        expect(adminExemptions, `${stage}: no Allow rule may reference the admin prefix`).toEqual([]);
+      }
+    });
+
+    it('exempts the scanner ingest paths from CommonRuleSet on both stages', () => {
+      for (const stage of ['dev', 'production']) {
+        const excluded = uriPathMatches(commonRuleSetScopeDown(stage)).map(m => m.searchString);
+
+        for (const path of [
+          '/api/admin/security-dashboard/web-owasp-ingest',
+          '/api/admin/security-dashboard/code-semgrep-ingest',
+          '/api/admin/security-dashboard/packages-ingest',
+          '/api/admin/security-dashboard/secrets-ingest',
+          '/api/admin/security-dashboard/cloud-prowler-ingest',
+          '/api/admin/security-dashboard/attack-simulation-ingest',
+        ]) {
+          expect(excluded, `${stage}: ${path} must stay exempt from CommonRuleSet`).toContain(path);
+        }
+      }
+    });
+
+    // (4) The claim the whole change rests on: production now runs the same surgical managed-rule
+    // configuration staging has run since July, which is what makes 10,981 measured staging
+    // requests evidence about production. The -prod-shadow parity guard covers rate limits only,
+    // so without this a future edit to one policy re-opens exactly the drift being closed here.
+    it('runs the same managed rule group configuration on both stages', () => {
+      const forStage = (stage: string): WafRule[] =>
+        JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+      const dev = forStage('dev');
+      const prod = forStage('production');
+
+      // any: ManagedRuleGroupStatement is deeply nested and not usefully typed here
+      const managed = (rules: WafRule[]) => rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement);
+      expect(
+        managed(prod)
+          .map(r => r.Name)
+          .sort()
+      ).toEqual(
+        managed(dev)
+          .map(r => r.Name)
+          .sort()
+      );
+
+      for (const rule of managed(prod)) {
+        const twin = dev.find(r => r.Name === rule.Name);
+        expect(twin, `${rule.Name} must exist on both stages`).toBeDefined();
+        expect(rule.Statement, `${rule.Name} must be configured identically on both stages`).toEqual(twin!.Statement);
+      }
+    });
+
+    it('matches the completions endpoint exactly, not by prefix', () => {
+      for (const stage of ['dev', 'production']) {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const allow = rules.find(r => r.Name === 'Allow-LLM-API');
+        const matches = uriPathMatches(allow!.Statement);
+
+        expect(matches.map(m => m.searchString).sort()).toEqual(['/api/ai/v1/completions', '/api/ai/v1/completions/']);
+        for (const m of matches) {
+          expect(m.positionalConstraint, `${stage} completions allow must not be a prefix`).toBe('EXACTLY');
+          // On an Allow, a transform inverts polarity: every form it folds in becomes exempt from
+          // all five managed rule groups. Asserted because the data was fixed and the guard was
+          // not, so reverting the transforms passed every test in this file.
+          expect(m.textTransformations, `${stage} completions allow transformations`).toEqual(['NONE']);
+        }
       }
     });
   });
