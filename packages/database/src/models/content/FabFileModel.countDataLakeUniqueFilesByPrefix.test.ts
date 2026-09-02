@@ -11,13 +11,12 @@ const LAKE_FIXTURE_COUNT = 25;
 
 const lakePrefixes = (count: number) => Array.from({ length: count }, (_, i) => `lake${i}:`);
 
-/** The shape `queryDataLakeTagCounts` passes: one meta-tag and one scoped prefix per lake, so the
- *  ownership filter these counters build grows with the lake set. */
+/** The shape `queryDataLakeTagCounts` passes: one meta-tag per lake, so the ownership filter these
+ *  counters build grows with the lake set. The positional prefix list is a separate argument. */
 const countOptions = (count: number) => ({
   userGroups: ['group-1'],
   dataLakeTags: Array.from({ length: count }, (_, i) => `datalake:org${i}:lake${i}`),
   dataLakeTagPrefixes: [],
-  scopedTagPrefixes: lakePrefixes(count),
 });
 
 // Create a fab file directly on the model so the test can control tags,
