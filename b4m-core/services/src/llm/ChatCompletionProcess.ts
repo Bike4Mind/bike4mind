@@ -89,6 +89,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
@@ -97,6 +98,7 @@ import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
   type ResolvedLakeAccess,
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
@@ -789,7 +791,6 @@ export class ChatCompletionProcess {
     | {
         dataLakeTags: string[];
         dataLakeTagPrefixes: string[];
-        scopedTagPrefixes: string[];
         lakes: ResolvedLakeAccess[];
       }
     | undefined;
@@ -923,7 +924,6 @@ export class ChatCompletionProcess {
   private async getAccessibleDataLakeAccess(): Promise<{
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
     lakes: ResolvedLakeAccess[];
   }> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
@@ -941,7 +941,6 @@ export class ChatCompletionProcess {
         this.accessibleDataLakeAccessMemo = {
           dataLakeTags: [],
           dataLakeTagPrefixes: [],
-          scopedTagPrefixes: [],
           lakes: [],
         };
       }
@@ -969,6 +968,8 @@ export class ChatCompletionProcess {
     try {
       const access = await this.getAccessibleDataLakeAccess();
       if (access.dataLakeTags.length === 0) return null;
+      const lakeMemberships = lakeMembershipsFrom(access.lakes);
+      warnIfManyLakeMemberships(lakeMemberships, this.logger, 'countLakeReachableAttachments');
       const res = await this.db.fabfiles!.search(
         this.user.id,
         '',
@@ -992,7 +993,7 @@ export class ChatCompletionProcess {
           //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
           //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
           //   full-resolution guard first, so this count is never reached at all.
-          lakeMemberships: lakeMembershipsFrom(access.lakes),
+          lakeMemberships,
           restrictToDataLake: true,
           excludeContent: true,
         }
@@ -1816,6 +1817,11 @@ export class ChatCompletionProcess {
         : session.systemPromptId && this.loadSystemPromptById
           ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
           : undefined;
+      // Hoisted out of the buildOptimizedFeatures argument it used to be inlined into: the
+      // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
+      // must be the same value - a telemetry field that recomputes its own answer is a field that
+      // can disagree with the behaviour it claims to describe.
+      const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1830,7 +1836,7 @@ export class ChatCompletionProcess {
         organization,
         sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
-        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
+        forcedRetrievalEnabled,
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session)
@@ -2610,6 +2616,28 @@ export class ChatCompletionProcess {
       // the model was actually given, so it reflects server-side offers like the attached-
       // knowledge auto-offer above.
       if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
+
+      // Seed the turn's retrieval mode (#1394). Paired with `offeredTools` above deliberately:
+      // together they are the denominator of "the model was OFFERED retrieval and chose not to
+      // use it", which is the measurement the per-turn routing question rests on. Before this,
+      // promptMeta recorded retrieval only when it RAN, so a turn where forced retrieval was
+      // enabled but suppressed (ChatCompletionFeatures.getContextMessages' attached-files and
+      // personal-corpus skips) was indistinguishable from a turn that was never forced at all -
+      // and those are precisely the turns the question is about.
+      //
+      // Seeded only for turns that could have retrieved, so a turn with no knowledge in scope
+      // still carries no `retrieval` field at all. Merged rather than assigned: the forced arm
+      // and the knowledge tools write the same field later in the turn (mergeRetrievalSummary
+      // keeps 'forced' and never lets this not-attempted seed erase a real outcome).
+      const knowledgeToolOffered = offeredToolNames.includes('search_knowledge_base');
+      if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
+        quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+          attempted: false,
+          mode: forcedRetrievalEnabled ? 'forced' : 'optional',
+          surfaces: [],
+          dataLakeTags: [],
+        });
+      }
 
       // Loud warning for the invisible failure mode: the caller has retrievable knowledge
       // (attached documents OR an accessible lake) but no knowledge tool survived into the final

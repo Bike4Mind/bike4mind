@@ -30,8 +30,12 @@ import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import {
+  buildChunkScanQueuePayload,
+  buildFabFileChunkScanFilter,
+  CHUNK_SCAN_MIN_AGE_MS,
+  CHUNK_CLAIM_STALE_MS,
+} from '@server/worker/chunkScan';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -73,7 +77,7 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   const candidates = await FabFile.find(
     buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: convergencePaused })
   )
-    .select('_id userId batchId')
+    .select('_id userId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
@@ -82,7 +86,6 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
   // file is not re-sent every pass.
   const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
-  const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
 
   // Bounded-concurrency fan-out with a PER-FILE catch. A throttled or unroutable send used to reject
   // out of a sequential loop and abandon every candidate behind it, and because the caller turns a
@@ -97,11 +100,7 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   let failed = 0;
   const enqueueOne = async (id: string) => {
     try {
-      await sendToQueue(queueUrl, {
-        fabFileId: id,
-        userId: userById.get(id)!,
-        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
-      });
+      await sendToQueue(queueUrl, buildChunkScanQueuePayload({ fabFileId: id, userId: userById.get(id)! }));
       enqueued++;
     } catch (e) {
       failed++;

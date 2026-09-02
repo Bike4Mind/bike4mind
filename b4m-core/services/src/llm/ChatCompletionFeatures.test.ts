@@ -9,6 +9,7 @@ import {
   LakeMemoryFeature,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -359,8 +360,10 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
   const makeRetrievalContext = () => {
+    // fileA carries a date and fileB deliberately does not, so the passage-date test (#2236) covers
+    // both the present and the absent case on one run.
     const files = [
-      { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [] },
+      { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
     const chunksByFile: Record<string, unknown[]> = {
@@ -415,6 +418,32 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(content).toContain('### Cortes NEJM 2024.pdf (ID: fileB)');
     expect(content).toContain('cite documents by name');
     expect(content).not.toContain('### [1]');
+  });
+
+  /**
+   * #2236. Without a date in the heading a model asked to prefer the newer of two conflicting
+   * passages has nothing to prefer on. Asserted on the forced arm specifically because it is the
+   * always-on injection site - a `forceKnowledgeRetrieval` session uses this one every turn.
+   */
+  it('heads a dated document with its date, and omits the clause entirely when there is none', async () => {
+    const { content } = await runRetrieval('indexed');
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
+    // fileB has no createdAt: no empty clause, no "dated undefined", no trailing separator.
+    expect(content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
+    expect(content).not.toContain('dated undefined');
+    expect(content).not.toContain('dated null');
+  });
+
+  it('carries the date on the named style too, so the two citation styles cannot drift', async () => {
+    const { content } = await runRetrieval();
+    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
+  });
+
+  it('leaves the date outside toContentLabel, which would be a no-op on it anyway', async () => {
+    const { content } = await runRetrieval('indexed');
+    // The date is digits and separators only, so it survives verbatim - and the `[N]` the indexed
+    // citation contract depends on is still intact beside it.
+    expect(content).toMatch(/### \[1\] .*\(ID: fileA\) - dated \d{4}-\d{2}-\d{2}/);
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
@@ -691,6 +720,10 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect(warn.mock.calls[0][0]).toContain('candidate cap');
+    // The substance, not just the label: the operator has to be able to tell "we missed some" from
+    // "we will never see those", which is what the alphabetical selection rule actually means.
+    expect(warn.mock.calls[0][0]).toContain('selected alphabetically by file name');
+    expect(warn.mock.calls[0][0]).toContain('every turn');
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
     // The structured twin of that warning - what the chat banner actually reads. `warnings` is a
     // shared channel (truncation and elision append there too), so the banner cannot key on it.
@@ -699,6 +732,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(coverage?.partial).toBe(true);
     expect(coverage?.reasons).toHaveLength(1);
     expect(coverage?.reasons[0]).toContain('candidate cap');
+    expect(coverage?.reasons[0]).toContain('selected alphabetically by file name');
+    expect(coverage?.reasons[0]).toContain('the rest of the library is never reached');
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls
@@ -1745,6 +1780,45 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
     );
   });
 
+  // The audit row is the only lake-attributable record that the candidate listing was truncated:
+  // returnedChunkCount/returnedFileCount describe the post-scoring injection and say nothing about
+  // the candidate stage, so this cannot be recovered later if it is not written here.
+  it('records candidateCapReached: true when the candidate listing hit the cap', async () => {
+    const ctx = makeCtx();
+    const files = [{ id: 'fileA', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:lake1' }], vectorized: true }];
+    ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: files, hasMore: true, total: 585 });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ candidateCapReached: true }));
+  });
+
+  it('records candidateCapReached: false when the whole candidate set was considered', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    // Explicitly false, not omitted: forced retrieval always knows the answer, and an omitted
+    // field means "this surface does not report it" to every consumer downstream.
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ candidateCapReached: false }));
+  });
+
   // Forced retrieval's candidate search is a MIXED corpus (owned + shared + org-shared + data
   // lake, via includeShared:true with no restrictToDataLake) - unlike the route/semantic-arm
   // sites, a grounded file with no recoverable tag might just be the caller's own private file,
@@ -1844,6 +1918,182 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
   it('does not skip when the flag is absent, so an unwired host keeps grounding', async () => {
     const { messages } = await run(undefined);
     expect(messages).not.toEqual([]);
+  });
+});
+
+/**
+ * The forced-retrieval conjunct fix (#2243): `retrievalTags` scopes candidates via an AND'ed
+ * `filters.tags` conjunct, not the ownership `$or` - so on a lake-created session (retrievalTags =
+ * [lake.datalakeTag]) every candidate had to carry that meta-tag, and the creator-anchored
+ * `lakeMemberships` arm could never admit a prefix-only member. The fix pairs
+ * narrowLakeAccessToSession + restrictToDataLake (scope to THIS session's lake only) with dropping
+ * the datalake: meta-tag from `filters.tags` (so the membership arm can do the admitting instead).
+ */
+describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  // Not the caller below ("viewer-1") - the membership arm must anchor to THIS creator.
+  const LAKE_DOC = {
+    id: 'lake-acme',
+    slug: 'acme',
+    name: 'Acme',
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    createdByUserId: 'creator-1',
+  };
+
+  const makeCtx = (opts: {
+    files?: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>;
+    dataLakes?: Array<Record<string, unknown>>;
+  }) => {
+    const files = opts.files ?? [];
+    const chunksByFile: Record<string, unknown[]> = Object.fromEntries(
+      files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.fileName}`, vector: [1, 0] }]])
+    );
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'viewer-1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(opts.dataLakes ?? []) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  it('scopes a lake-created session to that lake only, so a non-creator viewer reaches a creator-owned prefix-only member', async () => {
+    // No `datalake:acme` meta-tag - a prefix-only member, unreachable to a non-creator before #2243.
+    const prefixOnlyFile = { id: 'f1', fileName: 'playbook.pdf', tags: [{ name: 'acme:playbook' }] };
+    const ctx = makeCtx({ files: [prefixOnlyFile], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what is in the playbook'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      // The meta-tag conjunct is dropped entirely - the membership arm scopes instead.
+      { tags: [], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        restrictToDataLake: true,
+        lakeMemberships: [
+          { kind: 'owned', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+        ],
+      })
+    );
+    expect(messages[0]?.content ?? '').toContain('playbook.pdf');
+  });
+
+  it('drops only the datalake: meta-tag from filters.tags, retaining a non-lake content tag', async () => {
+    const file = { id: 'f1', fileName: 'legal-memo.pdf', tags: [{ name: 'acme:legal' }, { name: 'legal:review' }] };
+    const ctx = makeCtx({ files: [file], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme', 'legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the memo say'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('abstains as no_lakes - not failed - when the session names a lake this caller cannot reach', async () => {
+    // A revoked grant / archived lake / lapsed entitlement on a session that still names that lake.
+    // Nothing is in scope to search, which is an ACCESS state, not an outage: it must never reach
+    // buildOwnershipConditions' restrictToDataLake fail-fast, whose throw would land in the outer
+    // catch and stamp `failed` at error level on every turn of that session, indefinitely.
+    const ctx = makeCtx({ dataLakes: [] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:unreachable']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+    expect(ctx.logger.error).not.toHaveBeenCalled();
+    // Returned before the query: a zero-arm restricted search has nothing to ask.
+    expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+  });
+
+  it('leaves the personal base arms alone for a session whose tags name no lake at all', async () => {
+    // `retrievalTags` is not universally lake identity - a curated surface may scope by a content
+    // tag. narrowLakeAccessToSession deliberately no-ops there ("no lake opinion"), so pairing it
+    // with an unconditional restrictToDataLake would drop the own/shared/group arms and silently
+    // confine grounding to lake content, losing the caller's own files carrying that same tag.
+    const ctx = makeCtx({ files: [], dataLakes: [LAKE_DOC] });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['legal:review']
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'viewer-1',
+      '',
+      { tags: ['legal:review'], shared: false },
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ restrictToDataLake: false })
+    );
+  });
+
+  it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
+    const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+    // A genuine outage on the query itself - distinct from the no_lakes abstain above, and the one
+    // case that SHOULD record `failed` and log at error level.
+    ctx.db.fabfiles.search = vi.fn().mockRejectedValue(new Error('connection reset'));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      ['datalake:acme']
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+
+    expect(messages).not.toEqual([]); // the abstention block, not a throw reaching the caller
+    expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
+    expect(ctx.logger.error).toHaveBeenCalled();
   });
 });
 
@@ -1968,7 +2218,14 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
   const retrievalOf = (quest: IChatHistoryItemDocument) =>
     (
       quest.promptMeta as {
-        retrieval?: { attempted: boolean; outcome: string; surfaces: string[]; dataLakeTags: string[] };
+        retrieval?: {
+          attempted: boolean;
+          outcome?: string;
+          mode?: string;
+          forcedSkipReason?: string;
+          surfaces: string[];
+          dataLakeTags: string[];
+        };
       }
     )?.retrieval;
 
@@ -1978,6 +2235,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval).toEqual({
       attempted: true,
       outcome: 'failed',
+      mode: 'forced',
       surfaces: ['forced-retrieval'],
       dataLakeTags: [],
     });
@@ -1997,6 +2255,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval).toEqual({
       attempted: true,
       outcome: 'no_lakes',
+      mode: 'forced',
       surfaces: ['forced-retrieval'],
       dataLakeTags: [],
     });
@@ -2043,27 +2302,92 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval?.attempted).toBe(true);
   });
 
-  it('leaves no record on the three pre-attempt skips - never-ran must stay distinguishable', async () => {
+  it('leaves no record when there is no question to retrieve for', async () => {
+    // The one pre-attempt exit that stays silent: an empty message is not a turn that declined to
+    // retrieve, it is a turn with nothing to retrieve about, so it is not part of any denominator.
     const feature = new KnowledgeRetrievalFeature(
       makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
-    const factory = embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1];
-
     const blank = makeQuest();
-    await feature.getContextMessages(blank, factory, '   ');
-    expect(retrievalOf(blank)).toBeUndefined();
-
-    const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
-    await feature.getContextMessages(withFiles, factory, 'summarize the attached figure');
-    expect(retrievalOf(withFiles)).toBeUndefined();
-
-    const personalCtx = { ...makeCtx(), personalCorpusOnly: true };
-    const personalFeature = new KnowledgeRetrievalFeature(
-      personalCtx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    await feature.getContextMessages(
+      blank,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      '   '
     );
-    const personal = makeQuest();
-    await personalFeature.getContextMessages(personal, factory, 'what about my own upload');
-    expect(retrievalOf(personal)).toBeUndefined();
+    expect(retrievalOf(blank)).toBeUndefined();
+  });
+
+  describe('suppression skips (#1394)', () => {
+    // These two exits return before the recorder, so the turn used to look identical to one where
+    // forced retrieval was never configured - while actually being the case the routing question
+    // is about: forced retrieval is ON, a rule suppressed it, and the model is left on the
+    // optional tool path. `attempted` stays false; only the reason is new.
+    it('records the attached-files skip without claiming retrieval ran', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await feature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'attached_files',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('records the personal-corpus skip without claiming retrieval ran', async () => {
+      const personalFeature = new KnowledgeRetrievalFeature({
+        ...makeCtx(),
+        personalCorpusOnly: true,
+      } as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]);
+      const personal = makeQuest();
+      await personalFeature.getContextMessages(
+        personal,
+        embeddingFactory as unknown as Parameters<typeof personalFeature.getContextMessages>[1],
+        'what about my own upload'
+      );
+      expect(retrievalOf(personal)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'personal_corpus',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('does not let the skip record mask a tool retrieval later in the same turn', async () => {
+      // The whole point of the measurement: the model fell back to search_knowledge_base and it
+      // worked. The turn must read as attempted AND still say forced retrieval was suppressed.
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      quest.promptMeta!.retrieval = mergeRetrievalSummary(quest.promptMeta!.retrieval, {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['knowledgeBaseSearch'],
+        dataLakeTags: ['datalake:x'],
+      });
+
+      expect(retrievalOf(quest)).toMatchObject({
+        attempted: true,
+        outcome: 'ok',
+        mode: 'forced',
+        forcedSkipReason: 'attached_files',
+        surfaces: ['knowledgeBaseSearch'],
+      });
+    });
   });
 
   it('merges with another surface in the same turn rather than overwriting it', async () => {
