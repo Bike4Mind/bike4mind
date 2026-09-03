@@ -274,8 +274,10 @@ class OrgGoogleDriveConnectionRepository
     // Clear the error on a healthy update; redact + truncate otherwise (lastError is client-visible
     // and its predictable caller is a raw provider err.message - see redactLastError).
     set.lastError = update.lastError ? redactLastError(update.lastError) : null;
-    // Every caller here moves the connection OUT of 'syncing' (the success release, a credential
-    // failure, a disconnect), so any ingest-chain id/token goes with it - see releaseSyncClaim.
+    // Every caller here moves the connection out of 'syncing' into an ERROR state (a credential
+    // failure, a disconnect) and must be able to force it, so this is deliberately not claim-guarded.
+    // An ingest run ending its OWN claim goes through releaseSyncClaim instead, which is. Either way
+    // the chain id/token goes with the claim, or a stale continuation could adopt one nobody holds.
     const unset = update.status === 'syncing' ? undefined : { activeIngestBatchId: '', ingestClaimToken: '' };
     return this.model.findByIdAndUpdate(id, { $set: set, ...(unset && { $unset: unset }) }, { new: true });
   }
@@ -371,7 +373,7 @@ class OrgGoogleDriveConnectionRepository
    * Every path that takes the claim away either rotates that token to a value this caller cannot know
    * (claimForSync, adoptSyncClaim, a rival renew) or clears it outright (releaseSyncClaim, updateHealth
    * leaving 'syncing'), so a caller that already lost the claim presents a token nobody stores any more
-   * and matches nothing.
+   * and matches nothing. releaseSyncClaim compare-and-sets on the same token, for the same reason.
    *
    * The batch id cannot carry that guard on its own, in either direction: it is ABSENT on a first slice
    * (which is renewing precisely to name its batch for the first time), and on a later slice it is
@@ -403,9 +405,21 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * Guarded release for the failure path: 'syncing' -> 'connected' only. The `status: 'syncing'`
-   * conjunct means it no-ops if a terminal status (e.g. credential_error) was set underneath, so a
-   * failed run never overwrites a real error state.
+   * The ONE way an ingest run ends its own claim - both the failure exit and the success exit come
+   * through here. 'syncing' -> 'connected', guarded on the status AND on `expectedToken`.
+   *
+   * The status conjunct means it no-ops if a terminal status (e.g. credential_error) was set
+   * underneath, so a run never overwrites a real error state. The token conjunct means a run that has
+   * already LOST its claim - to a stale-claim reclaim, or to a disconnect/reconnect healing the status
+   * out from under it - cannot release the NEW owner's claim on its way out, which would flip a live
+   * ingest back to 'connected' and let the re-sync poll start a competing walk over the same folder.
+   * Losing that race is a no-op returning null, and is not an error: the new owner releases when it
+   * is done. This is the release-side half of the compare-and-set renewSyncClaim does for the chain.
+   *
+   * `lastError` is REQUIRED and nullable rather than optional precisely because both exits share this
+   * method: a string records the failure, null heals (matching updateHealth's contract for a healthy
+   * update). There is deliberately no "leave whatever is stored" arm - every caller knows which of the
+   * two it is, and an omitted argument would silently pick one of them.
    *
    * Stamps `lastPolledAt` too: a connection that fails DETERMINISTICALLY (a subtree the credential
    * cannot list, a Mongo timeout) would otherwise heal back to 'connected' with lastPolledAt
@@ -413,23 +427,29 @@ class OrgGoogleDriveConnectionRepository
    * before failing again. Stamping keeps the 6h poll cadence on the failure path, matching every
    * non-throwing exit (findDueForPoll's status filter can't help once the release flips it back).
    *
-   * `lastError` is the operator-visible half of that: without it, such a connection reads `connected`
-   * with a fresh poll time and no signal anywhere that its syncs keep dying. Redacted like
-   * updateHealth's, since the caller's message is a raw provider/driver `err.message`. Only WRITTEN
-   * when supplied - an omitted one leaves whatever is stored, so a caller with nothing to say cannot
-   * silently clear a real error.
+   * A recorded `lastError` is the operator-visible half of that: without it, such a connection reads
+   * `connected` with a fresh poll time and no signal anywhere that its syncs keep dying. Redacted
+   * like updateHealth's, since the caller's message is a raw provider/driver `err.message`.
    */
   async releaseSyncClaim(
     id: string,
-    lastError?: string
+    expectedToken: string,
+    lastError: string | null
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    const set: Record<string, unknown> = { status: 'connected', lastPolledAt: new Date() };
-    if (lastError) set.lastError = redactLastError(lastError);
     // The chain (if any) is over once the claim goes; leaving the id/token would let an in-flight
     // continuation message adopt a claim nobody holds.
     return this.model.findOneAndUpdate(
-      { _id: id, status: 'syncing' },
-      { $set: set, $unset: { activeIngestBatchId: '', ingestClaimToken: '' } },
+      { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
+      {
+        $set: {
+          status: 'connected',
+          lastPolledAt: new Date(),
+          // Empty-string-to-null matches updateHealth: a caller whose err.message is blank has nothing
+          // to report, and storing '' would read as a present error on the client.
+          lastError: lastError ? redactLastError(lastError) : null,
+        },
+        $unset: { activeIngestBatchId: '', ingestClaimToken: '' },
+      },
       { new: true }
     );
   }

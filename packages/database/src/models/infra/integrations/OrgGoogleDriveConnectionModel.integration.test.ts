@@ -269,14 +269,15 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
   it('claimForSync wins once and blocks a concurrent second claim until released', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
 
-    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).not.toBeNull();
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    expect(claimToken).not.toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('syncing');
 
     // A second run for the same connection cannot claim while the first holds it.
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBeNull();
 
     // Once released, a later run can claim again.
-    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claimToken!, null);
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('connected');
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).not.toBeNull();
   });
@@ -286,10 +287,10 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     // this release. Without stamping lastPolledAt it would stay due and be re-enqueued every hourly
     // tick, re-walking then failing each time. Stamping keeps the 6h cadence on the failure path.
     const created = await OrgGoogleDriveConnection.create(base);
-    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
 
     const before = Date.now();
-    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claimToken!, null);
     expect(released?.status).toBe('connected');
     expect(released?.lastPolledAt?.getTime()).toBeGreaterThanOrEqual(before);
 
@@ -305,36 +306,41 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     // deterministically-failing connection reads healthy and recently-polled with nothing anywhere to
     // tell an operator its syncs keep dying.
     const created = await OrgGoogleDriveConnection.create(base);
-    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
 
-    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, 'Drive folder unreadable');
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+      created.id,
+      claimToken!,
+      'Drive folder unreadable'
+    );
     expect(released?.status).toBe('connected');
     expect(released?.lastError).toContain('Drive folder unreadable');
   });
 
-  it('releaseSyncClaim leaves a stored lastError alone when the caller supplies none', async () => {
-    // Only ever WRITTEN when supplied - a caller with nothing to say must not silently clear a real
-    // error, unlike updateHealth, whose contract is to set the field to exactly what it is given.
+  it('releaseSyncClaim heals a stored lastError on a null (successful) release', async () => {
+    // The success exit comes through here too, so a null lastError has to CLEAR the field - otherwise
+    // a connection that failed once would keep reading broken through every later healthy sync.
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.updateHealth(created.id, {
       status: 'connected',
       lastError: 'earlier failure',
     });
-    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
 
-    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
-    expect(released?.lastError).toContain('earlier failure');
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claimToken!, null);
+    expect(released?.status).toBe('connected');
+    expect(released?.lastError).toBeNull();
   });
 
   it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
-    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
 
     // Simulate a credential failure marking the connection while a run held 'syncing'.
     await orgGoogleDriveConnectionRepository.updateHealth(created.id, { status: 'credential_error' });
 
     // The failure-path release must be a no-op now - status is not 'syncing' anymore.
-    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, claimToken!, null);
     expect(released).toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
   });
@@ -404,7 +410,7 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     const claimToken = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
     const chainToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1', claimToken!);
 
-    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, chainToken!, null);
     const releasedDoc = await OrgGoogleDriveConnection.findById(created.id);
     expect(releasedDoc?.activeIngestBatchId).toBeUndefined();
     expect(releasedDoc?.ingestClaimToken).toBeUndefined();
@@ -522,6 +528,35 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect(
       await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-fresh', newOwnerClaim!)
     ).not.toBeNull();
+  });
+
+  it('a run that lost its claim cannot RELEASE the new owner on its way out', async () => {
+    // The release-side half of the same hole renewSyncClaim had: releasing is guarded on 'syncing',
+    // but the new owner is also 'syncing', so without the token the loser would flip a live ingest
+    // back to 'connected' and clear its chain - freeing the re-sync poll to walk the same folder.
+    const created = await OrgGoogleDriveConnection.create(base);
+    const staleClaim = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    // The claim ages out and a fresh run reclaims it.
+    await OrgGoogleDriveConnection.updateOne(
+      { _id: created.id },
+      { $set: { syncClaimedAt: new Date(Date.now() - 60 * 60 * 1000) } }
+    );
+    const newOwnerClaim = await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    expect(newOwnerClaim).not.toBeNull();
+
+    // The loser's error path fires. It must not touch the new owner.
+    expect(
+      await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, staleClaim!, 'some failure')
+    ).toBeNull();
+    const held = await OrgGoogleDriveConnection.findById(created.id);
+    expect(held?.status).toBe('syncing');
+    expect(held?.ingestClaimToken).toBe(newOwnerClaim);
+    expect(held?.lastError).toBeUndefined();
+
+    // The actual owner still releases normally.
+    expect(await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, newOwnerClaim!, null)).not.toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('connected');
   });
 
   it('adoptSyncClaim refuses a connection that is not syncing at all', async () => {

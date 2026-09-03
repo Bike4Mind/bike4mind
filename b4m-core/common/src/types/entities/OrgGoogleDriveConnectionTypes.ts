@@ -286,11 +286,19 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null>;
 
   /**
-   * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'
-   * and can never clobber a terminal status (e.g. credential_error) set underneath it. The success
-   * path releases via `updateHealth({ status: 'connected' })` instead.
+   * The one way an ingest run ends its own claim - both the failure and the success exit. Moves
+   * 'syncing' -> 'connected' and stamps `lastPolledAt`, guarded so it can never clobber a terminal
+   * status (e.g. credential_error) set underneath it, and compare-and-set on `expectedToken` so a run
+   * that already lost the claim cannot release the NEW owner's - which would flip a live ingest back
+   * to 'connected' and let a poll start a competing walk. Losing that race returns null and is not an
+   * error; the new owner releases when it finishes. `lastError` is required and nullable because both
+   * exits share this method: a string records the failure, null heals.
    */
-  releaseSyncClaim(id: string, lastError?: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  releaseSyncClaim(
+    id: string,
+    expectedToken: string,
+    lastError: string | null
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
