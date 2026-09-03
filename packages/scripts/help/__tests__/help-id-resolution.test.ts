@@ -176,8 +176,9 @@ describe('help id resolution', () => {
     const derived: DerivedChunk[] = [];
     for (const entry of index.entries) {
       const article = articleBySlug.get(entry.slug);
-      // An index entry with no corpus article is already reported by the test above;
-      // do not double-report it here.
+      // An index entry with no corpus article is already reported by the test above.
+      // Skipping it still surfaces its committed chunks below as orphan vectors, which
+      // is the honest reading: with no article there is nothing to derive against.
       if (!article) continue;
       for (const section of chunkByHeadings(article.content, entry.title)) {
         derived.push({
@@ -192,13 +193,18 @@ describe('help id resolution', () => {
     const embeddedKeys = new Set(embeddings.chunks.map(chunkKey));
 
     // Nothing enforces (slug, sectionPath) uniqueness today (e.g. two identical H2
-    // headings in one article) - a Set comparison is only sound while it holds.
-    expect(derived.length, 'chunkByHeadings produced two chunks with the same (slug, sectionPath) key').toBe(
-      derivedKeys.size
-    );
-    expect(embeddings.chunks.length, 'help-embeddings.json has two chunks with the same (slug, sectionPath) key').toBe(
-      embeddedKeys.size
-    );
+    // headings in one article) - a Set comparison is only sound while it holds. The
+    // remedy is renaming the duplicate heading, not a regenerate: `retrieval.ts`'s
+    // `resolveChunkContent` keys its content map on this same composite, so a collision
+    // makes one chunk render another's text.
+    expect(
+      derived.length,
+      'chunkByHeadings produced two chunks with the same (slug, sectionPath) key - rename the duplicate heading'
+    ).toBe(derivedKeys.size);
+    expect(
+      embeddings.chunks.length,
+      'help-embeddings.json has two chunks with the same (slug, sectionPath) key - rename the duplicate heading'
+    ).toBe(embeddedKeys.size);
 
     const missingVectors = [...derivedKeys].filter(key => !embeddedKeys.has(key)).sort();
     const orphanVectors = [...embeddedKeys].filter(key => !derivedKeys.has(key)).sort();
@@ -227,14 +233,19 @@ describe('help id resolution', () => {
 
     // Warn rather than fail: unlike the key sets above, this one is not clean on
     // `main` today for a reason outside this test's control. A docs-only PR (#2196)
-    // edited these two articles and regenerated help-index.json but not
+    // edited two of these articles and regenerated help-index.json but not
     // help-embeddings.json; a later rebase of an in-flight artifact-regeneration PR
     // replayed its own (older) full-file embeddings snapshot on top, which silently
     // preserved the staleness instead of surfacing it. Hard-failing here would block
     // unrelated PRs on a pre-existing drift this test cannot itself fix, and this
-    // repo has no CI-held OPENAI_API_KEY to regenerate automatically. Tracked as a
-    // known gap: promote this to `expect(...).toEqual([])` once a regenerate clears
-    // the warning below (or once CI can regenerate on demand).
+    // repo has no CI-held OPENAI_API_KEY to regenerate automatically.
+    //
+    // Waiting for the set to reach zero is NOT a workable promotion path: ordinary
+    // docs edits keep landing without a re-embed, so it was two chunks when this test
+    // was written and is four now (#2272, #2312 grew it). #2331 tracks the fix -
+    // allowlist the currently-drifted keys, the way KNOWN_UNRESOLVED_HELP_IDS above
+    // already does for slugs, and hard-fail on any new one, so the gate stops
+    // depending on a regenerate CI cannot run.
     if (tokenCountMismatches.length > 0) {
       console.warn(
         'help-embeddings.json chunk content has changed since it was embedded (tokenCount drift). ' +
