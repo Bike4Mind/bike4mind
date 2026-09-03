@@ -99,7 +99,7 @@ Expect a `result` frame naming the server, and the process to stay up:
 
 ```json
 {"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true},
-"resources":{"listChanged":true}},"serverInfo":{"name":"bike4mind","version":"0.20.2"}},
+"resources":{"listChanged":true}},"serverInfo":{"name":"bike4mind","version":"<current>"}},
 "jsonrpc":"2.0","id":1}
 ```
 
