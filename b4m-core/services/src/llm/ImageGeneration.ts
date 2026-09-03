@@ -61,6 +61,7 @@ import {
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import axios from 'axios';
@@ -144,10 +145,6 @@ interface IImageGenerationServiceOptions {
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
 }
-
-// TODO make these adminSettings
-const TRUNCATE_THRESHOLD = 1000;
-const TRUNCATE_TO = 980;
 
 async function downloadImage(url: string) {
   // Handle data URLs (base64 images) from GPT-Image-1
@@ -742,19 +739,26 @@ export class ImageGenerationService {
         }
       }
 
-      let truncatedPrompt = prompt;
+      const {
+        prompt: truncatedPrompt,
+        tokenCount: sentPromptTokens,
+        truncated,
+      } = await truncateImagePrompt({
+        prompt,
+        promptTokens,
+        maxTokens: models.find(m => m.id === model)?.max_tokens,
+        tokenizer: this.tokenizer,
+        modelId: model,
+        logger,
+      });
 
-      const modelMaxTokens = models.find(m => m.id === model)?.max_tokens ?? TRUNCATE_THRESHOLD;
-
-      // Check if prompt exceeds the threshold and truncate if necessary
-      if (promptTokens.length > modelMaxTokens) {
+      if (truncated) {
         this.addStatusToQuest(quest, 'Trimming the prompt...');
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
           statusMessage: 'Trimming the prompt...',
         });
-        truncatedPrompt = promptTokens.slice(0, TRUNCATE_TO).join(' ');
       }
 
       this.addStatusToQuest(quest, 'Now painting...');
@@ -1322,10 +1326,10 @@ export class ImageGenerationService {
             feature: 'image_generation',
             provider: modelInfo.backend,
             model,
-            // Prompt tokens actually sent to the model: the full encoded prompt, or TRUNCATE_TO
-            // when it was trimmed above (see the modelMaxTokens branch). Image models bill
-            // per-image (costUsd/units), so this is analytics-only completeness, not billing.
-            inputTokens: promptTokens.length > modelMaxTokens ? TRUNCATE_TO : promptTokens.length,
+            // Prompt tokens actually sent to the model, as reported by truncateImagePrompt. Image
+            // models bill per-image (costUsd/units), so this is analytics-only completeness, not
+            // billing.
+            inputTokens: sentPromptTokens,
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,

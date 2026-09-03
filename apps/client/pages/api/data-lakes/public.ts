@@ -38,6 +38,7 @@ const handler = baseApi()
           dataLakes: dataLakeRepository,
           users: userRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          settings: adminSettingsRepository,
         },
       }
     );

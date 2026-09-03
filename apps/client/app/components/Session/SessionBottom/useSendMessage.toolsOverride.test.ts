@@ -15,10 +15,18 @@ import { resolve } from 'path';
 describe('useSendMessage - briefcase toolsOverride on the orchestration path (#95)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it('derives enabledTools from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist)', () => {
+  it('derives enabledTools from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist, org defaults)', () => {
     expect(source).toMatch(
-      /const enabledTools\s*=\s*resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*orchestrationAgent\?\.allowedTools\s*\);/
+      /const enabledTools\s*=\s*resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*orchestrationAgent\?\.allowedTools,\s*agentModeDefaultTools\s*\);/
     );
+  });
+
+  it('sources the agentless union base from admin settings, not a hardcoded seed', () => {
+    // The server REPLACES `profile.allowedTools` with a non-empty payload, so
+    // unioning a hardcoded schema seed here would override an admin who
+    // narrowed the org toolbelt. This is the wiring that stops that.
+    expect(source).toMatch(/agentModeDefaultToolNames\(orchestrationDefaultsSetting\)/);
+    expect(source).toMatch(/getSettingObject<unknown>\('orchestrationDefaults', undefined\)/);
   });
 
   it('assigns enabledTools inside the agent-executor branch and passes it to agentExecution.start', () => {

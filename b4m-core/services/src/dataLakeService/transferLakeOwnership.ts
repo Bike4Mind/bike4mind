@@ -211,12 +211,15 @@ export const transferLakeOwnership = async (
   // so a creator who is also an org admin ends up holding exactly that grant. `manageRung` is an
   // authorization fact, so it must come from the branch that actually authorized the call - which is
   // `resolveLakeTransferAuthority` above, the one rule this gate and the transfer picker share.
-  const manageRung = actor.isAdmin
-    ? 'platform-admin'
-    : authority.isOwner
-      ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
-        ? 'grant-owner'
-        : 'creator'
+  // Ownership is checked BEFORE the admin bypass, matching `resolveLakeManageRung`: an owner who
+  // also happens to be a platform admin transferred their OWN lake, and naming the admin rung there
+  // reads as an outside intervention on the history surface.
+  const manageRung = authority.isOwner
+    ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
+      ? 'grant-owner'
+      : 'creator'
+    : actor.isAdmin
+      ? 'platform-admin'
       : 'org-admin';
 
   await recordLakeConfigChange(

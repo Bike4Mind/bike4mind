@@ -49,6 +49,13 @@ const auditSpy = () => {
 const echoUpdate = (existing: IDataLakeDocument) =>
   vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...existing, ...d }));
 
+/** echoUpdate's conditional twin: a settle that always wins, echoing back the merged document. */
+const echoSettle = (existing: IDataLakeDocument) =>
+  vi.fn().mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => ({
+    ...existing,
+    ...set,
+  }));
+
 const noGrants = { listByLake: vi.fn().mockResolvedValue([]) };
 
 describe('updateDataLake', () => {
@@ -76,6 +83,28 @@ describe('updateDataLake', () => {
       principalId: 'owner',
       changes: [{ field: 'description', kind: 'literal', before: 'old', after: 'new' }],
     });
+  });
+
+  // The rung is left to resolveLakeManageRung on this path (as on archive/unarchive/delete/restore),
+  // so a dual-role owner's routine rename recorded `platform-admin` too - the same false alarm as
+  // the visibility rows, on every resolver-driven action.
+  it('attributes a rename by an admin who owns the lake to their ownership', async () => {
+    const existing = lake({ name: 'Lake' });
+    const audit = auditSpy();
+    await updateDataLake(
+      { userId: 'owner', isAdmin: true },
+      'lake1',
+      { name: 'Renamed' },
+      {
+        db: {
+          dataLakes: { findById: vi.fn().mockResolvedValue(existing), update: echoUpdate(existing) },
+          dataLakeAccessGrants: noGrants,
+          ...audit.db,
+        },
+      }
+    );
+
+    expect(audit.only().manageRung).toBe('creator');
   });
 
   // A concurrent writer's change must never be attributed to THIS caller. `BaseModel.update` is a
@@ -362,8 +391,32 @@ describe('setLakeVisibility', () => {
     expect(audit.only().manageRung).toBe('creator');
   });
 
-  // The other half of the same rule: DEMOTION to private stays full canManageLake, so an admin
-  // demoting a lake they do not own is genuinely acting as admin and must still record that.
+  // Both directions of one owner's own edit must name the same authority: un-publishing recorded
+  // `platform-admin` for a dual-role (platform admin + owner) account while publishing recorded
+  // ownership, so the History tab flagged half of the same account's own visibility edits as an
+  // outside intervention. Restoring the admin-first arm in resolveLakeManageRung makes this red.
+  it('records ownership in BOTH directions when an admin who owns the lake publishes then un-publishes', async () => {
+    const dualRole = { userId: 'owner', isAdmin: true, organizationId: 'org-1' };
+    const published = lake({ isPublic: true });
+    const audit = auditSpy();
+    const db = (existing: IDataLakeDocument) => ({
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: echoUpdate(existing),
+        find: vi.fn().mockResolvedValue([]),
+      },
+      dataLakeAccessGrants: noGrants,
+      ...audit.db,
+    });
+
+    await setLakeVisibility(dualRole, 'lake1', 'public', { db: db(lake()) });
+    await setLakeVisibility(dualRole, 'lake1', 'private', { db: db(published) });
+
+    expect(audit.events().map(e => e.manageRung)).toEqual(['creator', 'creator']);
+  });
+
+  // The other half of the same rule: an admin acting on a lake they have NO relationship to is
+  // genuinely acting as admin, in either direction, and must still record that.
   it('still records platform-admin when an admin makes a lake private', async () => {
     const existing = lake({ isPublic: true });
     const audit = auditSpy();
@@ -447,6 +500,29 @@ describe('transferLakeOwnership', () => {
     expect(audit.only().manageRung).toBe('org-admin');
   });
 
+  // Same false alarm as the visibility rows, through the other hand-written override: this gate's
+  // own ternary checked actor.isAdmin FIRST, so a dual-role owner handing off their own lake was
+  // recorded as a platform admin doing it to them. The two overrides now agree with the resolver.
+  it('records ownership, not platform-admin, when an admin transfers a lake they own', async () => {
+    const existing = lake();
+    const audit = auditSpy();
+    await transferLakeOwnership({ userId: 'owner', isAdmin: true }, 'lake1', 'newOwner', {
+      db: { ...transferDb(existing), ...audit.db },
+    });
+
+    expect(audit.only().manageRung).toBe('creator');
+  });
+
+  it('records platform-admin when an admin transfers a lake they do NOT own', async () => {
+    const existing = lake();
+    const audit = auditSpy();
+    await transferLakeOwnership({ userId: 'root', isAdmin: true }, 'lake1', 'newOwner', {
+      db: { ...transferDb(existing), ...audit.db },
+    });
+
+    expect(audit.only().manageRung).toBe('platform-admin');
+  });
+
   it('records nothing when the named owner already solely owns the lake', async () => {
     const existing = lake();
     const audit = auditSpy();
@@ -460,9 +536,12 @@ describe('lifecycle services', () => {
     dataLakes: {
       findById: vi.fn().mockResolvedValue(existing),
       update: echoUpdate(existing),
+      settleLifecycleStatus: echoSettle(existing),
       setStats: vi.fn(),
       activateIfDraft: vi.fn().mockResolvedValue(false),
       claimRestoring: vi.fn().mockResolvedValue(true),
+      claimArchiving: vi.fn().mockResolvedValue(true),
+      claimDeleting: vi.fn().mockResolvedValue(true),
       claimUnarchiving: vi.fn().mockResolvedValue(true),
       find: vi.fn().mockResolvedValue([]),
       claimFilesArchivedAt: vi.fn().mockResolvedValue(new Date()),
@@ -522,9 +601,13 @@ describe('lifecycle services', () => {
     async (_n, service, existing) => {
       const audit = auditSpy();
       const db = { ...lifecycleDb(existing), ...audit.db };
-      db.dataLakes.update = vi
+      db.dataLakes.settleLifecycleStatus = vi
         .fn()
-        .mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...existing, name: 'Renamed By Admin', ...d }));
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => ({
+          ...existing,
+          name: 'Renamed By Admin',
+          ...set,
+        }));
 
       await service(owner, 'lake1', { db });
 
@@ -629,16 +712,21 @@ describe('lifecycle services', () => {
     }
   );
 
-  // BaseModel.update is a findOneAndUpdate that RESOLVES null when the lake vanished mid-operation.
-  // Without the guard, diffLakeConfig(existing, null) throws and turns a previously-succeeding
-  // unarchive/restore into a 500 - a regression introduced purely by adding the audit call.
+  // settleLifecycleStatus RESOLVES null when the lake vanished mid-operation. Without the guard,
+  // diffLakeConfig(existing, null) throws and turns a previously-succeeding unarchive/restore into
+  // a 500 - a regression introduced purely by adding the audit call. A null settle is ALSO how a
+  // lost settle reads, so the re-read below is what separates them: gone stays lenient, moved
+  // throws (pinned separately in dataLakeService.test.ts).
   it.each([
     ['unarchive', unarchiveDataLake, lake({ status: 'archived' })],
     ['restore', restoreDeletedDataLake, lake({ status: 'deleted' })],
   ])('%s survives the lake vanishing mid-operation and records nothing', async (_name, service, existing) => {
     const audit = auditSpy();
     const db = { ...lifecycleDb(existing), ...audit.db };
-    db.dataLakes.update = vi.fn().mockResolvedValue(null);
+    db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
+    // The entry read still finds the lake; every read after it does not - which is what "vanished
+    // mid-operation" means, and what the settle's loss path re-reads to detect.
+    db.dataLakes.findById = vi.fn().mockResolvedValueOnce(existing).mockResolvedValue(null);
 
     await expect(
       (service as (a: unknown, id: string, adapters: unknown) => Promise<unknown>)(owner, 'lake1', { db })

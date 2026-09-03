@@ -48,6 +48,25 @@ const fmtDate = (d: Date | string | null | undefined): string =>
 const fmtDateTime = (d: Date | string | null | undefined): string =>
   d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
 
+/**
+ * The candidate-cap line for the access-history section, over the same event window as the history
+ * below it. A missing pressure object collapses into the SAME "not reported" sentence as a zero
+ * signal count: an older server, or a response cached from before the field, must not render as a
+ * blank line, which would read as "measured, nothing to report".
+ */
+const describeCapPressure = (view: LakeAccessView): string => {
+  const pressure = view.candidateCapPressure;
+  if (!pressure || pressure.turnsWithSignal === 0) return 'Candidate-cap pressure: not reported for this window.';
+  const windowScope = view.historyTruncated ? ' in this window' : '';
+  const lastRead = pressure.lastAtCapAt ? `, most recently ${fmtDateTime(pressure.lastAtCapAt)}` : '';
+  return (
+    `Candidate-cap pressure: ${pressure.turnsAtCap} of ${pressure.turnsWithSignal} reported read(s)${windowScope} ` +
+    `hit the forced-retrieval candidate cap${lastRead} - a capped read considers only part of the readable library. ` +
+    'The cap applies to the whole candidate listing for a turn, so this counts reads of this lake that hit it, not ' +
+    'caps this lake caused.'
+  );
+};
+
 // Keyed by the role enum so a new role fails the build here rather than silently rendering blank.
 const ROLE_COLOR: Record<DataLakeAccessRole, ColorPaletteProp> = {
   owner: 'primary',
@@ -358,6 +377,9 @@ function AccessViewBody({ view, canTransferOwnership }: { view: LakeAccessView; 
         >
           Covers reads through instrumented retrieval surfaces, within the audit retention window. Treat this as a lower
           bound - an empty list is not proof that no one has read this lake.
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 1 }} data-testid="datalake-access-cap-pressure">
+          {describeCapPressure(view)}
         </Typography>
         {view.historyTruncated && (
           <Alert

@@ -204,8 +204,8 @@ export interface ToolContext {
    * silently dropped by `processFabFilesServer` - see `buildDataSources`'s
    * `actuallyInlinedKnowledgeIds`). The knowledge tools use this to tell a caller "that file's
    * content is already above" without lying about a deferred OR undeliverable (audio,
-   * unserveable image, unsupported/corrupted file) attachment. Absent/empty on non-chat surfaces
-   * (agent executor, embed) where nothing is inlined this way.
+   * unserveable image, unsupported/corrupted file) attachment. The agent executor populates this
+   * too (see `agentExecutor.attachmentContent.ts`); absent/empty on surfaces that inline nothing.
    */
   inlinedAttachmentIds?: string[];
   /**

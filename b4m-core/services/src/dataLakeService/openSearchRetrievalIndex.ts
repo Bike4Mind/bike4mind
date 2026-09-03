@@ -2,7 +2,7 @@ import type { IFabFileChunkRepository } from '@bike4mind/common';
 import type { RetrievalIndexPort, RetrievalIndexRemoval } from './ports';
 
 export interface OpenSearchRetrievalIndexAdapters {
-  db: { fabFileChunks: Pick<IFabFileChunkRepository, 'embeddingModelsByFabFileIds'> };
+  db: { fabFileChunks: Pick<IFabFileChunkRepository, 'retrievalIndexModelsByFabFileIds'> };
   searchIndex: { deleteByFabFileIdOrThrow: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
@@ -48,9 +48,12 @@ export function openSearchRetrievalIndex(adapters: OpenSearchRetrievalIndexAdapt
   return {
     async removeForDataLake({ fabFileIds }: RetrievalIndexRemoval): Promise<void> {
       if (fabFileIds.length === 0) return;
-      const modelsByFile = await adapters.db.fabFileChunks.embeddingModelsByFabFileIds(fabFileIds);
-      // A file absent from the map has no model-bearing chunks, so it has nothing in any index -
-      // iterating the map rather than fabFileIds is what drops those no-op requests.
+      const modelsByFile = await adapters.db.fabFileChunks.retrievalIndexModelsByFabFileIds(fabFileIds);
+      // A file absent from the map has no chunk recording an index it was written to, so it has
+      // nothing in any index - iterating the map rather than fabFileIds is what drops those no-op
+      // requests. Absence is only trustworthy because the map unions index RESIDENCY with the
+      // readiness stamp (see IFabFileChunk.retrievalIndexModel); on the stamp alone a file whose
+      // vectorize never finished would read as absent while its documents were still live.
       const pairs = Object.entries(modelsByFile).flatMap(([fabFileId, models]) =>
         models.map(model => ({ fabFileId, model }))
       );

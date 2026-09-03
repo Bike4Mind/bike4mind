@@ -122,48 +122,148 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
 }
 
 /**
- * `FabFile.notes` marker written when the data-lake convergence kill switch abandons a vectorize
- * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed, and
- * it does NOT auto-resume.
+ * Why a file's chunk/vector pipeline is STALLED, stored in `FabFile.chunkStallReason`.
  *
- * Lives here rather than beside its writer (apps/client fabFileVectorize) because it is a
- * cross-layer contract: the queue handler writes it and the lake-health evaluator
- * (constants/lakeHealth.ts) reads it to tell a permanently-stalled file from one still in flight.
- * b4m-core cannot import from apps/client, so a copy there would have to drift silently.
+ *  - `vectorizePaused`: the data-lake convergence kill switch abandoned a vectorize (#1676). The
+ *    file keeps its chunks but has no vectors, so it is unsearchable until re-indexed.
+ *  - `rechunkPaused`: the OTHER half of the same switch dropped a re-chunk before it ran
+ *    (#1676/#1681). The damage is worse - the producer resets a wave's chunk state BEFORE the
+ *    messages are handled, so a file halted here has NO chunks at all.
+ *
+ * Neither auto-resumes; both need a reprocess or a lifted switch.
+ *
+ * Without a marker either state is misread by every surface at once, which is the failure the field
+ * exists to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so
+ * health drops it from the denominator, convergence grades it `conformant` (its stale stamp still
+ * matches), and search does not withhold it because it is not "in flight". The file's passages are
+ * simply gone and nothing REPORTS it. The rescue sweep is the one exception and deliberately so: an
+ * unmarked file matches its filter and gets re-chunked, which is repair rather than reporting. That
+ * is why the sweep excludes a stalled file only while the switch is ON - see
+ * buildFabFileChunkScanFilter.
+ *
+ * A dedicated field rather than prose in `FabFile.notes` (#2016): `notes` is the USER's note, and
+ * while the markers lived there every writer of the field clobbered the others - a "Rebuild
+ * passages" wave silently deleted whatever the owner had typed.
+ *
+ * Lives here rather than beside its writers (apps/client's chunk and vectorize handlers) because it
+ * is a cross-layer contract: the queue handlers write it and b4m-core's evaluators
+ * (constants/lakeHealth.ts, constants/lakeConvergence.ts, dataLakeService/retrievalUnavailable.ts)
+ * read it to tell a permanently-stalled file from one still in flight. b4m-core cannot import from
+ * apps/client, so a copy there would have to drift silently.
  */
-export const CONVERGENCE_PAUSED_NOTE =
-  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
+export const CHUNK_STALL_REASONS = ['vectorizePaused', 'rechunkPaused'] as const;
+export type ChunkStallReason = (typeof CHUNK_STALL_REASONS)[number];
 
 /**
- * `FabFile.notes` marker for the OTHER half of the same kill switch: a re-chunk dropped before it
- * ran (#1676/#1681). Distinct from `CONVERGENCE_PAUSED_NOTE` because the damage is worse and the
- * wording has to say so - the producer resets a wave's chunk state BEFORE the messages are handled,
- * so a file halted here has NO chunks at all rather than chunks without vectors.
- *
- * Without a marker this state is invisible to every surface at once, which is the failure it exists
- * to prevent: `chunkCount: 0` with `error: null` reads as an image or a pending upload, so health
- * drops it from the denominator, convergence grades it `conformant` (its stale stamp still matches),
- * search does not withhold it because it is not "in flight", and the rescue sweep's own filter
- * passes over it. The file's passages are simply gone and nothing reports it.
- *
- * Same cross-layer reason as the constant above for living here: the queue handler writes it and
- * b4m-core's evaluators read it, and b4m-core cannot import from apps/client.
+ * Whether a file is stalled by the convergence kill switch, by either arm. THE predicate every
+ * reader uses, so adding a third stall reason reaches health, convergence and retrieval without
+ * three separate comparisons drifting apart. Also the in-memory mirror of a Mongo
+ * `chunkStallReason: { $in: [...CHUNK_STALL_REASONS] }`.
  */
-export const CONVERGENCE_PAUSED_CHUNK_NOTE =
-  'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
-  'rebuilt when convergence resumes.';
+export function isChunkStalled(reason?: string | null): boolean {
+  return CHUNK_STALL_REASONS.includes(reason as ChunkStallReason);
+}
+
+/**
+ * Owner-facing prose for a stall reason, and the ONLY place it is worded. These are the exact
+ * strings the markers used while they lived in `notes`, which is also what the #2016 migration
+ * matches on to derive the field for existing rows - do not reword either without updating it.
+ */
+export const CHUNK_STALL_NOTICES: Record<ChunkStallReason, string> = {
+  vectorizePaused: 'Indexing paused by the data-lake convergence kill switch - reprocess to complete.',
+  rechunkPaused:
+    'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
+    'rebuilt when convergence resumes.',
+};
+
+/**
+ * DEPRECATED, kept for one release. These were `common`'s public surface for the stall markers while
+ * they lived in `FabFile.notes`; the facts now live in `FabFile.chunkStallReason` (#2016) and no
+ * reader in this repo parses prose any more. Deleting an exported symbol from `common` is the shape
+ * that passes public CI and breaks an overlay at deploy time (see MAX_PASSAGE_TOKEN_TARGET above),
+ * so they are aliased onto the new single source of prose rather than dropped.
+ *
+ * @deprecated read `chunkStallReason` via `isChunkStalled`; word it via `CHUNK_STALL_NOTICES`.
+ */
+export const CONVERGENCE_PAUSED_NOTE = CHUNK_STALL_NOTICES.vectorizePaused;
+
+/** @deprecated see CONVERGENCE_PAUSED_NOTE. */
+export const CONVERGENCE_PAUSED_CHUNK_NOTE = CHUNK_STALL_NOTICES.rechunkPaused;
+
+/** @deprecated see CONVERGENCE_PAUSED_NOTE. */
+export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;
+
+/** @deprecated see CONVERGENCE_PAUSED_NOTE - `isChunkStalled(file.chunkStallReason)` is the predicate now. */
+export function isConvergencePausedNote(notes?: string | null): boolean {
+  return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
+}
+
+/**
+ * TRANSITIONAL, and the ONE stall predicate every RETRIEVAL path must use until #2016's migration
+ * has run in every environment. Reads the new field, then falls back to the legacy prose that the
+ * pre-migration rows still carry in `notes`.
+ *
+ * It exists for the FORWARD window only: `migratorInvocation` is a `dependsOn` of the web stack
+ * only (infra/web.ts); the queue stack has none, so the executor can serve forced retrieval and
+ * `knowledge_base_search` while rows still carry the marker in `notes` and no `chunkStallReason`. A
+ * row stalled by the chunk arm then reads as a plain unindexed file: `isRetrievalExcluded` drops it
+ * upstream of the withhold on a vectorizedOnly lake, and `partitionByIndexAvailability` calls it
+ * servable everywhere else. The turn answers around a passage-less file and reports FULL coverage -
+ * the silent degradation this whole path exists to prevent.
+ *
+ * A code ROLLBACK is the mirror image and this arm CANNOT cover it: the rows are already migrated
+ * (`chunkStallReason` set, `notes` unset) and the code restored is pre-#2016, which does not contain
+ * this function. Nothing reverts the data on its own either - `migratorInvocation` only ever runs
+ * `up` and `migrate down` is a manual CLI step - so `migrate down` is a REQUIRED step of any
+ * rollback past #2016, not an optional tidy-up. What this arm does buy is that `down()` is safe to
+ * run FIRST: whichever stack is still new keeps honoring the prose it restores, so a staggered
+ * rollback has no window where a restored marker is invisible. `down()` is a PARTIAL restore
+ * though - it skips a row whose owner typed a note after `up()`, and that row grades as unstalled
+ * on both stacks once the field is dropped. See its own comment.
+ *
+ * Deliberately NOT used by the grading/health/UI readers: they are gated behind the web stack, and
+ * a legacy row there renders the notice line AND the identical text as the owner's note.
+ *
+ * Mirrored in Mongo by `buildFabFileSearchQuery`'s `vectorizedOnly` exemption. Delete the legacy arm
+ * from both together, one release after the migration has landed everywhere.
+ */
+export const LEGACY_CHUNK_STALL_NOTES: readonly string[] = Object.values(CHUNK_STALL_NOTICES);
+
+export function isChunkStalledFile(file: { chunkStallReason?: string | null; notes?: string | null }): boolean {
+  return isChunkStalled(file.chunkStallReason) || LEGACY_CHUNK_STALL_NOTES.includes(file.notes ?? '');
+}
+
+/**
+ * Owner-facing prose for `FabFile.noExtractableTextAt`, the stamp the chunk handler writes when a
+ * file produces 0 chunks. Same migration note as CHUNK_STALL_NOTICES: the pre-#2016 rows carry this
+ * text (prefixed 'No extractable text') in `notes`.
+ */
+export const NO_EXTRACTABLE_TEXT_NOTICE =
+  'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).';
+
+/**
+ * The pipeline notice to show for a file, or null when the pipeline has nothing to say. Distinct
+ * from `FabFile.notes`, which is the owner's own text and is never written by a pipeline path.
+ */
+export function describePipelineStall(file: {
+  chunkStallReason?: string | null;
+  noExtractableTextAt?: Date | string | null;
+}): string | null {
+  if (isChunkStalled(file.chunkStallReason)) return CHUNK_STALL_NOTICES[file.chunkStallReason as ChunkStallReason];
+  return file.noExtractableTextAt ? NO_EXTRACTABLE_TEXT_NOTICE : null;
+}
 
 /**
  * `FabFile.chunkRebuildRequestedAt`: stamped by `resetChunkStateByIds` in the SAME write that
  * clears a file's chunk rollups, so "this file's passages are being rebuilt" can never be lost the
  * way the pair of steps that creates the state can be. The reset and the queue send are two
  * operations - kill the producer between them, or lose the consumer's marker write, and the file
- * sits at `chunkCount: 0` with `error: null` and `notes: ''`, a shape indistinguishable from an
+ * sits at `chunkCount: 0` with `error: null` and no stall reason, a shape indistinguishable from an
  * image or a still-uploading row. It then drops out of lake health's denominator, out of the
  * convergence plan and out of the retrieval withhold at the same moment: every rollup says its
  * passages are gone, and nothing reports it.
  *
- * Deliberately NOT `CONVERGENCE_PAUSED_CHUNK_NOTE` pre-written by the producer, which is the obvious
+ * Deliberately NOT the `rechunkPaused` stall reason pre-written by the producer, which is the obvious
  * fix and the wrong one: that marker means "halted, needs an administrator", so a file awaiting an
  * ORDINARY rebuild would read to every reader as permanently paused for the whole rebuild - search
  * would tell readers it does not return on its own, health would hard-fail P3, and "Rebuild
@@ -175,9 +275,9 @@ export const CONVERGENCE_PAUSED_CHUNK_NOTE =
  * upgrade therefore degrades to mislabelled-but-visible rather than invisible, which is the trade
  * this field exists to make - invisibility is the real harm, labelling is secondary.
  *
- * A dedicated field rather than a third `notes` string on purpose: `notes` already carries two
- * unrelated facts (the user's own note / NO_EXTRACTABLE_TEXT, and the kill-switch markers), so every
- * writer of it clobbers the others.
+ * A dedicated field on purpose, and the precedent #2016 followed for the other two machine-written
+ * facts: while they all shared `notes` every writer of that field clobbered the others, including
+ * the user's own note.
  *
  * Cleared by `commitFabFileChunks` (the rebuild landed) and by the chunk handler's pause write (the
  * rebuild was halted instead). A file carrying `error` is settled regardless - see
@@ -198,19 +298,3 @@ export function isChunkRebuildPending(requestedAt?: Date | string | null): boole
  * the `dlq: { retry: 3 }` budget, so the door opens before the message would reach the DLQ.
  */
 export const REBUILD_PENDING_STALE_MS = 2 * 60 * 60_000;
-
-/**
- * Whether a file's `notes` marks it as stalled by the convergence kill switch, by either arm.
- * THE predicate every reader uses, so adding a third stall marker reaches health, convergence and
- * retrieval without three separate string comparisons drifting apart.
- */
-export function isConvergencePausedNote(notes?: string | null): boolean {
-  return CONVERGENCE_PAUSED_NOTES.includes(notes as (typeof CONVERGENCE_PAUSED_NOTES)[number]);
-}
-
-/**
- * Datastore mirror of `isConvergencePausedNote`, for a Mongo `notes: { $in: [...] }`. Exported so a
- * query and the in-memory predicate cannot drift: adding a third stall marker to this array reaches
- * both. Declared after the two constants it names so the function above can close over it.
- */
-export const CONVERGENCE_PAUSED_NOTES = [CONVERGENCE_PAUSED_NOTE, CONVERGENCE_PAUSED_CHUNK_NOTE] as const;

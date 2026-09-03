@@ -29,14 +29,15 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
 import {
+  buildChunkScanQueuePayload,
   buildFabFileChunkScanFilter,
   buildStrandedVectorizeScanFilter,
   CHUNK_SCAN_MIN_AGE_MS,
   CHUNK_CLAIM_STALE_MS,
   VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
 } from '@server/worker/chunkScan';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -71,8 +72,14 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   const now = Date.now();
   const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
   const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
-  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
-    .select('_id userId batchId')
+  // Platform flag only: this sweep is global, so there is no lake to resolve a scoped override
+  // against. While it is ON, paused files are excluded so they cannot consume the rescue cap; while
+  // it is OFF they are swept back in, which is the automatic rebuild their marker promises.
+  const convergencePaused = (await adminSettingsRepository.getSettingsValue(CONVERGENCE_PAUSE_SETTING_KEY)) === true;
+  const candidates = await FabFile.find(
+    buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: convergencePaused })
+  )
+    .select('_id userId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
@@ -81,7 +88,6 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
   // file is not re-sent every pass.
   const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
-  const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
 
   // Bounded-concurrency fan-out with a PER-FILE catch. A throttled or unroutable send used to reject
   // out of a sequential loop and abandon every candidate behind it, and because the caller turns a
@@ -96,11 +102,7 @@ async function rescueUnchunkedFiles(): Promise<{ enqueued: number; failed: numbe
   let failed = 0;
   const enqueueOne = async (id: string) => {
     try {
-      await sendToQueue(queueUrl, {
-        fabFileId: id,
-        userId: userById.get(id)!,
-        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
-      });
+      await sendToQueue(queueUrl, buildChunkScanQueuePayload({ fabFileId: id, userId: userById.get(id)! }));
       enqueued++;
     } catch (e) {
       failed++;
@@ -134,7 +136,7 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
   const cutoff = new Date(now - VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS);
   const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
   const candidates = await FabFile.find(buildStrandedVectorizeScanFilter(cutoff, staleClaimBefore))
-    .select('_id userId batchId')
+    .select('_id userId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
@@ -146,10 +148,20 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
   let sent = 0;
   for (const file of candidates) {
     try {
+      // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
+      // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
+      // already-chunked resume. Stamping `origin: convergence` would therefore route a healthy
+      // chunked file into that branch with the switch on, writing `chunkStallReason: 'rechunkPaused'`
+      // and nulling `chunkRebuildRequestedAt` over committed passages, then throwing - so the resume
+      // never runs, `vectorizeEnqueueFailedAt` is never cleared, and this sweep re-sends the file
+      // every tick until each message has burned its retry ladder into the DLQ. The un-chunked sweep
+      // is safe to stamp because its filter carries `excludeConvergencePaused` and its files have no
+      // chunks to damage; this filter has no paused-file exclusion, which is what would make the
+      // re-fire unbounded rather than one-shot. Finishing an already-committed hand-off is not the
+      // background work the kill switch exists to stop.
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: String(file.userId),
-        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
       sent += 1;
     } catch (err) {

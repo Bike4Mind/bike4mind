@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ReplToolMap, ReplSession } from '@bike4mind/agents';
+import type { PrincipalAuthHeaders } from './principalAuthHeaders';
 
 /**
  * Tool functions that get exposed inside the REPL for an RLM-style agent.
@@ -21,8 +22,12 @@ import type { ReplToolMap, ReplSession } from '@bike4mind/agents';
 export interface DataLakeToolDeps {
   /** Base URL for B4M API calls. Default: http://localhost:3000 */
   baseUrl: string;
-  /** Value for the `x-api-key` header on data-lake API calls. */
-  apiKey: string;
+  /**
+   * The requesting principal's own credential headers, replayed on every
+   * loopback call so retrieval is scoped to the caller and not to some shared
+   * identity. Build with `resolvePrincipalAuthHeaders(req.headers)`.
+   */
+  authHeaders: PrincipalAuthHeaders;
   /** Direct Anthropic API key for sub-LLM calls. */
   anthropicApiKey: string;
   /** Session whose budget the sub-LLM cost is recorded against. */
@@ -80,7 +85,7 @@ interface SubAgentQueryArgs {
 export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
   const anthropic = new Anthropic({ apiKey: deps.anthropicApiKey });
   const baseUrl = deps.baseUrl.replace(/\/+$/, '');
-  const headers = { 'x-api-key': deps.apiKey, 'Content-Type': 'application/json' } as const;
+  const headers = { ...deps.authHeaders, 'Content-Type': 'application/json' };
 
   // HTTP loopback to the semantic-search route, which resolves dynamic lakes as well as the
   // static registry. Its scope is still a subset of the browse scope rlm-answer gates on
@@ -136,7 +141,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     }
     const r = await fetch(`${baseUrl}/api/data-lakes/articles?${params}`, {
       method: 'GET',
-      headers: { 'x-api-key': deps.apiKey },
+      headers: { ...deps.authHeaders },
     });
     if (!r.ok) throw new Error(`keywordSearch ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const payload = (await r.json()) as { data?: Record<string, unknown>[]; total?: number; hasMore?: boolean };
@@ -155,7 +160,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     if (a.tag) params.append('tags', a.tag);
     const r = await fetch(`${baseUrl}/api/data-lakes/articles?${params}`, {
       method: 'GET',
-      headers: { 'x-api-key': deps.apiKey },
+      headers: { ...deps.authHeaders },
     });
     if (!r.ok) throw new Error(`listArticles ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const payload = (await r.json()) as { data?: Record<string, unknown>[]; total?: number; hasMore?: boolean };
@@ -189,7 +194,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
 
     // Fetch metadata to learn the filePath
     const metaR = await fetch(`${baseUrl}/api/data-lakes/articles?id=${encodeURIComponent(a.file_id)}`, {
-      headers: { 'x-api-key': deps.apiKey },
+      headers: { ...deps.authHeaders },
     });
     if (metaR.status === 404) {
       throw new Error(
@@ -205,7 +210,7 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
     // Get presigned URL and fetch the body
     const urlR = await fetch(
       `${baseUrl}/api/files/presigned-url?filePaths%5B%5D=${encodeURIComponent(article.filePath)}`,
-      { headers: { 'x-api-key': deps.apiKey } }
+      { headers: { ...deps.authHeaders } }
     );
     if (!urlR.ok) throw new Error(`getArticle presigned ${urlR.status}`);
     const { urls } = (await urlR.json()) as { urls: string[] };

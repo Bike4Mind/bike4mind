@@ -190,6 +190,16 @@ export const MIN_TAG_PREFIX_LENGTH = 2;
 export const MAX_TAG_PREFIX_LENGTH = 30;
 
 /**
+ * The longest a single tag name under a lake's prefix can be: the longest prefix plus the longest
+ * taxonomy suffix a name under it could carry. Derived rather than hardcoded so it tracks
+ * `MAX_TAG_PREFIX_LENGTH` and `MAX_TAXONOMY_TAG_SUFFIX_LENGTH` instead of drifting from either.
+ * This bounds what a caller may WRITE under a prefix; it does not bound what the upload path may
+ * already have stored there (folder-derived names are not truncated), so an existing name over
+ * this length is a real, legitimate possibility a replace-semantics door must account for.
+ */
+export const MAX_LAKE_FILE_TAG_NAME_LENGTH = MAX_TAG_PREFIX_LENGTH + MAX_TAXONOMY_TAG_SUFFIX_LENGTH;
+
+/**
  * Length bounds and shape for a lake `slug`, owned here rather than by the create schema because
  * the client PRODUCES the value it then sends: the wizard slugifies a lake name, truncates to the
  * max, and gates Start Upload on the min, all before the schema ever sees the result. A produced
@@ -428,8 +438,8 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
 /**
  * A public data lake as it appears in the discover/browse surface: the lightweight card
  * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
- * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
- * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * DataLakeConfig - it drops the access/gate internals (the endpoint has already resolved the
+ * gate for this caller) and adds the human-facing preview metadata the catalog renders: owner
  * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
  * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
  */

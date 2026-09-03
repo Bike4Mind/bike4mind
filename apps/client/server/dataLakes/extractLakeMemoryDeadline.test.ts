@@ -12,8 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const findByIdMock = vi.fn();
-const findIdsByDataLakeTagMock = vi.fn();
-const findAllByIdsMock = vi.fn();
+const findLakeMemoryExtractionMembersMock = vi.fn();
 const findTextsByFabFileIdMock = vi.fn();
 const evaluateMock = vi.fn();
 const appendMock = vi.fn();
@@ -32,8 +31,17 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
   fabFileRepository: {
-    findIdsByDataLakeTag: (...a: unknown[]) => findIdsByDataLakeTagMock(...a),
-    findAllByIds: (...a: unknown[]) => findAllByIdsMock(...a),
+    findLakeMemoryExtractionMembers: (...a: unknown[]) => findLakeMemoryExtractionMembersMock(...a),
+    // The two unbounded readers this producer used to use, kept here as THROWING stubs. Between them
+    // they resolved every id the lake had ever held and hydrated all of them unprojected, which is what
+    // OOMed the extraction Lambda before its own deadline guard could yield. Reaching for either again
+    // fails the test loudly instead of only showing up as a DLQ on a large lake.
+    findIdsByDataLakeTag: () => {
+      throw new Error('unbounded read: lake-memory extraction must page via findLakeMemoryExtractionMembers');
+    },
+    findAllByIds: () => {
+      throw new Error('unprojected read: lake-memory extraction must page via findLakeMemoryExtractionMembers');
+    },
   },
 }));
 vi.mock('@bike4mind/common', () => ({
@@ -64,12 +72,27 @@ const { extractLakeMemoryForBatch } = await import('./extractLakeMemory');
 
 const makeLogger = () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), log: vi.fn(), debug: vi.fn() });
 
+/**
+ * Stand in for the repository's paged member read over an in-memory id list, honoring the keyset
+ * `after` and the `limit` FOR REAL (sorted, as the database returns them). A fixed-array stub would
+ * leave the two things this producer actually decides on untested: where a continuation resumes, and
+ * whether the one-past-the-cap probe row correctly says "the lake continues".
+ */
+const seedMembers = (ids: string[]) => {
+  findLakeMemoryExtractionMembersMock.mockImplementation(
+    async (_scope: unknown, { after, limit }: { after?: string | null; limit: number }) =>
+      [...ids]
+        .sort()
+        .filter(id => !after || id > after)
+        .slice(0, limit)
+        .map(id => ({ fabFileId: id, fileName: `${id}.md`, tags: [] }))
+  );
+};
+
 /** N live docs, each with readable text and one extractable fact. */
 const seedLake = (docCount: number) => {
   findByIdMock.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1', datalakeTag: 'datalake:test' });
-  const ids = Array.from({ length: docCount }, (_, i) => `doc-${i}`);
-  findIdsByDataLakeTagMock.mockResolvedValue(ids);
-  findAllByIdsMock.mockResolvedValue(ids.map(id => ({ id, fileName: `${id}.md`, tags: [] })));
+  seedMembers(Array.from({ length: docCount }, (_, i) => `doc-${String(i).padStart(3, '0')}`));
   findTextsByFabFileIdMock.mockResolvedValue([{ text: 'some durable reference text' }]);
   evaluateMock.mockResolvedValue([{ fact: 'the X-200 ships with 36 units' }]);
 };
@@ -120,7 +143,7 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     expect(appendMock).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ran out of time after 2/10 docs'));
     // The cursor resumes from the last doc ATTEMPTED (doc index 1), not the cap boundary.
-    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-1');
+    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-001');
   });
 
   it('falls back to the wall clock when the Lambda clock reports a non-finite value', async () => {
@@ -208,13 +231,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
   });
 
   it('signals hasMore and persists the 100th doc as the cursor when the doc cap is hit', async () => {
-    // Zero-padded ids so lexicographic order == numeric order, making the keyset boundary deterministic.
-    findByIdMock.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1', datalakeTag: 'datalake:test' });
-    const ids = Array.from({ length: 150 }, (_, i) => `doc-${String(i).padStart(3, '0')}`);
-    findIdsByDataLakeTagMock.mockResolvedValue(ids);
-    findAllByIdsMock.mockResolvedValue(ids.map(id => ({ id, fileName: `${id}.md`, tags: [] })));
-    findTextsByFabFileIdMock.mockResolvedValue([{ text: 'durable reference text' }]);
-    evaluateMock.mockResolvedValue([{ fact: 'a durable fact' }]);
+    seedLake(150);
     const logger = makeLogger();
 
     const result = await extractLakeMemoryForBatch(
@@ -226,6 +243,45 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     expect(result.hasMore).toBe(true);
     expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-099');
     expect(releaseLakeMemoryExtractionMock).toHaveBeenCalledTimes(1);
+    // The 101st row is the probe that reported "more remain"; it is never processed.
+    expect(evaluateMock).toHaveBeenCalledTimes(100);
+  });
+
+  it('asks the database for the slice - cap plus one probe row, from the cursor - and nothing wider', async () => {
+    // The regression this whole change is about: the run must never materialize the lake to find out
+    // how big it is. One bounded, cursor-anchored read, and the bound is the cap plus the probe row.
+    seedLake(150);
+    findByIdMock.mockResolvedValue({
+      id: 'lake-1',
+      createdByUserId: 'owner-1',
+      datalakeTag: 'datalake:test',
+      lakeMemoryCursor: 'doc-004',
+    });
+
+    await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 },
+      makeLogger() as never
+    );
+
+    expect(findLakeMemoryExtractionMembersMock).toHaveBeenCalledTimes(1);
+    expect(findLakeMemoryExtractionMembersMock).toHaveBeenCalledWith('datalake:test', { after: 'doc-004', limit: 101 });
+  });
+
+  it('does not ask for a continuation when the slice fills the cap exactly and the lake ends there', async () => {
+    // The probe row is what tells these apart. Without it, a lake of exactly 100 live docs would look
+    // identical to a truncated one and chain a continuation run that finds nothing - and, because the
+    // cursor would have been advanced to the last doc, would keep the lake from ever re-scanning clean.
+    seedLake(100);
+    const logger = makeLogger();
+
+    const result = await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 },
+      logger as never
+    );
+
+    expect(result.docsProcessed).toBe(100);
+    expect(result.hasMore).toBe(false);
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalledWith('lake-1', 'doc-099');
   });
 
   it('resumes from the persisted cursor and clears it once the scan reaches the end', async () => {
@@ -237,9 +293,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
       datalakeTag: 'datalake:test',
       lakeMemoryCursor: 'doc-1',
     });
-    const ids = ['doc-0', 'doc-1', 'doc-2', 'doc-3', 'doc-4'];
-    findIdsByDataLakeTagMock.mockResolvedValue(ids);
-    findAllByIdsMock.mockResolvedValue(ids.map(id => ({ id, fileName: `${id}.md`, tags: [] })));
+    seedMembers(['doc-0', 'doc-1', 'doc-2', 'doc-3', 'doc-4']);
     findTextsByFabFileIdMock.mockResolvedValue([{ text: 'durable reference text' }]);
     evaluateMock.mockResolvedValue([{ fact: 'a durable fact' }]);
     const logger = makeLogger();
@@ -261,9 +315,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     // cursor in the window before this run wins the claim. Resuming from the stale value would re-scan
     // (and re-bill) an already-covered slice. Pre-claim read reports cursor doc-0; the post-claim read
     // reports the advanced doc-3, and the run must honor the latter.
-    const ids = ['doc-0', 'doc-1', 'doc-2', 'doc-3', 'doc-4'];
-    findIdsByDataLakeTagMock.mockResolvedValue(ids);
-    findAllByIdsMock.mockResolvedValue(ids.map(id => ({ id, fileName: `${id}.md`, tags: [] })));
+    seedMembers(['doc-0', 'doc-1', 'doc-2', 'doc-3', 'doc-4']);
     findTextsByFabFileIdMock.mockResolvedValue([{ text: 'durable reference text' }]);
     evaluateMock.mockResolvedValue([{ fact: 'a durable fact' }]);
     findByIdMock

@@ -14,6 +14,7 @@ import type {
   BatchCounterField,
   AccessContext,
   DataLakeStatus,
+  LakeSettleFields,
   TaxonomyStatus,
   IDataLakeBatch,
 } from '@bike4mind/common';
@@ -232,6 +233,39 @@ async function tryAddSpendWithinLimitMetered(
   return { granted: true, spendMicroUsd: doc.embeddingSpendMicroUsd ?? null };
 }
 
+/** Both gate fields blank, in the null/'' form used across this model for DocumentDB safety. */
+const GATELESS = {
+  $and: [
+    { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
+    { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
+  ],
+};
+
+/**
+ * Mongo mirror of the in-memory `lakeMatchesAccess` any-of: the lake has NO gate (BOTH
+ * requiredUserTag and requiredEntitlement blank), OR the caller holds the required tag, OR the
+ * caller holds the required entitlement. Requiring BOTH blank for the gate-less arm is what
+ * keeps an entitlement-only lake from leaking via the legacy blank-tag arm.
+ *
+ * Shared by every access filter in this repository (findAccessible, the public arms of
+ * findActiveByUserTagsAndEntitlements and findPublicLakes) so the DB paths cannot drift from
+ * each other. NOT byte-parity with the in-memory filter: `requiredUserTag` has no normalizing
+ * setter, so this matches the STORED value against the caller's tags in both casings while
+ * lakeMatchesAccess lowercases the stored value - a mixed-case stored tag held only in
+ * lowercase is filtered out here but admitted by the gate. Fails closed; entitlements are
+ * exempt (schema setter). Closing it needs a requiredUserTag setter plus a backfill.
+ */
+const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): Record<string, unknown> => {
+  const normalizedTags = userTags.map(t => t.toLowerCase());
+  const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
+  // Use the ONE canonical normalization (shared with the in-memory filter + write path).
+  const keys = (entitlementKeys ?? []).map(normalizeEntitlementKey);
+  const arms: Record<string, unknown>[] = [GATELESS, { requiredUserTag: { $in: allTags } }];
+  // Guard: `$in: []` is a harmless no-match but `$in: undefined` throws.
+  if (keys.length > 0) arms.push({ requiredEntitlement: { $in: keys } });
+  return { $or: arms };
+};
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
@@ -255,6 +289,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // datalakeTag carries a globally-unique index, so at most one lake matches.
     const doc = await this.dataLakeModel.findOne({ datalakeTag });
     return (doc?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  async findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]> {
+    if (datalakeTags.length === 0) return [];
+    // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
+    // per tag and a caller can key it by `datalakeTag` without losing a match.
+    const docs = await this.dataLakeModel.find({ datalakeTag: { $in: datalakeTags } });
+    return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 
   /**
@@ -307,13 +349,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (memberOrgIds.length > 0) {
       // Gateless lake (no tag, no entitlement) scoped to one of the caller's orgs -> membership
       // is its grant.
-      nonOwnerArms.push({
-        $and: [
-          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
-          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-          { organizationId: { $in: memberOrgIds } },
-        ],
-      });
+      nonOwnerArms.push({ $and: [GATELESS, { organizationId: { $in: memberOrgIds } }] });
     }
     // Only add the entitlement arm when there are keys - `$in: []` is a harmless no-match
     // but `$in: undefined` throws, so guard explicitly.
@@ -334,17 +370,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // the org prerequisite AND Private-by-default. The requirement gate is STILL enforced
     // (both-blank OR held tag OR held key), so a gate added after publishing keeps holding; a
     // normal public lake is gate-less and matches the both-blank sub-arm.
-    const publicRequirementOr: Record<string, unknown>[] = [
-      {
-        $and: [
-          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
-          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-        ],
-      },
-      { requiredUserTag: { $in: allTags } },
-    ];
-    if (keys.length > 0) publicRequirementOr.push({ requiredEntitlement: { $in: keys } });
-    accessArms.push({ $and: [{ isPublic: true }, { $or: publicRequirementOr }] });
+    accessArms.push({ $and: [{ isPublic: true }, requirementConstraint(userTags, entitlementKeys)] });
 
     // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
     // including private gateless ones. Only when a userId is supplied.
@@ -381,10 +407,6 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // lake there. Those views pass includePublic:false; the owner still sees their own via the
     // owner arm, and org members keep org lakes via the org arm (pre-existing, intended).
     const includePublic = opts?.includePublic ?? true;
-    const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
-    const allTags = Array.from(new Set(ctx.userTags.concat(normalizedTags)));
-    // Use the ONE canonical normalization (shared with the in-memory filter + write path).
-    const keys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
 
     // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
     // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
@@ -395,26 +417,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
         : { organizationId: { $in: [null, ''] } };
 
-    // Requirement constraint (mirror of `lakeMatchesAccess`): the lake has NO restriction
-    // (BOTH requiredUserTag AND requiredEntitlement blank), OR the user holds the required
-    // tag, OR the user holds the required entitlement. Requiring BOTH blank for the "no
-    // restriction" arm is what keeps an entitlement-only lake from leaking via the legacy
-    // blank-tag arm. Per-arm null/'' form (not `$in:[null]`) for DocumentDB safety, matching
-    // findActiveByUserTagsAndEntitlements.
-    const requirementOr: Record<string, unknown>[] = [
-      {
-        $and: [
-          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
-          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-        ],
-      },
-      { requiredUserTag: { $in: allTags } },
-    ];
-    // Guard: `$in: []` is a harmless no-match but `$in: undefined` throws.
-    if (keys.length > 0) {
-      requirementOr.push({ requiredEntitlement: { $in: keys } });
-    }
-    const requirementConstraint = { $or: requirementOr };
+    const requirement = requirementConstraint(ctx.userTags, ctx.entitlementKeys);
 
     // Not-private: exclude lakes with no org AND no gate at all. Such a lake grants a
     // non-owner nothing, so it must stay owner-only rather than read-by-anyone. Uses the
@@ -436,11 +439,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // requirement constraint is still ANDed as defense in depth, so a gate added after publishing
     // keeps holding while a normal (gate-less) public lake passes via requirementConstraint's
     // both-blank arm.
-    const publicArm = { $and: [{ isPublic: true }, requirementConstraint] };
+    const publicArm = { $and: [{ isPublic: true }, requirement] };
 
     // Non-owner arms: the org/gate arm always applies; the public arm only in browse/read views
     // (dropped for management views via includePublic - see the note at the top of this method).
-    const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirementConstraint, notPrivate] }];
+    const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirement, notPrivate] }];
     if (includePublic) nonOwnerArms.unshift(publicArm);
 
     // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
@@ -463,27 +466,42 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
-  async findPublicLakes(opts?: {
-    search?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
+  async findPublicLakes(
+    viewer: AccessContext,
+    opts?: {
+      search?: string;
+      limit?: number;
+      offset?: number;
+      grantedLakeIds?: string[];
+    }
+  ): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
     // Clamp paging here (defense in depth) even though the route also validates: a caller
     // reaching the repo directly can't request an unbounded page. Default one screenful.
     const limit = Math.min(Math.max(opts?.limit ?? 24, 1), 60);
     const offset = Math.max(opts?.offset ?? 0, 0);
 
-    // Gate-less + public + active: the browse catalog. Only both-blank-gate lakes qualify, so
-    // a lake gated after publishing drops out of browse-everyone (mirrors the retrieval/list
-    // public arm's requirement). null/'' form is the DocumentDB-safe shape used across this model.
+    // Public + active, with the SAME per-caller gate findAccessible's public arm applies, so
+    // discover and access agree: a lake gated after publishing stays out of the catalog for
+    // everyone except the callers who actually hold the gate (plus its owner, its grant holders
+    // and admins, who reach it via findAccessible's own bypass arms). The catalog is therefore
+    // per-caller - `total` included - which is the price of not showing a lake in one surface
+    // while the other insists it does not exist. `grantedLakeIds` is pre-resolved by the caller
+    // from listByPrincipal exactly as findAccessible's grant arm is (grantedLakeIdsFor); an
+    // unwired/empty list simply adds no arm.
     const filter: Record<string, unknown> = {
       status: 'active',
       isPublic: true,
-      $and: [
-        { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
-        { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-      ],
+      $and: [] as Record<string, unknown>[],
     };
+    if (!viewer.isAdmin) {
+      const grantedLakeIds = opts?.grantedLakeIds ?? [];
+      const reachArms: Record<string, unknown>[] = [
+        { createdByUserId: viewer.userId },
+        requirementConstraint(viewer.userTags, viewer.entitlementKeys),
+      ];
+      if (grantedLakeIds.length > 0) reachArms.push({ _id: { $in: grantedLakeIds } });
+      (filter.$and as Record<string, unknown>[]).push({ $or: reachArms });
+    }
 
     const search = opts?.search?.trim();
     if (search) {
@@ -491,9 +509,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       // match on name OR description - the two fields the browse card previews.
       const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const rx = { $regex: escaped, $options: 'i' };
-      // Nest under $and to compose with the gate-less $and above without a top-level $or/$and clash.
+      // Nest under $and to compose with the gate $and above without a top-level $or/$and clash.
       (filter.$and as Record<string, unknown>[]).push({ $or: [{ name: rx }, { description: rx }] });
     }
+
+    // An empty `$and: []` is a Mongo error, so drop the key when no clause was added (an admin
+    // with no search term).
+    if ((filter.$and as Record<string, unknown>[]).length === 0) delete filter.$and;
 
     // total is the unpaged count so the UI can show "showing X of Y" and drive load-more.
     const total = await this.dataLakeModel.countDocuments(filter);
@@ -542,19 +564,62 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
+  async claimArchiving(id: string): Promise<boolean> {
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving'], 'archiving');
+  }
+
+  async claimDeleting(id: string): Promise<boolean> {
+    // 'restoring' and 'unarchiving' are deliberately absent: a teardown must lose to a reversal on
+    // either axis already in flight rather than plain-write over it, which is what left a lake
+    // 'active' with every one of its files soft-deleted. 'deleted'/'purging' are handled by
+    // deleteDataLake's own guards.
+    //
+    // 'archiving' IS admitted, and that asymmetry is deliberate: a delete may take the lake out
+    // from under an in-flight archive. The archive's own sweep is write-once, and its terminal
+    // settle is conditional on 'archiving', so once this claim lands the archive loses that settle
+    // and reports the conflict instead of converging back on 'archived'.
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
+  }
+
   async claimUnarchiving(id: string): Promise<boolean> {
     // The archive-axis twin of claimRestoring. What the filter EXCLUDES is the point: deleteDataLake
     // also accepts 'archived', so a delete accepted between unarchiveDataLake's status read and this
     // write must win. Losing here yields the same refusal the caller's guard would have given, where
     // a plain $set would instead leave the lake 'active' with every member soft-deleted and
     // restoreDeletedDataLake refusing it - unreachable files with no route back.
-    const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: { $in: ['archived', 'restoring'] } },
-      { $set: { status: 'restoring' } }
-    );
-    // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
-    // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
+    //
+    // Lands on 'unarchiving', NOT the 'restoring' claimRestoring uses: sharing one value let an
+    // unarchive and a restore-from-deleted both hold it (each admits it for crash re-entry) and
+    // both settle 'active'. 'restoring' is still admitted as a SOURCE so an archive-axis reversal
+    // caught mid-flight by the deploy that split them converts onto this axis rather than
+    // stranding; that also demotes any delete-axis claimant holding it to a lost terminal settle.
+    return this.claimLifecycleStatus(id, ['archived', 'unarchiving', 'restoring'], 'unarchiving');
+  }
+
+  /**
+   * Conditional status hop: `$set` the new status only for a lake still sitting in one of `from`.
+   * matchedCount, not modifiedCount, so a re-entry that changes nothing (retrying a crashed
+   * transitional attempt) still reports as won - see claimRestoring's note.
+   */
+  private async claimLifecycleStatus(id: string, from: DataLakeStatus[], to: DataLakeStatus): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: { $in: from } }, { $set: { status: to } });
     return res.matchedCount === 1;
+  }
+
+  async settleLifecycleStatus(
+    id: string,
+    from: DataLakeStatus,
+    set: LakeSettleFields
+  ): Promise<IDataLakeDocument | null> {
+    // The closing half of claimLifecycleStatus, and conditional for the mirror reason: the claim
+    // decides who may START, this decides who may RECORD the outcome. Both sweeps run regardless -
+    // an operation that lost here has already applied its side effects - so settling
+    // unconditionally would let the loser stamp its own terminal status over the winner's, leaving
+    // a lake whose status and file state come from different operations.
+    //
+    // findOneAndUpdate rather than updateOne so the settled document comes back for the audit diff,
+    // matching what the plain `update` call this replaced returned.
+    return this.dataLakeModel.findOneAndUpdate({ _id: id, status: from }, { $set: set }, { new: true });
   }
 
   async releasePurgingToDeleted(id: string): Promise<boolean> {
@@ -710,6 +775,10 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // accounting; upload-complete.ts's browser-reported failures never touch it.
     processingFailedFiles: { type: Number, default: 0 },
     skippedFiles: { type: Number, default: 0 },
+    // Drive-ingest-only: the driveFileIds skip() has already counted into skippedFiles, so a later
+    // slice of the same chain can subtract them (see IDataLakeBatch.skippedDriveFileIds) instead of
+    // re-fetching and re-skipping (and re-incrementing) the same permanently-unsupported file.
+    skippedDriveFileIds: [{ type: String }],
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },
     // Embedding spend metered against this run, integer micro-USD - see IDataLakeBatch.
@@ -979,6 +1048,22 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   /**
+   * Drive-ingest-only: record a skipped driveFileId and increment `skippedFiles` in one atomic
+   * write, gated on that driveFileId not already being recorded. Without the gate, a chain that
+   * re-diffs the same permanently-unsupported file on every slice (skip() mints no FabFile, so the
+   * ordinary alreadyIngested subtraction can't see it) would increment skippedFiles once per slice
+   * for one file. Returns false when the driveFileId was already recorded (a genuine no-op, not an
+   * error) so the caller can tell a fresh skip from a repeat.
+   */
+  async recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES }, skippedDriveFileIds: { $ne: driveFileId } },
+      { $addToSet: { skippedDriveFileIds: driveFileId }, $inc: { skippedFiles: 1 } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  /**
    * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
    * incrementCounter calls can never leave a caller's counters partially applied (e.g.
    * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
@@ -1065,6 +1150,17 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // the queue finalizer) write a settled batch back to a non-terminal status - resurrecting it into
     // findActiveByUserId, where reconcileStuckBatches would later force-fail a batch that succeeded.
     return this.guardedActiveUpdate(batchId, fields as Record<string, unknown>);
+  }
+
+  /**
+   * Re-plan a still-active batch's expected file count. Only the multi-run Drive ingest needs this:
+   * its batch is created from the first slice's candidate list, and later slices re-walk a folder that
+   * may have grown, so `totalFiles` has to be raised before the chain can overrun it (finalizing the
+   * batch mid-chain) and set exactly once the chain ends. Guarded like every other write here, so it
+   * cannot re-plan a batch someone already settled.
+   */
+  async setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null> {
+    return this.guardedActiveUpdate(batchId, { totalFiles });
   }
 
   async touchIfActive(batchId: string): Promise<void> {

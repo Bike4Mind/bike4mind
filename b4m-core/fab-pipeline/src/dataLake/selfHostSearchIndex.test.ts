@@ -8,15 +8,14 @@ const mockOsClient = {
   deleteDocumentByQuery: vi.fn(),
 };
 
-vi.mock('./opensearchClient', () => ({
+// Fake only the OpenSearchClient; keep the real pure predicates
+// (isIndexAlreadyExistsError / isIndexNotFoundError) so these tests exercise the
+// shipped logic rather than a hand-copied fork that can drift (#2130).
+vi.mock('./opensearchClient', async importActual => ({
+  ...(await importActual<typeof import('./opensearchClient')>()),
   OpenSearchClient: vi.fn(function MockOpenSearchClient() {
     return mockOsClient;
   }),
-  isIndexAlreadyExistsError: (error: Error & { statusCode?: number; body?: { error?: { type?: string } } }) =>
-    error.statusCode === 400 && error.body?.error?.type === 'resource_already_exists_exception',
-  isIndexNotFoundError: (error: Error & { statusCode?: number; body?: { error?: { type?: string } } }) =>
-    (error.statusCode === 404 && error.body?.error?.type === 'index_not_found_exception') ||
-    (error.message ?? '').toLowerCase().includes('index_not_found_exception'),
 }));
 
 import { FabFileChunkSearchIndex, selfHostVectorIndexName } from './selfHostSearchIndex';
