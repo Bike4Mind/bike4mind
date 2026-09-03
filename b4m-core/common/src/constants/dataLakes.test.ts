@@ -245,6 +245,17 @@ describe('effectiveTagPrefixArm - the one decision the filter and its disclosure
     expect(effectiveTagPrefixArm({ kind: 'registry', fileTagPrefix: 'opti:' })).toBe('opti:');
   });
 
+  it('fails closed on a scope that names no kind at all', () => {
+    // Caught by fabFileSearchQuery's own test, which builds a scope literal without `kind`. Testing
+    // "is owned" rather than "is not registry" let such a scope keep an UNANCHORED prefix arm, which
+    // widens the predicate to every file carrying the prefix whoever owns it - on a path that also
+    // drives permanent deletion. Pinned here so the helper carries its own guard.
+    expect(effectiveTagPrefixArm({ fileTagPrefix: 'orphan:', creatorUserId: '' } as never)).toBeNull();
+    expect(effectiveTagPrefixArm({ fileTagPrefix: 'orphan:' } as never)).toBeNull();
+    // A creator still anchors it, kind or no kind.
+    expect(effectiveTagPrefixArm({ fileTagPrefix: 'orphan:', creatorUserId: 'u1' } as never)).toBe('orphan:');
+  });
+
   it('drops an unusable or reserved-namespace prefix for either kind', () => {
     for (const kind of ['owned', 'registry'] as const) {
       expect(effectiveTagPrefixArm({ kind, fileTagPrefix: 'datalake:', creatorUserId: 'u1' })).toBeNull();

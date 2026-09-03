@@ -140,7 +140,12 @@ export const effectiveTagPrefixArm = (scope: {
   if (!prefix || isReservedTagPrefix(prefix)) return null;
   // An owned lake's prefix is user-chosen and unique only per creator, so with no creator there is
   // nothing safe to match on. A registry prefix is compile-time config and needs no anchor.
-  if (scope.kind === 'owned' && !scope.creatorUserId) return null;
+  //
+  // Tested as "not registry" rather than "is owned" so a scope that names NO kind fails closed. The
+  // type requires one, but callers build these by hand and an unrecognised kind must never be the
+  // thing that keeps an unanchored prefix arm alive - that arm widens the predicate to every file
+  // carrying the prefix, whoever owns it, on a path that also drives permanent deletion.
+  if (scope.kind !== 'registry' && !scope.creatorUserId) return null;
   return prefix;
 };
 
