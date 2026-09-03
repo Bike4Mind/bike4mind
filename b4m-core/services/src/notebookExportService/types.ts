@@ -113,7 +113,11 @@ export interface ExportedArtifact {
   id: string;
   name: string;
   type: string;
-  /** Optional: the artifact body lives in a separate collection and is not joined by this export. */
+  /**
+   * The artifact body, joined from its own collection at the version the artifact points at.
+   * Optional only because a body can be missing at source; an artifact without one cannot be
+   * imported, since `contentHash`/`contentSize`/`contentId` are all derived from it.
+   */
   content?: string;
   createdAt: string; // ISO timestamp
   updatedAt: string; // ISO timestamp
