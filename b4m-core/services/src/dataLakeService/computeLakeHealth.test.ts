@@ -257,6 +257,99 @@ describe('computeLakeHealth membership dimension (#2245)', () => {
     expect(result.membership.scope).toEqual({ creatorUserId: 'u1', fileTagPrefix: 'acme:' });
   });
 
+  it('scopes a REGISTRY lake as registry, and discloses the arm that actually ran', async () => {
+    // The defect this pins: a hardcoded DATA_LAKES lake has no backing document, so its synthetic
+    // one carries createdByUserId ''. An `owned` scope therefore fails closed to meta-tag-only in
+    // buildDataLakeMembershipFilter - dropping the prefix arm, which on a registry lake is the OPEN
+    // one those lakes are largely made of - while a disclosure read off the lake document still
+    // named `opti:`. The report then read as "there is a prefix arm and nothing came through it".
+    const registryLake = {
+      ...lake,
+      id: 'opti-knowledge',
+      datalakeTag: 'datalake:opti-knowledge',
+      fileTagPrefix: 'opti:',
+      createdByUserId: '',
+    };
+    const adapters = makeAdapters([], [row({ arm: 'prefix' })]);
+
+    const result = await computeLakeHealth(registryLake, adapters as never);
+
+    for (const read of [
+      adapters.db.fabFiles.findDataLakeMembershipMembers,
+      adapters.db.fabFiles.findDataLakeHealthMembers,
+    ]) {
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'registry', datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:' }),
+        expect.any(Number)
+      );
+    }
+    // '' is neither documented state for creatorUserId; a registry lake has no creator to anchor to.
+    expect(result.membership.scope).toEqual({ creatorUserId: null, fileTagPrefix: 'opti:' });
+  });
+
+  it('discloses no prefix arm when the membership filter would drop the one the lake carries', async () => {
+    // A reserved-namespace prefix is dropped by buildDataLakeMembershipFilter because it would match
+    // every OTHER lake's membership tag. Deriving the disclosure from the lake document would claim
+    // an arm that never ran - the same class of lie as the registry case, reached a different way.
+    const reservedPrefixLake = { ...lake, fileTagPrefix: 'datalake:' };
+
+    const result = await computeLakeHealth(reservedPrefixLake, makeAdapters([], [row()]) as never);
+
+    expect(result.membership.scope).toEqual({ creatorUserId: 'u1', fileTagPrefix: null });
+  });
+
+  it('runs the health and membership reads concurrently', async () => {
+    // Independent reads over one scope; sequencing them doubled the wall clock on a lake near the
+    // scan bound. Pinned by observing that the second read starts before the first resolves.
+    let healthStarted = false;
+    let membershipStartedBeforeHealthResolved = false;
+    const adapters = makeAdapters([], []);
+    adapters.db.fabFiles.findDataLakeHealthMembers = vi.fn(async () => {
+      healthStarted = true;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return [];
+    });
+    adapters.db.fabFiles.findDataLakeMembershipMembers = vi.fn(async () => {
+      membershipStartedBeforeHealthResolved = healthStarted;
+      return [];
+    });
+
+    await computeLakeHealth(lake, adapters as never);
+
+    expect(membershipStartedBeforeHealthResolved).toBe(true);
+  });
+
+  it('caps a duplicate group members array but keeps an exact memberCount', async () => {
+    // maxGroups bounds the group LIST; without a per-group cap one shared file name could ship up to
+    // MEMBER_SCAN_LIMIT member objects. The sibling drill-down (affectedMembers) already caps at 200
+    // with an exact count beside it, and this must not imply fewer members than there are.
+    const rows = Array.from({ length: 250 }, (_, i) =>
+      row({ fabFileId: `f${i}`, createdAt: new Date(2026, 0, 1, 0, 0, i) })
+    );
+
+    const result = await computeLakeHealth(lake, makeAdapters([], rows) as never);
+
+    const group = result.membership.duplicateGroups[0];
+    expect(group.members).toHaveLength(200);
+    expect(group.memberCount).toBe(250);
+    expect(result.membership.duplicateMemberCount).toBe(250);
+  });
+
+  it('flags membership.scanTruncated and logs which end was cut when the scan is bounded', async () => {
+    // The membership truncation path had no coverage: the existing truncation test passes HEALTH
+    // members while membershipRows defaults to [], so membership.scanTruncated was false everywhere.
+    const rows = Array.from({ length: 25_001 }, (_, i) => row({ fabFileId: `f${i}`, fileName: `f${i}.pdf` }));
+    const adapters = makeAdapters([], rows);
+
+    const result = await computeLakeHealth(lake, adapters as never);
+
+    expect(result.membership.scanTruncated).toBe(true);
+    expect(result.membership.totalMembers).toBe(25_000);
+    // The bias is directional and adverse, so the warning has to say so - the members outside an
+    // _id-ascending window are the newest, which is the generation a re-upload creates.
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('OLDEST'));
+  });
+
   it('never auto-collapses two chunkless members carrying null hashes', async () => {
     // End-to-end guard on the trap: two images share serverTextHash null, and they are also exactly
     // the members health drops. If membership ever reused the health rows OR compared nulls, this
