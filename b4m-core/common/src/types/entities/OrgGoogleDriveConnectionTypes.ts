@@ -96,10 +96,12 @@ export interface IOrgGoogleDriveConnection {
   activeIngestBatchId?: string;
 
   /**
-   * One-time-use companion to `activeIngestBatchId`: the CAS value each slice's adoptSyncClaim call
-   * must present, rotated to a fresh value on every successful adopt/renew. `activeIngestBatchId`
-   * cannot itself serve as that CAS value - it stays fixed for the whole chain (it also names the
-   * batch document to resume) - so two deliveries of one continuation message would otherwise both
+   * The CAS value identifying whoever currently holds the 'syncing' claim: minted by claimForSync,
+   * rotated to a fresh value on every successful adopt/renew, and cleared on every release. Each slice
+   * must present the value it was issued to adoptSyncClaim or renewSyncClaim, and consuming it is what
+   * makes those a real compare-and-set. `activeIngestBatchId` cannot serve as that value - it is absent
+   * until a chain's first renew names a batch, and fixed for the whole chain afterwards (it also names
+   * the batch document to resume) - so two deliveries of one continuation message would otherwise both
    * match it and both win. Only meaningful while status === 'syncing'.
    */
   ingestClaimToken?: string;
@@ -251,9 +253,12 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * `syncClaimedAt`) iff the connection is idle ('connected') OR its existing 'syncing' claim is
    * STALE (older than the Lambda timeout) - so a process that died mid-sync can't wedge it forever,
    * and a claim never lands OVER a credential_error/needs_reconnect state (which a later release
-   * would erase). Returns whether THIS caller won the claim; exactly one concurrent run proceeds.
+   * would erase). Exactly one concurrent run proceeds.
+   *
+   * Returns the freshly-minted `ingestClaimToken` identifying this claim, or null if the claim was
+   * lost. The winner must carry that token into its own renewSyncClaim, which compare-and-sets on it.
    */
-  claimForSync(id: string): Promise<boolean>;
+  claimForSync(id: string): Promise<string | null>;
 
   /**
    * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
@@ -272,11 +277,13 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * Hold the claim across a slice boundary: re-stamps `syncClaimedAt` (so the stale-claim window never
    * elapses mid-chain), records the batch the next slice must present to adopt it, and mints a fresh
    * `ingestClaimToken` for that same slice to present. Guarded on 'syncing', and a real compare-and-set
-   * on `expectedToken` (the token THIS run currently holds for the chain, or omitted on a first slice
-   * that never held one) so a caller that already lost the claim to a reclaim/adopt cannot re-point it
-   * back at a chain nobody else is running. Returns the minted token on success, or null.
+   * on `expectedToken` - the token THIS run holds, minted by its own claimForSync or rotated onto it by
+   * adoptSyncClaim - so a caller that already lost the claim to a reclaim/adopt/disconnect cannot
+   * re-point the connection back at a chain nobody else is running. Required for that reason: it is the
+   * only field that distinguishes the holder, since the batch id is absent on a first slice and fixed
+   * for the whole of a later one. Returns the minted token on success, or null.
    */
-  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null>;
+  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null>;
 
   /**
    * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'

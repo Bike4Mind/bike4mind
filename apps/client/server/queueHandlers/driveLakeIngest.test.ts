@@ -168,9 +168,10 @@ describe('driveLakeIngest consumer', () => {
       organizationId: 'org1',
       driveFolderId: 'FOLDER',
     });
-    h.claimForSync.mockResolvedValue(true);
-    // adoptSyncClaim/renewSyncClaim now return the freshly-rotated token (or null on failure) rather
-    // than a bare boolean - see OrgGoogleDriveConnection.ingestClaimToken.
+    // claimForSync/adoptSyncClaim/renewSyncClaim all return the freshly-minted or -rotated claim
+    // token (or null on failure) rather than a bare boolean - see
+    // OrgGoogleDriveConnection.ingestClaimToken.
+    h.claimForSync.mockResolvedValue('token-claim');
     h.adoptSyncClaim.mockResolvedValue('token-adopt');
     h.renewSyncClaim.mockResolvedValue('token-renew');
     h.findDriveFileIdsByBatchId.mockResolvedValue([]);
@@ -229,7 +230,7 @@ describe('driveLakeIngest consumer', () => {
   });
 
   it('is a cheap no-op when the claim is lost and there is nothing in flight to defer behind', async () => {
-    h.claimForSync.mockResolvedValue(false);
+    h.claimForSync.mockResolvedValue(null);
     // Default connection has no 'syncing' status, so this is a duplicate/errored case, not a genuine
     // second sync - drop it (do not re-enqueue) and do not release a claim it does not own.
     await run();
@@ -240,7 +241,7 @@ describe('driveLakeIngest consumer', () => {
   });
 
   it('defers a genuine second sync (re-enqueue with delay) when a real run is in flight', async () => {
-    h.claimForSync.mockResolvedValue(false);
+    h.claimForSync.mockResolvedValue(null);
     h.connFindById.mockResolvedValue({
       id: 'conn1',
       status: 'syncing', // another run genuinely holds the claim
@@ -261,7 +262,7 @@ describe('driveLakeIngest consumer', () => {
   });
 
   it('stops deferring once the redrive bound is hit (cannot spin)', async () => {
-    h.claimForSync.mockResolvedValue(false);
+    h.claimForSync.mockResolvedValue(null);
     h.connFindById.mockResolvedValue({
       id: 'conn1',
       status: 'syncing',
@@ -736,7 +737,7 @@ describe('driveLakeIngest consumer', () => {
       expect(h.upload).toHaveBeenCalledTimes(1);
       // The claim is HANDED to the next slice, never released: a poll slipping in between slices would
       // start a competing walk that duplicates the tail, which is the same failure by another route.
-      expect(h.renewSyncClaim).toHaveBeenCalledWith('conn1', 'batch1', undefined);
+      expect(h.renewSyncClaim).toHaveBeenCalledWith('conn1', 'batch1', 'token-claim');
       expect(h.updateHealth).not.toHaveBeenCalled();
       expect(h.releaseSyncClaim).not.toHaveBeenCalled();
       expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', {
@@ -913,6 +914,39 @@ describe('driveLakeIngest consumer', () => {
       expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ driveFileId: 'd2' });
     });
 
+    it('renews against the token its FRESH claim minted, not the one its lost adopt presented', async () => {
+      // A continuation whose adopt lost and that fell back to claimForSync now holds a DIFFERENT claim
+      // than the payload names. renewSyncClaim compare-and-sets on the token the connection actually
+      // stores, so presenting the payload's consumed one would fail every renew and collapse the chain
+      // to a single slice - it has to carry the freshly-minted token forward instead.
+      h.adoptSyncClaim.mockResolvedValue(null);
+      h.walkFolder.mockResolvedValue(walkOf('d1', 'd2', 'd3'));
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 3,
+        skippedFiles: 0,
+        files: [],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run(
+        { connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' },
+        contextAllowingFiles(1)
+      );
+
+      expect(h.renewSyncClaim).toHaveBeenCalledWith('conn1', 'batch1', 'token-claim');
+      expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', {
+        connectionId: 'conn1',
+        resumeBatchId: 'batch1',
+        slice: 2,
+        claimToken: 'token-renew',
+      });
+    });
+
     it('does not re-fetch a driveFileId the chain has already permanently skipped', async () => {
       // skip() mints no FabFile, so a permanently-unsupported file is invisible to
       // findDriveFileIdsByBatchId - without subtracting skippedDriveFileIds too, a chain would
@@ -1046,7 +1080,7 @@ describe('driveLakeIngest consumer', () => {
       // first-slice sync on its deferred retry - that would carry no resumeBatchId, subtract
       // nothing, and re-ingest the still-`pending` tail as duplicate ADDs.
       h.adoptSyncClaim.mockResolvedValue(null);
-      h.claimForSync.mockResolvedValue(false);
+      h.claimForSync.mockResolvedValue(null);
       h.connFindById.mockResolvedValue({
         id: 'conn1',
         status: 'syncing',

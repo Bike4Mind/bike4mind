@@ -293,7 +293,7 @@ class OrgGoogleDriveConnectionRepository
    * Guarded ingest lock: atomically flip status to 'syncing' (stamping `syncClaimedAt`) only when the
    * connection is idle ('connected') OR its existing 'syncing' claim is STALE. A single atomic
    * compare-and-set - a losing concurrent caller matches nothing and gets `null`, so exactly one run
-   * proceeds. Returns whether THIS caller claimed it.
+   * proceeds.
    *
    * Deliberately NOT `$ne: 'syncing'`: that also claimed OVER a `credential_error`/`needs_reconnect`
    * connection, and a later release would erase the real error state (leaving it reading healthy with
@@ -305,10 +305,14 @@ class OrgGoogleDriveConnectionRepository
    * The staleness arm is SPLIT by whether the claim carries a chain token, because the two measure
    * different durations and stealing a live chain is far more damaging than stealing an idle claim -
    * see CHAINED_SYNC_CLAIM_STALE_MS.
+   *
+   * Returns the freshly-minted `ingestClaimToken` this claim is identified by (null if the claim was
+   * lost). The caller must carry it into its own renewSyncClaim, which compare-and-sets on it.
    */
-  async claimForSync(id: string): Promise<boolean> {
+  async claimForSync(id: string): Promise<string | null> {
     const staleBefore = new Date(Date.now() - SYNC_CLAIM_STALE_MS);
     const chainedStaleBefore = new Date(Date.now() - CHAINED_SYNC_CLAIM_STALE_MS);
+    const claimToken = randomUUID();
     const claimed = await this.model.findOneAndUpdate(
       {
         _id: id,
@@ -323,15 +327,17 @@ class OrgGoogleDriveConnectionRepository
           },
         ],
       },
-      // A fresh claim starts no chain, so any continuation id/token left by a dead one is cleared
-      // here - otherwise a stale message could still present it to adoptSyncClaim and join a chain
-      // that is no longer running.
+      // A fresh claim starts no chain, so the batch pointer left by a dead one is cleared - otherwise
+      // a stale message could still present it to adoptSyncClaim and join a chain that is no longer
+      // running. The token is REPLACED rather than cleared, for the same reason: it is what makes
+      // renewSyncClaim a compare-and-set even before this claim has named a batch, so leaving it null
+      // would let the dead chain's last slice renew straight back over this one.
       {
-        $set: { status: 'syncing', syncClaimedAt: new Date() },
-        $unset: { activeIngestBatchId: '', ingestClaimToken: '' },
+        $set: { status: 'syncing', syncClaimedAt: new Date(), ingestClaimToken: claimToken },
+        $unset: { activeIngestBatchId: '' },
       }
     );
-    return claimed !== null;
+    return claimed !== null ? claimToken : null;
   }
 
   /**
@@ -360,36 +366,36 @@ class OrgGoogleDriveConnectionRepository
 
   /**
    * Hold the claim across a slice boundary; guarded on 'syncing' so it cannot resurrect a released one.
-   * The later-slice arm (activeIngestBatchId AND expectedToken must both still match) is a real
-   * compare-and-set for that case, for the same reason adoptSyncClaim's is: `expectedToken` closes the
-   * gap the batch id alone leaves, since the batch id never changes across a whole chain and so cannot
-   * tell "my own live chain" apart from "a chain I used to hold and lost to a reclaim/disconnect/
-   * reconnect" (both have the same activeIngestBatchId once a new owner renews or adopts).
+   * `expectedToken` is the one-time token this run currently holds - minted by its own claimForSync, or
+   * rotated onto it by adoptSyncClaim - and it is REQUIRED, because it is the whole compare-and-set.
+   * Every path that takes the claim away either rotates that token to a value this caller cannot know
+   * (claimForSync, adoptSyncClaim, a rival renew) or clears it outright (releaseSyncClaim, updateHealth
+   * leaving 'syncing'), so a caller that already lost the claim presents a token nobody stores any more
+   * and matches nothing.
    *
-   * The no-chain-yet arm is NOT a compare-and-set against the caller's own `activeIngestBatchId`: it
-   * matches any doc currently sitting at null/null regardless of which batch id the caller passed in,
-   * so a stale first-slice caller (e.g. an abandoned attempt whose crash-retry already produced a fresh,
-   * unrelated claim on the same connection) can still win it and redirect the connection to ITS batch
-   * id. Known gap, tracked separately rather than closed here - not blocking because the un-chained
-   * `updateHealth` path already has an equivalent window on main.
+   * The batch id cannot carry that guard on its own, in either direction: it is ABSENT on a first slice
+   * (which is renewing precisely to name its batch for the first time), and on a later slice it is
+   * fixed for the whole chain, so it cannot tell "my own live chain" apart from "a chain I used to hold
+   * and lost to a reclaim/disconnect/reconnect" - both read back the same id once a new owner renews or
+   * adopts. Hence the $or is only over the batch pointer, and describes the two states a legitimate
+   * token-holder can be in:
+   *   - null - a first slice straight off its own claimForSync, about to point the connection at the
+   *     batch it just planned (also the state a continuation lands in when its adopt lost and it fell
+   *     back to a fresh claim);
+   *   - the same id - a later slice re-renewing the chain it is already running.
    *
    * Always mints a fresh `ingestClaimToken` on success and returns it - the caller carries it into the
    * next slice's continuation payload for adoptSyncClaim to present.
    */
-  async renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null> {
+  async renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken: string): Promise<string | null> {
     const rotatedToken = randomUUID();
     const renewed = await this.model.findOneAndUpdate(
       {
         _id: id,
         status: 'syncing',
-        $or: [
-          // No chain yet: the first slice, right after its own fresh claimForSync (which unsets both
-          // fields). Not gated on expectedToken - a first slice never held one to present.
-          { activeIngestBatchId: { $in: [null] }, ingestClaimToken: { $in: [null] } },
-          // A later slice renewing its own still-held chain: both the id AND the token must still match
-          // what this run was issued, or the claim moved on without us.
-          ...(expectedToken ? [{ activeIngestBatchId, ingestClaimToken: expectedToken }] : []),
-        ],
+        ingestClaimToken: expectedToken,
+        // $in: [null] matches a missing field too - a claim that has not named a batch yet.
+        $or: [{ activeIngestBatchId: { $in: [null] } }, { activeIngestBatchId }],
       },
       { $set: { syncClaimedAt: new Date(), activeIngestBatchId, ingestClaimToken: rotatedToken } }
     );
