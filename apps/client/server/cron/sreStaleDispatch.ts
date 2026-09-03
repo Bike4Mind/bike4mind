@@ -52,7 +52,7 @@ export async function handler() {
 
       // Use atomicTransition (CAS) instead of updateStatus to prevent race with
       // Surgeon callback that may have already transitioned fixing -> fixed.
-      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, 'fixing', 'failed', {
+      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, doc.repoSlug, 'fixing', 'failed', {
         errorMessage,
       });
       if (!result) continue; // Callback already transitioned it — skip
@@ -71,7 +71,7 @@ export async function handler() {
   const staleAnalyzing = await sreErrorTrackingRepository.findStaleByStatus('analyzing', ANALYZING_TIMEOUT_MINUTES);
   for (const doc of staleAnalyzing) {
     try {
-      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, 'analyzing', 'failed', {
+      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, doc.repoSlug, 'analyzing', 'failed', {
         errorMessage: 'Analysis timed out — Lambda may have crashed',
       });
       if (result) {
@@ -90,9 +90,15 @@ export async function handler() {
   );
   for (const doc of staleRevisions) {
     try {
-      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, 'revision_requested', 'failed', {
-        errorMessage: 'Revision timed out — Lambda may have crashed',
-      });
+      const result = await sreErrorTrackingRepository.atomicTransition(
+        doc.id,
+        doc.repoSlug,
+        'revision_requested',
+        'failed',
+        {
+          errorMessage: 'Revision timed out - Lambda may have crashed',
+        }
+      );
       if (result) {
         transitioned++;
         logger.warn('[SRE-STALE-DISPATCH] Revision timed out', { trackingId: doc.id });
@@ -133,6 +139,7 @@ export async function handler() {
 
       const result = await sreErrorTrackingRepository.atomicTransition(
         doc.id,
+        docRepoSlug,
         'awaiting_approval',
         'approval_expired',
         {
