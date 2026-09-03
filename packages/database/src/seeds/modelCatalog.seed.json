@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-20T13:26:52.509Z",
-  "notice": "Fallback defaults last maintained on 2026-08-20. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-09-03T08:39:26.666Z",
+  "notice": "Fallback defaults last maintained on 2026-09-03. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
