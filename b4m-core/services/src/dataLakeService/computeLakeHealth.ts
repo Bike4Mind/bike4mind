@@ -1,6 +1,8 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
+  findDuplicateMembers,
   resolveLakeHealthPolicy,
+  selectLakeHealthMembers,
   summarizeLakeHealth,
   type IAdminSettingsRepository,
   type IDataLakeDocument,
@@ -26,18 +28,32 @@ const MEMBER_SCAN_LIMIT = 25_000;
 /** How many failing members the report carries for the drill-down. The count is always exact. */
 const AFFECTED_MEMBERS_RETURNED = 200;
 /**
- * How many duplicate GROUPS the report carries. Sorted worst-first before the cap (see
- * summarizeLakeMembership), so a truncated list holds the groups needing a human rather than an
- * arbitrary slice.
+ * How many duplicate-fileName groups, and how many members per group, the report carries. Both the
+ * group count and each group's member count stay exact regardless. Bounded because neither dimension
+ * of `groups` is capped by MEMBER_SCAN_LIMIT: a connector-synced lake full of generic names (`scan.pdf`,
+ * `index.html`) can produce thousands of groups, and one giant group can hold every scanned member -
+ * uncapped, either shape can push the response into multiple megabytes on a lake this endpoint (an
+ * `isPublic` lake is reader-visible app-wide) can be asked to report on repeatedly.
  */
-const DUPLICATE_GROUPS_RETURNED = 100;
+const DUPLICATE_GROUPS_RETURNED = 50;
+const DUPLICATE_MEMBERS_PER_GROUP = 20;
+/**
+ * The same two bounds for the MEMBERSHIP dimension, which reports duplicates over its own (wider)
+ * population - see the note on LakeHealthApiResponse.membership about the two overlapping. Prefixed
+ * because the unprefixed names above belong to `duplicateMembers`; if that redundancy is resolved,
+ * one of these two pairs goes with it.
+ *
+ * Groups are sorted worst-first before the cap (see summarizeLakeMembership), so a truncated list
+ * holds the groups needing a human rather than an arbitrary slice.
+ */
+const MEMBERSHIP_GROUPS_RETURNED = 100;
 /**
  * How many MEMBERS each of those groups carries. Capping groups alone left the payload bounded only
  * by MEMBER_SCAN_LIMIT, since one file name shared by N members is a single group holding N member
  * objects. Mirrors AFFECTED_MEMBERS_RETURNED, and like it every group keeps an exact `memberCount`
  * beside the capped array so no reader can be told there are fewer.
  */
-const DUPLICATE_GROUP_MEMBERS_RETURNED = 200;
+const MEMBERSHIP_GROUP_MEMBERS_RETURNED = 200;
 
 export interface ComputeLakeHealthAdapters {
   db: {
@@ -58,6 +74,13 @@ export interface ComputeLakeHealthAdapters {
  * `inherited` platform/owner `DefaultChunkSize` (epic decision 5), resolved through the SAME
  * `deriveServeCharBudget` the serve path uses, so predicate P4 ("serve cap >= policy size") cannot
  * disagree with what retrieval actually does.
+ *
+ * Also reports duplicate members (#2239): a lake can pass all four predicates - every member
+ * vectorized, chunk-consistent, vector-bearing, under the serve cap - while carrying two upload
+ * generations of the same documents, which is measurably healthy and wrong. `findDuplicateMembers`
+ * groups this same member scan by exact fileName; report-only, same as the rest of this module.
+ * `groups` and each group's `members` are capped here for payload size (`DUPLICATE_GROUPS_RETURNED`,
+ * `DUPLICATE_MEMBERS_PER_GROUP`); the counts stay exact regardless.
  */
 export async function computeLakeHealth(
   lake: Pick<
@@ -105,6 +128,7 @@ export async function computeLakeHealth(
       affectedMemberCount: 0,
       scanTruncated: false,
       membership: summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) }),
+      duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
       inconsistency: storedInconsistency(lake),
     };
   }
@@ -127,12 +151,24 @@ export async function computeLakeHealth(
   }
 
   const report = summarizeLakeHealth(members, policy);
+  // Same admitted-members filter `summarizeLakeHealth` grades over, applied here explicitly rather
+  // than relied on implicitly: the raw scan and the health report agree on membership by
+  // construction, not because the DB `$match` happens to already filter it.
+  const duplicates = findDuplicateMembers(selectLakeHealthMembers(members));
   return {
     ...report,
     affectedMembers: report.affectedMembers.slice(0, AFFECTED_MEMBERS_RETURNED),
     affectedMemberCount: report.affectedMembers.length,
     scanTruncated,
     membership,
+    duplicateMembers: {
+      memberCount: duplicates.memberCount,
+      groupCount: duplicates.groupCount,
+      groups: duplicates.groups.slice(0, DUPLICATE_GROUPS_RETURNED).map(g => ({
+        ...g,
+        members: g.members.slice(0, DUPLICATE_MEMBERS_PER_GROUP),
+      })),
+    },
     // READ, never computed here: detection needs chunk text and this function may not touch the chunk
     // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
     inconsistency: storedInconsistency(lake),
@@ -210,7 +246,7 @@ async function computeMembership(
   return summarizeLakeMembership(truncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows, {
     scope: membershipScopeDisclosure(scope),
     scanTruncated: truncated,
-    maxGroups: DUPLICATE_GROUPS_RETURNED,
-    maxGroupMembers: DUPLICATE_GROUP_MEMBERS_RETURNED,
+    maxGroups: MEMBERSHIP_GROUPS_RETURNED,
+    maxGroupMembers: MEMBERSHIP_GROUP_MEMBERS_RETURNED,
   });
 }

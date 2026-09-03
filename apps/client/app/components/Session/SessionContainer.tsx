@@ -67,9 +67,6 @@ interface SessionLayoutProps {
   dockedChatTitle?: React.ReactNode;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
-  /** When true, the top toolbar bar renders transparent (no solid background) so a surface's
-   *  own backdrop shows through - used by the chat-first Data Lake surface. (#836) */
-  transparentTop?: boolean;
 }
 
 /**
@@ -192,7 +189,6 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   floatingChatHeaderActions,
   dockedChatTitle,
   onSessionCreated,
-  transparentTop,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
@@ -527,11 +523,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                     // a rule under it just cuts the pane in two.
                     borderBottom: isKnowledgeViewerOpen ? '1px solid' : 'none',
                     borderColor: 'divider',
-                    background: transparentTop
-                      ? 'transparent'
-                      : isKnowledgeViewerOpen
-                        ? theme.palette.background.level1
-                        : theme.palette.background.body,
+                    background: isKnowledgeViewerOpen ? theme.palette.background.level1 : theme.palette.background.body,
                     zIndex: 1,
                     padding: '8px 8px 16px',
                     display: {

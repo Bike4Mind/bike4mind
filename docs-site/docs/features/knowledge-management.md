@@ -415,9 +415,15 @@ opens a compliance surface answering the two questions a lake owner is asked fir
     exists only for a retrieval surface that emits access events, the audit write is best-effort by
     design, and events age out on their own retention window. An empty history means "no reads
     recorded", not "nobody read this lake".
+  - **Candidate-cap pressure** - how many of those reads ran against a truncated candidate list,
+    because more documents matched than the retrieval candidate cap considers. Shown as a pair
+    ("N of M reported reads"), since only some retrieval surfaces report it at all: "not reported
+    for this window" means nothing measured it, not that every read saw the whole library. The cap
+    applies to a turn's entire candidate list, across every source that turn could read, so read
+    this as reads of this lake that hit the cap - not as this lake causing it.
 
 Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
-same three sections plus a note when the history was truncated.
+same four sections plus a note when the history was truncated.
 
 ### Transferring a data lake to someone else
 

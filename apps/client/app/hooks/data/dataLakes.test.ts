@@ -65,6 +65,7 @@ import {
   useSetLakeVisibility,
   useArchiveDataLake,
   useTransferLakeOwnership,
+  usePurgeDataLakeDocument,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -917,5 +918,57 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+});
+
+describe('usePurgeDataLakeDocument', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { invalidate, ...renderHook(() => usePurgeDataLakeDocument('lake1'), { wrapper }) };
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it('invalidates by ROOT prefix, because the destruction is not lake-scoped', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: { verified: true, chunksBefore: 3, chunksRemaining: 0 },
+    });
+    const { invalidate, result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    // Not ['dataLakeFiles','lake1'] / ['dataLakeHealth','lake1']: every OTHER lake that held the
+    // document loses a file and the chunk rollups health is computed from, not just this one.
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles']));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth']));
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
+    expect(keys).toContain(JSON.stringify(['file-tags']));
+    // The document leaves the owner's Files list too, so that cache is stale as well.
+    expect(keys).toContain(JSON.stringify(['fabFiles']));
+    // Scoped to the purged-FROM lake: a purge can move its rebuild badge and, via
+    // recomputeLakeStats' draft -> active flip, write a config-history row.
+    expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
+
+  it("surfaces the server's refusal, not axios' status line, on the irreversible door", async () => {
+    // A mid-sweep failure is exactly where "Request failed with status code 500" cannot tell the
+    // owner whether their document is half destroyed.
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, "Only the file's owner can permanently delete this document"));
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync('f1').catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith("Only the file's owner can permanently delete this document");
   });
 });

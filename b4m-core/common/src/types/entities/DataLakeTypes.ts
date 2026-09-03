@@ -23,6 +23,12 @@ export const DATA_LAKE_STATUSES = [
   'active',
   'archiving',
   'archived',
+  // Two transitional statuses for the two reversal axes, deliberately NOT one shared 'restoring'.
+  // They used to be the same value, and because each axis admits its own status for crash re-entry,
+  // an unarchive and a restore-from-deleted could both hold it and both settle 'active' - a
+  // terminal settle conditional on the claimed status passes for BOTH claimants and so cannot
+  // separate them. Distinct values make the two axes mutually exclusive at the claim.
+  'unarchiving',
   'restoring',
   'deleting',
   'deleted',
@@ -39,6 +45,22 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /** Stable (non-transitional) lake statuses. */
 export const DATA_LAKE_STABLE_STATUSES: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleted'];
+
+/**
+ * What a terminal lifecycle settle may write alongside the status it settles on: the spent
+ * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
+ * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
+ * make it a general update that happens to be conditional.
+ *
+ * The mark fields are `null`-only, never a Date: a settle clears a spent stamp, and the only writer
+ * that may SET one is the set-if-unset claim (`claimFilesArchivedAt`/`claimFilesDeletedAt`).
+ */
+export type LakeSettleFields = {
+  status: DataLakeStatus;
+  filesArchivedAt?: null;
+  filesDeletedAt?: null;
+  lastUpdatedByUserId?: string;
+};
 
 /** Per-batch policy for files whose content hash already exists in the lake. */
 export type ConflictResolution = 'skip' | 'update' | 'duplicate';
@@ -472,15 +494,33 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   claimDeleting(id: string): Promise<boolean>;
   /**
-   * Enter `restoring` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
+   * Enter `unarchiving` from an ARCHIVED lake - the archive-axis twin of `claimRestoring`, and
    * claimed for the same reason: `unarchiveDataLake` pre-checks a document it read moments earlier,
    * and `deleteDataLake` also accepts `archived`, so a delete landing in that gap must make this
    * LOSE rather than be overwritten by it. A plain `$set` there leaves the lake `active` with every
    * member soft-deleted and `restoreDeletedDataLake` refusing it, which strands the files.
-   * Re-entrant from `restoring` itself so a crashed prior attempt can retry. Returns whether this
-   * caller may proceed.
+   * Re-entrant from `unarchiving` itself so a crashed prior attempt can retry.
+   *
+   * Also admits the legacy shared `restoring`, which is what an archive-axis reversal in flight
+   * across the deploy that split the two statuses is sitting in. Claiming it CONVERTS that lake
+   * onto this axis, so a delete-axis restore holding the same value loses its own terminal settle
+   * rather than both settling `active`. Once no lake predates the split this entry can go.
    */
   claimUnarchiving(id: string): Promise<boolean>;
+  /**
+   * Settle a lake onto its TERMINAL status, conditional on it still holding the transitional status
+   * this caller claimed - the closing half of the `claim*` pattern above.
+   *
+   * Claiming the transitional status stops two operations from STARTING on top of each other; it
+   * does not stop one that already started from settling over the other's result. Both sweeps run
+   * to completion either way, so what this decides is which operation gets to RECORD its outcome:
+   * the one still holding its claim. The loser reports a conflict rather than silently writing a
+   * status whose file state belongs to somebody else.
+   *
+   * Resolves the settled document, or `null` when the lake has moved on (lost) or vanished - the
+   * caller re-reads to tell those apart, since only the loss path needs the distinction.
+   */
+  settleLifecycleStatus(id: string, from: DataLakeStatus, set: LakeSettleFields): Promise<IDataLakeDocument | null>;
   /**
    * Release `purging -> deleted` after a sweep was refused by its own guards, so the lake becomes
    * visible and retryable again instead of stranded in a state no list shows (#1744). Conditional
@@ -583,6 +623,13 @@ export interface IDataLakeBatch {
    * schema comment on this field for why it's tracked separately. */
   processingFailedFiles: number;
   skippedFiles: number;
+  /**
+   * Drive-ingest-only: driveFileIds skip() has already counted into `skippedFiles` for THIS batch.
+   * A skip mints no FabFile, so it is invisible to the ordinary alreadyIngested subtraction
+   * (findDriveFileIdsByBatchId) - without recording it here, a chain re-diffing the same
+   * permanently-unsupported file on every slice would re-fetch and re-count it once per slice.
+   */
+  skippedDriveFileIds?: string[];
 
   // Size tracking
   totalSizeBytes: number;
@@ -663,6 +710,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and
+   * increment `skippedFiles`, gated on that driveFileId not already being recorded - so a chain
+   * re-diffing the same permanently-unsupported file across several slices counts and subtracts it
+   * exactly once. Returns false (a no-op, not an error) when it was already recorded.
+   */
+  recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean>;
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
    * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
   tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
@@ -707,6 +761,14 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     batchId: string,
     fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
   ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Re-plan a still-active batch's expected file count, guarded like the transitions above. The
+   * multi-run Drive folder ingest is the caller: its batch spans several queue-Lambda invocations, so
+   * the expected total is only known progressively - it is raised whenever a later slice re-walks a
+   * folder that grew, and set exactly when the chain ends, which is what lets the finalize gate
+   * (`vectorized + failed + skipped === totalFiles`) still be reached exactly.
+   */
+  setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null>;
   /**
    * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
    * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
@@ -856,6 +918,58 @@ export interface SyncDelta {
   changedFiles: SyncDeltaChangedFile[];
   removedFiles: SyncDeltaRemovedFile[];
   unchangedFiles: { fileId: string; fileName: string }[];
+}
+
+/**
+ * The evidence a permanent deletion leaves behind: a deletion which silently did nothing and one
+ * that destroyed everything must not look the same to the caller. `chunksRemaining` and
+ * `documentDeleted` are READ BACK after the writes; with `storageObjectDeleted` they are what
+ * `verified` is made of. `retrievalIndexOutcome` is not read back, and `verified` makes no claim
+ * about it.
+ */
+export interface DataLakeDocumentPurgeReceipt {
+  dataLakeId: string;
+  datalakeTag: string;
+  fabFileId: string;
+  fileName: string;
+  /** Chunks the document had before the sweep. Vectors live on the chunks, so this counts both. */
+  chunksBefore: number;
+  /** Chunks still present after it. Anything but 0 means the sweep did not finish. */
+  chunksRemaining: number;
+  /**
+   * Every embedding model the document's vectors were generated under, captured before the chunk
+   * delete - names exactly which vector index the removal had to reach. Empty when unvectorized.
+   */
+  embeddingModels: string[];
+  /** The FabFile row is gone, confirmed by re-reading it. */
+  documentDeleted: boolean;
+  /**
+   * EVERY stored object went - the current one and each prior version's, since an AI-edited file
+   * keeps earlier revisions under their own keys. False means bytes are retained, and the sweep
+   * then leaves the row intact so a retry can still name them; the quota refund is withheld.
+   */
+  storageObjectDeleted: boolean;
+  /** How many stored objects the document had (current revision plus every prior version). */
+  storageObjectsTotal: number;
+  /** How many of them the object store refused. 0 whenever `storageObjectDeleted` is true. */
+  storageObjectsRemaining: number;
+  /**
+   * What happened to the separate retrieval index. NOT read back - the port has no read operation.
+   * `purged`: a wired index accepted the removal without throwing. `collocated`: this deployment
+   * keeps vectors on the chunk documents, so the chunk delete already removed them. `unwired`:
+   * neither, which means this door was left unwired and vectors may survive.
+   */
+  retrievalIndexOutcome: 'purged' | 'collocated' | 'unwired';
+  /**
+   * documentDeleted AND no chunks left AND every stored object gone. The single claim a caller may
+   * repeat back to a user. It does not cover the global EmbeddingCache, which is keyed by content
+   * hash with no file id and so is unreachable from here (shared with the whole-lake purge).
+   */
+  verified: boolean;
+  purgedAt: string;
+  /** The lake's stats after the purge, so a caller can refresh without a second round trip. */
+  fileCount: number;
+  totalSizeBytes: number;
 }
 
 /**

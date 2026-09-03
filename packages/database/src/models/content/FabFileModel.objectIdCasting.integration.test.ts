@@ -8,9 +8,9 @@ import { FabFile, fabFileRepository } from './FabFileModel';
  * Run against a real server because the behaviour under test IS Mongo's casting, not the shape of
  * a query object. Session id arrays are declared `[{ type: String }]` (SessionModel) while these
  * collections are ObjectId-keyed, so every consumer that resolves them by `_id` inherits whatever
- * this file pins down. `services/src/utils/objectIds.ts` guards those consumers with
- * `isObjectIdOrHexString`, and its unit tests stub the throw - which encodes an assumption about
- * Mongo rather than checking it. This is where that assumption is checked.
+ * this file pins down. `db-core/src/utils/mongo.ts` `usableObjectIds` guards those consumers with
+ * `isObjectIdOrHexString`; the service-layer unit tests around it use stubs, which encode an
+ * assumption about Mongo rather than checking it. This is where that assumption is checked.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -84,13 +84,12 @@ describe('choosing the predicate', () => {
 });
 
 describe('FabFileRepository.findAllByIds', () => {
-  /**
-   * Characterisation test, NOT desired behaviour: this method has no shape guard, so a session
-   * holding a legacy id breaks the notebook file list and project-add with a confusing 404 (the
-   * error middleware remaps CastError). Tracked separately from the export fix. When that lands,
-   * this expectation flips to a filtered result - update it deliberately rather than deleting it.
-   */
-  it('characterises: currently throws on a non-castable id instead of skipping it', async () => {
-    await expect(fabFileRepository.findAllByIds([JUNK_ID, liveId])).rejects.toThrow(/Cast to ObjectId failed/);
+  it('returns the rows for the usable ids and skips the rest, rather than throwing', async () => {
+    const rows = await fabFileRepository.findAllByIds([JUNK_ID, liveId]);
+    expect(rows.map(r => String(r.id ?? r._id))).toEqual([liveId]);
+  });
+
+  it('returns nothing when no id is usable, instead of throwing', async () => {
+    expect(await fabFileRepository.findAllByIds([JUNK_ID, TWELVE_CHAR_ID])).toEqual([]);
   });
 });

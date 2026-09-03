@@ -59,34 +59,50 @@ interface ChunkData {
 }
 
 /**
- * Load slug -> accessLevel mapping from help-index.json.
- * Falls back to 'public' if the index doesn't exist or a slug is missing.
+ * Load slug -> accessLevel mapping from help-index.json. Throws if the index
+ * can't be read or parsed: access-level labels gate admin-only content out of
+ * the Help AI chat for non-admin users, so a broken index must fail the build
+ * rather than silently produce chunks that resolveAccessLevel then defaults
+ * to the fail-closed 'admin' level (which would also hide public docs).
  */
-function loadAccessLevelMap(): Map<string, HelpAccessLevel> {
+export function loadAccessLevelMap(indexPath: string = HELP_INDEX_PATH): Map<string, HelpAccessLevel> {
+  const raw = fs.readFileSync(indexPath, 'utf-8');
+  const index = JSON.parse(raw) as HelpIndex;
   const map = new Map<string, HelpAccessLevel>();
-  try {
-    const raw = fs.readFileSync(HELP_INDEX_PATH, 'utf-8');
-    const index = JSON.parse(raw) as HelpIndex;
-    for (const entry of index.entries) {
-      map.set(entry.slug, entry.accessLevel);
-    }
-    console.log(`Loaded access levels for ${map.size} entries from help-index.json`);
-  } catch {
-    console.warn('Could not load help-index.json for access levels — defaulting all chunks to "public"');
+  for (const entry of index.entries) {
+    map.set(entry.slug, entry.accessLevel);
   }
+  console.log(`Loaded access levels for ${map.size} entries from help-index.json`);
   return map;
+}
+
+/**
+ * Resolve a slug's access level, defaulting to the more restrictive 'admin'
+ * when the slug isn't in the map. Fail-closed: an unresolvable slug must
+ * never fall back to 'public', or it bypasses the Help AI chat's admin gate.
+ */
+export function resolveAccessLevel(slug: string, accessLevelMap: Map<string, HelpAccessLevel>): HelpAccessLevel {
+  return accessLevelMap.get(slug) ?? 'admin';
+}
+
+export interface BuildChunksOptions {
+  /** Overridable roots for testing; default to the real repo locations. */
+  contentRoot?: string;
+  indexPath?: string;
 }
 
 /**
  * Process all help articles into chunks ready for embedding.
  * Reads directly from apps/client/public/help-content/ (already filtered and bundled).
  */
-async function buildChunks(): Promise<ChunkData[]> {
-  const accessLevelMap = loadAccessLevelMap();
+export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkData[]> {
+  const contentRoot = opts.contentRoot ?? HELP_CONTENT_ROOT;
+  const indexPath = opts.indexPath ?? HELP_INDEX_PATH;
+  const accessLevelMap = loadAccessLevelMap(indexPath);
   const chunks: ChunkData[] = [];
 
   const files = await glob('**/*.md', {
-    cwd: HELP_CONTENT_ROOT,
+    cwd: contentRoot,
     absolute: true,
   });
 
@@ -101,13 +117,13 @@ async function buildChunks(): Promise<ChunkData[]> {
       continue;
     }
 
-    const relativePath = path.relative(HELP_CONTENT_ROOT, filePath);
+    const relativePath = path.relative(contentRoot, filePath);
     let slug = relativePath.replace(/\.md$/, '');
     if (slug.endsWith('/index')) slug = slug.replace(/\/index$/, '');
     else if (slug === 'index') slug = '';
 
     const title = frontmatter.title as string;
-    const accessLevel = accessLevelMap.get(slug) ?? 'public';
+    const accessLevel = resolveAccessLevel(slug, accessLevelMap);
     const sections = chunkByHeadings(content, title);
 
     for (const section of sections) {
@@ -218,7 +234,10 @@ async function main(): Promise<void> {
   console.log(`  Output: ${OUTPUT_PATH}`);
 }
 
-main().catch(error => {
-  console.error('Failed to vectorize help content:', error);
-  process.exit(1);
-});
+// Only run when invoked directly (not when imported by tests)
+if (process.argv[1] && process.argv[1].endsWith('vectorize-help-content.ts')) {
+  main().catch(error => {
+    console.error('Failed to vectorize help content:', error);
+    process.exit(1);
+  });
+}

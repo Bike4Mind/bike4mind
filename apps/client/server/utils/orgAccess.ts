@@ -12,14 +12,7 @@
 
 import { organizationRepository } from '@bike4mind/database/infra';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { Types } from 'mongoose';
-
-/**
- * Validate MongoDB ObjectId format
- */
-function isValidObjectId(id: string): boolean {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-}
+import { isValidObjectId } from '@server/utils/objectId';
 
 /**
  * Verify user has update access to the organization

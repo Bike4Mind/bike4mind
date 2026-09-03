@@ -22,7 +22,7 @@ import type {
   IToolDocument,
 } from '@bike4mind/common';
 
-import { usableObjectIds } from '../utils/objectIds';
+import { usableSessionIds } from '../utils/objectIds';
 
 /** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
 type ExportQuery = Record<string, unknown>;
@@ -328,7 +328,7 @@ export class NotebookExportService {
     knowledgeIds: string[],
     options: NotebookExportOptions
   ): Promise<ExportedKnowledgeFile[]> {
-    const usableIds = usableObjectIds(knowledgeIds, 'knowledge', this.adapters.logger);
+    const usableIds = usableSessionIds(knowledgeIds, 'knowledge', this.adapters.logger);
     if (usableIds.length === 0) return [];
 
     const knowledgeFiles = await this.adapters.knowledgeRepository.find({
@@ -434,9 +434,9 @@ export class NotebookExportService {
 
   private async exportTools(toolIds: string[], options: NotebookExportOptions): Promise<ExportedTool[]> {
     // `_id` is correct here, unlike artifacts: tools and agents are ObjectId-keyed. Sessions
-    // imported before the id fix can still hold uuids, which usableObjectIds drops rather than
+    // imported before the id fix can still hold uuids, which usableSessionIds drops rather than
     // letting them cast-throw.
-    const usableIds = usableObjectIds(toolIds, 'tool', this.adapters.logger);
+    const usableIds = usableSessionIds(toolIds, 'tool', this.adapters.logger);
     if (usableIds.length === 0) return [];
 
     const tools = await this.adapters.toolRepository.find({
@@ -451,7 +451,7 @@ export class NotebookExportService {
   }
 
   private async exportAgents(agentIds: string[], options: NotebookExportOptions): Promise<ExportedAgent[]> {
-    const usableIds = usableObjectIds(agentIds, 'agent', this.adapters.logger);
+    const usableIds = usableSessionIds(agentIds, 'agent', this.adapters.logger);
     if (usableIds.length === 0) return [];
 
     const agents = await this.adapters.agentRepository.find({

@@ -35,10 +35,12 @@ import {
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
+  PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
+  PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder } from './tools/ToolBuilder';
+import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -1386,6 +1388,100 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
     });
 
+    // The reservation figure itself, at the production call site. The cap tests above run a
+    // 100-token output window, where reservationOutputTokens is the identity - so reverting
+    // this call site to the raw ceiling would pass them untouched. Input priced at $0 so the
+    // hold depends only on the output figure, whatever the assembled prompt tokenizes to.
+    const RESERVATION_MAX_TOKENS = 100_000;
+    const reservationOrgSetup = (extraModelFields: Record<string, unknown> = {}) => {
+      const setup = capOrgSetup();
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 128_000,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: { 200000: { input: 0, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+          ...extraModelFields,
+        },
+      ]);
+      return setup;
+    };
+    const reservationBody = () => ({
+      ...startQuestParams,
+      params: { ...startQuestParams.params, max_tokens: RESERVATION_MAX_TOKENS },
+      tools: [],
+      projectId: undefined,
+      organizationId: 'org1',
+    });
+    const outputOnlyCredits = (outputTokens: number) => realUsdToCredits((outputTokens * 30) / 1_000_000);
+    const expectedHold = outputOnlyCredits(PREFLIGHT_RESERVATION_OUTPUT_TOKENS);
+    const expectedReasoningHold = outputOnlyCredits(PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS);
+    const ceilingHold = outputOnlyCredits(RESERVATION_MAX_TOKENS);
+
+    it('holds the reservation ceiling, not the full requested max_tokens window', async () => {
+      reservationOrgSetup();
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      // Balance reads empty at the debit, which stops the turn right after the reservation -
+      // all this test needs is the amount that was held.
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(expectedHold).toBeLessThan(ceilingHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
+    });
+
+    // 'adaptive' is what the real reasonsWithinOutputBudget keys off - it is not mocked here,
+    // so dropping that argument at the call site would show up as the 16K figure.
+    it('holds the larger reasoning ceiling for a model that reasons inside its output budget', async () => {
+      reservationOrgSetup({ thinkingStyle: 'adaptive' });
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(expectedReasoningHold).toBeGreaterThan(expectedHold);
+      expect(expectedReasoningHold).toBeLessThan(ceilingHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
+    });
+
+    it('checks the per-member cap against the raw ceiling, not the shrunk hold', async () => {
+      // The cap has no settlement counterpart, so it must stay priced on the ceiling:
+      // this cap clears the hold but not the worst case, and must still block.
+      reservationOrgSetup();
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: Math.floor((expectedHold + ceilingHold) / 2),
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn();
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockQuest.errorCode).toBe('insufficient_credits');
+      expect(mockQuest.reply).toMatch(/per-member credit limit/);
+      expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+    });
+
     // Idempotency guard for a cross-model failover: the failed primary
     // attempt streamed partial output AND provider usage before erroring. The loop must
     // settle on ONLY the successful fallback attempt's usage (the per-attempt reset at
@@ -2355,11 +2451,20 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+        promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
+      };
 
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
 
-      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+      return {
+        enabledToolsArg,
+        getAccessibleFiles,
+        contextAndSystemMessages,
+        retrieval: savedQuest?.promptMeta?.retrieval,
+        offeredTools: savedQuest?.promptMeta?.offeredTools,
+      };
     };
 
     // #2228: a file that never reached the model used to leave no trace at all - the model answered
@@ -2489,6 +2594,63 @@ describe('ChatCompletionProcess', () => {
       expect(
         contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
       ).toBe(true);
+    });
+
+    /**
+     * The denominator of the #1394 metric, asserted through the real `process()` rather than
+     * against the seed site in isolation: a turn is only in the optional population if the tool
+     * was genuinely offered AND nothing forced retrieval. Reuses this harness because it is the
+     * one place that already drives both halves of that condition.
+     */
+    describe('optional-path retrieval mode is seeded from the same turn that offers the tool', () => {
+      it('marks a turn optional when the knowledge tool is offered and nothing forces retrieval', async () => {
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        expect(enabledToolsArg).toContain('search_knowledge_base');
+        expect(retrieval).toEqual({ attempted: false, mode: 'optional', surfaces: [], dataLakeTags: [] });
+      });
+
+      it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
+        // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
+        // ordinary chat turn would dilute the rate toward zero.
+        const { enabledToolsArg, retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: [],
+          files: [],
+        });
+
+        expect(enabledToolsArg).not.toContain('search_knowledge_base');
+        expect(retrieval).toBeUndefined();
+      });
+
+      it('becomes the numerator when a knowledge-tool call merges its result onto the seed', async () => {
+        // The seed lands first and says attempted:false; the tool's own write arrives later in the
+        // turn. Composing the REAL seeded value here (rather than a hand-written literal) is what
+        // ties this to the shape `process()` actually produces, and driving it through
+        // applyQuestStatusChanges - the site every tool write goes through - is what would catch
+        // that path being changed from a merge to an assignment, which would erase `mode`.
+        const { retrieval } = await runKnowledgeGatingCase({
+          knowledgeIds: ['f1'],
+          files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+        });
+
+        const quest = { promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(quest, {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as any);
+
+        expect(quest.promptMeta.retrieval).toEqual({
+          attempted: true,
+          outcome: 'ok',
+          mode: 'optional',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags: [],
+        });
+      });
     });
   });
 
@@ -3293,6 +3455,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3307,6 +3470,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3323,6 +3487,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'failed',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
       });
@@ -3344,6 +3509,7 @@ describe('ChatCompletionProcess', () => {
       expect(retrieval).toEqual({
         attempted: true,
         outcome: 'no_lakes',
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
       });
