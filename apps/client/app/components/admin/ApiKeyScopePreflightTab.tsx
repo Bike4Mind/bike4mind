@@ -113,8 +113,13 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
               data-testid="scope-preflight-prefix-input"
             />
             <FormHelperText>
-              Matched as a plain string prefix, not by path segment, so <code>/api/chat</code> also matches{' '}
-              <code>/api/chatbots</code>.
+              {/* Joy's FormHelperText and Alert roots are both flex with no wrap, so text interleaved
+                  with an inline element lays out as side-by-side columns instead of one sentence. A
+                  single wrapping child keeps it prose. Same trap as PartnerSignupRulesTab's helper. */}
+              <span>
+                Matched as a plain string prefix, not by path segment, so <code>/api/chat</code> also matches{' '}
+                <code>/api/chatbots</code>.
+              </span>
             </FormHelperText>
           </FormControl>
 
@@ -221,10 +226,14 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
 
           {data.coverage.unloggedPrefixes.length > 0 ? (
             <Alert color="warning" data-testid="scope-preflight-unlogged">
-              {data.coverage.unloggedPrefixes.join(', ')} falls under this prefix and writes no usage log. Those routes
-              authenticate through <code>verifyApiKey</code> rather than the <code>baseApi</code> gate, and only that
-              gate records API-key traffic, so calls to them are invisible here however busy they are. Read this result
-              as covering the rest of the prefix only.
+              {/* Wrapped for the same reason as the prefix helper above: this is the message that says
+                  why a zero here would be false, so it is the one that most has to stay readable. */}
+              <span>
+                {data.coverage.unloggedPrefixes.join(', ')} falls under this prefix and writes no usage log. Those
+                routes authenticate through <code>verifyApiKey</code> rather than the <code>baseApi</code> gate, and
+                only that gate records API-key traffic, so calls to them are invisible here however busy they are. Read
+                this result as covering the rest of the prefix only.
+              </span>
             </Alert>
           ) : null}
 
