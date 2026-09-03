@@ -49,7 +49,8 @@ describe('NotebookExportModal', () => {
     // The picker yields a bare "2026-01-15", which carries no offset - so whoever resolves it picks
     // the zone. Resolving it against UTC cost a user in UTC-8 the last 8 hours of the day they chose.
     renderModal();
-    const [from, to] = Array.from(document.querySelectorAll('input[type="date"]')) as HTMLInputElement[];
+    const from = screen.getByTestId('notebook-export-from-date-input');
+    const to = screen.getByTestId('notebook-export-to-date-input');
     fireEvent.change(from, { target: { value: '2026-01-15' } });
     fireEvent.change(to, { target: { value: '2026-01-20' } });
     clickExport();
@@ -66,7 +67,7 @@ describe('NotebookExportModal', () => {
     // The input is controlled: an onChange that skips setState leaves React restoring the old text,
     // so the box could never be emptied to type a fresh number.
     renderModal();
-    const box = screen.getByDisplayValue('10') as HTMLInputElement;
+    const box = screen.getByTestId('notebook-export-size-input') as HTMLInputElement;
     fireEvent.change(box, { target: { value: '' } });
     expect(box.value).toBe('');
 
@@ -76,15 +77,46 @@ describe('NotebookExportModal', () => {
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
+  it('does not submit a stale size after the box is backspaced empty', async () => {
+    // A real backspace on "10" fires "1" before it fires "": the first keystroke is a valid number
+    // and sets the option, the second cannot, so a guard that only skips the unparseable value
+    // leaves 1 MB behind while the box shows nothing. Clearing must restore the default, not the
+    // last digit that happened to parse.
+    renderModal();
+    const box = screen.getByTestId('notebook-export-size-input') as HTMLInputElement;
+    fireEvent.change(box, { target: { value: '1' } });
+    fireEvent.change(box, { target: { value: '' } });
+    expect(box.value).toBe('');
+
+    clickExport();
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    expect(mockPost.mock.calls[0][1]).toMatchObject({ maxFileSize: 10 * 1024 * 1024 });
+  });
+
   it('submits a retyped size', async () => {
     renderModal();
-    const box = screen.getByDisplayValue('10');
+    const box = screen.getByTestId('notebook-export-size-input');
     fireEvent.change(box, { target: { value: '' } });
     fireEvent.change(box, { target: { value: '25' } });
     clickExport();
 
     await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(mockPost.mock.calls[0][1]).toMatchObject({ maxFileSize: 25 * 1024 * 1024 });
+  });
+
+  it('holds a number input to the bounds it advertises', async () => {
+    // A number input accepts more than its min/max attributes suggest: those are submit-time hints
+    // the browser does not enforce on typed text. "1e3" is the case worth pinning - it is valid
+    // input, and parseInt reads it as 1, the opposite end of the range from what it says.
+    renderModal();
+    const box = screen.getByTestId('notebook-export-size-input') as HTMLInputElement;
+    // The real sequence, captured from Chromium: a number input reports "" for the transient "1e",
+    // so typing this passes through the same intermediate the backspace case does.
+    for (const step of ['1', '', '1e3']) fireEvent.change(box, { target: { value: step } });
+    clickExport();
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    expect(mockPost.mock.calls[0][1]).toMatchObject({ maxFileSize: 100 * 1024 * 1024 });
   });
 
   it('names the offending field when the server rejects the body', async () => {

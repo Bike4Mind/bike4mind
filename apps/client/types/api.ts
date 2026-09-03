@@ -109,6 +109,13 @@ export const ProjectInviteRequestSchema = z.object({
   available: z.number().positive().optional(),
 });
 
+// Labelled deliberately: a bare union reports only zod's generic "Invalid input", losing the
+// "Invalid ISO datetime" a lone datetime schema gave. The route copies issue.message into errors[]
+// and the modal renders it, so this string is what an API caller sending "15/01/2026" actually reads.
+const DATE_OR_DATETIME = z.union([z.iso.date(), z.iso.datetime()], {
+  error: 'must be YYYY-MM-DD or a full ISO datetime',
+});
+
 export const NotebookExportRequestSchema = z.object({
   includeKnowledge: z.boolean().optional().prefault(true),
   includeArtifacts: z.boolean().optional().prefault(true),
@@ -137,8 +144,8 @@ export const NotebookExportRequestSchema = z.object({
   // export modal no longer sends that form - it resolves the picked day in the viewer's own zone,
   // the only place that zone is known - so this now serves API callers, whose bare date the
   // service reads as a UTC day: the only defensible reading when no offset was supplied.
-  fromDate: z.union([z.iso.date(), z.iso.datetime()]).optional(),
-  toDate: z.union([z.iso.date(), z.iso.datetime()]).optional(),
+  fromDate: DATE_OR_DATETIME.optional(),
+  toDate: DATE_OR_DATETIME.optional(),
 });
 
 export const NotebookCurateRequestSchema = z.object({

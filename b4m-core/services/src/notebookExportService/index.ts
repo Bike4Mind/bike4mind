@@ -218,6 +218,9 @@ export class NotebookExportService {
         throw error;
       }
 
+      // Not de-duplicated, unlike the branch above: the route logs a genuine 500 again through the
+      // same logger. That feeds a fingerprint-deduplicating pipeline, so it costs one dropped queue
+      // message rather than a second page.
       this.adapters.logger.error('Notebook export failed', { userId, error });
 
       if (error instanceof NotebookExportError) {

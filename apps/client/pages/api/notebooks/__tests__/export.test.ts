@@ -1,27 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// The route derives its HTTP status from NotebookExportError.statusCode, so the double has to be a
-// real class: an instanceof check is what selects the 4xx branch over the blanket 500.
-const { mockExport, NotebookExportError } = vi.hoisted(() => {
-  const STATUS_BY_CODE = new Map<string, number>([
-    ['NO_NOTEBOOKS', 404],
-    ['INVALID_NOTEBOOK_ID', 400],
-  ]);
-  class NotebookExportError extends Error {
-    public readonly statusCode: number;
-    constructor(
-      message: string,
-      public code: string,
-      public details?: unknown
-    ) {
-      super(message);
-      this.name = 'NotebookExportError';
-      this.statusCode = STATUS_BY_CODE.get(code) ?? 500;
-    }
-  }
-  return { mockExport: vi.fn(), NotebookExportError };
-});
+const { mockExport } = vi.hoisted(() => ({ mockExport: vi.fn() }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -41,14 +21,22 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-vi.mock('@bike4mind/services', () => ({
+// Only the service class is doubled. NotebookExportError is the REAL one, so the status this route
+// answers is the status the error actually carries - a replica would let the two drift apart and
+// keep asserting the old behaviour with nothing failing. Imported from source because that module
+// is pure (one `import type`), while pulling the whole services barrel in costs seconds of module
+// load for one Error class. The route's `instanceof` resolves to this same object, since its
+// binding comes from this mock.
+vi.mock('@bike4mind/services', async () => ({
   notebookExportService: {
+    ...(await import('../../../../../../b4m-core/services/src/notebookExportService/types')),
     NotebookExportService: class {
       exportNotebooks = mockExport;
     },
-    NotebookExportError,
   },
 }));
+
+const { NotebookExportError } = await import('../../../../../../b4m-core/services/src/notebookExportService/types');
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {

@@ -65,6 +65,20 @@ const localDayBoundary = (value: string, edge: 'start' | 'end'): string | undefi
   return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
 };
 
+const SIZE_MB = { default: 10, min: 1, max: 100 } as const;
+
+/**
+ * Resolve the size box's text to the megabytes the request carries. A box that holds no usable
+ * number falls back to the default rather than keeping whatever last parsed: backspacing "10" yields
+ * "1" before "", so a guard that only skips the unparseable step submits 1MB while the box shows
+ * nothing. `Number` rather than `parseInt`, which reads "1e3" as 1 instead of 1000.
+ */
+const resolveSizeMb = (text: string): number => {
+  const mb = Number(text);
+  if (!text.trim() || !Number.isFinite(mb)) return SIZE_MB.default;
+  return Math.min(Math.max(Math.floor(mb), SIZE_MB.min), SIZE_MB.max);
+};
+
 const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose }) => {
   const [options, setOptions] = useState<ExportOptions>({
     includeKnowledge: true,
@@ -74,14 +88,18 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
     anonymize: false,
     includeMetadata: true,
     includeImages: true,
-    maxFileSize: 10 * 1024 * 1024, // 10MB
+    maxFileSize: SIZE_MB.default * 1024 * 1024,
     format: 'json',
   });
 
   // The date and size inputs display raw text while `options` holds the submitted value. Without
   // that split, a value the input can show but the request cannot carry (an empty size box, a
   // local calendar date) has nowhere to live, and the field becomes uneditable.
-  const [drafts, setDrafts] = useState({ fromDate: '', toDate: '', maxFileSizeMb: '10' });
+  const [drafts, setDrafts] = useState({
+    fromDate: '',
+    toDate: '',
+    maxFileSizeMb: String(SIZE_MB.default),
+  });
 
   const [isExporting, setIsExporting] = useState(false);
   const [exportResult, setExportResult] = useState<any>(null);
@@ -299,15 +317,16 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 type="number"
                 value={drafts.maxFileSizeMb}
                 onChange={e => {
-                  setDrafts(d => ({ ...d, maxFileSizeMb: e.target.value }));
-                  const mb = parseInt(e.target.value, 10);
-                  if (mb > 0) updateOption('maxFileSize', mb * 1024 * 1024);
+                  const text = e.target.value;
+                  setDrafts(d => ({ ...d, maxFileSizeMb: text }));
+                  updateOption('maxFileSize', resolveSizeMb(text) * 1024 * 1024);
                 }}
                 endDecorator="MB"
                 slotProps={{
                   input: {
-                    min: 1,
-                    max: 100,
+                    min: SIZE_MB.min,
+                    max: SIZE_MB.max,
+                    'data-testid': 'notebook-export-size-input',
                   },
                 }}
               />
@@ -329,6 +348,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                       setDrafts(d => ({ ...d, fromDate: e.target.value }));
                       updateOption('fromDate', localDayBoundary(e.target.value, 'start'));
                     }}
+                    slotProps={{ input: { 'data-testid': 'notebook-export-from-date-input' } }}
                   />
                 </FormControl>
                 <FormControl sx={{ flex: 1 }}>
@@ -340,6 +360,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                       setDrafts(d => ({ ...d, toDate: e.target.value }));
                       updateOption('toDate', localDayBoundary(e.target.value, 'end'));
                     }}
+                    slotProps={{ input: { 'data-testid': 'notebook-export-to-date-input' } }}
                   />
                 </FormControl>
               </Stack>

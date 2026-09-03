@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { NotebookExportRequestSchema } from './api';
 
@@ -55,7 +56,11 @@ describe('NotebookExportRequestSchema - notebookIds', () => {
   });
 
   it('still rejects a date that is neither form', () => {
-    expect(NotebookExportRequestSchema.safeParse({ fromDate: '15/01/2026' }).success).toBe(false);
+    const bad = NotebookExportRequestSchema.safeParse({ fromDate: '15/01/2026' });
+    expect(bad.success).toBe(false);
+    // The message, not just the rejection: the route copies it into errors[] and the modal shows it,
+    // and a union reports zod's generic "Invalid input" unless it is labelled.
+    expect(bad.error?.issues[0].message).toBe('must be YYYY-MM-DD or a full ISO datetime');
   });
 
   it('caps the batch at 50, matching the sibling curate schema', () => {
