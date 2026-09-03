@@ -20,6 +20,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
+import { isAxiosError } from 'axios';
 import { ApiKeyScope } from '@bike4mind/common';
 import type { IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { useApiKeyScopePreflight, type ScopePreflightParams } from '@client/app/hooks/data/apiKeyScopePreflight';
@@ -28,6 +29,28 @@ const WINDOW_OPTIONS = [7, 30, 90];
 
 /** ApiKeyUsageLog's TTL. Only a run at this window has seen the whole logged history. */
 const FULL_WINDOW_DAYS = 90;
+
+/**
+ * The handler's refusals are the remedy, not the symptom: an unlogged prefix and
+ * an unknown scope both explain themselves in the thrown message, which
+ * `errorHandler` puts at `response.data.error`. Axios's own `.message` is the
+ * generic "Request failed with status code 400", which turns an explained refusal
+ * into what looks like a broken tool.
+ */
+const preflightErrorMessage = (error: unknown): string => {
+  if (isAxiosError(error)) {
+    return error.response?.data?.error || error.response?.data?.message || error.message;
+  }
+  return error instanceof Error ? error.message : 'Preflight failed';
+};
+
+/** Whether Run would re-ask the question already on screen, rather than a new one. */
+const isSameRun = (a: ScopePreflightParams | null, b: ScopePreflightParams): boolean =>
+  a !== null &&
+  a.endpointPrefix === b.endpointPrefix &&
+  a.days === b.days &&
+  a.scopes.length === b.scopes.length &&
+  a.scopes.every((scope, i) => scope === b.scopes[i]);
 
 const OutcomeChip: React.FC<{ outcome: IApiKeyScopePreflightRow['outcome'] }> = ({ outcome }) => {
   const config = {
@@ -54,7 +77,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
   const [days, setDays] = useState(90);
   const [submitted, setSubmitted] = useState<ScopePreflightParams | null>(null);
 
-  const { data, isFetching, error } = useApiKeyScopePreflight(submitted);
+  const { data, isFetching, error, refetch } = useApiKeyScopePreflight(submitted);
 
   const scopeOptions = useMemo(() => Object.values(ApiKeyScope), []);
   const canRun = endpointPrefix.trim().startsWith('/') && selectedScopes.length > 0;
@@ -125,7 +148,18 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
           <Button
             startDecorator={<SearchIcon />}
             disabled={!canRun || isFetching}
-            onClick={() => setSubmitted({ endpointPrefix: endpointPrefix.trim(), scopes: selectedScopes, days })}
+            onClick={() => {
+              const next = { endpointPrefix: endpointPrefix.trim(), scopes: selectedScopes, days };
+              // Identical params hash to the same react-query key, so the mounted
+              // observer serves cache and fires nothing - no request, and no
+              // `isFetching` either, so a stale answer is indistinguishable from a
+              // fresh one. Run must always mean run.
+              if (isSameRun(submitted, next)) {
+                void refetch();
+                return;
+              }
+              setSubmitted(next);
+            }}
             data-testid="scope-preflight-run-btn"
           >
             Run
@@ -135,7 +169,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
 
       {error ? (
         <Alert color="danger" data-testid="scope-preflight-error">
-          {error instanceof Error ? error.message : 'Preflight failed'}
+          {preflightErrorMessage(error)}
         </Alert>
       ) : null}
 
@@ -148,6 +182,17 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
 
       {data && !isFetching ? (
         <Stack spacing={2}>
+          {/*
+            The form stays editable while these results stay on screen, so without
+            an echo of the run that produced them a verdict can be read as
+            answering a prefix nobody ran. The server echoes both fields back for
+            exactly this.
+          */}
+          <Typography level="body-sm" textColor="text.secondary" data-testid="scope-preflight-run-echo">
+            Showing <code>{data.endpointPrefix}</code> against <code>{data.requiredScopes.join(', ')}</code> over{' '}
+            {data.windowDays} days.
+          </Typography>
+
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Chip color="danger" variant="soft" data-testid="scope-preflight-deny-count">
               {counts.deny} would 403
@@ -187,7 +232,9 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
             data.coverage.fullWindow && data.coverage.unloggedPrefixes.length === 0 ? (
               <Alert color="success" data-testid="scope-preflight-empty">
                 No API key has called these routes in the last {data.windowDays} days, the full logged history. There is
-                no grandfathered population to re-mint, so the gate can be declared and enforced in one step.
+                no grandfathered population to re-mint, so the gate can be declared and enforced in one step. This
+                counts pre-enforcement traffic only: a request rejected by a scope gate is never logged, so if these
+                routes already require a scope, the keys being turned away today do not appear here.
               </Alert>
             ) : (
               // An empty list is only actionable when the run saw everything there

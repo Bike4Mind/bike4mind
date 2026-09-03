@@ -51,8 +51,30 @@ const state = (over: Record<string, unknown> = {}) => ({
   data: undefined,
   isFetching: false,
   error: null,
+  refetch: vi.fn(),
   ...over,
 });
+
+/**
+ * `isAxiosError` keys off the flag alone, so this is the real shape as far as the
+ * component's extraction is concerned. A plain `Error` would pass either way -
+ * its `.message` *is* the right text - which is why the axios path needs its own
+ * fixture to be pinned at all.
+ */
+const axiosError = (serverMessage: string) => ({
+  isAxiosError: true,
+  message: 'Request failed with status code 400',
+  response: { data: { error: serverMessage } },
+});
+
+/** Fill the form enough to enable Run: a rooted prefix plus one scope. */
+const fillForm = async (prefix = '/api/x') => {
+  const input = screen.getByTestId('scope-preflight-prefix-input').querySelector('input')!;
+  await userEvent.clear(input);
+  await userEvent.type(input, prefix);
+  await userEvent.click(screen.getByTestId('scope-preflight-scopes-select').querySelector('button')!);
+  await userEvent.click(screen.getByRole('option', { name: 'admin:*' }));
+};
 
 describe('ApiKeyScopePreflightTab', () => {
   beforeEach(() => {
@@ -72,6 +94,42 @@ describe('ApiKeyScopePreflightTab', () => {
     await userEvent.clear(input);
     await userEvent.type(input, '/api/x'); // rooted, but still no scope selected
     expect(screen.getByTestId('scope-preflight-run-btn')).toBeDisabled();
+
+    // The other half of the rule: with both inputs supplied it must actually run.
+    // Without this, hardcoding `disabled` or dropping the scope check leaves the
+    // three assertions above green.
+    await userEvent.click(screen.getByTestId('scope-preflight-scopes-select').querySelector('button')!);
+    await userEvent.click(screen.getByRole('option', { name: 'admin:*' }));
+    expect(screen.getByTestId('scope-preflight-run-btn')).not.toBeDisabled();
+  });
+
+  it('re-runs when Run is pressed on unchanged inputs', async () => {
+    // Identical params hash to the same react-query key, so the mounted observer
+    // serves cache and fires nothing - no request and no spinner, which makes a
+    // stale verdict indistinguishable from a fresh one.
+    const refetch = vi.fn();
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [] }), refetch }));
+    renderTab();
+
+    await fillForm();
+    await userEvent.click(screen.getByTestId('scope-preflight-run-btn'));
+    expect(refetch).not.toHaveBeenCalled(); // first run: the query key is new
+
+    await userEvent.click(screen.getByTestId('scope-preflight-run-btn'));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the run the results belong to', async () => {
+    // The form stays editable while results stay on screen. Without an echo, a
+    // green verdict for one prefix reads as answering whatever is in the box now.
+    mockUseApiKeyScopePreflight.mockReturnValue(
+      state({ data: result({ endpointPrefix: '/api/widgets', requiredScopes: ['ai:chat'], rows: [row()] }) })
+    );
+    renderTab();
+
+    const echo = screen.getByTestId('scope-preflight-run-echo').textContent!;
+    expect(echo).toContain('/api/widgets');
+    expect(echo).toContain('ai:chat');
   });
 
   it('reads a fully-covered empty result as safe-to-enforce, not as missing data', () => {
@@ -174,5 +232,20 @@ describe('ApiKeyScopePreflightTab', () => {
     expect(screen.getByTestId('scope-preflight-error').textContent).toContain('scan exploded');
     expect(screen.queryByTestId('scope-preflight-empty')).toBeNull();
     expect(screen.queryByTestId('scope-preflight-results')).toBeNull();
+  });
+
+  it("shows the handler's refusal, not axios's generic status string", () => {
+    // The refusals are the remedy: an unlogged prefix explains why the answer
+    // would have been false, and an unknown scope explains a caught typo.
+    // `errorHandler` puts that text at `response.data.error`; `error.message` is
+    // only "Request failed with status code 400", which reads as a broken tool.
+    mockUseApiKeyScopePreflight.mockReturnValue(
+      state({ error: axiosError('/api/ai/v1 is served by verifyApiKey, not baseApi') })
+    );
+    renderTab();
+
+    const alert = screen.getByTestId('scope-preflight-error').textContent!;
+    expect(alert).toContain('served by verifyApiKey');
+    expect(alert).not.toContain('Request failed with status code');
   });
 });

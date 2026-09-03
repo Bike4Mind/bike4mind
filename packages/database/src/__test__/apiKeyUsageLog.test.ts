@@ -152,6 +152,15 @@ describe('ApiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix', () => {
     await ApiKeyUsageLog.deleteMany({});
   });
 
+  /**
+   * Seed timestamps must stay inside the collection's 90-day TTL. `ApiKeyUsageLog`
+   * declares `expireAfterSeconds` and `createMongoServer` cannot disable autoIndex,
+   * so a real mongod builds that index and its background monitor is entitled to
+   * sweep an older fixture between the write and the aggregate. Widening the query
+   * with `days` does not help - the TTL is a separate mechanism.
+   */
+  const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
   const log = (overrides: Partial<Record<string, unknown>> = {}) =>
     apiKeyUsageLogRepository.create({
       userId: 'user-1',
@@ -167,21 +176,20 @@ describe('ApiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix', () => {
     } as any);
 
   it('groups matching traffic per key with its request count and last use', async () => {
-    await log({ keyId: 'busy', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
-    await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: new Date('2026-01-03') });
-    await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: new Date('2026-01-02') });
-    await log({ keyId: 'quiet', userId: 'user-2', endpoint: '/api/thing/one', timestamp: new Date('2026-01-02') });
+    const newestBusy = daysAgo(8);
+    await log({ keyId: 'busy', endpoint: '/api/thing/one', timestamp: daysAgo(10) });
+    await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: newestBusy });
+    await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: daysAgo(9) });
+    await log({ keyId: 'quiet', userId: 'user-2', endpoint: '/api/thing/one', timestamp: daysAgo(9) });
 
     const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
       endpointPrefix: '/api/thing',
-      days: 36500,
+      days: 90,
     });
 
     expect(rows).toHaveLength(2);
     expect(rows.find(r => r.keyId === 'busy')).toMatchObject({ userId: 'user-1', requests: 3 });
-    expect(new Date(rows.find(r => r.keyId === 'busy')!.lastUsed).toISOString()).toBe(
-      new Date('2026-01-03').toISOString()
-    );
+    expect(new Date(rows.find(r => r.keyId === 'busy')!.lastUsed).toISOString()).toBe(newestBusy.toISOString());
     expect(rows.find(r => r.keyId === 'quiet')).toMatchObject({ userId: 'user-2', requests: 1 });
   });
 
@@ -189,14 +197,14 @@ describe('ApiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix', () => {
     // The keys this tool exists to catch are the monthly and quarterly callers.
     // Ordering by `requests` before the limit would discard exactly those first,
     // and narrowing the window to clear the cap would drop them for good.
-    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
-    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
-    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: new Date('2026-01-01') });
-    await log({ keyId: 'quiet-but-recent', endpoint: '/api/thing/one', timestamp: new Date('2026-06-01') });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: daysAgo(80) });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: daysAgo(80) });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: daysAgo(80) });
+    await log({ keyId: 'quiet-but-recent', endpoint: '/api/thing/one', timestamp: daysAgo(1) });
 
     const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
       endpointPrefix: '/api/thing',
-      days: 36500,
+      days: 90,
       limit: 1,
     });
 

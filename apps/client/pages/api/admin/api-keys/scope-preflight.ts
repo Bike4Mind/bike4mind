@@ -89,6 +89,15 @@ function unloggedSurfacesUnder(prefix: string): string[] {
  * `coverage.fullWindow`. An empty row list is safe to act on only when `coverage`
  * is clean on both counts.
  *
+ * One blind spot `coverage` does not model, because it opens only after a gate is
+ * already live: the scope 403 throws before `apiKeyAuth` registers its
+ * `res.finish` usage-log hook, so a *denied* request writes no row. Traffic here
+ * is therefore pre-enforcement traffic. On a prefix that already requires a scope,
+ * the keys it is rejecting today contribute nothing, and once their last passing
+ * request ages out of the TTL an empty result says only "nobody is getting through",
+ * not "nobody is calling". Nothing new breaks from acting on that - those keys are
+ * already failing - but it is not the same statement as a true zero.
+ *
  * Read-only by design: it produces the list, a human rotates the keys.
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(

@@ -145,7 +145,10 @@ to a question it cannot see.
    `API key scope check missed but staged - allowing` as a cross-check that the list was
    complete - a `keyId` there that step 2 did not name means the preflight window was too
    short, so widen it rather than trusting the log alone.
-6. Remove the entry from `API_KEY_SCOPE_STAGING`. The gate is now live.
+6. When that line stops appearing, remove the entry from `API_KEY_SCOPE_STAGING`. The
+   gate is now live. Wait for the log to go quiet, not for step 5's re-mints to be
+   dispatched - this is the step that starts rejecting, and a key whose owner has not
+   yet rotated is still calling until the traffic says otherwise.
 
 Do not skip the last step quietly. A scope left in the list forever is a gate that has
 never once enforced.
