@@ -253,10 +253,12 @@ jobs:
           PW_WORKERS: '3'
           CI: 'true'
           PLAYWRIGHT_ARGS: ${{ inputs.playwright_args }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
           set -o pipefail
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
-          if [ -n "${{ inputs.pr_number }}" ]; then
+          if [ -n "$PR_NUMBER" ]; then
             # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
             if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
               echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
@@ -265,7 +267,7 @@ jobs:
             pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           else
             # dev/staging (same account): resolve the secret from SST.
-            pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+            pnpm sst shell --stage "$SST_STAGE" -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           fi
 
       - name: Upload Playwright report
