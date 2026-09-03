@@ -95,7 +95,6 @@ export async function deriveRetrievalTagsFromFiles(
             userGroups: user.groups || [],
             dataLakeTags: access.dataLakeTags,
             dataLakeTagPrefixes: access.dataLakeTagPrefixes,
-            scopedTagPrefixes: access.scopedTagPrefixes,
             excludeContent: true,
           }
         );

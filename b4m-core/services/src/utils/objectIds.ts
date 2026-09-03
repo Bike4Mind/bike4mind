@@ -1,37 +1,63 @@
-import { isObjectIdOrHexString } from 'mongoose';
-import type { ILogger } from '@bike4mind/observability';
+import { usableObjectIds } from '@bike4mind/db-core';
+import { Logger } from '@bike4mind/observability';
 
 /** The session id arrays that reference ObjectId-keyed collections. Excludes artifactIds. */
 export type ObjectIdArrayKind = 'knowledge' | 'tool' | 'agent';
 
 /**
- * The subset of a session id array that can actually address a row by `_id`.
- *
- * `knowledgeIds`, `toolIds` and `agentIds` are declared `[{ type: String }]` on SessionModel, but
- * the collections they reference are ObjectId-keyed. A single non-castable entry makes Mongoose
- * reject the whole `$in` with a CastError - losing every other id in the call, not just the bad
- * one. (`artifactIds` is deliberately not covered: those are `artifact_<ts>_<rand>` and are matched
- * on a string `id` field.)
- *
- * Dropped rather than rejected, because callers routinely resubmit a STORED list: renaming a
- * notebook PUTs `{ ...session, name }`, tagging PUTs `{ ...session, tags }`, and `/api/ai/llm`
- * forwards client `fabFileIds` straight into session creation. Rejecting would make a notebook
- * holding a legacy entry impossible to rename, tag or attach to - a worse dead end than the
- * export failure this exists to prevent.
- *
- * `isObjectIdOrHexString`, not `isValidObjectId`: for string input the two agree, but the latter
- * also accepts a number and casts it to a fabricated id matching no stored row. See
- * FabFileModel.objectIdCasting.integration.test.ts, which pins both against a real server.
- *
- * The logger is required: an omitted one is how a drop turns silent, and a silently incomplete
- * result is the failure this is meant to replace, not reproduce.
+ * Service-layer wrapper over db-core's `usableObjectIds`, kept so call sites name a session field
+ * rather than a model. The reasoning for dropping rather than rejecting lives on the db-core
+ * implementation; the part specific to here is that callers resubmit a STORED list - renaming a
+ * notebook PUTs `{ ...session, name }` - so rejecting would block writes unrelated to knowledge.
  */
-export const usableObjectIds = (ids: string[], kind: ObjectIdArrayKind, logger: Pick<ILogger, 'warn'>): string[] => {
-  const usable = ids.filter(id => isObjectIdOrHexString(id));
-  if (usable.length !== ids.length) {
-    logger.warn(`Skipping ${kind} ids that cannot address a row by _id`, {
-      skipped: ids.filter(id => !isObjectIdOrHexString(id)),
-    });
+export const usableSessionIds = (
+  ids: string[],
+  kind: ObjectIdArrayKind,
+  logger: Pick<typeof Logger.globalInstance, 'warn'> = Logger.globalInstance
+): string[] => usableObjectIds(ids, kind, logger);
+
+/**
+ * Lowercased form used ONLY for comparing ids, never for storing them. A hex ObjectId is accepted
+ * in either case and resolves the same row, but a resolved document's `id` is always canonical
+ * lowercase - so comparing raw request strings rejects an uppercase id that Mongo handled fine.
+ *
+ * Do not write the result back to a document: a legacy non-hex entry like `Legacy-UUID-2019` would
+ * be rewritten to a form that no longer matches what is stored.
+ *
+ * Only hex is folded. Mongo treats hex case-insensitively, arbitrary strings it does not, and these
+ * arrays are declared `[{ type: String }]` precisely so they can hold a non-hex legacy id. Folding
+ * those too would make an imported `Doc-A` and `doc-a` compare equal, so removing one drops both.
+ */
+const HEX_OBJECT_ID = /^[0-9a-f]{24}$/i;
+
+export const canonicalId = (id: string): string => (HEX_OBJECT_ID.test(id) ? id.toLowerCase() : id);
+
+/**
+ * How many DISTINCT rows a request could address, ignoring hex case. Callers compare this against
+ * the number of rows that resolved, so `[abc, ABC]` must count as one - it addresses one document.
+ *
+ * Exists as a helper because this comparison is repeated at six call sites and has been got wrong
+ * twice: first counting raw duplicates, then counting case variants as separate ids.
+ */
+export const distinctIdCount = (ids: string[]): number => new Set(ids.map(canonicalId)).size;
+
+/**
+ * Appends `incoming` to `existing`, skipping any id already present ignoring hex case.
+ *
+ * `uniq` alone is case-sensitive, so a row written before ids were canonicalised can hold `ABC`
+ * and still gain a second `abc` entry for the same file - and the reader's own `uniq`
+ * (ChatCompletionFeatures) is case-sensitive too, so that file gets fetched and embedded into the
+ * prompt twice. Stored entries are returned untouched: rewriting one to its canonical form would
+ * break a non-hex legacy id, per canonicalId above.
+ */
+export const mergeIds = (existing: string[], incoming: string[]): string[] => {
+  const seen = new Set(existing.map(canonicalId));
+  const merged = [...existing];
+  for (const id of incoming) {
+    const key = canonicalId(id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(id);
   }
-  return usable;
+  return merged;
 };

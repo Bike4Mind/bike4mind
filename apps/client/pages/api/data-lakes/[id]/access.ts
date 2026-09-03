@@ -13,6 +13,7 @@ import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeAccessViewToCsv, lakeAccessViewCsvFilename } from '@server/dataLakes/lakeAccessViewCsv';
 import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 
 /**
  * GET /api/data-lakes/:id/access[?format=csv]
@@ -76,7 +77,7 @@ const handler = baseApi()
 
     if ((format ?? '').toLowerCase() === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename=${lakeAccessViewCsvFilename(view)}`);
+      res.setHeader('Content-Disposition', buildContentDisposition(lakeAccessViewCsvFilename(view)));
       return res.send(lakeAccessViewToCsv(view));
     }
 

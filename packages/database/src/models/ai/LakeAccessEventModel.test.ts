@@ -91,6 +91,26 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.sessionId).toBeUndefined();
     });
 
+    it('round-trips candidateCapReached in both boolean directions', async () => {
+      const capped = await repo.record(baseInput({ candidateCapReached: true }));
+      expect(capped.candidateCapReached).toBe(true);
+
+      // `false` is an assertion in its own right - "this surface considered its whole candidate
+      // set" - so a truthiness check in record() that dropped it would be a silent data loss.
+      const complete = await repo.record(baseInput({ candidateCapReached: false }));
+      expect(complete.candidateCapReached).toBe(false);
+    });
+
+    it('omits the candidateCapReached path entirely when the caller supplies none', async () => {
+      const event = await repo.record(baseInput());
+      // Absent, NOT false: a surface that does not measure its candidate stage must not be
+      // recorded as having considered everything. Asserted on the stored document rather than on
+      // falsiness, since `false` is falsy too and is exactly the value this must not be.
+      const stored = await LakeAccessEventModel.findById(event.id).lean();
+      expect(stored).not.toBeNull();
+      expect(Object.prototype.hasOwnProperty.call(stored as object, 'candidateCapReached')).toBe(false);
+    });
+
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {
       const event = await repo.record(baseInput());
       expect((event as unknown as { updatedAt?: Date }).updatedAt).toBeUndefined();

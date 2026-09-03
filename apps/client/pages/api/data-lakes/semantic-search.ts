@@ -403,6 +403,8 @@ const handler = baseApi()
       // --- Delegate to the shared in-process semantic search service ---
       // (Same implementation AND the same lake-scope resolution the chat search_knowledge_base
       // tool uses: embed query -> scope files -> bulk chunk vectors -> cosine rank -> top-K.)
+      const lakeMemberships = dataLakeService.lakeMembershipsFrom(lakes); // dynamic-lake arms, each anchored to that lake's creator
+      dataLakeService.warnIfManyLakeMemberships(lakeMemberships, req.logger, 'semantic-search');
       const search = await dataLakeService.semanticDataLakeSearch(
         {
           userId: req.user.id,
@@ -415,7 +417,7 @@ const handler = baseApi()
           apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
-          lakeMemberships: dataLakeService.lakeMembershipsFrom(lakes), // dynamic-lake arms, each anchored to that lake's creator
+          lakeMemberships,
           budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
           vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           logger: req.logger,

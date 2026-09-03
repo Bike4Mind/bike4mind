@@ -3,11 +3,16 @@ import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
-import { getDynamicDataLakeAccess, lakeMembershipsFrom } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+} from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMembership';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -250,6 +255,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               );
             } else {
               const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
+              const lakeMemberships = lakeMembershipsFrom(lakes);
+              warnIfManyLakeMemberships(lakeMemberships, context.logger, 'retrieve_knowledge_content');
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -262,7 +269,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   userGroups: context.user.groups || [],
                   dataLakeTags,
                   dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                  lakeMemberships: lakeMembershipsFrom(lakes), // Dynamic-lake arms, each anchored to that lake's creator
+                  lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                   ...retrievalFilter,
@@ -394,9 +401,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             // Untrusted on every part that comes from the document, not just the body: the file
             // name and tag list are attacker-influenced too, and a newline in either would carry a
-            // forged marker into the header lines. See renderRetrievedContentBlock.
+            // forged marker into the header lines. See renderRetrievedContentBlock. The date is the
+            // one part that needs no wrap - documentDateClause emits digits and separators only.
+            //
+            // Placed on the `###` line rather than in the metadata block below so all THREE
+            // retrieval channels carry it in the same relative position (#2236 names only the
+            // other two; a dateless channel here would let one turn cite the same document dated
+            // via search and undated via retrieve).
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.createdAt)}\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
