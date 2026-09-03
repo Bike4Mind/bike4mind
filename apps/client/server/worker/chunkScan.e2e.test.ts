@@ -5,6 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { FabFile } from '@bike4mind/database';
 import { CHUNK_STALL_NOTICES } from '@bike4mind/common';
+import { buildDataLakeMembershipFilter } from '@bike4mind/database';
 import {
   buildFabFileChunkScanFilter,
   buildStrandedVectorizeScanFilter,
@@ -185,6 +186,17 @@ const selectedNames = async (filter: Record<string, unknown>): Promise<string[]>
   return docs.map(d => d.name as string).sort();
 };
 
+/** No lake carries an override, so the exclusion is the platform value alone. */
+const PLATFORM_ON = { platformPaused: true, paused: [], running: [] };
+const PLATFORM_OFF = { platformPaused: false, paused: [], running: [] };
+
+/** A real membership predicate, exactly as toChunkScanConvergencePause builds it. */
+const membership = (lake: { datalakeTag: string; fileTagPrefix?: string; creatorUserId?: string }) =>
+  buildDataLakeMembershipFilter({ kind: 'owned', ...lake });
+
+const LAKE_META = { datalakeTag: 'datalake:alpha' };
+const LAKE_PREFIX = { datalakeTag: 'datalake:beta', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
+
 describe('buildFabFileChunkScanFilter against real Mongo', () => {
   it('selects an ordinary un-chunked file and leaves the terminal and in-flight ones alone', async () => {
     await fabFiles.insertMany([
@@ -198,7 +210,7 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
     ]);
 
     expect(
-      await selectedNames(buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: false }))
+      await selectedNames(buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_OFF }))
     ).toEqual(['plain']);
   });
 
@@ -210,7 +222,7 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'user-note', notes: 'quarterly report for the board deck' }),
     ]);
 
-    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: true });
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
     expect(await selectedNames(filter)).toEqual(['plain', 'user-note']);
   });
 
@@ -223,7 +235,7 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'plain' }),
     ]);
 
-    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: true });
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
     expect(await selectedNames(filter)).toEqual(['plain']);
   });
 
@@ -239,7 +251,7 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'paused', chunkStallReason: 'rechunkPaused' }),
     ]);
 
-    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: true });
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
     expect(await selectedNames(filter)).toEqual(['notes-empty', 'stall-missing', 'stall-null']);
   });
 
@@ -253,7 +265,7 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'keeper' }),
     ]);
 
-    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: true });
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
     expect(await selectedNames(filter)).toEqual(['keeper']);
   });
 
@@ -268,7 +280,7 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'no-text', noExtractableTextAt: OLD }),
     ]);
 
-    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: false });
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_OFF });
     // The no-text file stays out - that exclusion is terminal regardless of the switch.
     expect(await selectedNames(filter)).toEqual(['legacy-paused', 'paused-chunk', 'paused-vectorize', 'plain']);
   });
@@ -281,7 +293,106 @@ describe('buildFabFileChunkScanFilter against real Mongo', () => {
       candidate({ name: 'plain-image', mimeType: 'image/png' }),
     ]);
 
-    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { excludeConvergencePaused: true });
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
     expect(await selectedNames(filter)).toEqual(['stamped-image']);
+  });
+});
+
+describe('buildFabFileChunkScanFilter - scoped pause against real Mongo (#2157)', () => {
+  /** A rescue candidate that has stalled, plus whatever membership signals the case needs. */
+  const stalled = (name: string, overrides: Record<string, unknown> = {}) =>
+    candidate({ name, chunkStallReason: 'rechunkPaused', ...overrides });
+
+  it("platform OFF: excludes only the paused lake's stalled members", async () => {
+    await fabFiles.insertMany([
+      stalled('in-paused-lake', { tags: [{ name: 'datalake:alpha' }] }),
+      stalled('in-other-lake', { tags: [{ name: 'datalake:gamma' }] }),
+      stalled('in-no-lake'),
+      candidate({ name: 'unstalled-in-paused-lake', tags: [{ name: 'datalake:alpha' }] }),
+    ]);
+
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, {
+      convergencePause: { platformPaused: false, paused: [membership(LAKE_META)], running: [] },
+    });
+
+    // The un-stalled member stays selectable on purpose: the handler is what writes the stall reason,
+    // so excluding it here would leave its state invisible.
+    expect(await selectedNames(filter)).toEqual(['in-no-lake', 'in-other-lake', 'unstalled-in-paused-lake']);
+  });
+
+  it("platform ON: exempts the running lake's stalled members and excludes the rest", async () => {
+    await fabFiles.insertMany([
+      stalled('in-running-lake', { tags: [{ name: 'datalake:alpha' }] }),
+      stalled('in-other-lake', { tags: [{ name: 'datalake:gamma' }] }),
+      stalled('in-no-lake'),
+      candidate({ name: 'plain' }),
+    ]);
+
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, {
+      convergencePause: { platformPaused: true, paused: [], running: [membership(LAKE_META)] },
+    });
+
+    expect(await selectedNames(filter)).toEqual(['in-running-lake', 'plain']);
+  });
+
+  it('honours the PREFIX arm of membership, ownership conjunct included', async () => {
+    // The arm no hand-rolled evaluator models: an anchored `$regex` on `tags.name` AND a `userId`
+    // match against the lake's creator. Getting the conjunct wrong would make this lake's pause reach
+    // every file in the install carrying an `acme:` tag.
+    await fabFiles.insertMany([
+      stalled('creator-prefixed', { userId: 'creator-1', tags: [{ name: 'acme:legal' }] }),
+      stalled('stranger-prefixed', { userId: 'someone-else', tags: [{ name: 'acme:legal' }] }),
+      stalled('creator-unprefixed', { userId: 'creator-1', tags: [{ name: 'legal' }] }),
+    ]);
+
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, {
+      convergencePause: { platformPaused: false, paused: [membership(LAKE_PREFIX)], running: [] },
+    });
+
+    expect(await selectedNames(filter)).toEqual(['creator-unprefixed', 'stranger-prefixed']);
+  });
+
+  it('excludes a PRE-MIGRATION stalled member of a paused lake, via the legacy notes arm', async () => {
+    // The lake conjunct has to hold for BOTH stall representations, or the migration window silently
+    // re-admits a scoped-paused lake's files.
+    await fabFiles.insertMany([
+      candidate({
+        name: 'legacy-in-paused',
+        notes: CHUNK_STALL_NOTICES.rechunkPaused,
+        tags: [{ name: 'datalake:alpha' }],
+      }),
+      candidate({
+        name: 'legacy-in-other',
+        notes: CHUNK_STALL_NOTICES.rechunkPaused,
+        tags: [{ name: 'datalake:gamma' }],
+      }),
+    ]);
+
+    const filter = buildFabFileChunkScanFilter(CUTOFF, undefined, {
+      convergencePause: { platformPaused: false, paused: [membership(LAKE_META)], running: [] },
+    });
+
+    expect(await selectedNames(filter)).toEqual(['legacy-in-other']);
+  });
+
+  it('the platform-only exclusion still matches the pre-#2157 sibling-key form', async () => {
+    // The `$nor` rewrite must be the same query as the `$nin`s it replaced when there is no lake
+    // conjunct - including on null and MISSING fields, where the two could plausibly diverge.
+    await fabFiles.insertMany([
+      candidate({ name: 'reason-null', chunkStallReason: null }),
+      candidate({ name: 'reason-missing' }),
+      stalled('stalled'),
+      candidate({ name: 'legacy', notes: CHUNK_STALL_NOTICES.vectorizePaused }),
+    ]);
+
+    const viaNor = buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_ON });
+    const viaNin = {
+      ...buildFabFileChunkScanFilter(CUTOFF, undefined, { convergencePause: PLATFORM_OFF }),
+      chunkStallReason: { $nin: ['vectorizePaused', 'rechunkPaused'] },
+      notes: { $nin: Object.values(CHUNK_STALL_NOTICES) },
+    };
+
+    expect(await selectedNames(viaNor)).toEqual(['reason-missing', 'reason-null']);
+    expect(await selectedNames(viaNin)).toEqual(await selectedNames(viaNor));
   });
 });

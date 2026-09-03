@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { convertIds, Organization, User, UserActivityCounter, convertPipelineForDocumentDB } from '@bike4mind/database';
 import { NotFoundError } from '@server/utils/errors';
 import { mongoose } from '@bike4mind/database';
+import { isValidObjectId } from '@server/utils/objectId';
 import qs from 'qs';
 import { Pagination } from '@bike4mind/utils';
 
@@ -18,7 +19,7 @@ const handler = baseApi().get(
     try {
       let orgId = req.user.organizationId!;
       if (req.user.isAdmin && filters?.orgId) {
-        if (mongoose.Types.ObjectId.isValid(filters?.orgId)) {
+        if (isValidObjectId(filters.orgId)) {
           orgId = filters?.orgId;
         }
       }

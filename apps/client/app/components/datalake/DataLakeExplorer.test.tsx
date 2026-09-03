@@ -68,8 +68,23 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
 // what every other test here expects.
-const { tagCountsState } = vi.hoisted(() => ({
-  tagCountsState: { tagCounts: [] as { tag: string; count: number }[], total: 0 },
+const { tagCountsState, uncategorizedState } = vi.hoisted(() => ({
+  tagCountsState: {
+    tagCounts: [] as { tag: string; count: number }[],
+    total: 0,
+    lakeFileCounts: {} as Record<string, number>,
+    uncategorizedFileCounts: {} as Record<string, number>,
+    totalUncategorized: 0,
+  },
+  // The bucket's file list, fetched lazily by the explorer once the bucket is opened. `enabled`
+  // records what the hook was called with, so a test can assert the fetch stays off until then.
+  uncategorizedState: {
+    files: [] as { id: string; fileName: string }[],
+    enabled: [] as boolean[],
+    mergedFiles: [] as { id: string; fileName: string }[],
+    mergedEnabled: [] as boolean[],
+    isError: false,
+  },
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -78,15 +93,33 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     data: {
       tagCounts: tagCountsState.tagCounts,
       uniqueArticleCounts: { total: tagCountsState.total },
+      totalLakeFileCount: tagCountsState.total,
+      lakeFileCounts: tagCountsState.lakeFileCounts,
+      uncategorizedFileCounts: tagCountsState.uncategorizedFileCounts,
+      totalUncategorizedFileCount: tagCountsState.totalUncategorized,
     },
     isLoading: false,
     isError: false,
   }),
-  // id query (deep-link) resolves to a file; tag query resolves empty.
-  useGetDataLakeArticles: (params?: { id?: string } | null) => ({
-    data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
-    isLoading: false,
-  }),
+  // Records whether the query would actually RUN, mirroring the hook's own `enabled && !!lakeId`
+  // gate: in the all-lakes scope the explorer still calls this (hooks are unconditional) with a
+  // null lake, and counting that as a fetch would misread a disabled query as a live one.
+  useGetDataLakeUncategorizedFiles: (lakeId: string | null, enabled: boolean) => {
+    uncategorizedState.enabled.push(enabled && !!lakeId);
+    return { data: { data: uncategorizedState.files }, isLoading: false, isError: uncategorizedState.isError };
+  },
+  // id query (deep-link) resolves to a file; the merged Uncategorized bucket resolves to its own
+  // fixture (and records that it was enabled); tag query resolves empty.
+  useGetDataLakeArticles: (params?: { id?: string; uncategorized?: boolean } | null) => {
+    if (params?.uncategorized) {
+      uncategorizedState.mergedEnabled.push(true);
+      return { data: { data: uncategorizedState.mergedFiles }, isLoading: false };
+    }
+    return {
+      data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
+      isLoading: false,
+    };
+  },
   useGetDataLakes: () => ({ data: lakesState.value }),
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
@@ -162,6 +195,8 @@ vi.mock('./DataLakeChatTree', () => ({
     emptySlot?: React.ReactNode;
     dropHint?: string;
     tree: { segment: string }[];
+    uncategorized?: { files: { id: string }[]; count: number };
+    isError?: boolean;
   }) => {
     const file = {
       id: 'file-123',
@@ -176,6 +211,9 @@ vi.mock('./DataLakeChatTree', () => ({
         data-can-delete={String(props.canDeleteFile(file))}
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
+        data-error={String(!!props.isError)}
+        data-uncategorized-count={props.uncategorized ? String(props.uncategorized.count) : ''}
+        data-uncategorized-files={(props.uncategorized?.files ?? []).map(f => f.id).join(',')}
       >
         {props.subHeader}
         {props.emptySlot}
@@ -190,6 +228,9 @@ vi.mock('./DataLakeChatTree', () => ({
         </button>
         <button data-testid="mock-navigate-back" onClick={() => props.onNavigate([])}>
           back
+        </button>
+        <button data-testid="mock-open-bucket" onClick={() => props.onNavigate(['__uncategorized__'])}>
+          open bucket
         </button>
         {props.onClose && (
           <button data-testid="mock-close" onClick={props.onClose}>
@@ -630,6 +671,108 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
     expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
+
+  // The picker's per-lake count is membership-based while the tree is built from prefix tags, so
+  // a member with no taxonomy tag was counted and then shown nowhere. The bucket is what makes
+  // that file reachable rather than merely counted (#2031).
+  describe('uncategorized bucket', () => {
+    beforeEach(() => {
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 1 };
+      uncategorizedState.files = [{ id: 'loose-1', fileName: 'no-tags.pdf' }];
+      uncategorizedState.enabled = [];
+      uncategorizedState.isError = false;
+    });
+    afterEach(() => {
+      tagCountsState.uncategorizedFileCounts = {};
+      uncategorizedState.files = [];
+    });
+
+    const scopeToLakeA = () => {
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+    };
+
+    it('hands the tree the scoped lake bucket count, from the same payload the picker reads', () => {
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '1');
+    });
+
+    it('offers no merged bucket when every lake member is categorized somewhere', () => {
+      // The per-lake figure is 1 here, and the merged one is 0 - that file is filed under another
+      // lake's branch, so the merged tree already reaches it and must not offer it twice.
+      renderExplorer();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '');
+    });
+
+    it('offers no bucket for a scoped lake whose members are all categorized', () => {
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 0 };
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '');
+    });
+
+    it('offers the MERGED bucket in the all-lakes scope, sized by the distinct cross-lake count', () => {
+      // Not a sum of the per-lake figures: a file categorized in one lake is already reachable
+      // under that lake's branch in the merged tree, so the server hands down its own number.
+      tagCountsState.totalUncategorized = 4;
+      renderExplorer();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '4');
+
+      tagCountsState.totalUncategorized = 0;
+    });
+
+    it('reads the merged bucket from the cross-lake browse, which has no lake-scope parameter', () => {
+      tagCountsState.totalUncategorized = 1;
+      uncategorizedState.mergedFiles = [{ id: 'merged-1', fileName: 'loose.pdf' }];
+      uncategorizedState.mergedEnabled = [];
+      renderExplorer();
+
+      expect(uncategorizedState.mergedEnabled).toHaveLength(0);
+      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+
+      expect(uncategorizedState.mergedEnabled.at(-1)).toBe(true);
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'merged-1');
+      // The per-lake route stays untouched in this scope - it cannot express "every lake".
+      expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
+
+      tagCountsState.totalUncategorized = 0;
+      uncategorizedState.mergedFiles = [];
+    });
+
+    it('tells the tree a failed bucket read failed, rather than letting it render as empty', () => {
+      // The row the user just clicked promised a count, so an empty file list would read as
+      // "they are gone" - a failed read must never borrow the empty state's meaning.
+      uncategorizedState.isError = true;
+      uncategorizedState.files = [];
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-error', 'false');
+
+      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-error', 'true');
+    });
+
+    it('fetches the bucket files only once it is opened, not to render its count', () => {
+      renderExplorer();
+      scopeToLakeA();
+
+      // The count alone renders the row, so the list must stay unfetched until someone opens it.
+      expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', '');
+
+      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+
+      expect(uncategorizedState.enabled.at(-1)).toBe(true);
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'loose-1');
+    });
   });
 
   it('withholds Add files on a lake the caller cannot manage', () => {

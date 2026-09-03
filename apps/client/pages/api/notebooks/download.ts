@@ -5,6 +5,7 @@ import { NotebookDownloadRequestSchema } from '../../../types/api';
 import { getFilesStorage } from '@server/utils/storage';
 import { stampGear } from '@server/services/gears/stampGear';
 import { notebookCurationService } from '@bike4mind/services';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import archiver from 'archiver';
 
@@ -300,7 +301,7 @@ const handler = baseApi().post(
       // force download via Content-Disposition instead of rendering in-browser
       const signedUrl = await getFilesStorage().getSignedUrl(finalFilePath, 'get', {
         expiresIn: 3600,
-        ResponseContentDisposition: `attachment; filename="${fileName}"`,
+        ResponseContentDisposition: buildContentDisposition(fileName),
       });
 
       req.logger.info('Generated download URL for curated notebook', {

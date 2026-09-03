@@ -573,12 +573,23 @@ describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
   });
 
   it('forwards origin + lakeId into the vectorize fan-out so the switch still bites downstream', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'chunk-1' }]);
+
     await dispatch(makeEvent({ ...convergencePayload, lakeId: 'lake-9' }), {} as never, mockLogger);
 
-    expect(h.sendToQueue).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ fabFileId: 'ff1', origin: 'convergence', lakeId: 'lake-9' })
-    );
+    // EXACT shape, not objectContaining: the scope is the whole point of this message, and an
+    // objectContaining passes just as happily against a body that dropped a field it was not asked
+    // about. A silently dropped lakeId is how the rescue sweep resolved the pause platform-only for
+    // two releases (#2157), so the shape is pinned whole.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff1',
+      chunkIds: ['chunk-1'],
+      userId: 'u1',
+      embeddingModel: 'text-embedding-3-small',
+      batchSize: 1,
+      origin: 'convergence',
+      lakeId: 'lake-9',
+    });
   });
 });
 

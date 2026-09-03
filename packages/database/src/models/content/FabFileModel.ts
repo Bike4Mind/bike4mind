@@ -3,6 +3,7 @@ import {
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  type DataLakeMembershipFileCounts,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
@@ -11,11 +12,12 @@ import {
   IFabFileVersion,
   FabFileSourceType,
   KnowledgeType,
+  normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
 } from '@bike4mind/common';
-import mongoose, { Model, Schema } from 'mongoose';
+import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
-import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
@@ -23,6 +25,7 @@ import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '
 import {
   buildDataLakeMembershipFilter,
   buildDataLakeMembershipQuery,
+  buildLacksContentPrefixTagFilter,
   buildNoOtherLakeMetaTagFilter,
 } from '../../queries/dataLakeLifecycleScope';
 
@@ -594,7 +597,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async findAllInIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllInIds') } });
     return result.map(d => d.toObject());
   }
 
@@ -676,8 +679,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return await super.find(filter, { content: 0 });
   }
 
+  /** Without this guard a CastError here is remapped by the API error handler into a confusing 404 on the notebook file list. */
   async findAllByIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
   }
 
@@ -1866,13 +1870,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * Per-lake live file counts, keyed by membership tag. A lake with no members counts 0 rather
-   * than dropping out of the map.
+   * Per-lake live file counts, keyed by membership tag, split into the whole lake and the slice
+   * of it a prefix-keyed tag tree structurally cannot render:
+   *   `total`         - every member (meta-tag arm OR prefix arm). What a lake picker shows.
+   *   `uncategorized` - the members carrying no tag under the lake's `fileTagPrefix`, so a
+   *                     browse tree can offer them as an "Uncategorized" bucket rather than
+   *                     counting files it never lists. A lake with no usable prefix reports 0:
+   *                     with no prefix there is no taxonomy to be outside of, and the tree
+   *                     renders no branches for it either.
+   * Both come from the SAME membership predicate, one narrowed by the shared uncategorized rule
+   * (`buildLacksContentPrefixTagFilter`, whose in-memory twin `satisfiesTagPrefix` is what the
+   * write-door reconciler and the backfill migration stamp on), so a surface can subtract one
+   * from the other and get exactly the files its prefix-keyed branches do cover. A lake with no
+   * members reports zeros rather than dropping out of the map.
    *
    * Batched into `$facet` aggregates rather than one `countDocuments` per scope: the tag-count
    * surface hands this every lake an ADMIN can see - every lake of every tenant - and a fan-out
    * that wide is thousands of round trips through a pool that defaults to two connections
-   * (b4m-core/db-core/src/utils/mongo.ts), which is what times the request out.
+   * (b4m-core/db-core/src/utils/mongo.ts), which is what times the request out. The two figures
+   * ride ONE pass for the same reason: a second fan-out of this shape would double the round
+   * trips this batching exists to avoid, where a second branch per scope is one more in-memory
+   * pass over a union the aggregate already matched.
    *
    * Each facet branch re-applies its OWN scope filter to the chunk's union, so the counts stay
    * per-scope INDEPENDENT: a file that belongs to two lakes (co-owned meta-tags, or a colliding
@@ -1882,9 +1900,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * Chunks run at LAKE_COUNT_CONCURRENCY, the same bound countDataLakeUniqueFilesByPrefix uses:
    * these two legs are issued concurrently with each other, so neither may fan out freely.
    */
-  async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
+  async countDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, DataLakeMembershipFileCounts>> {
     if (scopes.length === 0) return {};
-    const counts: Record<string, number> = {};
+    const counts: Record<string, DataLakeMembershipFileCounts> = {};
     const chunkStarts = Array.from(
       { length: Math.ceil(scopes.length / LAKE_COUNT_CHUNK) },
       (_, i) => i * LAKE_COUNT_CHUNK
@@ -1897,17 +1917,82 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         archivedAt: null,
         status: { $ne: 'pending' },
       }));
+      // $and, never a spread: the membership half can carry a top-level `tags` key (the prefix
+      // arm) and so does the uncategorized half, and the later spread would silently DELETE the
+      // earlier - widening the branch to every file in the install.
+      const uncategorizedFilters = chunk.map((scope, j) => {
+        const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+        return prefix ? { $and: [filters[j], buildLacksContentPrefixTagFilter(prefix)] } : null;
+      });
       // Synthetic branch keys: a facet field name may not contain a '.' or start with a '$',
       // and `datalakeTag` is a user-derived string. Mapped back positionally.
+      const branches: Record<string, PipelineStage.FacetPipelineStage[]> = {};
+      filters.forEach((filter, j) => {
+        branches[`s${j}`] = [{ $match: filter }, { $count: 'n' }];
+        const uncategorized = uncategorizedFilters[j];
+        if (uncategorized) branches[`u${j}`] = [{ $match: uncategorized }, { $count: 'n' }];
+      });
       const [row] = await this.fabFileModel.aggregate<Record<string, { n: number }[]>>([
         { $match: { $or: filters } },
-        { $facet: Object.fromEntries(filters.map((filter, j) => [`s${j}`, [{ $match: filter }, { $count: 'n' }]])) },
+        { $facet: branches },
       ]);
       chunk.forEach((scope, j) => {
-        counts[scope.datalakeTag] = row?.[`s${j}`]?.[0]?.n ?? 0;
+        counts[scope.datalakeTag] = {
+          total: row?.[`s${j}`]?.[0]?.n ?? 0,
+          uncategorized: row?.[`u${j}`]?.[0]?.n ?? 0,
+        };
       });
     });
     return counts;
+  }
+
+  /**
+   * DISTINCT live files across every scope - the honest "all my lakes" figure, where the per-lake
+   * counts above deliberately count a file once per lake it belongs to. So those can sum to MORE
+   * than this, which is dedupe rather than disagreement; what they can no longer do is describe a
+   * different POPULATION than the total shown above them.
+   *
+   * One `countDocuments`, no chunking: unlike `countDataLakeUniqueFilesByPrefix` there is no
+   * per-lake `$facet` branch to repeat an O(lakes) filter into, so the query document stays
+   * linear in the scope count. Each arm is a rooted `$or` member, the shape the planner bounds
+   * per arm against the `tags.name` index.
+   */
+  async countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number> {
+    if (scopes.length === 0) return 0;
+    return this.fabFileModel.countDocuments({
+      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
+      deletedAt: null,
+      archivedAt: null,
+      status: { $ne: 'pending' },
+    });
+  }
+
+  /**
+   * The same distinct count, narrowed to the files categorized under NONE of the caller's lake
+   * prefixes - the bucket for a MERGED tree, where a file categorized under any one lake is
+   * already reachable through that lake's branch.
+   *
+   * Deliberately not a sum of the per-lake `uncategorized` figures: those judge each lake
+   * separately, so a file uncategorized in two lakes would count twice, and one uncategorized in
+   * A but categorized in B would count despite already being reachable under B's branch.
+   *
+   * Each prefix is its own `$and` conjunct - every fragment's top-level key is `tags`, so merging
+   * them into one object would keep only the last and the count would silently widen. Prefixes
+   * are deduped and unusable ones dropped, matching the browse query this sizes.
+   */
+  async countDistinctUncategorizedDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[],
+    tagPrefixes: string[]
+  ): Promise<number> {
+    if (scopes.length === 0) return 0;
+    const prefixes = usableTagPrefixes(tagPrefixes);
+    return this.fabFileModel.countDocuments({
+      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
+      ...(prefixes.length > 0 ? { $and: prefixes.map(buildLacksContentPrefixTagFilter) } : {}),
+      deletedAt: null,
+      archivedAt: null,
+      status: { $ne: 'pending' },
+    });
   }
 
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
@@ -2048,6 +2133,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
+  }
+
+  async hardDeleteOneById(fabFileId: string): Promise<boolean> {
+    // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
+    // concurrent purges of the same document exactly one is told it did the deleting.
+    const doc = await this.fabFileModel
+      .findOneAndDelete({ _id: fabFileId }, { hardDelete: true } as Record<string, unknown>)
+      .setOptions({ includeDeleted: true });
+    return !!doc;
   }
 
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {

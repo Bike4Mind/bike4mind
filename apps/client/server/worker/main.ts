@@ -18,6 +18,7 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
+import { CHUNK_SCAN_BATCH } from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -170,13 +171,14 @@ async function main() {
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
   // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose
-  // vectorize hand-off was stranded. Selection and enqueue accounting for both passes live in
-  // chunkRescueSweep.ts, shared in shape with the hosted daily cron.
+  // vectorize hand-off was stranded. Selection, pause scoping and enqueue accounting for both
+  // passes live in chunkRescueSweep.ts, shared in shape with the hosted daily cron - the per-tick
+  // budget below is the only thing that differs.
   // Each pass is isolated, as in the hosted twin: neither guards its own FabFile.find, so a Mongo
   // blip in the first would otherwise reject out of the tick and leave the stranded-vectorize
   // backlog growing untouched until the error cleared.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    await runChunkRescueSweep(bootLogger).catch(err => {
+    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger }).catch(err => {
       bootLogger.error(`[fabFileChunkScan] un-chunked rescue sweep failed: ${err}`);
     });
     await runStrandedVectorizeRescue(bootLogger).catch(err => {

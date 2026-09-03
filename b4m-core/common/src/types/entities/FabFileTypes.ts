@@ -591,6 +591,22 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
+ * One lake's live file counts under the membership predicate.
+ *
+ * They ship together because a browse surface showing `total` is committing to LIST that many
+ * files, and a prefix-keyed tag tree cannot list the `uncategorized` slice: those files carry the
+ * lake's meta-tag but no tag under its `fileTagPrefix`, so no branch of the tree contains them.
+ * Serving one without the other is what let a picker advertise 13 files above a tree totalling 12
+ * (#2031). `uncategorized` is always <= `total`; the difference is what the tree's branches cover.
+ */
+export type DataLakeMembershipFileCounts = {
+  /** Every member: the meta-tag arm OR the prefix arm. */
+  total: number;
+  /** Members with no tag under the lake's `fileTagPrefix`. 0 when the lake has no usable prefix. */
+  uncategorized: number;
+};
+
+/**
  * Identifies a data lake for file-membership matching. The predicate itself is
  * `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
  * `IFabFileRepository` can name it without the packages depending on each other.
@@ -782,6 +798,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
+      /**
+       * NARROW to the files carrying no tag under ANY of these lake prefixes - an
+       * "Uncategorized" bucket. Never widens, so it means nothing without `restrictToDataLake`.
+       * See buildFabFileSearchQuery.options.lacksContentPrefixTags.
+       */
+      lacksContentPrefixTags?: string[];
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -1223,12 +1245,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
-   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
    * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
-   * carry only the membership tag and over-counts multi-tagged ones.
+   * carry only the membership tag and over-counts multi-tagged ones - and see
+   * `DataLakeMembershipFileCounts` for why the uncategorized slice ships alongside the total.
    */
-  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
+  countDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[]
+  ): Promise<Record<string, DataLakeMembershipFileCounts>>;
+  /**
+   * DISTINCT live files across every scope. The per-lake counts above deliberately count a file
+   * once per lake it belongs to, so they can sum HIGHER than this; use this wherever an
+   * "all lakes" figure sits above those per-lake rows, so the two describe one population.
+   */
+  countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
+  /**
+   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
+   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
+   * which judge each lake on its own and so both double-count and over-count.
+   */
+  countDistinctUncategorizedDataLakeFilesByMembership(
+    scopes: DataLakeMembershipScope[],
+    tagPrefixes: string[]
+  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
@@ -1307,6 +1347,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * malformed one throws a CastError partway through the delete.
    */
   hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
+  /**
+   * Hard-delete ONE file, atomically, answering whether THIS call is the one that removed it.
+   *
+   * The single-document sibling of `hardDeleteByIds`, and the difference is the whole point: a
+   * `deleteMany` cannot say which of two concurrent callers actually removed the row, so a caller
+   * that owes a side effect per destruction (returning the owner's storage quota, say) would pay
+   * it twice. `false` means the row was already gone.
+   */
+  hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }
