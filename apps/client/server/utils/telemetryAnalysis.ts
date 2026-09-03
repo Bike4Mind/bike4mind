@@ -718,44 +718,49 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
   sections.push(`**Timestamp:** ${telemetry.timestamp}`);
   sections.push('');
 
-  // AI Analysis Section (if available)
+  // AI Analysis Section (if available). LLM-generated text rendered as GitHub
+  // markdown, so every field is escaped before interpolation.
   if (analysis) {
+    const safeSummary = escapeMarkdown(analysis.summary);
+    const safeRootCause = analysis.rootCause ? escapeMarkdown(analysis.rootCause) : undefined;
+    const safeEstimatedImpact = escapeMarkdown(analysis.estimatedImpact);
+
     sections.push(`## AI Analysis`);
     if (analysisSource) {
       sections.push(`> _Analysis source: ${analysisSource}_`);
     }
     sections.push('');
     sections.push(`### Summary`);
-    sections.push(analysis.summary);
+    sections.push(safeSummary);
     sections.push('');
 
-    if (analysis.rootCause) {
+    if (safeRootCause) {
       sections.push(`### Root Cause`);
-      sections.push(analysis.rootCause);
+      sections.push(safeRootCause);
       sections.push('');
     }
 
     sections.push(`### Findings`);
     for (const finding of analysis.findings) {
-      sections.push(`- ${finding}`);
+      sections.push(`- ${escapeMarkdown(finding)}`);
     }
     sections.push('');
 
     sections.push(`### Recommendations`);
     for (const rec of analysis.recommendations) {
-      sections.push(`- ${rec}`);
+      sections.push(`- ${escapeMarkdown(rec)}`);
     }
     sections.push('');
 
     if (analysis.correlations && analysis.correlations.length > 0) {
       sections.push(`### Correlations`);
       for (const corr of analysis.correlations) {
-        sections.push(`- ${corr}`);
+        sections.push(`- ${escapeMarkdown(corr)}`);
       }
       sections.push('');
     }
 
-    sections.push(`**Estimated Impact:** ${analysis.estimatedImpact}`);
+    sections.push(`**Estimated Impact:** ${safeEstimatedImpact}`);
     sections.push('');
     sections.push('---');
     sections.push('');
