@@ -128,7 +128,7 @@ describe('GET /api/data-lakes/[id]/access', () => {
     const { res, send, setHeader } = makeRes();
     await call(req({ id: 'lake1', format: 'csv' }), res);
     expect(setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
-    expect(setHeader).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename=lake-access-lake-oid-1.csv');
+    expect(setHeader).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename="lake-access-lake-oid-1.csv"');
     const body = send.mock.calls[0][0] as string;
     expect(body).toContain('# Members and grants');
     expect(body).toContain('"user","u2","Bob","reader","active"');

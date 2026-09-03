@@ -17,6 +17,7 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useReprocessFabFile: () => ({ mutate: vi.fn(), isPending: false }),
   useRemoveFileFromDataLake: () => ({ mutate: removeFileMutate, isPending: false }),
+  usePurgeDataLakeDocument: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector?: (s: { currentUser: { id: string } }) => unknown) =>
@@ -153,5 +154,24 @@ describe('DataLakeArticlePanel - remove-from-lake copy', () => {
     );
 
     expect(screen.queryByTestId('datalake-removefile-btn-f1')).not.toBeInTheDocument();
+  });
+
+  it('renders the permanent-deletion door only for a caller who may use it', () => {
+    // The render gate is the outer half of the two-part rule the service enforces: without it a
+    // curator, or a lake owner looking at someone else's document, meets a red "Delete permanently"
+    // that 400s only after they have confirmed it.
+    const { rerender } = render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage canPurge={false} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('datalake-purgefile-btn-f1')).not.toBeInTheDocument();
+
+    rerender(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage canPurge />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('datalake-purgefile-btn-f1')).toBeInTheDocument();
   });
 });

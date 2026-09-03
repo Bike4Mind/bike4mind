@@ -45,6 +45,7 @@ export * from './removeFileFromDataLake';
 export * from './addFileToDataLake';
 export * from './setDataLakeFileTags';
 export * from './acceptDataLakePurge';
+export * from './purgeDataLakeDocument';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';
