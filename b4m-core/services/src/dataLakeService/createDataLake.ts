@@ -6,6 +6,13 @@ import type { z } from 'zod';
 
 type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
 
+// Mirrors the slug.max(60) bound on CreateDataLakeRequestInput (and
+// MAX_DATA_LAKE_SLUG_LENGTH in apps/client/app/hooks/data/dataLakeSlug.ts) - the input schema
+// only bounds the caller's base slug, so disambiguateSlug's own suffixing must re-enforce this
+// or a collision can persist a slug the rest of the system (e.g. entitlements/registry.ts)
+// treats as invalid.
+const MAX_SLUG_LENGTH = 60;
+
 interface CreateDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'create' | 'find'>;
@@ -42,7 +49,15 @@ async function disambiguateSlug(
   const scope = organizationId ? { organizationId } : { organizationId: { $in: [null, ''] } };
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
-    const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt}`;
+    let slug = baseSlug;
+    if (attempt > 0) {
+      // Truncate the base (not the suffix) so the persisted slug never exceeds
+      // MAX_SLUG_LENGTH, and trim a hyphen the truncation may have exposed - slugRegex
+      // requires the slug to end alphanumeric, which the "-N" suffix already guarantees.
+      const suffix = `-${attempt}`;
+      const truncatedBase = baseSlug.slice(0, MAX_SLUG_LENGTH - suffix.length).replace(/-+$/, '');
+      slug = `${truncatedBase}${suffix}`;
+    }
     if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
     if (existing.length === 0) return slug;

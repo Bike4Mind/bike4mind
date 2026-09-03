@@ -986,6 +986,24 @@ describe('createDataLake', () => {
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
   });
+
+  it('truncates the base rather than growing past 60 chars when disambiguating a max-length slug', async () => {
+    // A max-length (60-char) base slug that collides must still get a suffixed slug that
+    // fits the same 60-char bound every other surface (e.g. entitlements/registry.ts) judges
+    // slugs by - appending "-1" onto it unbounded would persist an over-long slug.
+    const baseSlug = 'a'.repeat(60);
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    // Call order: the tag-prefix availability check (no candidates), then the slug probes -
+    // base slug taken, truncated+suffixed slug free.
+    const find = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    const db = { dataLakes: { create, find } };
+
+    await createDataLake('owner', { name: 'X', slug: baseSlug, fileTagPrefix: 'xy:' }, { db });
+
+    const written = create.mock.calls[0][0] as IDataLakeDocument;
+    expect(written.slug.length).toBeLessThanOrEqual(60);
+    expect(written.slug).toBe(`${'a'.repeat(58)}-1`);
+  });
 });
 
 describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
