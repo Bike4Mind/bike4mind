@@ -689,7 +689,12 @@ describe('ChatCompletionProcess', () => {
   // see Approach property 1. Pin both directions.
   describe('countLakeReachableAttachments (#2243 lake-membership arm)', () => {
     const LAKE = { id: 'lake1', name: 'Acme', slug: 'acme', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:' };
-    const MEMBERSHIP = { datalakeTag: LAKE.datalakeTag, fileTagPrefix: LAKE.fileTagPrefix, creatorUserId: 'creator-1' };
+    const MEMBERSHIP = {
+      kind: 'owned' as const,
+      datalakeTag: LAKE.datalakeTag,
+      fileTagPrefix: LAKE.fileTagPrefix,
+      creatorUserId: 'creator-1',
+    };
 
     it('forwards lakeMemberships (derived from access.lakes), not scopedTagPrefixes', async () => {
       (service as any).accessibleDataLakeAccessMemo = {
