@@ -7,6 +7,17 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
 
+// The purge gate reads BOTH lake ownership and FILE ownership, so the viewer's identity has to be
+// real here: unmocked, `currentUser` is null and an untagged fixture's `userId` is undefined, and
+// the file-ownership conjunct passes on `undefined === undefined` - pinning nothing.
+const userState = vi.hoisted(() => ({
+  isAdmin: false,
+  currentUser: { id: 'u-owner' } as { id: string } | null,
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector?: (state: typeof userState) => unknown) => (selector ? selector(userState) : userState),
+}));
+
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
 const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 // Same for the active-lake delete button, so its onSuccess (exit-to-root) wiring is exercised too.
@@ -110,8 +121,9 @@ vi.mock('./TaxonomyReviewPanel', () => ({
 }));
 
 const lakeFiles = [
-  { id: 'f1', fileName: 'war.md', tags: [{ name: 'lk:genre:war' }] },
-  { id: 'f2', fileName: 'peace.md', tags: [{ name: 'lk:genre:peace' }] },
+  { id: 'f1', fileName: 'war.md', userId: 'u-owner', tags: [{ name: 'lk:genre:war' }] },
+  // Uploaded by someone else: a lake owner may remove it, but never destroy it.
+  { id: 'f2', fileName: 'peace.md', userId: 'u-contributor', tags: [{ name: 'lk:genre:peace' }] },
   // No prefix-matching tag -> must surface under the Uncategorized bucket.
   { id: 'f3', fileName: 'loose.md', tags: [{ name: 'datalake:mine' }] },
   // A BARE prefix is not a category anyone can navigate to, so the server counts this file as
@@ -149,7 +161,19 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 // The right-pane reader and the settings editor have their own suites - stub them so this
 // one exercises only the manager's navigation/affordance wiring.
 vi.mock('./DataLakeArticlePanel', () => ({
-  default: ({ file }: { file: { fileName: string } | null }) => <div data-testid="mock-article">{file?.fileName}</div>,
+  default: ({
+    file,
+    canManage,
+    canPurge,
+  }: {
+    file: { fileName: string } | null;
+    canManage?: boolean;
+    canPurge?: boolean;
+  }) => (
+    <div data-testid="mock-article" data-can-manage={String(!!canManage)} data-can-purge={String(!!canPurge)}>
+      {file?.fileName}
+    </div>
+  ),
 }));
 vi.mock('./DataLakeSettingsModal', () => ({
   DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
@@ -231,6 +255,8 @@ const rerenderPanel = (rerender: (ui: ReactNode) => void) =>
   );
 
 beforeEach(() => {
+  userState.isAdmin = false;
+  userState.currentUser = { id: 'u-owner' };
   isFeatureEnabled.mockReset();
   isFeatureEnabled.mockReturnValue(true);
   useGetDataLakes.mockReset();
@@ -680,6 +706,67 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-addfiles-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-adminview')).toBeInTheDocument();
+  });
+
+  it('withholds the permanent-delete door from a non-owning manager, who can still manage', async () => {
+    // The rung split that matters: a curator or org admin manages membership (canManage) but must
+    // not be shown a destructive button the service will refuse - purge follows ownership.
+    const curatorView = { ...mineLake, canManage: true, isOwn: false };
+    useGetDataLakes.mockReturnValue({ data: [curatorView], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-war'));
+    await user.click(screen.getByTestId('datalake-manager-file-f1'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-manage', 'true');
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'false');
+  });
+
+  it('gives the owner the permanent-delete door on their own file', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-war'));
+    await user.click(screen.getByTestId('datalake-manager-file-f1'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'true');
+  });
+
+  it('withholds it from the LAKE owner on a contributor\'s file, which they can still manage', async () => {
+    // The half of the rule `isOwn` alone cannot cover, and the reachable one: `restrictToDataLake`
+    // drops the ownership arms from the browse, so a lake owner really does see files they did not
+    // upload. Destroying one would take it out of that contributor's own Files list and chats -
+    // `purgeDataLakeDocument` refuses it, and the button must not be there to refuse.
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-peace'));
+    await user.click(screen.getByTestId('datalake-manager-file-f2'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-manage', 'true');
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'false');
+  });
+
+  it('gives a platform admin the door on a file they do not own', async () => {
+    // The deliberate escape hatch the service allows; without this case the `|| isAdmin` arm could
+    // be deleted and every other purge case here would stay green.
+    userState.isAdmin = true;
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+    await user.click(screen.getByTestId('datalake-manager-node-peace'));
+    await user.click(screen.getByTestId('datalake-manager-file-f2'));
+
+    expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'true');
   });
 });
 

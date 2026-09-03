@@ -1,25 +1,16 @@
 import { useState } from 'react';
-import {
-  Box,
-  Button,
-  Chip,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Modal,
-  ModalDialog,
-  Skeleton,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, Chip, Skeleton, Tooltip, Typography } from '@mui/joy';
 import ChatIcon from '@mui/icons-material/Chat';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import { useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
+import { useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
+import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
+import { describePipelineStall } from '@bike4mind/common';
 
 function cleanFileName(fileName: string): string {
   return fileName.replace(/\.[^/.]+$/, '').replace(/^\[.*?\]\s*/, '');
@@ -33,12 +24,21 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
 interface DataLakeArticlePanelProps {
   file: IFabFileDocument | null;
   dataLakeId: string;
+  lakeName: string;
   /**
    * Whether the caller may manage this lake (admin or creator). Gates the per-file
    * management actions (Re-process, Remove) - lake lists surface other users'
    * read-only public lakes. Absent -> read-only (fail-safe).
    */
   canManage?: boolean;
+  /**
+   * Whether the caller may DESTROY this document - one rung narrower than `canManage`: a curator or
+   * org admin manages membership, but permanent deletion needs lake ownership AND ownership of the
+   * file itself (or platform admin), which is exactly what `purgeDataLakeDocument` enforces. Separate
+   * prop rather than reusing `canManage`, so nobody meets a red button that 400s after the
+   * confirmation. Absent -> no purge door (fail-safe).
+   */
+  canPurge?: boolean;
   onAskAbout?: (prompt: string) => void;
   onRemoved?: () => void;
 }
@@ -51,14 +51,21 @@ interface DataLakeArticlePanelProps {
 export default function DataLakeArticlePanel({
   file,
   dataLakeId,
+  lakeName,
   canManage,
+  canPurge,
   onAskAbout,
   onRemoved,
 }: DataLakeArticlePanelProps) {
-  const { data: content, isLoading } = useGetFabFileContent(file);
+  // A purged file is unreadable the instant the receipt comes back, but the selection only clears
+  // when the owner dismisses it. Without this the pane re-fetches the signed URL of an object that
+  // no longer exists and logs a 404 behind the dialog.
+  const [purgedFileId, setPurgedFileId] = useState<string | null>(null);
+  const readableFile = file && file.id === purgedFileId ? null : file;
+  const { data: content, isLoading } = useGetFabFileContent(readableFile);
   const reprocess = useReprocessFabFile(dataLakeId);
-  const removeFile = useRemoveFileFromDataLake(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const stallNotice = file ? describePipelineStall(file) : null;
 
   if (!file) {
     return (
@@ -100,8 +107,9 @@ export default function DataLakeArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          {/* Re-process and Remove mutate lake content, so they are owner-or-admin only
-              (the backend enforces the same). Hidden when viewing a read-only lake. */}
+          {/* These mutate lake content, so they are owner-or-admin only (the backend enforces the
+              same). Hidden when viewing a read-only lake. Remove unpicks lake membership and is
+              reversible; Delete permanently destroys the document everywhere and is not. */}
           {canManage && (
             <>
               <Tooltip title="Re-run chunking + vectorization" size="sm">
@@ -125,20 +133,34 @@ export default function DataLakeArticlePanel({
                   color="danger"
                   data-testid={`datalake-removefile-btn-${file.id}`}
                   startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
-                  loading={removeFile.isPending}
                   onClick={() => setConfirmRemove(true)}
                   sx={{ flexShrink: 0, fontSize: '13px' }}
                 >
                   Remove
                 </Button>
               </Tooltip>
+              {canPurge && (
+                <PurgeLakeDocumentAction
+                  file={file}
+                  title={title}
+                  dataLakeId={dataLakeId}
+                  onPurgeComplete={() => setPurgedFileId(file.id)}
+                  onPurged={onRemoved}
+                />
+              )}
             </>
           )}
         </Box>
-        {/* Surfaced from the chunk-pipeline hardening: files that extracted no text are flagged. */}
-        {file.notes && (
+        {/* Pipeline state (no extractable text, a halted rebuild) is derived from its own fields;
+            `notes` is the owner's own text and is shown alongside, not in place of it. */}
+        {stallNotice && (
           <Typography level="body-xs" sx={{ color: 'warning.500', mb: 1 }}>
-            ⚠️ {file.notes}
+            {'\u26a0\ufe0f'} {stallNotice}
+          </Typography>
+        )}
+        {file.notes && (
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1 }}>
+            {file.notes}
           </Typography>
         )}
         {tags.length > 0 && (
@@ -153,7 +175,11 @@ export default function DataLakeArticlePanel({
       </Box>
 
       <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 2 }}>
-        {isLoading ? (
+        {readableFile === null ? (
+          <Typography level="body-sm" data-testid="datalake-article-purged" sx={{ color: 'text.tertiary' }}>
+            This document has been permanently deleted.
+          </Typography>
+        ) : isLoading ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             <Skeleton variant="text" level="h4" sx={{ width: '60%' }} />
             <Skeleton variant="text" level="body-md" sx={{ width: '100%' }} />
@@ -184,37 +210,14 @@ export default function DataLakeArticlePanel({
         </Box>
       )}
 
-      <Modal open={confirmRemove} onClose={() => setConfirmRemove(false)}>
-        <ModalDialog data-testid="datalake-removefile-confirm" role="alertdialog">
-          <DialogTitle>Remove file from data lake?</DialogTitle>
-          <DialogContent>
-            “{title}” will be removed from this data lake. The file stays in your Files list and any chats that use it —
-            only its membership in this lake is removed. It stops appearing here right away; some search backends finish
-            clearing it on the lake&apos;s next sync.
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="danger"
-              data-testid="datalake-removefile-confirm-btn"
-              loading={removeFile.isPending}
-              onClick={() =>
-                removeFile.mutate(file.id, {
-                  onSuccess: () => {
-                    setConfirmRemove(false);
-                    onRemoved?.();
-                  },
-                })
-              }
-            >
-              Remove
-            </Button>
-            <Button variant="plain" color="neutral" onClick={() => setConfirmRemove(false)}>
-              Cancel
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+      <RemoveFileFromLakeDialog
+        open={confirmRemove}
+        onClose={() => setConfirmRemove(false)}
+        file={file}
+        lakeName={lakeName}
+        dataLakeId={dataLakeId}
+        onRemoved={onRemoved}
+      />
     </Box>
   );
 }

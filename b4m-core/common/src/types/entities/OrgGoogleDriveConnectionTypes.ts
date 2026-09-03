@@ -86,6 +86,24 @@ export interface IOrgGoogleDriveConnection {
    */
   syncClaimedAt?: Date;
 
+  /**
+   * The data-lake batch a multi-run ingest chain is currently filling. A folder too large to ingest
+   * inside one queue-Lambda invocation yields mid-loop and re-enqueues itself; this is the token that
+   * lets ONLY that continuation take over the live 'syncing' claim (adoptSyncClaim), so the chain
+   * keeps the connection to itself and no poll starts a competing walk that would duplicate the tail.
+   * Cleared whenever a claim is taken or released. Only meaningful while status === 'syncing'.
+   */
+  activeIngestBatchId?: string;
+
+  /**
+   * One-time-use companion to `activeIngestBatchId`: the CAS value each slice's adoptSyncClaim call
+   * must present, rotated to a fresh value on every successful adopt/renew. `activeIngestBatchId`
+   * cannot itself serve as that CAS value - it stays fixed for the whole chain (it also names the
+   * batch document to resume) - so two deliveries of one continuation message would otherwise both
+   * match it and both win. Only meaningful while status === 'syncing'.
+   */
+  ingestClaimToken?: string;
+
   // === Incremental sync ===
 
   /**
@@ -163,6 +181,16 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
+   * The connection bound to a given lake, whatever its `enabled` state, and deliberately WITHOUT an
+   * org filter - the caller is the lake-purge teardown, which must release the folder claim from
+   * whichever org holds it and cannot re-derive that org once the lake document is gone. A disabled
+   * row still occupies the unique driveFolderId index, so `findByDataLakeId`'s enabled-only view
+   * would leave exactly the strand this exists to prevent. Excludes credentials.
+   * SECURITY: server-side teardown only; never hand the result to a cross-org caller.
+   */
+  findByDataLakeIdAny(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
    * The connection that has claimed a given Drive folder, if any. Deliberately GLOBAL (no org
    * filter) - it answers "is this folder already claimed by ANY org", which is the whole point of
    * the global-unique index. SECURITY: server-side claim check only; the returned document (which
@@ -226,6 +254,29 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * would erase). Returns whether THIS caller won the claim; exactly one concurrent run proceeds.
    */
   claimForSync(id: string): Promise<boolean>;
+
+  /**
+   * Continuation-only claim take-over: refreshes `syncClaimedAt` iff the connection is still 'syncing'
+   * for THIS `activeIngestBatchId` AND still presents `claimToken` (the value the previous slice's
+   * renewSyncClaim/adoptSyncClaim minted). A sliced ingest hands the claim from one run to the next
+   * without ever passing through 'connected', so a scheduled poll cannot slip in between slices and
+   * start a competing walk (which would re-create the un-uploaded tail as duplicates, the whole
+   * failure this chain exists to avoid). The token match is what makes this a REAL compare-and-set: it
+   * is rotated on success, so a second delivery of the same continuation message presents a token that
+   * has already been consumed and loses. Returns the freshly-rotated token on success (to carry into
+   * the next slice's payload), or null if the take-over lost.
+   */
+  adoptSyncClaim(id: string, activeIngestBatchId: string, claimToken: string): Promise<string | null>;
+
+  /**
+   * Hold the claim across a slice boundary: re-stamps `syncClaimedAt` (so the stale-claim window never
+   * elapses mid-chain), records the batch the next slice must present to adopt it, and mints a fresh
+   * `ingestClaimToken` for that same slice to present. Guarded on 'syncing', and a real compare-and-set
+   * on `expectedToken` (the token THIS run currently holds for the chain, or omitted on a first slice
+   * that never held one) so a caller that already lost the claim to a reclaim/adopt cannot re-point it
+   * back at a chain nobody else is running. Returns the minted token on success, or null.
+   */
+  renewSyncClaim(id: string, activeIngestBatchId: string, expectedToken?: string | null): Promise<string | null>;
 
   /**
    * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'

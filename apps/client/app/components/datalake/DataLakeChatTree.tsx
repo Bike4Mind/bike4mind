@@ -52,6 +52,14 @@ interface DataLakeChatTreeProps {
   onNavigate: (breadcrumb: string[]) => void;
   /** Threaded to DataLakeTreeView's cross-tree article search. */
   source?: DataLakeBrowseSource;
+  /**
+   * The scoped lake's Uncategorized bucket: its members carrying no tag under the lake's own
+   * prefix, which the tag tree has no branch for. `count` comes from the same tag-counts payload
+   * as the picker's number, so the two account for the same files; `files` is fetched only once
+   * the bucket is opened and is empty until then. Omitted in the all-lakes scope, where there is
+   * no single prefix to be outside of.
+   */
+  uncategorized?: { files: IFabFileDocument[]; count: number };
   selectedFileIds: ReadonlySet<string>;
   /** Menu action: attach the file to the chat session. */
   onAttachFile: (file: IFabFileDocument) => void;
@@ -95,6 +103,7 @@ export default function DataLakeChatTree({
   breadcrumb,
   onNavigate,
   source,
+  uncategorized,
   selectedFileIds,
   onAttachFile,
   onViewFile,
@@ -421,6 +430,37 @@ export default function DataLakeChatTree({
       source={source}
       selectedFileIds={selectedFileIds}
       onSelectFile={() => {}}
+      uncategorized={
+        uncategorized && {
+          ...uncategorized,
+          // Italic + neutral folder, matching the manager nav's row: the bucket is not a category
+          // anyone named, so it must not read as one of the taxonomy branches above it.
+          renderRow: (count, onOpen) => (
+            <ListItem>
+              <ListItemButton
+                onClick={onOpen}
+                data-testid="datalake-node-uncategorized"
+                sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
+              >
+                <FolderOutlinedIcon sx={{ fontSize: 16, color: 'neutral.400', flexShrink: 0 }} />
+                <ListItemContent>
+                  {/* Not TreeRowLabel: a fixed one-word label never clips, so its measuring
+                      tooltip would be dead weight - and it carries no italic. */}
+                  <Typography
+                    noWrap
+                    sx={{ fontSize: '14px', fontWeight: 400, fontStyle: 'italic', color: 'text.secondary' }}
+                  >
+                    Uncategorized
+                  </Typography>
+                </ListItemContent>
+                <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
+                  {count}
+                </Chip>
+              </ListItemButton>
+            </ListItem>
+          ),
+        }
+      }
       isLoading={isLoading}
       isError={isError}
       chrome={chrome}

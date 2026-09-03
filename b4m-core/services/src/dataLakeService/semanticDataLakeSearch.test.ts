@@ -33,6 +33,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 import {
+  comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   type SemanticDataLakeSearchParams,
@@ -172,6 +173,58 @@ const skipAwareFilesAdapter = (corpus: { id: string; fileName: string; tags?: un
   });
 
 const makeLogger = () => ({ warn: vi.fn(), debug: vi.fn(), error: vi.fn(), log: vi.fn() });
+
+// #2243: retrieval resolves a dynamic lake's prefix arm through `lakeMemberships`, replacing the
+// caller-anchored `scopedTagPrefixes` this module used to forward. Net-new coverage - this module
+// never pinned `scopedTagPrefixes` reaching fabfiles.search at all.
+describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
+  const MEMBERSHIP = { datalakeTag: 'datalake:x', fileTagPrefix: 'x:', creatorUserId: 'creator-1' };
+
+  it('reaches fabfiles.search on EVERY page of the paging walk', async () => {
+    const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const pageTwo = [{ id: 'g0', fileName: 'G0.pdf', tags: [] }];
+    const search = filesAdapter([
+      { data: pageOne, hasMore: true, total: 11 },
+      { data: pageTwo, hasMore: false, total: 11 },
+    ]);
+
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP], budgets: { filePageSize: 10 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect(search).toHaveBeenCalledTimes(2);
+    for (const call of search.mock.calls) {
+      expect((call[5] as { lakeMemberships?: unknown[] }).lakeMemberships).toEqual([MEMBERSHIP]);
+    }
+  });
+
+  it('scopedTagPrefixes is absent from the options object', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search.mock.calls[0][5]).not.toHaveProperty('scopedTagPrefixes');
+  });
+
+  it('ownFilesOnly with no lake tags still sends lakeMemberships: [] + includeShared: true', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    const opts = search.mock.calls[0][5] as { lakeMemberships?: unknown[]; includeShared?: boolean };
+    expect(opts.lakeMemberships).toEqual([]);
+    expect(opts.includeShared).toBe(true);
+  });
+
+  it('the empty-dataLakeTags bail still fires even with non-empty lakeMemberships', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    const result = await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search).not.toHaveBeenCalled();
+    expect(result.results).toEqual([]);
+  });
+});
 
 describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
   const oneFile = [{ id: 'f1', fileName: 'F1.pdf', tags: [] }];
@@ -334,13 +387,17 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
   });
 
-  it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
+  it('asks for a fileName order, the sort the file walk needs to be a total order', async () => {
+    // The sort literal is hardcoded inside the paging loop (semanticDataLakeSearch.ts), so pinning
+    // the first call pins every page - a one-page fixture is sufficient here. buildFabFileSearchQuery
+    // gives no _id tiebreaker to createdAt, so switching this walk to it would silently re-expose
+    // the walk to page-boundary loss.
     const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
     await semanticDataLakeSearch(baseParams(), {
       db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
     } as never);
 
-    expect(search.mock.calls[0][5]).toMatchObject({ stableSort: true });
+    expect(search.mock.calls[0][4]).toEqual({ by: 'fileName', direction: 'asc' });
   });
 
   it('the file budget marks the scan truncated and warns', async () => {
@@ -1598,5 +1655,44 @@ describe('semanticDataLakeSearch withholds mid-(re)index members (#1681)', () =>
 
     expect(result.retrievalUnavailable.indexing.count).toBe(1);
     expect(result.retrievalUnavailable.paused.count).toBe(0);
+  });
+});
+
+/**
+ * `comparedNoPassages` is the seam that separates "we looked at none of the corpus" from "we
+ * looked and it did not match" - the distinction `results.length` cannot make, and the one a
+ * retrieval outcome is graded on (see proveRetrievalOutcome in knowledgeBaseSearch).
+ *
+ * Both routes have to count, and each was a plausible one-sided implementation: keying on the scan
+ * count alone reports every healthy all-ANN deployment as unsearched, and keying on the ann hits
+ * alone reports every DocumentDB/self-host deployment the same way.
+ */
+describe('comparedNoPassages', () => {
+  const scanOf = (over: Partial<{ annHits: number }> = {}) => ({
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 0,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    annModelsQueried: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+    ...over,
+  });
+
+  it('is true only when neither route compared anything', () => {
+    expect(comparedNoPassages({ chunksScored: 0, scan: scanOf() })).toBe(true);
+  });
+
+  it('is false once the scan path scored a chunk, even with no ann hits', () => {
+    expect(comparedNoPassages({ chunksScored: 1, scan: scanOf() })).toBe(false);
+  });
+
+  it('is false once an ann index returned a hit, even with nothing scored on the scan path', () => {
+    expect(comparedNoPassages({ chunksScored: 0, scan: scanOf({ annHits: 1 }) })).toBe(false);
   });
 });

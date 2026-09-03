@@ -282,6 +282,25 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
     const res = await this.model.updateMany({ principalKind, principalId, ownerUserId, subject }, SHRED_UPDATE);
     return res.modifiedCount ?? 0;
   }
+
+  /**
+   * Shred every event EXTRACTED FROM one source document - the per-document counterpart of
+   * markShredded, scoped by the `sources` entry that extraction stamps on each fact.
+   *
+   * This is what makes destroying a lake document reach the beliefs it produced. The principal's
+   * key stays: other documents' facts on the same lake chain must remain readable, so removing this
+   * source's ciphertext is what makes these facts irrecoverable. Same payload removal as the other
+   * two shreds, so the chain still verifies.
+   */
+  async markSourceShredded(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    source: string
+  ): Promise<number> {
+    const res = await this.model.updateMany({ principalKind, principalId, ownerUserId, sources: source }, SHRED_UPDATE);
+    return res.modifiedCount ?? 0;
+  }
 }
 
 /**

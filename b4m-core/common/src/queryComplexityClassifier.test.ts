@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routeQuery, type AgentRoutingContext } from './queryComplexityClassifier';
+import { classifyQueryComplexity, routeQuery, type AgentRoutingContext } from './queryComplexityClassifier';
 
 // Routing contract - base behavior plus three rules:
 //   - `userOverride` (Agent-mode toggle) wins over every other signal
@@ -19,6 +19,57 @@ function ctx(overrides: Partial<AgentRoutingContext> = {}): AgentRoutingContext 
     ...overrides,
   };
 }
+
+// The prompt that first surfaced the auto-engage bug: plainly conversational,
+// matches the `^how about` simple pattern, and contains a dollar amount that
+// used to register as a date.
+const REPORTED_PROMPT = 'How about 21 year old with 70k of assets, zero debt, $75k income, monthly spending of $1400';
+
+describe('classifyQueryComplexity', () => {
+  describe('date signal', () => {
+    // Isolate the date indicator: one session file + one message file score 2
+    // on their own, so the verdict flips contextual -> complex exactly when the
+    // message reads as a date. Asserting the verdict rather than the regex
+    // keeps the test on the observable contract.
+    const classify = (message: string) => classifyQueryComplexity(message, ['session-file'], ['message-file']);
+
+    it.each([
+      ['a bare dollar amount', 'budget for $1400'],
+      ['a bare quantity', 'budget for 1400'],
+      ['a comma-grouped amount', 'budget for $1,400'],
+      ['a five-digit quantity', 'budget for 70000'],
+      ['a year-shaped dollar amount', 'budget for $2024'],
+      ['a year-shaped amount spaced off its sign', 'budget for $ 2024'],
+    ])('does not count %s as a date', (_label, message) => {
+      expect(classify(message)).toBe('contextual');
+    });
+
+    it.each([
+      ['a bare year', 'budget for 2024'],
+      ['a year in prose', 'budget in 2019'],
+      ['a four-digit slash date', 'budget for 3/14/2024'],
+      ['a two-digit slash date', 'budget for 12/1/25'],
+      ['a letter-adjacent year', 'budget for v2024'],
+    ])('still counts %s as a date', (_label, message) => {
+      expect(classify(message)).toBe('complex');
+    });
+  });
+
+  describe('the reported prompt', () => {
+    it('is simple with no tools, no files and no agents', () => {
+      expect(classifyQueryComplexity(REPORTED_PROMPT, [], [])).toBe('simple');
+    });
+
+    it('is contextual when agents are attached to the session', () => {
+      expect(classifyQueryComplexity(REPORTED_PROMPT, [], [], undefined, undefined, ['agent-1'])).toBe('contextual');
+    });
+
+    it('is still complex when a forcing tool is passed - the short-circuit is intact', () => {
+      // Rapid reply and server-side feature selection still depend on this.
+      expect(classifyQueryComplexity(REPORTED_PROMPT, [], [], ['recharts'])).toBe('complex');
+    });
+  });
+});
 
 describe('routeQuery', () => {
   describe('userOverride', () => {

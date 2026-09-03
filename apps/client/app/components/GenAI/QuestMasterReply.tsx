@@ -1,4 +1,10 @@
-import { IQuestMasterPlanDocument, ISessionDocument, QuestMasterData, supportedChatModels } from '@bike4mind/common';
+import {
+  IQuestMasterPlanDocument,
+  ISessionDocument,
+  QuestMasterData,
+  normalizeSubQuestStatus,
+  supportedChatModels,
+} from '@bike4mind/common';
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -42,14 +48,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import {
-  Difficulty,
   DifficultyIcons,
   getDifficultyColor,
+  toDifficulty,
   getTaskTypeColor,
   TaskType,
   TaskTypeIcons,
 } from './types/QuestTypes';
 import QuestExportMenu from './QuestExportMenu';
+import { getSubQuestStatusColor } from './subQuestStatusDisplay';
 import { useSubscribeCollection } from '@client/app/utils/react-query';
 import { requestScrollToMessage } from '@client/app/utils/chatScroll';
 import { SubscriptionCallbackFunction } from '@client/app/hooks/useCollection';
@@ -65,27 +72,6 @@ const pulseAnimation = keyframes`
   0%, 100% { box-shadow: 0 0 20px rgba(255, 171, 0, 0.3); }
   50% { box-shadow: 0 0 30px rgba(255, 171, 0, 0.6); }
 `;
-
-const getStatusColor = (status: string) => {
-  switch (status.toLowerCase()) {
-    case 'completed':
-    case 'done':
-      return 'success';
-    case 'in_progress':
-    case 'started':
-      return 'warning';
-    case 'not_started':
-    case 'pending':
-      return 'neutral';
-    case 'skipped':
-      return 'neutral';
-    case 'failed':
-    case 'error':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
-};
 
 // SubQuestCard - one sub-quest row; layout varies by status
 interface SubQuestCardProps {
@@ -118,7 +104,11 @@ const SubQuestCard: React.FC<SubQuestCardProps> = React.memo(
     onBreakDown,
     onClickSubQuest,
   }) => {
-    const currentStatus = subQuest.status;
+    // Normalized ONCE here so the chip, the two layouts, the spinner and the elapsed timer all
+    // agree. Comparing the raw persisted value instead left a retired token half-rendered: it
+    // picked up the in-progress colour but not the in-progress layout, since only the colour
+    // helper resolved aliases.
+    const currentStatus = normalizeSubQuestStatus(subQuest.status) ?? subQuest.status;
     const isCompleted = currentStatus === 'completed';
     const isInProgress = currentStatus === 'in_progress';
 
@@ -244,7 +234,7 @@ const SubQuestCard: React.FC<SubQuestCardProps> = React.memo(
               <Chip
                 data-testid="status-chip"
                 variant="soft"
-                color={getStatusColor(currentStatus)}
+                color={getSubQuestStatusColor(currentStatus)}
                 size="sm"
                 sx={{ flexShrink: 0 }}
               >
@@ -312,7 +302,7 @@ const SubQuestCard: React.FC<SubQuestCardProps> = React.memo(
                 {subQuest.title}
               </Typography>
 
-              <Chip data-testid="status-chip" variant="soft" color={getStatusColor(currentStatus)} size="sm">
+              <Chip data-testid="status-chip" variant="soft" color={getSubQuestStatusColor(currentStatus)} size="sm">
                 {currentStatus}
               </Chip>
 
@@ -945,7 +935,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
           const taskTypeColor = getTaskTypeColor(taskType);
 
           // Get the difficulty icon and color
-          const difficulty = quest.complexity.toLowerCase() as Difficulty;
+          const difficulty = toDifficulty(quest.complexity);
           const DifficultyIcon = DifficultyIcons[difficulty];
           const difficultyColor = getDifficultyColor(difficulty);
 
@@ -1052,7 +1042,7 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
                   <Tooltip title={`${completionPercentage}% Complete`} placement="top">
                     <Chip
                       variant="soft"
-                      color={getStatusColor(completionPercentage === 100 ? 'completed' : 'in_progress')}
+                      color={getSubQuestStatusColor(completionPercentage === 100 ? 'completed' : 'in_progress')}
                       size="sm"
                     >
                       {completionPercentage}%

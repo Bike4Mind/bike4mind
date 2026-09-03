@@ -209,6 +209,20 @@ describe('OrgGoogleDriveConnectionModel - accessors', () => {
     // BaseRepository.findOne resolves to undefined (not null) on no match - matches the sibling repos.
     expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-1')).toBeFalsy();
   });
+
+  it('findByDataLakeIdAny sees what findByDataLakeId cannot: a disabled row, and no org scope', async () => {
+    // The purge teardown resolves through this one. It runs with only a lake id, and a disabled row
+    // still occupies the unique driveFolderId index - so either filter would leave the folder
+    // permanently unclaimable.
+    const created = await OrgGoogleDriveConnection.create({ ...base, enabled: false });
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-1')).toBeFalsy();
+    const found = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny('lake-1');
+    expect(found?.id).toBe(created.id);
+    expect(found?.organizationId).toBe('org-1');
+    // Still excludes the credential, like every other default read.
+    expect(found?.oauthRefreshToken).toBeUndefined();
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeIdAny('lake-missing')).toBeFalsy();
+  });
 });
 
 describe('OrgGoogleDriveConnectionModel - health + sync cursor', () => {
@@ -340,6 +354,141 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     );
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('syncing');
+  });
+
+  it('hands the claim from one ingest slice to the next without passing through connected', async () => {
+    // The chain invariant for a folder too large for one run: the connection must stay 'syncing' the
+    // whole way, or the re-sync poll slips in between slices and starts a competing walk.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const token1 = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+    expect(token1).not.toBeNull();
+    const held = await OrgGoogleDriveConnection.findById(created.id);
+    expect(held?.status).toBe('syncing');
+    expect(held?.activeIngestBatchId).toBe('batch-1');
+    expect(held?.ingestClaimToken).toBe(token1);
+
+    // Wrong batch id refuses outright, regardless of token.
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'other-batch', token1!)).toBeNull();
+    // Right batch id but the wrong token also refuses - the token is a real second CAS field, not
+    // just an audit value alongside the batch id.
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', 'wrong-token')).toBeNull();
+    // Only the chain's own next slice - presenting BOTH the recorded batch id and its token - may
+    // take it over, and doing so rotates the token to a fresh value.
+    const token2 = await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', token1!);
+    expect(token2).not.toBeNull();
+    expect(token2).not.toBe(token1);
+    // A plain claim still loses to the live chain, exactly as it does to any other in-flight run.
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+  });
+
+  it('consumes the token on adopt, so a redelivered duplicate of the same continuation message loses', async () => {
+    // SQS is at-least-once. Two deliveries of the SAME continuation message would both match on the
+    // batch id alone; the token has to be the thing that is actually CONSUMED (rotated) so only the
+    // first of the two can win - otherwise both would proceed to ingest the same tail.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const token = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+
+    const first = await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', token!);
+    expect(first).not.toBeNull();
+
+    const secondDelivery = await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', token!);
+    expect(secondDelivery).toBeNull();
+  });
+
+  it('drops the chain id and token whenever the claim is taken or released', async () => {
+    // Otherwise a continuation message left over from a dead chain could adopt a claim nobody holds.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    const releasedDoc = await OrgGoogleDriveConnection.findById(created.id);
+    expect(releasedDoc?.activeIngestBatchId).toBeUndefined();
+    expect(releasedDoc?.ingestClaimToken).toBeUndefined();
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', 'anything')).toBeNull();
+
+    await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-2'); // no-op: not syncing
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const freshDoc = await OrgGoogleDriveConnection.findById(created.id);
+    expect(freshDoc?.activeIngestBatchId).toBeUndefined();
+    expect(freshDoc?.ingestClaimToken).toBeUndefined();
+  });
+
+  it('holds a CHAINED claim past the unchained stale bound, but still reclaims an abandoned chain', async () => {
+    // A continuation is refreshed only at slice boundaries, so its un-refreshed interval is the
+    // message's queue wait, not its run length. Reclaiming at the unchained bound would hand the
+    // connection to a fresh poll that has no resumeBatchId, and it would re-ingest the still-`pending`
+    // tail as new ADDs - the duplicate spiral chaining exists to prevent.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const token = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+
+    await OrgGoogleDriveConnection.updateOne(
+      { _id: created.id },
+      { $set: { syncClaimedAt: new Date(Date.now() - 30 * 60 * 1000) } } // past 20min, inside 60min
+    );
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', token!)).not.toBeNull();
+
+    // Finite, though: a chain that really is dead must not wedge the connection forever.
+    await OrgGoogleDriveConnection.updateOne(
+      { _id: created.id },
+      { $set: { syncClaimedAt: new Date(Date.now() - 90 * 60 * 1000) } }
+    );
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.activeIngestBatchId).toBeUndefined();
+  });
+
+  it('renewSyncClaim will not re-point a batch that belongs to another chain', async () => {
+    // A slow slice renewing after its claim was reclaimed and re-chained must lose, not stamp its own
+    // dead batch over the live one.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const token = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live');
+
+    // Wrong batch id refuses outright, whatever token accompanies it.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-dead', token)).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.activeIngestBatchId).toBe('batch-live');
+    // Only the matching batch id AND its current token succeeds.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live', token)).not.toBeNull();
+  });
+
+  it('renewSyncClaim requires the current token once a chain has one, not the batch id alone', async () => {
+    // The bug this guards against: the batch id never changes for a whole chain, so matching it alone
+    // cannot tell "my own live chain" apart from "a chain I used to hold and lost" - both have the
+    // same activeIngestBatchId once a new owner renews or adopts over it.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const token = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live');
+
+    // Right batch id, no token presented: refused.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live')).toBeNull();
+    // Right batch id, wrong token: refused.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-live', 'wrong-token')).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.ingestClaimToken).toBe(token);
+  });
+
+  it('a slice that already lost its claim to a reclaim cannot renew back over the new owner', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+    const staleToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1');
+
+    // Someone else takes over the same chain - the chain's own next slice adopting, in practice.
+    const newToken = await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', staleToken!);
+    expect(newToken).not.toBeNull();
+
+    // The original slice, unaware it already lost the claim, tries to renew with the token it holds.
+    expect(await orgGoogleDriveConnectionRepository.renewSyncClaim(created.id, 'batch-1', staleToken)).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.ingestClaimToken).toBe(newToken);
+  });
+
+  it('adoptSyncClaim refuses a connection that is not syncing at all', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    expect(await orgGoogleDriveConnectionRepository.adoptSyncClaim(created.id, 'batch-1', 'any-token')).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('connected');
   });
 
   it('does not claim OVER an error state (credential_error / needs_reconnect)', async () => {

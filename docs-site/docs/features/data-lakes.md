@@ -36,8 +36,13 @@ Data Lakes follow a lifecycle with these statuses:
 | Active | Available for AI retrieval |
 | Archiving | Being moved to cold storage |
 | Archived | In cold storage, not searchable |
-| Restoring | Being brought back from archive |
+| Unarchiving | Being brought back from archive |
+| Restoring | Being recovered from a delete |
 | Deleting | Removal in progress |
+
+Archiving and deleting are two separate reversal paths, and each has its own in-progress status --
+`Unarchiving` comes back from `Archived`, `Restoring` comes back from `Deleted`. Only one lifecycle
+action can hold a lake at a time.
 
 ## Use Cases
 
@@ -55,6 +60,20 @@ Yes. The AI retrieval tools automatically search across all Data Lakes you have 
 
 **How are files added to a Data Lake?**
 Files are tagged with the lake's file tag prefix when uploaded. The lake tracks file count and total size automatically.
+
+**Why does a reply say "Only part of your library was searched"?**
+Grounded answers scan the library under per-turn bounds -- a candidate-document cap and a chunk
+budget -- and they skip documents whose embeddings came from a different model than the one running
+the query. When any of that applies, the reply carries a warning banner, and expanding it lists the
+specific reasons. The important consequence is what the answer does *not* prove: a "nothing found"
+on a partial scan is not evidence that the library holds nothing relevant. Narrow the question, or
+wait if the banner says documents are still being re-indexed.
+
+**I got "this data lake moved to '...' while it was being archived/deleted/restored". What happened?**
+Two lifecycle actions ran on the same lake at once -- for example Archive and Delete were both
+started from the lake's panel before the first finished. Only one of them can complete, and the
+other reports this instead of overwriting it. The message names the status that won; the lake is in
+that state and is safe to act on from there. Re-run the action you wanted if it is still available.
 
 ## Related
 

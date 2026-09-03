@@ -210,6 +210,7 @@ describe('persistRunAsQuest agent artifact persistence', () => {
   const CREATED_AT = new Date(1700000000000);
 
   it('hands the persisted quest and the reply text to the artifact writer (update branch)', async () => {
+    stubExecution({ enableArtifacts: false });
     findOneAndUpdateMock.mockResolvedValue({ _id: 'q1', createdAt: CREATED_AT });
 
     await persistRunAsQuest(EXECUTION_ID, 'reply with <artifact>', logger);
@@ -223,6 +224,10 @@ describe('persistRunAsQuest agent artifact persistence', () => {
       sessionId: 's1',
       userId: 'u1',
       executionId: EXECUTION_ID,
+      // The caller opt-out must reach the durable rows, not only the emission prompt. Absent from
+      // this list, dropping the `enableArtifacts` hand-off reverts persistence to admin-only with
+      // every test still green.
+      enableArtifacts: false,
     });
   });
 
