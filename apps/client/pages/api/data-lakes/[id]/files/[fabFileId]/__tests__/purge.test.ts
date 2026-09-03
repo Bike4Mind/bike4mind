@@ -15,6 +15,28 @@ const h = vi.hoisted(() => ({
   userFindById: vi.fn(),
   storageDelete: vi.fn(async () => {}),
   shredMemoryFromSource: vi.fn(async () => 2),
+  findByDatalakeTag: vi.fn(),
+  extractDataLakeMetaTags: vi.fn((tagNames: readonly unknown[]) =>
+    Array.from(
+      new Set(
+        tagNames
+          .filter((name): name is string => typeof name === 'string')
+          .map(name => name.toLowerCase())
+          .filter(name => name.startsWith('datalake:'))
+      )
+    )
+  ),
+  // Meta-tag arm only, via the same findByDatalakeTag mock - the prefix arm and the dedupe against
+  // a directly-handed purgingLake are unit-tested in shredMemoryForLakeTags.test.ts; this file is
+  // about the route's wiring, not that resolution.
+  findMemberLakesForFile: vi.fn(async (file: { tags?: { name: string }[] }) => {
+    const tagNames = (file.tags ?? []).map(t => t.name);
+    const metaTags = h.extractDataLakeMetaTags(tagNames);
+    const lakes = await Promise.all(metaTags.map((tag: string) => h.findByDatalakeTag(tag)));
+    return lakes
+      .filter((lake): lake is { id?: string; datalakeTag: string; createdByUserId: string } => Boolean(lake))
+      .map(lake => ({ ...lake, id: lake.id ?? lake.datalakeTag }));
+  }),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -34,10 +56,12 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeWritable: h.assertLakeWritable,
     purgeDataLakeDocument: h.purgeDataLakeDocument,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
+    extractDataLakeMetaTags: h.extractDataLakeMetaTags,
+    findMemberLakesForFile: h.findMemberLakesForFile,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
@@ -415,22 +439,64 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
   });
 
-  it('shreds the facts the lake distilled from the purged document', async () => {
+  it('shreds the facts the lake distilled from the purged document, deduped against the purging lake handoff', async () => {
     // Extracted beliefs keep reaching live system prompts through recallLakeMemory, so a document
-    // reported permanently deleted would otherwise go on speaking through them.
+    // reported permanently deleted would otherwise go on speaking through them. The tag also
+    // resolves back to the purging lake itself here - the common case - so this also covers that
+    // the direct `purgingLake` handoff and the tag-based resolution dedupe to one shred, not two.
+    h.findByDatalakeTag.mockResolvedValueOnce({
+      id: 'lake-oid-1',
+      datalakeTag: 'datalake:sales',
+      createdByUserId: 'owner-1',
+    });
     const { res } = makeRes();
     await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
 
     await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
-      datalakeTag: 'datalake:sales',
-      ownerUserId: 'owner-1',
+      tagNames: ['datalake:sales'],
       fabFileId: FILE_ID,
+      ownerUserId: 'file-owner-1',
+      purgingLake: { id: 'lake-oid-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
+    });
+
+    expect(h.shredMemoryFromSource).toHaveBeenCalledTimes(1);
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
+      {},
+      { kind: 'lake', id: 'datalake:sales' },
+      'owner-1',
+      FILE_ID
+    );
+  });
+
+  it('fans the shred out to every other lake the document belonged to, not only the purging one', async () => {
+    // A file in two lakes has beliefs on both ledgers under the same fabFileId (extraction runs per
+    // lake): shredding only the lake the purge was authorized through leaves the other lake folding
+    // and recalling beliefs sourced from a document already destroyed.
+    h.findByDatalakeTag.mockImplementation(async (tag: string) =>
+      tag === 'datalake:sales'
+        ? { id: 'lake-oid-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' }
+        : { id: 'lake-oid-2', datalakeTag: 'datalake:marketing', createdByUserId: 'owner-2' }
+    );
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+
+    await h.purgeDataLakeDocument.mock.calls[0][3].shredDocumentMemory({
+      tagNames: ['datalake:sales', 'datalake:marketing'],
+      fabFileId: FILE_ID,
+      ownerUserId: 'file-owner-1',
+      purgingLake: { id: 'lake-oid-1', datalakeTag: 'datalake:sales', createdByUserId: 'owner-1' },
     });
 
     expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
       {},
       { kind: 'lake', id: 'datalake:sales' },
       'owner-1',
+      FILE_ID
+    );
+    expect(h.shredMemoryFromSource).toHaveBeenCalledWith(
+      {},
+      { kind: 'lake', id: 'datalake:marketing' },
+      'owner-2',
       FILE_ID
     );
   });
