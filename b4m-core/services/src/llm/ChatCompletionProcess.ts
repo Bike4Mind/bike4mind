@@ -58,6 +58,7 @@ import {
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
+  reservationOutputTokens,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
   getSettingsByNames,
@@ -79,6 +80,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
+  reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
   type ICompletionOptions,
@@ -3354,7 +3356,16 @@ export class ChatCompletionProcess {
         // Atomic pre-reservation: reserve estimated credits BEFORE streaming begins
         // This prevents race conditions where concurrent requests overdraw the balance.
         // Pattern: bare $inc + check + rollback (consistent with cliCompletions.ts)
-        const usdCost = getTextModelCost(modelInfo, inputTokens, safeMaxTokens);
+        //
+        // Priced on a realistic output size, NOT safeMaxTokens: that is a ceiling the
+        // model usually stops far short of, and holding it would gate the turn on a cost
+        // it will not incur. See reservationOutputTokens for the under-reservation
+        // tradeoff this accepts; settlement below charges actual usage either way.
+        const usdCost = getTextModelCost(
+          modelInfo,
+          inputTokens,
+          reservationOutputTokens(safeMaxTokens, reasonsWithinOutputBudget(modelInfo))
+        );
         const requiredCredits = usdToCredits(usdCost);
 
         // Determine credit holder (user or org)
@@ -3371,7 +3382,14 @@ export class ChatCompletionProcess {
           // Enforce the per-member cap here, at pre-flight, before debiting the org pool.
           // Blocking must happen now: by settlement the reply has streamed and the balance
           // has moved, so a cap throw there can only sabotage usage tracking (#1536).
-          if (isMemberCreditCapExceeded(organization, this.user.id, requiredCredits)) {
+          // Priced on the unshrunk ceiling rather than the hold: this gate has no
+          // settlement counterpart (see memberCreditCap.ts), so an under-estimate lets a
+          // member blow past the cap in one turn with nothing left to catch it. Still not
+          // an upper bound on the turn - it prices one round at the uncached input rate on
+          // the primary model, so a tool loop, a cache-write turn, or a fallback hop onto
+          // pricier pricing can each settle above it.
+          const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
+          if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),
@@ -5617,78 +5635,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       fileNotices: allNotices,
     };
     return result;
-  }
-
-  private async validateUserCredits(
-    model: ModelInfo,
-    inputTokens: number,
-    maxOutputTokens: number,
-    organization?: IOrganizationDocument | null
-  ) {
-    // Secondary dispute check: catches mid-stream tool invocations (e.g. image generation)
-    if (this.user.disputePending) {
-      throw new InsufficientCreditsError(
-        'Your account is under review due to a payment dispute. Please contact support to resolve this.'
-      );
-    }
-
-    let userCredits = this.user.currentCredits ?? 0;
-    this.logger.updateMetadata({ creditsSource: 'user', creditsSourceId: this.user.id });
-
-    if (organization) {
-      this.logger.updateMetadata({ creditsSource: 'organization', creditsSourceId: organization.id });
-      userCredits = organization.currentCredits;
-    }
-
-    const usdCost = getTextModelCost(model, inputTokens, maxOutputTokens);
-    const requiredCredits = usdToCredits(usdCost);
-
-    // Check if current credits are below the alert threshold
-    if (userCredits < LOW_CREDIT_ALERT_THRESHOLD) {
-      // Send low credits notification for current balance using deduplication
-      const { getNotificationDeduplicator } = await import('@bike4mind/utils');
-      getNotificationDeduplicator()
-        .handleLowCreditNotification(
-          this.user.id,
-          this.user.name || 'Unknown',
-          this.user.email || 'No email',
-          userCredits,
-          organization ? { id: organization.id, name: organization.name } : null,
-          this.slackWebhookUrl
-        )
-        .catch((error: Error) => {
-          this.logger.error('Failed to send low credits notification:', error);
-        });
-    }
-
-    // Check if there are enough credits for the operation
-    if (userCredits < requiredCredits) {
-      const errorMessage = organization
-        ? `Your organization "${organization.name}" does not have enough credits to complete this request. The organization currently has ${userCredits} credits, and this request requires ${requiredCredits} credits. Please contact your organization administrator to add more credits.`
-        : `You do not have enough credits to complete this request. You currently have ${userCredits} credits, and this request requires ${requiredCredits} credits. Try adjusting your prompt to be more concise or reducing the number of chat history messages to lower the credit cost.`;
-      throw new InsufficientCreditsError(errorMessage);
-    }
-
-    // Check if credits will be below the alert threshold after this operation
-    const remainingCredits = userCredits - requiredCredits;
-    if (remainingCredits < LOW_CREDIT_ALERT_THRESHOLD) {
-      // Send low credits notification using deduplication
-      const { getNotificationDeduplicator } = await import('@bike4mind/utils');
-      getNotificationDeduplicator()
-        .handleLowCreditNotification(
-          this.user.id,
-          this.user.name || 'Unknown',
-          this.user.email || 'No email',
-          remainingCredits,
-          organization ? { id: organization.id, name: organization.name } : null,
-          this.slackWebhookUrl
-        )
-        .catch((error: Error) => {
-          this.logger.error('Failed to send low credits notification:', error);
-        });
-    }
-
-    return requiredCredits;
   }
 
   /**
