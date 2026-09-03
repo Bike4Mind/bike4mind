@@ -53,8 +53,14 @@ export interface DuplicateGroupMember {
 export interface DuplicateGroup {
   fileName: string;
   bucket: DuplicateBucket;
-  /** Newest first, so "keep newest" is `members[0]` at every reading surface. */
+  /** Newest first, so "keep newest" is `members[0]` at every reading surface. Capped by the caller. */
   members: DuplicateGroupMember[];
+  /**
+   * Members in this group even when `members` is capped, so no reader can be told there are fewer -
+   * the same discipline `affectedMemberCount` keeps beside `affectedMembers`. `bucket` is classified
+   * over the WHOLE group before the cap, so a capped group is not mis-bucketed.
+   */
+  memberCount: number;
 }
 
 /**
@@ -73,6 +79,7 @@ export interface MembershipScopeDisclosure {
 
 export interface LakeMembershipReport {
   scope: MembershipScopeDisclosure;
+  /** Members the caller SCANNED, not the lake's true total - a lower bound when `scanTruncated`. */
   totalMembers: number;
   /** Not a pass/fail split - see MEMBERSHIP_ARMS. */
   armSplit: Record<MembershipArm, number>;
@@ -84,18 +91,31 @@ export interface LakeMembershipReport {
   bucketCounts: Record<DuplicateBucket, number>;
   /** Worst-first: unverified, then differing, then proven-identical; capped by the caller. */
   duplicateGroups: DuplicateGroup[];
-  /** True when the caller's member scan was bounded, so every count here is a lower bound. */
+  /**
+   * True when the caller's member scan was bounded, so every count here is a lower bound.
+   *
+   * Which end was cut matters and is not symmetric: the scan is `_id`-ascending, so the members
+   * OUTSIDE the window are the newest - and a fresh re-upload generation is exactly what this
+   * dimension hunts. A group with one member inside the window and its twin outside is not reported
+   * as a duplicate at all. Read this flag as "the newest members are missing", not merely "some are".
+   */
   scanTruncated: boolean;
 }
 
 /**
- * Whether a `serverTextHash` value can PROVE anything.
+ * Whether a `serverTextHash` value can PROVE anything: a RECORDED hash, as opposed to `null` or
+ * absent. It does not validate the encoding - any non-empty string passes.
  *
- * Only a hex fingerprint can. `null` is the trap: it is a recorded fact ("chunked, no extractable
- * text"), not a missing value, so it is tempting to compare two of them for equality - but every
- * image, every scan and every empty document in a lake carries `null`, and calling those identical
- * would auto-collapse unrelated files into one another. Absence and `null` therefore mean the same
- * thing HERE even though they mean different things in the datastore: identity is unproven.
+ * `null` is the trap: it is a recorded fact ("chunked, no extractable text"), not a missing value, so
+ * it is tempting to compare two of them for equality - but every image, every scan and every empty
+ * document in a lake carries `null`, and calling those identical would auto-collapse unrelated files
+ * into one another. Absence and `null` therefore mean the same thing HERE even though they mean
+ * different things in the datastore: identity is unproven.
+ *
+ * Deliberately not a hex validator. The only producer is the internal hashing pipeline
+ * (`computeServerTextHash`), so a format check would buy nothing and would add a failure mode - a
+ * future hash encoding, or a truncated value, silently reclassified as "unproven" rather than
+ * flagged. If this ever receives less-trusted input, validate at that boundary, not here.
  */
 export function isFingerprint(hash: string | null | undefined): hash is string {
   return typeof hash === 'string' && hash.length > 0;
@@ -116,18 +136,24 @@ function byNewestFirst(a: DuplicateGroupMember, b: DuplicateGroupMember): number
 /**
  * Which bucket a same-name group belongs to.
  *
- * `proven-identical` requires EVERY member to carry the same hex fingerprint AND the same
+ * `proven-identical` requires EVERY member to carry the same hex fingerprint AND a KNOWN, matching
  * `fileSize`. The size conjunct is a judgment call worth stating: the hash covers normalized
  * extracted TEXT, so two files can share it while differing in bytes (a re-export, a different
  * encoding, an added image). Auto-collapse is the only bucket that mutates membership without asking
  * anyone, so it is the one place to be stricter than the issue's wording and let a size disagreement
  * fall to `differing` for a human.
+ *
+ * `fileSize` is optional on the schema and the read coalesces an absent one to `null`, so requiring
+ * it to be a NUMBER is the same rule `isFingerprint` applies to the hash: a missing value is never
+ * compared for equality. Without that, two size-less members satisfied `null === null` and the
+ * conjunct went vacuous exactly where it cannot discriminate - on the re-export case it exists to
+ * catch - handing the collapse arm a group it was never meant to be given.
  */
 function classifyGroup(members: DuplicateGroupMember[]): DuplicateBucket {
   if (!members.every(m => isFingerprint(m.serverTextHash))) return 'unverified';
   const [first, ...rest] = members;
   const sameHash = rest.every(m => m.serverTextHash === first.serverTextHash);
-  const sameSize = rest.every(m => m.fileSize === first.fileSize);
+  const sameSize = typeof first.fileSize === 'number' && rest.every(m => m.fileSize === first.fileSize);
   return sameHash && sameSize ? 'proven-identical' : 'differing';
 }
 
@@ -144,7 +170,13 @@ const BUCKET_ORDER: Record<DuplicateBucket, number> = { unverified: 0, differing
  */
 export function summarizeLakeMembership(
   members: LakeMembershipMemberInput[],
-  options: { scope: MembershipScopeDisclosure; scanTruncated?: boolean; maxGroups?: number }
+  options: {
+    scope: MembershipScopeDisclosure;
+    scanTruncated?: boolean;
+    maxGroups?: number;
+    /** Per-group member cap. Capping groups alone leaves the payload bounded only by the scan limit. */
+    maxGroupMembers?: number;
+  }
 ): LakeMembershipReport {
   const armSplit: Record<MembershipArm, number> = { 'meta-tag': 0, prefix: 0 };
   const byName = new Map<string, DuplicateGroupMember[]>();
@@ -173,10 +205,18 @@ export function summarizeLakeMembership(
   for (const [fileName, entries] of byName) {
     if (entries.length < 2) continue;
     entries.sort(byNewestFirst);
+    // Bucketed and counted over the whole group, then capped: the cap bounds the payload and must
+    // not change what the group IS. Sorted first, so a capped array keeps the newest members - the
+    // ones "keep newest" reads and a reviewer needs.
     const bucket = classifyGroup(entries);
     bucketCounts[bucket] += 1;
     duplicateMemberCount += entries.length;
-    groups.push({ fileName, bucket, members: entries });
+    groups.push({
+      fileName,
+      bucket,
+      members: options.maxGroupMembers === undefined ? entries : entries.slice(0, options.maxGroupMembers),
+      memberCount: entries.length,
+    });
   }
 
   // Sort before the cap, so a truncated report carries the groups a human most needs to see rather
