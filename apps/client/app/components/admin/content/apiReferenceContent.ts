@@ -1108,6 +1108,12 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | GET | /api/admin/context-telemetry/integration-status | Integration status |
 | GET | /api/admin/context-telemetry/metrics | Telemetry metrics |
 
+### Retrieval Rate
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/admin/retrieval-rate | Optional-path retrieval rate over a date window |
+
 ### LiveOps Triage
 
 | Method | Endpoint | Description |

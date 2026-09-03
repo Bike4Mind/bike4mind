@@ -19,9 +19,11 @@ import { Types } from 'mongoose';
 import { createHmac } from 'crypto';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
@@ -78,18 +80,24 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
+    // A key-driven purge can auto-activate a draft lake (recomputeLakeStats); auditPrincipal is
+    // what keeps that config-change row from being recorded as the human, matching the sibling
+    // removal route on this same path.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+
     // Distinguishes the two ways a `verified: false` row can be reached: a sweep that threw
     // part-way (nothing yet filed) from one that completed and then threw in the bookkeeping after
     // it. Without it an auditor cannot tell a partly-destroyed document from an intact one.
     let receiptFiled = false;
     try {
-      const receipt = await dataLakeService.purgeDataLakeDocument(ctx, lake.id, fabFileId, {
+      const receipt = await dataLakeService.purgeDataLakeDocument(actor, lake.id, fabFileId, {
         db: {
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           fabFiles: fabFileRepository,
           fabFileChunks: fabFileChunkRepository,
           sessions: sessionRepository,
+          ...lakeConfigAuditDb,
         },
         // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
         // FabFileChunk collection itself, so the chunk delete already removes it. Same wiring as

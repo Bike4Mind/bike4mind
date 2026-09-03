@@ -489,12 +489,12 @@ export const OrchestrationDefaultsSchema = z.object({
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block. Mirrored client-side via
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
     // to expose. Mirrored client-side in
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'image_generation',
     'edit_image',
     'music_generation',
@@ -1976,7 +1976,7 @@ export const settingsMap = {
     name: 'Data Lakes: Pause background convergence work',
     defaultValue: false,
     description:
-      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running - including overriding a platform-wide pause back OFF for one lake. Every producer honors the override, the global chunk rescue sweep included: it resolves each candidate against the lake it belongs to (#2157), so a file in no lake at all follows the platform value, which is correct for it. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 93,

@@ -522,7 +522,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
           pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          borderRadius: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem',
+          // Bottom corners at 8px to sit inside the chat pane's own 8px frame; the top pair
+          // is free-standing and keeps its looser .625rem.
+          borderRadius:
+            isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem .625rem 8px 8px',
         })}
       >
         <Box>

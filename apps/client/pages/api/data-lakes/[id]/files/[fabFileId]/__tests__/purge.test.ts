@@ -67,6 +67,8 @@ vi.mock('@bike4mind/database', () => ({
   fabFileChunkRepository: {},
   sessionRepository: {},
   memoryLedgerRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
   changeStorageSize: h.changeStorageSize,
   withTransaction: (fn: (session: unknown) => unknown) => fn({}),
   User: { findById: h.userFindById },
@@ -177,6 +179,18 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
       administeredOrgIds: ['org-1'],
     });
     expect(h.purgeDataLakeDocument.mock.calls[0][3].db.dataLakeAccessGrants).toBeDefined();
+  });
+
+  it('spreads lakeConfigAuditDb into the db it wires, like every other lake config-write route', async () => {
+    // Without this, a draft-or-legacy lake that auto-activates as a side effect of a purge (see
+    // recomputeLakeStats) records no config-change event: the same silent gap every other route on
+    // this surface closes by spreading the same constant.
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+
+    const db = h.purgeDataLakeDocument.mock.calls[0][3].db;
+    expect(db.lakeConfigChangeEvents).toBeDefined();
+    expect(db.adminSettings).toBeDefined();
   });
 
   it("returns the destroyed bytes to the FILE OWNER's quota, not the caller's", async () => {

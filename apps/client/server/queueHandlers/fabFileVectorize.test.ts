@@ -116,12 +116,8 @@ vi.mock('@bike4mind/common', async () => {
   return {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
-    // Pulled from the real module rather than retyped. This handler WRITES the note and the lake-health
-    // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
-    // drift (both import the same constant), but a literal here would let THIS suite keep passing
-    // against a string the constant no longer has.
-    CONVERGENCE_PAUSED_NOTE: actual.CONVERGENCE_PAUSED_NOTE,
-    // Same reason, for the provenance vocabulary convergenceProvenance.ts re-exports from common:
+    // Pulled from the real module rather than retyped, for the provenance vocabulary
+    // convergenceProvenance.ts re-exports from common:
     // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
     // tests below exercise, so a stub here would make them assert against themselves.
     WORK_ORIGINS: actual.WORK_ORIGINS,
@@ -153,7 +149,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
-import { dispatch, CONVERGENCE_PAUSED_NOTE } from './fabFileVectorize';
+import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -206,7 +202,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
     expect(h.fabFileUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'ff1', notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
+      expect.objectContaining({ id: 'ff1', chunkStallReason: 'vectorizePaused', isVectorizing: false })
     );
     // Embedding is gated: neither the chunk load nor the provider call runs.
     expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
@@ -221,7 +217,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
 
     // User work short-circuits before any settings read; the file is never flagged paused.
     expect(h.getSettingsValue).not.toHaveBeenCalled();
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ chunkStallReason: 'vectorizePaused' }));
   });
 
   // The marker is what makes an abandoned chunked-but-unvectorized file ENUMERABLE - the rebuild
@@ -255,7 +251,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
 
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ chunkStallReason: 'vectorizePaused' }));
     // Passed the gate and reached chunk loading.
     expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });

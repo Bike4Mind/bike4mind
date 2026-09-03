@@ -9,11 +9,7 @@ import {
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
-import { Types } from 'mongoose';
-
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
+import { toObjectIdString } from '@server/utils/objectId';
 
 const handler = baseApi()
   /**
@@ -24,13 +20,17 @@ const handler = baseApi()
       const userId = req.user!.id;
       const { id } = req.query;
 
-      if (!id || !isValidObjectId(id)) {
+      // Canonicalized: the session lookup casts and so matches any casing, but the
+      // chat-history query below hits `sessionId: { type: String }` (QuestModel), which
+      // does byte equality - an uppercase id would drop every chat-attached file.
+      const sessionId = id ? toObjectIdString(id) : undefined;
+      if (!sessionId) {
         return res.status(400).json({ error: 'Invalid session ID format' });
       }
 
       const results = await fabFilesService.listFabFilesBySession(
         userId,
-        { sessionId: id! },
+        { sessionId },
         {
           db: {
             chatHistories: questRepository,

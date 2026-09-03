@@ -96,6 +96,7 @@ export enum AdminTab {
   EmbedKeys = 57,
   ModelLifecycle = 58,
   PrReport = 59,
+  RetrievalRate = 60,
 }
 
 /**
@@ -218,6 +219,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.ContextInspector,
         label: 'Context Inspector',
         testid: 'admin-context-inspector-btn',
+      },
+      {
+        Icon: QueryStatsIcon,
+        tab: AdminTab.RetrievalRate,
+        label: 'Retrieval Rate',
+        testid: 'admin-retrieval-rate-btn',
       },
     ],
   },
