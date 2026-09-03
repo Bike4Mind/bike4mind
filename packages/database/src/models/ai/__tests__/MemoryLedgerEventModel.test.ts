@@ -144,15 +144,7 @@ describe('MemoryLedgerRepository', () => {
     // What makes permanently deleting a lake document reach the beliefs that document produced: a
     // lake's key cannot be destroyed for one file, so the scope is the source stamp instead.
     await memoryLedgerRepository.tryInsert(
-      sealedEvent({
-        seq: 0,
-        hash: 'h0',
-        subject: 'a',
-        sources: ['doc-1'],
-        factCipher: 'c1',
-        factIv: 'i1',
-        factTag: 't1',
-      })
+      sealedEvent({ seq: 0, hash: 'h0', subject: 'a', sources: ['doc-1'], factCipher: 'c1', factIv: 'i1', factTag: 't1' })
     );
     await memoryLedgerRepository.tryInsert(
       sealedEvent({
@@ -183,12 +175,7 @@ describe('MemoryLedgerRepository', () => {
     expect(n).toBe(2);
 
     const chain = await memoryLedgerRepository.listChain('user', 'u1', 'u1');
-    expect(
-      chain
-        .filter(e => e.shredded)
-        .map(e => e.subject)
-        .sort()
-    ).toEqual(['a', 'b']);
+    expect(chain.filter(e => e.shredded).map(e => e.subject).sort()).toEqual(['a', 'b']);
     expect(chain.find(e => e.subject === 'c')?.factCipher).toBe('c3');
   });
 

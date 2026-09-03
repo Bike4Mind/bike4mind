@@ -275,13 +275,7 @@ describe('resolvePlatformOnlyMembership (the lakes the override set cannot see)'
     await resolvePlatformOnlyMembership(
       exemptScope(),
       [
-        {
-          userId: 'u1',
-          tags: [
-            { name: 'datalake:lake-1', strength: 1 },
-            { name: 'acme:legal', strength: 1 },
-          ],
-        },
+        { userId: 'u1', tags: [{ name: 'datalake:lake-1', strength: 1 }, { name: 'acme:legal', strength: 1 }] },
         { userId: 'u2', tags: [{ name: 'datalake:other', strength: 1 }] },
       ],
       deps,
@@ -310,9 +304,7 @@ describe('resolvePlatformOnlyMembership (the lakes the override set cannot see)'
       fileTagPrefix: undefined,
       creatorUserId: 'creator-1',
     });
-    expect(scope.platformOnlyMembership).not.toContainEqual(
-      expect.objectContaining({ datalakeTag: 'datalake:lake-1' })
-    );
+    expect(scope.platformOnlyMembership).not.toContainEqual(expect.objectContaining({ datalakeTag: 'datalake:lake-1' }));
   });
 
   it('always includes the static registry, which no override can ever reach', async () => {
@@ -532,7 +524,9 @@ describe('toChunkScanConvergencePause (the selection clause inputs)', () => {
   });
 
   it('is two empty arms when nothing is overridden - the platform-only shape', () => {
-    expect(toChunkScanConvergencePause({ platformPaused: true, scopedLakes: [], platformOnlyMembership: [] })).toEqual({
+    expect(
+      toChunkScanConvergencePause({ platformPaused: true, scopedLakes: [], platformOnlyMembership: [] })
+    ).toEqual({
       platformPaused: true,
       paused: [],
       running: [],

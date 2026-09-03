@@ -737,7 +737,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('mock-article')).toHaveAttribute('data-can-purge', 'true');
   });
 
-  it("withholds it from the LAKE owner on a contributor's file, which they can still manage", async () => {
+  it('withholds it from the LAKE owner on a contributor\'s file, which they can still manage', async () => {
     // The half of the rule `isOwn` alone cannot cover, and the reachable one: `restrictToDataLake`
     // drops the ownership arms from the browse, so a lake owner really does see files they did not
     // upload. Destroying one would take it out of that contributor's own Files list and chats -

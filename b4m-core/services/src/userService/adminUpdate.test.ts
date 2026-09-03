@@ -145,9 +145,9 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     const { adapters, incrementCredits, update } = makeAdapters(100);
     update.mockRejectedValueOnce(new Error('doc write failed'));
 
-    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters)).rejects.toThrow(
-      'doc write failed'
-    );
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters)
+    ).rejects.toThrow('doc write failed');
 
     // Inverse trade-off: the balance change is already committed and auditable;
     // only the doc write and the moderation transition (which run after it) are

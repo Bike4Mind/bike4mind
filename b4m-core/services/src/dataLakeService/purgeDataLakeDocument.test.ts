@@ -97,7 +97,9 @@ describe('purgeDataLakeDocument', () => {
 
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db: dbWithAudit, storage: makeStorage() });
 
-    expect(record).toHaveBeenCalledWith(expect.objectContaining({ principalKind: 'user', principalId: OWNER.userId }));
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ principalKind: 'user', principalId: OWNER.userId })
+    );
   });
 
   it('removes the document from a wired retrieval index BEFORE anything destructive', async () => {
