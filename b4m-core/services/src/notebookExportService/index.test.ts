@@ -48,6 +48,7 @@ function makeAdapters(over: AdapterOverrides = {}) {
     },
     knowledgeRepository: { ...none, findOne: vi.fn().mockResolvedValue(null) },
     artifactRepository: none,
+    artifactContentRepository: none,
     toolRepository: none,
     agentRepository: none,
     fileStorageService: {
@@ -62,6 +63,16 @@ function makeAdapters(over: AdapterOverrides = {}) {
   } as unknown as NotebookExportAdapters;
   return { adapters, uploaded };
 }
+
+/**
+ * The artifact query nests two `$or`s under `$and`: membership (by id or by sessionId) first,
+ * access second. Reading each clause by position rather than matching the whole object is what
+ * lets a test fail when one of them goes missing.
+ */
+type ArtifactClause = { id?: { $in?: string[] }; sessionId?: string };
+type ArtifactQuery = { deletedAt?: null; $and?: { $or?: ArtifactClause[] }[] };
+const membershipOf = (q: ArtifactQuery): ArtifactClause[] => q.$and?.[0]?.$or ?? [];
+const accessOf = (q: ArtifactQuery) => q.$and?.[1]?.$or;
 
 const GOOD = '507f1f77bcf86cd799439011';
 const UPPER = '507F1F77BCF86CD799439011';
@@ -155,16 +166,41 @@ describe('notebook export', () => {
 
   it('finds artifacts by their own id, not by _id', async () => {
     // Artifact ids are not ObjectId-castable, so the real collection throws on an `_id` query.
-    const find = vi.fn(async (query: Record<string, { $in?: string[] }>) => {
-      if (!query.id?.$in) {
+    const find = vi.fn(async (query: ArtifactQuery) => {
+      const byId = membershipOf(query).find(c => c.id)?.id?.$in;
+      if (!byId) {
         throw new Error('CastError: Cast to ObjectId failed for value "artifact_1_probe" at path "_id"');
       }
-      return query.id.$in.map(id => ({ id, title: 'My Chart', type: 'recharts' }));
+      return byId.map(id => ({ id, title: 'My Chart', type: 'recharts' }));
     });
 
     const payload = await exportOnce({ artifactRepository: { find } });
 
     expect(payload.notebooks[0].artifacts.map((a: { id: string }) => a.id)).toEqual(['artifact-1']);
+  });
+
+  it('exports an artifact linked only by its own sessionId, not listed in session.artifactIds', async () => {
+    // The ordinary case, and the one that used to export nothing: an artifact generated in chat
+    // records `sessionId` itself, while `session.artifactIds` is a denormalised copy only the
+    // artifact viewer's save path writes. Keying on the array alone missed every such artifact.
+    const find = vi.fn(async (query: ArtifactQuery) => {
+      const bySession = membershipOf(query).find(c => c.sessionId)?.sessionId;
+      return bySession === 'session-1' ? [{ id: 'artifact_chat_1', title: 'Red Circle', type: 'svg', version: 1 }] : [];
+    });
+    const contents = {
+      find: vi.fn().mockResolvedValue([{ artifactId: 'artifact_chat_1', version: 1, content: '<svg/>' }]),
+    };
+
+    // Empty array: the session names no artifacts at all, so only the sessionId match can find it.
+    const payload = await exportOnce({
+      sessionRepository: { find: vi.fn().mockResolvedValue([{ ...SESSION, artifactIds: [] }]) },
+      artifactRepository: { find },
+      artifactContentRepository: contents,
+    });
+
+    expect(payload.notebooks[0].artifacts).toEqual([
+      expect.objectContaining({ id: 'artifact_chat_1', name: 'Red Circle', content: '<svg/>' }),
+    ]);
   });
 
   it('warns by id about an artifact it could not export, so the gap is not silent', async () => {
@@ -205,24 +241,23 @@ describe('notebook export', () => {
     // at the export is not necessarily the caller's. The normal read path denies such a row; the
     // export must not be the way around it. The stub answers only when the query carries the
     // access clause, so this cannot pass by resolving everything.
-    const find = vi.fn().mockImplementation((query: Record<string, unknown>) => {
-      if (!query.$or) return [{ id: 'artifact-1', title: 'Someone Elses Artifact', type: 'react' }];
+    const find = vi.fn().mockImplementation((query: ArtifactQuery) => {
+      if (!accessOf(query)) return [{ id: 'artifact-1', title: 'Someone Elses Artifact', type: 'react' }];
       return [];
     });
 
     const payload = await exportOnce({ artifactRepository: { find } });
 
     expect(payload.notebooks[0].artifacts).toEqual([]);
-    expect(find).toHaveBeenCalledWith(
-      expect.objectContaining({
-        $or: [
-          { userId: 'user-1' },
-          { 'permissions.canRead': 'user-1' },
-          { visibility: 'public' },
-          { 'permissions.isPublic': true },
-        ],
-      })
-    );
+    // Read off the sent query rather than matched loosely: the access clause and the membership
+    // clause are both `$or`s nested under `$and`, and a regression that dropped either one would
+    // still satisfy an `objectContaining` on the outer object.
+    expect(accessOf(find.mock.calls[0][0])).toEqual([
+      { userId: 'user-1' },
+      { 'permissions.canRead': 'user-1' },
+      { visibility: 'public' },
+      { 'permissions.isPublic': true },
+    ]);
   });
 
   it('exports the resolvable knowledge files even when a session holds a non-ObjectId knowledgeId', async () => {
@@ -296,7 +331,10 @@ describe('notebook export', () => {
   it('names an artifact from its title, which is the field the entity actually has', async () => {
     const { payload, adapters } = await exportOnceWithAdapters({
       artifactRepository: {
-        find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts' }]),
+        find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts', version: 1 }]),
+      },
+      artifactContentRepository: {
+        find: vi.fn().mockResolvedValue([{ artifactId: 'artifact-1', version: 1, content: 'chart body' }]),
       },
     });
 
@@ -304,5 +342,45 @@ describe('notebook export', () => {
     // An export where every id resolved must say nothing. Without this a spurious warn - the kind
     // an off-by-one in the notExported predicate produces - would ship green.
     expect(adapters.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('carries the artifact body, which is what makes the export importable at all', async () => {
+    // Without this the import cannot derive contentId/contentHash/contentSize and rejects every
+    // artifact, which is the whole failure this join exists to remove.
+    const { payload } = await exportOnceWithAdapters({
+      artifactRepository: {
+        find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts', version: 3 }]),
+      },
+      artifactContentRepository: {
+        // Current version first, stale second, so a key that ignored the version would take the
+        // stale row by last-write-wins instead of quietly landing on the right answer.
+        find: vi.fn().mockResolvedValue([
+          { artifactId: 'artifact-1', version: 3, content: 'current body' },
+          { artifactId: 'artifact-1', version: 2, content: 'stale body' },
+        ]),
+      },
+    });
+
+    // Keyed by version, not just by artifact: a stale row would export content the source no
+    // longer shows.
+    expect(payload.notebooks[0].artifacts[0].content).toBe('current body');
+  });
+
+  it('warns by id about an artifact whose body is missing rather than exporting it silently', async () => {
+    const { payload, adapters } = await exportOnceWithAdapters({
+      artifactRepository: {
+        find: vi.fn().mockResolvedValue([{ id: 'artifact-1', title: 'My Chart', type: 'recharts', version: 1 }]),
+      },
+      artifactContentRepository: { find: vi.fn().mockResolvedValue([]) },
+    });
+
+    // Still exported, so the notebook lists what it had; the import is what refuses it. The warn is
+    // what separates "the source had no body" from "the import lost it".
+    expect(payload.notebooks[0].artifacts).toHaveLength(1);
+    expect(payload.notebooks[0].artifacts[0].content).toBeUndefined();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      'Some artifacts exported without their body',
+      expect.objectContaining({ artifactIds: ['artifact-1'] })
+    );
   });
 });

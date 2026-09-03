@@ -44,11 +44,17 @@ const createArtifactSchema = z.object({
 
 type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
 
+/**
+ * Only `create` is used, so only `create` is asked for. Declaring the full repositories would make
+ * a caller that legitimately has just the one method - the notebook import, which hands over three
+ * models each bound to its transaction session - cast to satisfy an interface it never calls the
+ * rest of.
+ */
 interface CreateArtifactAdapters {
   db: {
-    artifacts: IArtifactRepository;
-    artifactContents: IArtifactContentRepository;
-    artifactVersions: IArtifactVersionRepository;
+    artifacts: Pick<IArtifactRepository, 'create'>;
+    artifactContents: Pick<IArtifactContentRepository, 'create'>;
+    artifactVersions: Pick<IArtifactVersionRepository, 'create'>;
   };
 }
 
