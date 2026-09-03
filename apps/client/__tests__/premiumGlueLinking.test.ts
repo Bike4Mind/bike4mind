@@ -74,6 +74,7 @@ beforeAll(() => {
           { generatedPath: 'server/premium-generated/fakeoverlay.ts', exportFrom: `${PKG_NAME}/handlers` },
         ],
         infra: true,
+        localStorageKeyPrefixes: ['fakeoverlay-'],
       },
     })
   );
@@ -120,8 +121,14 @@ describe('hydrated but UNLINKED overlay', () => {
     expect(existsSync(join(clientRoot, 'server/premium-generated/fakeoverlay.ts'))).toBe(false);
   });
 
-  it('still emits the PRESENT relative-import glue (infra + migrations need no link)', () => {
+  it('still emits the PRESENT no-import + relative-import glue (they need no link)', () => {
     runCodegen();
+
+    // Pure data lifted from package.json - it must never be demoted into the
+    // linked-only group, or the sweep silently stops covering unlinked overlays.
+    const lsKeys = readFileSync(join(clientRoot, 'app/premium-generated/premiumLocalStorageKeys.generated.ts'), 'utf8');
+    expect(lsKeys).toContain(`'fakeoverlay-'`);
+
     const infra = readFileSync(join(sandbox, 'infra/premium-generated/fakeoverlay-infra.generated.ts'), 'utf8');
     expect(infra).toContain(`from '../../packages/premium/fakeoverlay/src/infra'`);
 

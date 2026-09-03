@@ -8,9 +8,10 @@ import { Organization, organizationRepository } from './OrganizationModel';
  * Concurrency + guard proof for the domain-signup auto-add model methods (#1239).
  *
  * `addMemberRaisingSeats` (non-Stripe orgs) raises the seat ceiling to fit rather than rejecting at
- * capacity, so N racing signups into one org must land N members with `seats` equal to the real
- * member count - never a double-raise and never a duplicate. `addMemberIfUnderCeiling` (Stripe
- * orgs) instead adds ONLY under the existing ceiling and never raises it. Both skip soft-deleted
+ * capacity, so N racing signups into one org must land N members with `seats` equal to the
+ * owner-inclusive team size (owner + members, #1423) - never a double-raise and never a duplicate.
+ * `addMemberIfUnderCeiling` (Stripe orgs) instead adds ONLY under the existing ceiling and never
+ * raises it, reserving a seat for the owner. Both skip soft-deleted
  * orgs and return the PRE-image.
  *
  * A standalone mongod is enough: this is single-document atomicity (one guarded `findOneAndUpdate`),
@@ -63,8 +64,8 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
     expect(pre!.seats).toBe(1);
     const fresh = await readRaw(created.id);
     expect(fresh!.users).toHaveLength(2);
-    // 2 members past a ceiling of 1 => raised to 2.
-    expect(fresh!.seats).toBe(2);
+    // Owner + 2 members past a ceiling of 1 => raised to 3 (owner-inclusive, #1423).
+    expect(fresh!.seats).toBe(3);
   });
 
   it('returns null and writes nothing when the user is already a member (idempotent guard)', async () => {
@@ -102,8 +103,9 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
     const fresh = await readRaw(created.id);
     expect(fresh!.users).toHaveLength(userIds.length);
     expect(new Set(fresh!.users.map(u => u.userId)).size).toBe(userIds.length);
-    // The invariant: seats was raised exactly to the real member count, never past it.
-    expect(fresh!.seats).toBe(userIds.length);
+    // The invariant: seats was raised exactly to the owner-inclusive size (owner + members), never
+    // past it (#1423).
+    expect(fresh!.seats).toBe(userIds.length + 1);
   });
 
   it('the SAME user racing itself is admitted exactly once and raises seats once', async () => {
@@ -117,7 +119,8 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
     expect(results.filter(r => r !== null)).toHaveLength(1);
     const fresh = await readRaw(created.id);
     expect(fresh!.users.map(u => u.userId)).toEqual(['dup']);
-    expect(fresh!.seats).toBe(1);
+    // Owner + 1 member => raised once to 2 (owner-inclusive, #1423).
+    expect(fresh!.seats).toBe(2);
   });
 
   it('rejects the add and does not grow seats past the maximum when the org is at the ceiling (#1424)', async () => {
@@ -138,12 +141,34 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
     expect(fresh!.seats).toBe(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
   });
 
-  it('still admits a member one below the ceiling, raising seats up to the maximum (#1424 boundary)', async () => {
-    const belowMax = Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1 }, (_, i) => member(`u${i}`));
+  it('rejects a member at MAX-1 members because the owner fills the last seat (#1423 boundary)', async () => {
+    // Owner-inclusive: MAX-1 members + the owner == MAX == full, so the clamp ($size < MAX-1) rejects.
+    // The member-only accounting would have admitted this add, growing the org past the owner-inclusive
+    // ceiling.
+    const atCeiling = Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1 }, (_, i) => member(`u${i}`));
     const created = await Organization.create({
       name: 'Partner',
       userId: 'owner',
-      seats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1,
+      seats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+      users: atCeiling,
+    });
+
+    const pre = await organizationRepository.addMemberRaisingSeats(created.id, member('over'));
+
+    expect(pre).toBeNull();
+    const fresh = await readRaw(created.id);
+    expect(fresh!.users).toHaveLength(ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1);
+    expect(fresh!.seats).toBe(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+  });
+
+  it('still admits a member at MAX-2 members, raising seats up to the maximum (#1423 boundary)', async () => {
+    // The largest admittable state: MAX-2 members + owner == MAX-1 (one below full). The add lands and
+    // raises seats to the owner-inclusive maximum (MAX-1 members + owner == MAX).
+    const belowMax = Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 2 }, (_, i) => member(`u${i}`));
+    const created = await Organization.create({
+      name: 'Partner',
+      userId: 'owner',
+      seats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 2,
       users: belowMax,
     });
 
@@ -151,7 +176,7 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
 
     expect(pre).not.toBeNull();
     const fresh = await readRaw(created.id);
-    expect(fresh!.users).toHaveLength(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+    expect(fresh!.users).toHaveLength(ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1);
     expect(fresh!.seats).toBe(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
   });
 });
@@ -214,10 +239,11 @@ describe('OrganizationModel.addMemberIfUnderCeiling (#1239, Stripe path)', () =>
       userIds.map(id => organizationRepository.addMemberIfUnderCeiling(created.id, member(id)))
     );
 
-    // Exactly `seats` adds matched the atomic capacity guard; the rest were rejected (null).
-    expect(results.filter(r => r !== null)).toHaveLength(3);
+    // Owner-inclusive: exactly `seats - 1` adds matched the guard (the owner holds the last seat,
+    // #1423); the rest were rejected (null).
+    expect(results.filter(r => r !== null)).toHaveLength(2);
     const fresh = await readRaw(created.id);
-    expect(fresh!.users).toHaveLength(3);
+    expect(fresh!.users).toHaveLength(2);
     expect(fresh!.seats).toBe(3);
   });
 });

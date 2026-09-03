@@ -1,61 +1,165 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useSyncExternalStore } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
+// The store itself stays real (only its setter is spied), so a test can drive a layout write the
+// way the KnowledgeViewer's close button does.
+import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 import DataLakeExplorer from './DataLakeExplorer';
 
-// Chat-first mode opens a clicked file INLINE in the KnowledgeViewer by adding it to the
-// session workbench and switching layout to `vertical`. Spy on those two seams.
-const { setWorkBenchFiles, setSessionLayout, sessionState } = vi.hoisted(() => ({
+// Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
+// and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
+// assert both. setWorkBenchFiles also mutates workBenchState and notifies subscribers, and the
+// mocked useWorkBenchFiles reads it back via useSyncExternalStore - like the real Zustand store,
+// which re-renders subscribers on its own regardless of whether the action that wrote to it also
+// did a local setState. Plain-function mocks don't get that for free (React has no way to know a
+// re-render is needed), which matters here because #1640 removed the local setState (old
+// viewerFileId) that used to trigger it as a side effect. The tree's persistent highlight
+// (#1693) is driven entirely by this read, so it must survive independent of whichever action
+// attached the file and of the viewer opening or closing afterward.
+const {
+  setWorkBenchFiles,
+  setSessionLayout,
+  sessionState,
+  removeFileMutate,
+  removeFileLakeIds,
+  lakesState,
+  workBenchState,
+  mockFileOwnerId,
+} = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
   sessionState: { currentSessionId: 'sess-1' as string | null },
+  removeFileMutate: vi.fn(),
+  // Every lake id the removal hook was constructed with, so tests can assert the mutation
+  // is bound to the resolved lake (not a stale null) at the moment it fires.
+  removeFileLakeIds: [] as Array<string | null>,
+  // Mutable so delete-gating tests can vary the accessible-lake list per-test.
+  lakesState: {
+    value: [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }] as unknown[],
+  },
+  workBenchState: {
+    files: [] as { id: string; fileName: string }[],
+    listeners: new Set<() => void>(),
+  },
+  // Mutable so a test can exercise the non-owner copy branch of the remove-confirm dialog.
+  mockFileOwnerId: { value: 'owner-1' },
 }));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
   useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
   useWorkBenchActions: () => ({ setWorkBenchFiles }),
+  useWorkBenchFiles: () =>
+    useSyncExternalStore(
+      listener => {
+        workBenchState.listeners.add(listener);
+        return () => workBenchState.listeners.delete(listener);
+      },
+      () => workBenchState.files
+    ),
 }));
 vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/useSessionLayout')>()),
   setSessionLayout,
 }));
 
+// Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
+// what every other test here expects.
+const { tagCountsState, uncategorizedState } = vi.hoisted(() => ({
+  tagCountsState: {
+    tagCounts: [] as { tag: string; count: number }[],
+    total: 0,
+    lakeFileCounts: {} as Record<string, number>,
+    uncategorizedFileCounts: {} as Record<string, number>,
+    totalUncategorized: 0,
+  },
+  // The bucket's file list, fetched lazily by the explorer once the bucket is opened. `enabled`
+  // records what the hook was called with, so a test can assert the fetch stays off until then.
+  uncategorizedState: {
+    files: [] as { id: string; fileName: string }[],
+    enabled: [] as boolean[],
+    mergedFiles: [] as { id: string; fileName: string }[],
+    mergedEnabled: [] as boolean[],
+    isError: false,
+  },
+}));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
-    data: { tagCounts: [], uniqueArticleCounts: { total: 0 } },
+    data: {
+      tagCounts: tagCountsState.tagCounts,
+      uniqueArticleCounts: { total: tagCountsState.total },
+      totalLakeFileCount: tagCountsState.total,
+      lakeFileCounts: tagCountsState.lakeFileCounts,
+      uncategorizedFileCounts: tagCountsState.uncategorizedFileCounts,
+      totalUncategorizedFileCount: tagCountsState.totalUncategorized,
+    },
     isLoading: false,
     isError: false,
   }),
-  // id query (deep-link) resolves to a file; tag query resolves empty.
-  useGetDataLakeArticles: (params?: { id?: string } | null) => ({
-    data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
-    isLoading: false,
-  }),
-  // Page mode renders DataLakeArticle, which reads file content.
-  useGetFabFileContent: () => ({ data: null, isLoading: false }),
+  // Records whether the query would actually RUN, mirroring the hook's own `enabled && !!lakeId`
+  // gate: in the all-lakes scope the explorer still calls this (hooks are unconditional) with a
+  // null lake, and counting that as a fetch would misread a disabled query as a live one.
+  useGetDataLakeUncategorizedFiles: (lakeId: string | null, enabled: boolean) => {
+    uncategorizedState.enabled.push(enabled && !!lakeId);
+    return { data: { data: uncategorizedState.files }, isLoading: false, isError: uncategorizedState.isError };
+  },
+  // id query (deep-link) resolves to a file; the merged Uncategorized bucket resolves to its own
+  // fixture (and records that it was enabled); tag query resolves empty.
+  useGetDataLakeArticles: (params?: { id?: string; uncategorized?: boolean } | null) => {
+    if (params?.uncategorized) {
+      uncategorizedState.mergedEnabled.push(true);
+      return { data: { data: uncategorizedState.mergedFiles }, isLoading: false };
+    }
+    return {
+      data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
+      isLoading: false,
+    };
+  },
+  useGetDataLakes: () => ({ data: lakesState.value }),
+  useRemoveFileFromDataLake: (lakeId: string | null) => {
+    removeFileLakeIds.push(lakeId);
+    return { mutate: removeFileMutate, isPending: false };
+  },
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  // Page mode renders DataLakeArticle, which reads the selected file's body.
+  // The rail viewer's KnowledgeViewer reads file content; stubbed so no query client is needed.
   useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 
-// The page-mode header's ManageKnowledgeButton folds in the EnableDataLakes gate, which
-// reaches the admin settings cache; mirror manageKnowledge.test's stubs for that chain.
+// The rail viewer mounts KnowledgeViewer, which pulls in the websocket/session/artifact chain.
+// What this suite owns is the explorer's wiring - whether the rail swaps and Back returns - so
+// the wrapper is stubbed with the same test ids it renders.
+vi.mock('./DataLakeRailViewer', () => ({
+  default: () => <div data-testid="datalake-rail-viewer" />,
+}));
+
+// The tree footer's Manage affordance folds in the EnableDataLakes gate, which reaches the
+// admin settings cache; mirror manageKnowledge.test's stubs for that chain.
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true, isFeatureEnabled: () => true, isLoading: false }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (selector?: (s: { isAdmin: boolean }) => unknown) =>
-    selector ? selector({ isAdmin: true }) : { isAdmin: true },
+  useUser: (selector?: (s: { isAdmin: boolean; currentUser: { id: string } }) => unknown) =>
+    selector ? selector({ isAdmin: true, currentUser: { id: 'owner-1' } }) : { isAdmin: true },
+}));
+// Both writers, not just openManager: SelectedLakeHeader selects openWizardForLake too, and a
+// stub missing it hands the Add-files button `undefined` - the click throws, and a test that
+// only asserts the button is PRESENT never finds out. Hoisted spies so the tests below can
+// assert on them.
+const { openManagerSpy, openWizardForLakeSpy } = vi.hoisted(() => ({
+  openManagerSpy: vi.fn(),
+  openWizardForLakeSpy: vi.fn(),
 }));
 vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
-  useDataLakeWizardStore: (selector: (s: { openManager: () => void }) => unknown) => selector({ openManager: vi.fn() }),
+  useDataLakeWizardStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ openManager: openManagerSpy, openWizardForLake: openWizardForLakeSpy }),
 }));
 
 // Collapsed-sidenav clearance reads this store; default open (no extra indent) for these tests.
@@ -75,30 +179,67 @@ const { setModeSpy, toastInfo, toastError, toastSuccess } = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success: toastSuccess } }));
 
-// Stub the tree so we can trigger onSelectFile/onClose deterministically and read the
-// highlight prop. Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub.
+// Stub the tree so we can trigger the row actions deterministically and read the highlight
+// prop. Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub. The file
+// carries a membership meta-tag so delete-gating tests exercise resolveManageableLake for real.
 vi.mock('./DataLakeChatTree', () => ({
-  default: ({
-    onSelectFile,
-    selectedFileId,
-    onClose,
-  }: {
-    onSelectFile: (f: { id: string; fileName: string }) => void;
-    selectedFileId: string | null;
+  default: (props: {
+    onAttachFile: (f: { id: string; fileName: string }) => void;
+    onViewFile: (f: { id: string; fileName: string }) => void;
+    canDeleteFile: (f: { id: string; fileName: string }) => boolean;
+    onDeleteFile: (f: { id: string; fileName: string }) => void;
+    onNavigate: (breadcrumb: string[]) => void;
+    selectedFileIds: ReadonlySet<string>;
     onClose?: () => void;
-  }) => (
-    <div data-testid="mock-tree" data-selected={selectedFileId ?? ''}>
-      <button data-testid="mock-select-file" onClick={() => onSelectFile({ id: 'file-123', fileName: 'x.pdf' })}>
-        select
-      </button>
-      {/* Mirror the real header: the close X renders only when an onClose is supplied. */}
-      {onClose && (
-        <button data-testid="mock-close" onClick={onClose}>
-          close
+    subHeader?: React.ReactNode;
+    emptySlot?: React.ReactNode;
+    dropHint?: string;
+    tree: { segment: string }[];
+    uncategorized?: { files: { id: string }[]; count: number };
+    isError?: boolean;
+  }) => {
+    const file = {
+      id: 'file-123',
+      fileName: 'x.pdf',
+      userId: mockFileOwnerId.value,
+      tags: [{ name: 'datalake:lake-a' }],
+    };
+    return (
+      <div
+        data-testid="mock-tree"
+        data-selected={Array.from(props.selectedFileIds).join(',')}
+        data-can-delete={String(props.canDeleteFile(file))}
+        data-drop-hint={props.dropHint ?? ''}
+        data-segments={props.tree.map(n => n.segment).join(',')}
+        data-error={String(!!props.isError)}
+        data-uncategorized-count={props.uncategorized ? String(props.uncategorized.count) : ''}
+        data-uncategorized-files={(props.uncategorized?.files ?? []).map(f => f.id).join(',')}
+      >
+        {props.subHeader}
+        {props.emptySlot}
+        <button data-testid="mock-attach" onClick={() => props.onAttachFile(file)}>
+          attach
         </button>
-      )}
-    </div>
-  ),
+        <button data-testid="mock-view" onClick={() => props.onViewFile(file)}>
+          view
+        </button>
+        <button data-testid="mock-delete" onClick={() => props.onDeleteFile(file)}>
+          delete
+        </button>
+        <button data-testid="mock-navigate-back" onClick={() => props.onNavigate([])}>
+          back
+        </button>
+        <button data-testid="mock-open-bucket" onClick={() => props.onNavigate(['__uncategorized__'])}>
+          open bucket
+        </button>
+        {props.onClose && (
+          <button data-testid="mock-close" onClick={props.onClose}>
+            close
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -106,8 +247,9 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-// Main-app arrangement (DataLakeChatSurface): the chat is embedded in the right pane, so file
-// clicks own the layout. Overlay-host tests override chatEmbedded per-case.
+// Main-app arrangement (DataLakeChatSurface): the chat fills the right pane, so View may drive
+// the KnowledgeViewer split. Row actions are the only way browsing reaches the chat (no
+// click-to-open). Overlay-host tests override chatEmbedded per-case.
 const baseProps = {
   source: 'datalakes' as const,
   chatSlot: <div data-testid="my-chat" />,
@@ -125,41 +267,29 @@ describe('DataLakeExplorer chat-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionState.currentSessionId = 'sess-1';
+    removeFileLakeIds.length = 0;
+    mockFileOwnerId.value = 'owner-1';
+    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
+    workBenchState.files = [];
+    // Re-applied each test since clearAllMocks only clears call history, not implementation -
+    // runs the functional updater the way the real zustand store does, persists the result, and
+    // notifies useSyncExternalStore subscribers (see the useWorkBenchFiles mock comment above),
+    // so the attach-vs-already-attached branch AND the tree's data-selected read are both
+    // exercised for real.
+    setWorkBenchFiles.mockImplementation(
+      (_sessionId: string, updater: (prev: typeof workBenchState.files) => typeof workBenchState.files) => {
+        workBenchState.files = updater(workBenchState.files);
+        workBenchState.listeners.forEach(listener => listener());
+      }
+    );
+    // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
+    // a close request is an actual transition rather than a no-op write.
+    useSessionLayoutStore.setState({ layout: 'dockRight' });
   });
 
   it('renders chatSlot in the right pane', () => {
     renderExplorer();
     expect(screen.getByTestId('my-chat')).toBeInTheDocument();
-  });
-
-  it('opens a clicked file inline (workbench + vertical KnowledgeViewer) in chat mode', () => {
-    renderExplorer();
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    // Added to the session workbench so the KnowledgeViewer renders it.
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    // Layout switched to the split view with the file selected.
-    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
-    // The clicked file is highlighted in the tree.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
-  });
-
-  it('opens the deep-linked articleId inline once it resolves', () => {
-    renderExplorer({ articleId: 'deep-1' });
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'deep-1' });
-  });
-
-  it('without chatEmbedded (overlay host, chat docked outside): file click adds to the workbench + toasts, never touches layout', () => {
-    // Regression guard: switching to 'vertical' here collapsed the overlay's docked chat into
-    // the 0x0 non-docked branch with no on-surface way back. The contract is keyed on the HOST
-    // prop, not the live layout store - that store is global and leaks across surfaces.
-    renderExplorer({ chatEmbedded: false });
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    expect(toastInfo).toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
-    // The clicked file still highlights in the tree.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
   it('tree close (X) turns Data Lake mode off via the shared setter', () => {
@@ -173,124 +303,276 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.queryByTestId('mock-close')).toBeNull();
   });
 
-  it('no session + no createSessionForFile (overlay): file click guides via toast, writes nothing', () => {
-    // The viewer reads the session workbench, so with no session it would render empty and
-    // auto-hide (reads as a dead click); hosts without a create path get guidance instead.
-    sessionState.currentSessionId = null;
+  it('touches neither the workbench nor the layout until an action runs', () => {
+    // Browsing (mounting, navigating) stays inert; only the row actions below reach the chat.
+    // Which gesture triggers which action is the tree's contract - see DataLakeChatTree.test.
     renderExplorer();
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    expect(toastInfo).toHaveBeenCalled();
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
-    // The pick still highlights so the guidance has a visible anchor.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
-  it('no session + createSessionForFile (main app /new): mints the session, then opens the file in the viewer', async () => {
+  it('attach action adds the file to the workbench and toasts, never touching layout', async () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function)));
+    expect(toastSuccess).toHaveBeenCalled();
+    expect(setSessionLayout).not.toHaveBeenCalled();
+    // Attaching alone (no View, no viewer ever opened) still highlights the row: the highlight
+    // tracks workbench membership (#1693), not viewer state. waitFor (not vi.waitFor) because
+    // this depends on React actually flushing the mocked store's reactive update - see the
+    // useWorkBenchFiles mock comment above.
+    await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
+  });
+
+  it('attach on /new with createSessionForFile mints the session, then attaches', async () => {
     sessionState.currentSessionId = null;
     const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
     renderExplorer({ createSessionForFile });
-    fireEvent.click(screen.getByTestId('mock-select-file'));
+    fireEvent.click(screen.getByTestId('mock-attach'));
     await vi.waitFor(() => {
       expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-new', expect.any(Function));
-      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
     });
     expect(createSessionForFile).toHaveBeenCalledTimes(1);
+    // The minting host needs the file: the session must be created already holding it
+    // (knowledgeIds), or the adoption-time workbench rehydration wipes the store write.
+    expect(createSessionForFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-123' }));
   });
 
-  it('no session + createSessionForFile rejection: toasts an error and opens nothing', async () => {
+  it('attach with no session and no create path guides via toast, writes nothing', () => {
+    sessionState.currentSessionId = null;
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    expect(toastInfo).toHaveBeenCalled();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
+
+  it('attach create rejection toasts an error and attaches nothing', async () => {
     sessionState.currentSessionId = null;
     const createSessionForFile = vi.fn().mockRejectedValue(new Error('boom'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderExplorer({ createSessionForFile });
-    fireEvent.click(screen.getByTestId('mock-select-file'));
+    fireEvent.click(screen.getByTestId('mock-attach'));
     await vi.waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
     errSpy.mockRestore();
   });
-});
 
-// Page mode (no chatSlot) is the only arrangement that renders the header action row.
-const renderPageExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplorer>> = {}) =>
-  render(
-    <TestWrapper>
-      <DataLakeExplorer source="datalakes" onBack={vi.fn()} {...props} />
-    </TestWrapper>
-  );
-
-describe('DataLakeExplorer - Create primary alongside Manage secondary', () => {
-  it('renders both buttons, Create first, each wired to its own handler', () => {
-    const onCreate = vi.fn();
-    const onManage = vi.fn();
-    renderPageExplorer({ onCreate, onManage });
-
-    const createBtn = screen.getByTestId('datalake-create-btn');
-    const manageBtn = screen.getByTestId('datalake-manage-btn');
-    expect(createBtn.compareDocumentPosition(manageBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    fireEvent.click(createBtn);
-    expect(onCreate).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-
-    fireEvent.click(manageBtn);
-    expect(onManage).toHaveBeenCalledTimes(1);
+  it('view opens the KnowledgeViewer split on the embedded host without touching the workbench', async () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    // The viewer shows the file through the transient previewFile slot - viewing must not
+    // attach it to the prompt (the explicit [+] action does that).
+    await vi.waitFor(() => {
+      expect(setSessionLayout).toHaveBeenCalledWith({
+        layout: 'vertical',
+        previewFile: expect.objectContaining({ id: 'file-123' }),
+        selectedArtifactId: 'file-123',
+      });
+    });
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    // No highlight either: the highlight tracks workbench membership (#1693), and View no
+    // longer changes membership.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
+    // The rail keeps the tree; the chat's own SessionContainer renders the viewer here.
+    expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
   });
 
-  it('gives Create the primary treatment and Manage the secondary one', () => {
-    renderPageExplorer({ onCreate: vi.fn(), onManage: vi.fn() });
+  it('view on /new opens the split without minting a session', async () => {
+    sessionState.currentSessionId = null;
+    const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => {
+      expect(setSessionLayout).toHaveBeenCalledWith({
+        layout: 'vertical',
+        previewFile: expect.objectContaining({ id: 'file-123' }),
+        selectedArtifactId: 'file-123',
+      });
+    });
+    // Previewing is not a chat mutation, so it must not create the session either.
+    expect(createSessionForFile).not.toHaveBeenCalled();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
 
-    // Joy's variant/color modifier classes are a stable public API (unlike its emotion
-    // hashes), so they are the only way to assert visual hierarchy without a snapshot.
-    const createBtn = screen.getByTestId('datalake-create-btn');
-    expect(createBtn.className).toMatch(/MuiButton-variantSolid/);
-    expect(createBtn.className).toMatch(/MuiButton-colorPrimary/);
+  it('view on an overlay host mounts the viewer in the rail and never sets a layout', async () => {
+    // Regression guard: switching to 'vertical' here collapsed the overlay's docked chat into
+    // the 0x0 non-docked branch with no on-surface way back. Keyed on the HOST prop, not the
+    // live layout store - that store is global and leaks across surfaces. Selecting the artifact
+    // is fine; it is `layout` that must never be written.
+    renderExplorer({ chatEmbedded: false });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+    // The tree stays; the centre pane (the host's own content) is hidden - not unmounted, so
+    // its in-progress state survives a look at a file.
+    expect(screen.getByTestId('mock-tree')).toBeInTheDocument();
+    expect(screen.getByTestId('my-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('my-chat')).not.toBeVisible();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(setSessionLayout).toHaveBeenCalledWith({
+      previewFile: expect.objectContaining({ id: 'file-123' }),
+      selectedArtifactId: 'file-123',
+    });
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.anything() as unknown as string })
+    );
+  });
 
-    const manageBtn = screen.getByTestId('datalake-manage-btn');
-    expect(manageBtn.className).toMatch(/MuiButton-variantOutlined/);
-    expect(manageBtn.className).toMatch(/MuiButton-colorNeutral/);
+  it("the viewer's own close request restores the host's content and layout (overlay host)", async () => {
+    // The viewer closes itself by writing layout 'hide'. On this host 'hide' would collapse the
+    // docked chat, so the panel answers the request by closing AND restoring the layout the host
+    // was running when the viewer opened.
+    renderExplorer({ chatEmbedded: false });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+
+    act(() => useSessionLayoutStore.setState({ layout: 'hide' }));
+
+    expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
+    expect(screen.getByTestId('my-chat')).toBeVisible();
+    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'dockRight' });
+    // View never attached anything, so there is no highlight to keep or clear (the highlight
+    // tracks workbench membership, #1693 - not viewer state).
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
+  });
+
+  it('any other layout departure closes the viewer without fighting the write (overlay host)', async () => {
+    // A write that is not 'hide' is the host rearranging itself, not a close request: the rail
+    // viewer must get out of the way and let the new layout stand rather than restoring over it.
+    renderExplorer({ chatEmbedded: false });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+
+    act(() => useSessionLayoutStore.setState({ layout: 'vertical' }));
+
+    expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
+    expect(screen.getByTestId('my-chat')).toBeVisible();
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.anything() as unknown as string })
+    );
+  });
+
+  it('view is silent - it attaches nothing, so there is nothing to toast', async () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(setSessionLayout).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+
+  it('view of an already-attached file opens the viewer without workbench writes', async () => {
+    workBenchState.files = [{ id: 'file-123', fileName: 'x.pdf' }];
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(setSessionLayout).toHaveBeenCalled());
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('browsing back out of a category leaves the open viewer up (overlay host)', async () => {
+    // The tree and the viewer are separate panels; navigating one must not dismiss the other.
+    renderExplorer({ chatEmbedded: false });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('mock-navigate-back'));
+
+    expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument();
+  });
+
+  it('browsing the tree never touches the layout on the embedded host', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-navigate-back'));
+    expect(setSessionLayout).not.toHaveBeenCalled();
+  });
+
+  it('attach-driven highlight survives the viewer closing (embedded host)', async () => {
+    // The highlight is workbench membership (#1693): the explicit attach sets it, and viewer
+    // state (open, closed, never opened) has no bearing on it.
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    // waitFor (not vi.waitFor) - see the useWorkBenchFiles mock comment above.
+    await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
+
+    act(() => useSessionLayoutStore.setState({ layout: 'hide' }));
+
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+  });
+
+  it('deep-linked articleId opens it the same way View does - preview only, no attach', async () => {
+    renderExplorer({ articleId: 'deep-1' });
+    await vi.waitFor(() => {
+      expect(setSessionLayout).toHaveBeenCalledWith({
+        layout: 'vertical',
+        previewFile: expect.objectContaining({ id: 'deep-1' }),
+        selectedArtifactId: 'deep-1',
+      });
+    });
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
+
+  it('delete is offered only for a uniquely-resolved manageable lake', () => {
+    renderExplorer();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'true');
+  });
+
+  it('delete is not offered when the owning lake is not manageable', () => {
+    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: false }];
+    renderExplorer();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'false');
+  });
+
+  it('delete action confirms first, then fires the removal bound to the resolved lake', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-delete'));
+    expect(removeFileMutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('datalake-tree-removefile-confirm-btn'));
+    expect(removeFileMutate).toHaveBeenCalledWith('file-123', expect.anything());
+    // The mutation must target the lake the confirm dialog named - by the time it fires, the
+    // hook has to have been (re)constructed with that lake's id, not the initial null.
+    expect(removeFileLakeIds[removeFileLakeIds.length - 1]).toBe('lake-1');
+  });
+
+  it('promises the file stays in Files (and Undo) when the actor owns it', () => {
+    mockFileOwnerId.value = 'owner-1'; // matches the mocked useUser's currentUser.id
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-delete'));
+    expect(screen.getByTestId('datalake-tree-removefile-confirm').textContent).toMatch(/stays in your Files/);
+    expect(screen.getByTestId('datalake-tree-removefile-confirm').textContent).toMatch(/Undo/);
+  });
+
+  it('does not promise "your Files" for a file the actor does not own - states only what is certain', () => {
+    mockFileOwnerId.value = 'someone-else';
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-delete'));
+    const text = screen.getByTestId('datalake-tree-removefile-confirm').textContent ?? '';
+    expect(text).not.toMatch(/your Files/);
+    expect(text).toMatch(/owner's Files/);
+    expect(text).toMatch(/Undo/);
   });
 });
 
 describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
   it('advertises drag-to-add at rest, before any drag has started', () => {
-    render(
-      <TestWrapper>
-        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
-      </TestWrapper>
-    );
+    renderExplorer();
 
-    // No drag is underway, so the drag-active overlay must stay hidden while the
-    // resting affordances carry the invitation.
-    expect(screen.queryByTestId('datalake-dropzone')).not.toBeInTheDocument();
-    expect(screen.getByTestId('datalake-drop-hint')).toHaveTextContent(/drag files here to add/i);
-    expect(screen.getByTestId('datalake-drop-prompt')).toBeInTheDocument();
+    // No drag is underway, so the drag-active overlay must stay hidden while the resting hint -
+    // handed to the tree's footer, the only chrome this surface owns - carries the invitation.
+    expect(screen.queryByTestId('opti-datalake-dropzone')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-drop-hint', 'Drag files here to add');
   });
 
-  it('swaps the resting hint for the drag overlay once a file drag enters', () => {
-    render(
-      <TestWrapper>
-        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
-      </TestWrapper>
-    );
+  it('raises the drag overlay once a file drag enters', () => {
+    renderExplorer();
 
-    fireEvent.dragEnter(screen.getByTestId('datalake-explorer'), {
-      dataTransfer: { types: ['Files'] },
-    });
+    fireEvent.dragEnter(screen.getByTestId('opti-datalake-explorer'), { dataTransfer: { types: ['Files'] } });
 
-    expect(screen.getByTestId('datalake-dropzone')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-drop-hint')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-drop-prompt')).not.toBeInTheDocument();
+    expect(screen.getByTestId('opti-datalake-dropzone')).toBeInTheDocument();
   });
 
   it('confirms a successful drop with a toast naming the file count', async () => {
-    render(
-      <TestWrapper>
-        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
-      </TestWrapper>
-    );
+    renderExplorer();
 
-    fireEvent.drop(screen.getByTestId('datalake-explorer'), {
+    fireEvent.drop(screen.getByTestId('opti-datalake-explorer'), {
       dataTransfer: {
         types: ['Files'],
         items: [],
@@ -299,5 +581,232 @@ describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
     });
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/^2 files /)));
+  });
+});
+
+// The lake rail, the scoped-lake header and the honest empty states came off the retired
+// /data-lakes page into the tree card's own chrome (#1943), so the explorer must hand them down.
+describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
+  beforeEach(() => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+      { id: 'lake-2', name: 'Lake B', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'lakeb', canManage: false },
+    ];
+    tagCountsState.tagCounts = [
+      { tag: 'lakea:notes', count: 2 },
+      { tag: 'lakeb:decks', count: 3 },
+    ];
+    tagCountsState.total = 5;
+  });
+  afterEach(() => {
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
+  });
+
+  it('offers the lake picker in the tree, opening on the all-lakes scope', () => {
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
+    // Unscoped, so every lake's branches are in the tree.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
+
+  it('scopes the tree to the picked lake and drops the outgoing breadcrumb', () => {
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    // Only lake B's prefix survives - the scoping the standalone page's rail used to do.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakeb');
+  });
+
+  it('shows the scoped lake actions only once a specific lake is picked', () => {
+    renderExplorer();
+    expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(screen.getByTestId('datalake-selected-lake-header')).toBeInTheDocument();
+    // Add files is a manage capability; Configure deep-links the manager either way.
+    expect(screen.getByTestId('datalake-selected-lake-addfiles-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
+  });
+
+  // Clicked, not just asserted present: the strip's handlers come from the wizard store, so a
+  // rendered button proves nothing about whether the explorer wired the store through to it.
+  it('drives the strip actions against the lake the picker scoped to', () => {
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    fireEvent.click(screen.getByTestId('datalake-selected-lake-addfiles-btn'));
+    expect(openWizardForLakeSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake-1' }));
+
+    fireEvent.click(screen.getByTestId('datalake-selected-lake-manage-btn'));
+    expect(openManagerSpy).toHaveBeenCalledWith('mine', 'lake-1');
+  });
+
+  it('falls back to the all-lakes scope when the scoped lake leaves the list', () => {
+    const { rerender } = renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('Lake B');
+
+    // Archiving or deleting the scoped lake through Configure drops it from the list. The scope
+    // must follow, rather than leaving the picker naming a lake nothing else is honouring.
+    lakesState.value = [lakesState.value[0]];
+    // The lake list is a query result, so it changes without any local state change - re-render
+    // the way an invalidation would rather than by driving the UI.
+    rerender(
+      <TestWrapper>
+        <DataLakeExplorer {...baseProps} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+
+    expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
+    expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
+
+  // The picker's per-lake count is membership-based while the tree is built from prefix tags, so
+  // a member with no taxonomy tag was counted and then shown nowhere. The bucket is what makes
+  // that file reachable rather than merely counted (#2031).
+  describe('uncategorized bucket', () => {
+    beforeEach(() => {
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 1 };
+      uncategorizedState.files = [{ id: 'loose-1', fileName: 'no-tags.pdf' }];
+      uncategorizedState.enabled = [];
+      uncategorizedState.isError = false;
+    });
+    afterEach(() => {
+      tagCountsState.uncategorizedFileCounts = {};
+      uncategorizedState.files = [];
+    });
+
+    const scopeToLakeA = () => {
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+    };
+
+    it('hands the tree the scoped lake bucket count, from the same payload the picker reads', () => {
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '1');
+    });
+
+    it('offers no merged bucket when every lake member is categorized somewhere', () => {
+      // The per-lake figure is 1 here, and the merged one is 0 - that file is filed under another
+      // lake's branch, so the merged tree already reaches it and must not offer it twice.
+      renderExplorer();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '');
+    });
+
+    it('offers no bucket for a scoped lake whose members are all categorized', () => {
+      tagCountsState.uncategorizedFileCounts = { 'datalake:lake-a': 0 };
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '');
+    });
+
+    it('offers the MERGED bucket in the all-lakes scope, sized by the distinct cross-lake count', () => {
+      // Not a sum of the per-lake figures: a file categorized in one lake is already reachable
+      // under that lake's branch in the merged tree, so the server hands down its own number.
+      tagCountsState.totalUncategorized = 4;
+      renderExplorer();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-count', '4');
+
+      tagCountsState.totalUncategorized = 0;
+    });
+
+    it('reads the merged bucket from the cross-lake browse, which has no lake-scope parameter', () => {
+      tagCountsState.totalUncategorized = 1;
+      uncategorizedState.mergedFiles = [{ id: 'merged-1', fileName: 'loose.pdf' }];
+      uncategorizedState.mergedEnabled = [];
+      renderExplorer();
+
+      expect(uncategorizedState.mergedEnabled).toHaveLength(0);
+      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+
+      expect(uncategorizedState.mergedEnabled.at(-1)).toBe(true);
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'merged-1');
+      // The per-lake route stays untouched in this scope - it cannot express "every lake".
+      expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
+
+      tagCountsState.totalUncategorized = 0;
+      uncategorizedState.mergedFiles = [];
+    });
+
+    it('tells the tree a failed bucket read failed, rather than letting it render as empty', () => {
+      // The row the user just clicked promised a count, so an empty file list would read as
+      // "they are gone" - a failed read must never borrow the empty state's meaning.
+      uncategorizedState.isError = true;
+      uncategorizedState.files = [];
+      renderExplorer();
+      scopeToLakeA();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-error', 'false');
+
+      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-error', 'true');
+    });
+
+    it('fetches the bucket files only once it is opened, not to render its count', () => {
+      renderExplorer();
+      scopeToLakeA();
+
+      // The count alone renders the row, so the list must stay unfetched until someone opens it.
+      expect(uncategorizedState.enabled.every(on => !on)).toBe(true);
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', '');
+
+      fireEvent.click(screen.getByTestId('mock-open-bucket'));
+
+      expect(uncategorizedState.enabled.at(-1)).toBe(true);
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'loose-1');
+    });
+  });
+
+  it('withholds Add files on a lake the caller cannot manage', () => {
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(screen.getByTestId('datalake-selected-lake-header')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-selected-lake-addfiles-btn')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
+  it('offers create-first when the caller genuinely has no lakes', () => {
+    lakesState.value = [];
+    renderExplorer({ onCreateLake: vi.fn() });
+
+    const empty = screen.getByTestId('datalake-tree-empty');
+    expect(empty).toHaveAttribute('data-variant', 'no-lakes');
+    expect(screen.getByTestId('datalake-tree-empty-create-btn')).toBeInTheDocument();
+  });
+
+  it('hands the tree no empty state while there is something to browse', () => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ];
+    tagCountsState.tagCounts = [{ tag: 'lakea:notes', count: 2 }];
+    tagCountsState.total = 2;
+    renderExplorer();
+
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
+
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
   });
 });

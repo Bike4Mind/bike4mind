@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   toAccessContext: vi.fn(),
+  computeDataLakeStats: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,8 +30,28 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeBatchRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { computeDataLakeStats: h.computeDataLakeStats },
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
+  // The GET read gate reads the EnforceLakeReadGrants cutover flag (#1673) via assertLakeAccess;
+  // default off keeps these redaction tests on the legacy report-only path.
+  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', async () => {
@@ -44,6 +65,7 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
+import { DATA_LAKES } from '@bike4mind/common';
 import handler from '../[id]';
 
 const PROMPT = 'Always begin your reply with the token LAKEPROMPT-OK.';
@@ -101,5 +123,69 @@ describe('GET /api/data-lakes/[id] - editor-only redaction is wired into the han
     await run(get(), res);
 
     expect(json.mock.calls[0][0].systemPrompt).toBe(PROMPT);
+  });
+});
+
+/**
+ * A registry lake has no document, so it has no persisted stats to serialize - the fields were
+ * simply absent while the same lake's /articles reported a real total. The handler computes them
+ * live for that case only.
+ *
+ * Worth its own block because nothing else reaches it: every fixture above is a DB lake, so the
+ * branch is skipped and CI stays green whether or not it works. It also fails SILENTLY into the
+ * exact pre-change response, which makes "the fix is broken" and "the fix is not deployed"
+ * indistinguishable from the outside.
+ */
+describe('GET /api/data-lakes/[id] - live stats for a registry lake', () => {
+  // A real registry id, so the handler's own isFallbackLake (not a stub) selects the branch.
+  const registryLake = {
+    ...DATA_LAKES[0],
+    createdByUserId: '',
+    status: 'active',
+  };
+  const getRegistry = () => ({ method: 'GET', query: { id: registryLake.id } }) as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAccess.mockResolvedValue(registryLake);
+    h.toAccessContext.mockResolvedValue({ userId: 'reader', isAdmin: false, userTags: [] });
+  });
+
+  it('merges live fileCount/totalSizeBytes onto a registry lake', async () => {
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 86, totalSizeBytes: 4096, totalChunkedChars: 9 });
+    const { res, json } = makeRes();
+
+    await run(getRegistry(), res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.fileCount).toBe(86);
+    expect(body.totalSizeBytes).toBe(4096);
+    // Scoped through the registry arm - an owned scope here would drop the prefix and report 0.
+    expect(h.computeDataLakeStats).toHaveBeenCalledWith({
+      kind: 'registry',
+      datalakeTag: registryLake.datalakeTag,
+      fileTagPrefix: registryLake.fileTagPrefix,
+    });
+  });
+
+  it('still serializes the lake when the stats aggregate throws, rather than failing the read', async () => {
+    h.computeDataLakeStats.mockRejectedValue(new Error('aggregate exploded'));
+    const { res, json } = makeRes();
+
+    await run(getRegistry(), res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.datalakeTag).toBe(registryLake.datalakeTag);
+    // Degrades to the un-augmented lake: supporting detail must not take the endpoint down.
+    expect(body.fileCount).toBeUndefined();
+  });
+
+  it('does not compute stats for an ordinary DB lake, which carries persisted ones', async () => {
+    h.assertLakeAccess.mockResolvedValue(publishedLake);
+    const { res } = makeRes();
+
+    await run(get(), res);
+
+    expect(h.computeDataLakeStats).not.toHaveBeenCalled();
   });
 });

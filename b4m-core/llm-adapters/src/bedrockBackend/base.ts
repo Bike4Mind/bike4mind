@@ -1,7 +1,8 @@
 import { Logger } from '@bike4mind/observability';
 import { ChatModels, IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
-import { stripToolDependentMessages } from '../toolPairingUtils';
+import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch } from '../executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
   type CompletionInfo,
@@ -36,6 +37,61 @@ interface BedrockOptions {
 // (recommended for throttle/503-prone workloads). This absorbs brief blips; sustained
 // outages still need provider/model fallback (tracked separately).
 const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
+
+/**
+ * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
+ * here rather than imported: adding @smithy/node-http-handler to this package's manifest was
+ * measured to re-resolve the lockfile and unify the transitive copies the repo currently carries
+ * (4.8.2, 4.9.3, 4.9.4 all collapsed onto 4.9.13), which silently changes the transport version
+ * other packages' AWS clients get. That is a repo-wide change with no place in this fix - not a
+ * claim that pnpm cannot hold several versions at once, which it plainly does today.
+ * Deliberately narrow, so `satisfies` rejects an h1 knob.
+ *
+ * The names are covered at runtime by base.requestTimeout.integration.test.ts, which drives a
+ * REAL BedrockRuntimeClient built from this config against a stalled h2 server. If upstream
+ * renames one, that test fails instead of the timeout silently disarming.
+ */
+type BedrockHttp2HandlerOptions = {
+  requestTimeout: number;
+  sessionTimeout: number;
+  disableConcurrentStreams: boolean;
+};
+
+// Bound every Bedrock call so a stalled connection cannot hang forever. Without this the SDK
+// arms NO timer at all (@smithy DEFAULT_REQUEST_TIMEOUT is 0, and the defaults-mode provider
+// contributes only retryMode plus a connectionTimeout the h2 handler ignores), so a dead socket
+// never errors, never returns, and the retry config above never engages.
+//
+// CRITICAL - client-bedrock-runtime builds a NodeHttp2Handler, NOT a NodeHttpHandler, so the h1
+// knobs are silently DROPPED here: `socketTimeout`, `connectionTimeout` and
+// `throwOnRequestTimeout` configure nothing on this client. Keep the `satisfies` below, and do
+// not inline this as a bare object literal: the SDK types `requestHandler` as loosely as
+// Record<string, unknown>, so any wrong key would type-check and quietly do nothing.
+//
+// On h2 `requestTimeout` is a per-stream INACTIVITY timeout (Http2Stream.setTimeout), not a
+// total-duration cap, and it rejects with a TimeoutError. Hence it is safe for long streaming
+// chat: a completion that keeps producing tokens keeps resetting it, and the handler never
+// clears it once headers arrive, so it guards the response body too. The non-streaming Invoke
+// path has no intermediate activity, so there it effectively bounds total generation time -
+// which is what sets the value, matching the slow-model ceiling in anthropicBackend.ts.
+//
+// Caveat: a stall AFTER headers closes the stream gracefully, so it truncates the response
+// rather than raising - bounded, but silent. Only a pre-response stall throws.
+//
+// TimeoutError is retryable (@smithy TRANSIENT_ERROR_CODES), so worst-case pre-response latency
+// is maxAttempts x requestTimeout plus adaptive backoff. A caller needing a tighter deadline
+// should pass `options.abortSignal`, which every send() below forwards.
+//
+// `disableConcurrentStreams` is NOT optional: supplying our own requestHandler replaces the
+// SDK's default config object, which sets it. Dropping it would silently move Bedrock from an
+// isolated session per request to multiplexed sessions.
+export const BEDROCK_REQUEST_HANDLER = {
+  requestTimeout: 120_000,
+  // Above requestTimeout so the stream timer normally wins (clearer error); this is the
+  // backstop for a hung TCP/TLS connect, the gap h1's connectionTimeout would have covered.
+  sessionTimeout: 130_000,
+  disableConcurrentStreams: true,
+} satisfies BedrockHttp2HandlerOptions;
 
 /**
  * Detect cancellation errors so they propagate past tool-error containment to
@@ -82,6 +138,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
       ...BEDROCK_RETRY_CONFIG,
+      requestHandler: BEDROCK_REQUEST_HANDLER,
     });
   }
 
@@ -112,6 +169,35 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     return this._bedrockRuntime.send(command, { abortSignal });
   }
 
+  /**
+   * The reasoning blocks the just-translated assistant turn produced, cleared as they are
+   * taken. A backend whose provider signs thinking blocks overrides this so the tool loop
+   * below can replay them onto the assistant turns it rebuilds; providers that sign nothing
+   * keep the default. @see AnthropicBedrockBackend.takeReasoningBlocks
+   */
+  protected takeReasoningBlocks(): unknown[] {
+    return [];
+  }
+
+  /**
+   * Whether this adapter's `translateStreamChunk` reports `done: true` ONLY on the provider's
+   * terminal event. When true, complete() treats a stream that produced output but never
+   * reported done as a TRUNCATED response and throws instead of returning the partial text.
+   *
+   * Opt-in rather than the default because "reports done terminally" is a per-adapter contract
+   * the base class cannot infer, and getting it wrong turns every healthy completion into an
+   * error. Three groups exist today:
+   *   - terminal-only, so they override this to true: anthropic, deepseek, llama, jurassicTwo
+   *   - `done: true` on EVERY content chunk, so the check would be inert: titan, moonshot
+   *     (the better fix for those is a stopReason passthrough, as moonshot.ts already does)
+   *   - never report done, incl. the test doubles in this directory: left false
+   *
+   * A new streaming backend must opt in deliberately; silence keeps the old behaviour.
+   */
+  protected get signalsStreamTermination(): boolean {
+    return false;
+  }
+
   protected updateClientForModel(model: string): void {
     const requiredRegion = this.getRegionForModel(model);
     this._options.region = requiredRegion;
@@ -119,6 +205,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
       ...BEDROCK_RETRY_CONFIG,
+      requestHandler: BEDROCK_REQUEST_HANDLER,
     });
   }
 
@@ -127,7 +214,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     // Update client region if needed for this specific model
@@ -174,8 +261,27 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // native structured-output API, so we inject the schema as a system-level
     // instruction and surface `responseFormatMode: 'best-effort'` so callers
     // know to post-validate.
-    const messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
+    let messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
+
+    // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool_use/
+    // tool_result blocks from a PRIOR turn, even when THIS turn offers no tools - Bedrock talks
+    // the same Anthropic Messages API as anthropicBackend.ts and rejects any tool block when
+    // `tools` is absent regardless of pairing. Mirrors the same proactive strip added there;
+    // the reactive count-mismatch warning below only logs, it never stripped this case either.
+    if (!options.tools?.length) {
+      const hasToolBlocks = messagesWithFormat.some(
+        m =>
+          Array.isArray(m.content) &&
+          m.content.some((b: { type?: string }) => b.type === 'tool_use' || b.type === 'tool_result')
+      );
+      if (hasToolBlocks) {
+        Logger.globalInstance.warn(
+          '[BaseBedrockBackend Pre-API #6181] Tool blocks present but no tools offered this turn. Stripping all tool blocks.'
+        );
+        messagesWithFormat = stripAllToolBlocks(messagesWithFormat, Logger.globalInstance);
+      }
+    }
 
     let formattedMessages = this.formatMessages(messagesWithFormat);
     let input = this.getPayload(model, formattedMessages, options);
@@ -339,11 +445,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the old code returned silently, so the chat had nothing to render and hung until the client
         // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
         let emittedTextChars = 0;
+        // @see signalsStreamTermination - only meaningful for adapters that opt in.
+        let sawTerminalEvent = false;
 
         for await (const streamEvent of response.body) {
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
-            const { chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            sawTerminalEvent ||= done;
             if (chunk?.stopReason) stopReason = chunk.stopReason;
 
             chunk?.choices?.forEach(choice => {
@@ -382,12 +491,46 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
         // count is deliberately NOT part of the condition: an empty response can still report phantom
         // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
+        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
+        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
+        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
+        // profile produces literally the same observable (no chunks, no terminal event), so the
+        // two are indistinguishable at this layer and the more actionable message should win.
         if (emittedTextChars === 0 && !func.some(f => f.name)) {
           throw new Error(
             `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
               `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
               `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
               `model/profile is granted in ${this._options.region}.`
+          );
+        }
+
+        // FAIL LOUD on a TRUNCATED completion. A transport stall mid-body closes the h2 stream
+        // gracefully (NGHTTP2_NO_ERROR), so the loop above just ends: the send() promise has
+        // already resolved, nothing rejects, and a half-finished answer would be delivered as a
+        // complete one. The guard above only catches a stream that produced NOTHING, and
+        // stopReason is absent on healthy turns for most adapters, so the terminal event is the
+        // only trustworthy signal that the model actually finished. @see BEDROCK_REQUEST_HANDLER
+        //
+        // A user Stop is EXCLUDED, and must stay excluded. In the h2 handler the abort callback
+        // and the requestTimeout callback do the same two things (close the stream, then reject an
+        // already-settled promise), so a cancel reaches this point looking exactly like a stall:
+        // verified against the real event-stream path, where BOTH end the body iterator cleanly
+        // with no throw. Without this check a routine cancel would discard the partial reply, log
+        // at ERROR, and trigger the retry below - re-running a completion the user just stopped.
+        //
+        // Worded to include "stream timeout" on purpose: that is the substring
+        // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
+        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
+        // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
+        // that survived a retry and a provider fallback is worth seeing.
+        if (this.signalsStreamTermination && !sawTerminalEvent && !options.abortSignal?.aborted) {
+          throw new Error(
+            `[BaseBedrockBackend] stream timeout - model "${model}" in region ${this._options.region} ` +
+              `ended after ${emittedTextChars} chars without a terminal event, so the response is ` +
+              `TRUNCATED. Usually a stalled Bedrock socket cut the stream short; the partial text is ` +
+              `withheld deliberately rather than returned as a finished answer.`
           );
         }
 
@@ -423,6 +566,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 resolvedTools.push({ id, name, parameters, parsedParams: JSON.parse(parameters), toolFn });
               } catch {
                 Logger.globalInstance.warn('[BaseBedrockBackend] Tool parameter parse error, skipping tool:', name);
+                const entry = toolsUsed.find(t => t.name === name && t.id === id);
+                if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -460,6 +611,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   }
             );
 
+            // Taken ONCE for the whole round, not once per tool: every assistant message
+            // rebuilt below stands in for the same provider turn, so they all have to replay
+            // that turn's reasoning blocks. Taking inside the loop gives them to the first
+            // tool only and sends the rest as a bare tool_use - the shape that makes the
+            // continuation round come back empty.
+            const roundReasoningBlocks = this.takeReasoningBlocks();
+
             // Inject results in original order
             for (const outcome of outcomes) {
               if (outcome.ok) {
@@ -468,10 +626,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr,
+                  roundReasoningBlocks
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -480,11 +641,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 // Push error result so the model can continue
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation,
+                  roundReasoningBlocks
                 );
               }
             }
@@ -499,7 +664,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               messages,
               {
                 ...options,
-                thinking: { enabled: false, budget_tokens: 0 },
+                // `thinking` carries forward rather than being forced off: pushToolMessages
+                // replays this turn's signed thinking blocks, and those belong on a request
+                // that declares thinking the same way the round that produced them did.
+                // Matches anthropicBackend, which spreads options unchanged on its recursion.
+                //
                 // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
                 // tool_choice, so this is a no-op today but keeps the recursion uniform.
                 tool_choice: 'auto',
@@ -561,6 +730,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
 
             if (executable.length > 0) {
+              // One take for the whole round - see the streaming path above.
+              const roundReasoningBlocks = this.takeReasoningBlocks();
+
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
               for (const { id, name, parameters } of executable) {
@@ -568,6 +740,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 if (!toolFn) continue;
                 const safeParameters = parameters || '{}';
                 let result: { toString(): string };
+                let succeeded = true;
                 try {
                   result = await toolFn(JSON.parse(safeParameters));
                 } catch (err) {
@@ -577,6 +750,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     `[BaseBedrockBackend] Tool ${name} failed:`,
                     err instanceof Error ? err.message : String(err)
                   );
+                  succeeded = false;
                   result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
                 }
 
@@ -585,7 +759,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
-                this.pushToolMessages(messages, { id, name, parameters }, result.toString());
+                recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
+                this.pushToolMessages(messages, { id, name, parameters }, result.toString(), roundReasoningBlocks);
               }
 
               // Add newline separator before recursive call to ensure proper markdown rendering
@@ -599,7 +774,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 messages,
                 {
                   ...options,
-                  thinking: { enabled: false, budget_tokens: 0 },
+                  // `thinking` carries forward, not forced off - see the streaming recursion above.
+                  //
                   // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
                   // tool_choice, so this is a no-op today but keeps the recursion uniform.
                   tool_choice: 'auto',

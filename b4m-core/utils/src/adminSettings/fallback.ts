@@ -279,10 +279,19 @@ export const DEFAULT_FALLBACK_CHAIN: string[] = [
 ];
 
 /**
+ * Just enough of a model to pick a fallback for it: an id to look its chain up by,
+ * and the backend it would have run on. `backend` is absent when the original is
+ * not in the caller's model list at all - a sunset id the deprecation filter has
+ * already hidden - so there is no backend to exclude from the cross-provider hop.
+ * `ModelInfo` is assignable, so the multi-hop traversal passes one unchanged.
+ */
+type FallbackOrigin = { id: string; backend?: string };
+
+/**
  * Find a suitable automatic fallback model based on the original model
  */
 function findAutomaticFallback(
-  originalModel: ModelInfo,
+  originalModel: FallbackOrigin,
   availableModels: ModelInfo[],
   apiKeyTable: ApiKeyTable,
   logger: Logger,
@@ -291,7 +300,10 @@ function findAutomaticFallback(
 ): ModelInfo | null {
   logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
 
-  const hasValidKey = (m: ModelInfo) => !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
+  // A disabled model is still listed so the picker can grey it out, but it must never
+  // run (see ChatCompletionInvoke). Selecting one here would trade a clean fallback for
+  // a raw provider error on the next hop, so it is not a candidate.
+  const hasValidKey = (m: ModelInfo) => !m.disabled && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
 
   // Get preference list for this model. Copied because the table is shared and
   // the generic tail below is pushed onto this list.
@@ -308,7 +320,7 @@ function findAutomaticFallback(
   // hard-failing before the cross-provider tail. Same-provider tier degradation still happens on
   // earlier hops, where preferUntriedBackend is false.
   if (preferUntriedBackend) {
-    const triedBackends = new Set<string>([originalModel.backend]);
+    const triedBackends = new Set<string>(originalModel.backend ? [originalModel.backend] : []);
     for (const id of excludeModelIds ?? []) {
       const tried = availableModels.find(m => m.id === id);
       if (tried) triedBackends.add(tried.backend);
@@ -352,7 +364,12 @@ function findAutomaticFallback(
     }
   }
 
-  logger.error('❌ No suitable automatic fallback model found');
+  // warn, not error: severity is the caller's call, not this selector's. Exhausting the chain
+  // is fatal to a chat completion - getLlmWithFallback still logs its own error for that path
+  // and ChatCompletionProcess rethrows - but to rapid reply it is only a skipped optimization.
+  // An error line here would page the alert channel for the latter no matter what the caller
+  // decides, which is the recurring alert this whole change exists to stop.
+  logger.warn('⚠️ No suitable automatic fallback model found');
   return null;
 }
 
@@ -461,4 +478,41 @@ export async function getLlmWithFallback(
   });
 
   return null;
+}
+
+/**
+ * Pick a runnable substitute for a model id that is NOT in `availableModels` at all -
+ * a sunset id a catalog lifecycle row has hidden, or one disabled since whatever
+ * persisted it (a session pin, a stored mapping row) was written.
+ *
+ * `getLlmWithFallback` cannot serve this case: its `originalModel` is a `ModelInfo`,
+ * which by definition does not exist here. This walks the same
+ * `FALLBACK_PREFERENCES` -> `DEFAULT_FALLBACK_CHAIN` -> any-keyed-model selection
+ * through the same `findAutomaticFallback`, so the substitute a hidden id lands on
+ * cannot diverge from the one a listed-but-failing id would.
+ *
+ * Callers should run `resolveDeprecatedModelId` first: a sunset id with a known
+ * successor should be forwarded to it (and counted as a `[model-sunset]`) rather
+ * than treated as a model with no answer.
+ */
+export function findFallbackForMissingModel(
+  missingModelId: string,
+  availableModels: ModelInfo[],
+  apiKeyTable: ApiKeyTable,
+  logger: Logger,
+  /** Forwarded so provider abuse enforcement stays scoped to the user across the hop. */
+  endUserId?: string | null
+): FallbackAttempt | null {
+  const fallbackModel = findAutomaticFallback({ id: missingModelId }, availableModels, apiKeyTable, logger);
+  if (!fallbackModel) {
+    return null;
+  }
+
+  const backend = getLlmByModel(apiKeyTable, { modelInfo: fallbackModel, logger, endUserId });
+  if (!backend) {
+    logger.warn(`⚠️ Fallback for unavailable model ${missingModelId} failed to initialize: ${fallbackModel.id}`);
+    return null;
+  }
+
+  return { model: fallbackModel, backend, attempt: 1 };
 }

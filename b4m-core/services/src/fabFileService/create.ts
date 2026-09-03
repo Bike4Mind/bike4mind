@@ -1,5 +1,8 @@
 import {
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
   IFabFileDocument,
   IUserDocument,
   IOrganizationDocument,
@@ -19,6 +22,7 @@ import {
 } from '@bike4mind/utils';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 
 export const createFabFileSchema = z.object({
   fileName: z.string(),
@@ -59,6 +63,17 @@ export interface CreateFabFileAdapters {
     organizations?: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // Optional, but WIRE IT on any door that stamps a lake tag on behalf of someone who may manage
+    // that lake by grant or by org role. Absent, loadActiveLakeGrants returns [] and
+    // assertCanWriteDataLakeTags degrades to the createdByUserId + org rungs only - which is
+    // adequate for the upload fan-in (the actor is always the file's own owner, applying its own or
+    // hardcoded tags) but NOT for the proposal-approval door, where the reviewer may be a curator or
+    // a grant-transferred owner. See proposalAdmissionDeps.ts.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // Optional: absent means the admission contract (#1680) resolves its enforcement lever from the
+    // platform value only, so a caller that has no scoped store still gets the platform decision.
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
     generateSignedUrl: (path: string, expireInSeconds: number, type?: 'get' | 'put') => Promise<string>;
@@ -81,19 +96,49 @@ export interface CreateFabFileAdapters {
     sourceType: FabFileSourceType;
     sourceMetadata?: Record<string, unknown>;
   };
+  /**
+   * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
+   * does). It cannot be read off the user document, so omitting it silently drops the two org rungs
+   * of `canManageLake` - the actor is treated as administering nothing.
+   *
+   * Omit on the upload doors: their actor applies tags to a file it owns, so the org rungs are not
+   * what authorizes them. PASS IT on any door writing a lake tag on someone else's authority, or
+   * that door's write gate ends up strictly narrower than the route gate in front of it.
+   */
+  administeredOrgIds?: string[];
 }
 
 const DEFAULT_MAX_FILE_SIZE = 20;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
+/**
+ * Every caller of `createFabFile` is gated against lake membership here, whether or not it also
+ * gates itself up front (a few HTTP routes already call `assertCanWriteDataLakeTags` before
+ * reaching this) - so a new caller, like `researchTaskService`/`downloadRelevantLinks` used to
+ * be, cannot forget the check by omission. A write that bypasses this service entirely (e.g.
+ * `fabFileRepository.create()`/a direct model call) gets NO such gate; today's few such bypasses
+ * only ever set hardcoded or no tags, never a caller-controlled name, but a future one gaining a
+ * caller-supplied `tags` field must route through here instead.
+ */
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance }: CreateFabFileAdapters
+  { db, storage, provenance, administeredOrgIds }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
+
+  // `administeredOrgIds` cannot be derived from the user document, so a caller that already resolved
+  // it (via toAccessContext) has to hand it over or the org rungs of canManageLake cannot fire. The
+  // upload doors legitimately omit it - their actor owns the file and applies its own tags - but a
+  // door admitting content for a reviewer must pass it, or an org admin of the lake's org is refused
+  // a write the route's own manage gate just authorized.
+  const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
+  const tagNames = (params.tags ?? []).map(t => t.name);
+  // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
+  await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  assertCanWriteStaticRegistryTags(actor, tagNames);
 
   const ext = getFileExtension(params.fileName);
   let mimeType = params.mimeType || getMimeTypeByExtension(ext);

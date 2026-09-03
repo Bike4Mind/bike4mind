@@ -1,14 +1,16 @@
-import { FeedbackModel } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FeedbackEvents } from '@bike4mind/common';
+import { FeedbackEvents, feedbackContentExpiresAt, truncateFeedbackContent } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { z } from 'zod';
 
 const UpdateFeedbackRequestSchema = z.object({
   userId: z.string(),
-  content: z.string(),
+  // Optional: content now lives in a TTL'd sibling document. Omit to leave it untouched.
+  content: z.string().optional(),
   username: z.string(),
   status: z.string(),
   promptMeta: z.object({}).optional(),
@@ -44,18 +46,113 @@ const handler = baseApi().put(
       throw new NotFoundError('Feedback not found');
     }
 
-    const updatedFeedback = await FeedbackModel.findOneAndUpdate(
-      { _id: id },
-      { $set: { content, status, username } },
-      { new: true }
-    );
+    // Resolve the sibling write BEFORE the Feedback update, so contentStored (if it changes) can
+    // ride in the same $set as status/username - one write to the permanent document, not two.
+    // contentApplied stays true when the caller didn't touch content at all - false only signals
+    // a genuine no-op (the sibling had already expired under the 90-day TTL).
+    let contentApplied = true;
+    // Undefined: caller didn't touch content this request. true: originated a fresh sibling.
+    // false: cleared an existing one. Both true/false ride into the same $set below;
+    // cleanupOrphanedSibling only guards `true`, since a clear's own deleteOne either succeeds
+    // (nothing left to orphan) or throws and aborts the request before any $set is attempted.
+    let contentStoredChange: boolean | undefined;
+    // True only for the legacy-shape clear below: a pre-migration document that still carries
+    // its content directly on the permanent doc has contentStored:false, so the branch above
+    // can't signal "unset it" through contentStoredChange without also claiming a sibling changed.
+    let unsetLegacyContent = false;
+    if (content !== undefined) {
+      if (content.trim().length === 0) {
+        // Empty content means "clear the text", mirroring the create handler's treatment of an
+        // empty submission as nothing to store (index.ts's writeFeedbackText) - without this,
+        // an empty string reached FeedbackTextModel.create's required-string validator (which
+        // rejects ''), while the sibling-update branch wrote it unvalidated, so the two branches
+        // disagreed on what an empty edit meant and one of them 500'd.
+        if (feedback.contentStored) {
+          await FeedbackTextModel.deleteOne({ _id: id });
+          contentStoredChange = false;
+        } else {
+          // Legacy shape: content lives on the permanent doc itself. Clearing it here must also
+          // unset that field, or hydrateFeedbackText's legacy fallback reads it right back in and
+          // the clear silently does nothing from the caller's perspective.
+          unsetLegacyContent = true;
+        }
+      } else {
+        const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
+        if (feedback.contentStored) {
+          // upsert:false is deliberate: expiresAt is immutable, so a report whose text already
+          // expired must not be resurrected by editing it back in.
+          //
+          // Not rolled back if the status/username update below then fails: the sibling would keep
+          // the caller's edited text while the rest of the document reverts. Left as-is rather than
+          // adding a compensating write - the sibling holding what the caller actually submitted is
+          // arguably closer to correct than reverting it, and the update failing at all is rare.
+          const result = await FeedbackTextModel.updateOne(
+            { _id: id },
+            { $set: { content: truncated, contentTruncated } }
+          );
+          contentApplied = result.matchedCount > 0;
+        } else {
+          // This report never had text (e.g. a placeholder submission) - originating it now is a
+          // fresh write, not a resurrection, so it gets its own full retention window.
+          await FeedbackTextModel.create({
+            _id: id,
+            content: truncated,
+            contentTruncated,
+            expiresAt: feedbackContentExpiresAt(new Date()),
+          });
+          contentStoredChange = true;
+        }
+      }
+    }
 
+    // Symmetric with the create handler's own cleanup: a freshly-originated sibling must not
+    // outlive the document update that was supposed to record it, whether that update throws or
+    // (on a delete race) just returns null.
+    const cleanupOrphanedSibling = async (context: string) => {
+      if (contentStoredChange !== true) return;
+      await FeedbackTextModel.deleteOne({ _id: id }).catch(cleanupError => {
+        req.logger.warn(`Failed to delete orphaned FeedbackText sibling after ${context}`, cleanupError);
+      });
+    };
+
+    let updatedFeedback;
+    try {
+      updatedFeedback = await FeedbackModel.findOneAndUpdate(
+        { _id: id },
+        {
+          $set: {
+            status,
+            username,
+            ...(contentStoredChange !== undefined ? { contentStored: contentStoredChange } : {}),
+          },
+          // Originating a fresh sibling can happen on a pre-migration document that still carries
+          // its content directly on the permanent doc - unset it there too, or it survives
+          // forever on a field the 90-day TTL can never reach. Same reason applies when clearing
+          // that legacy content outright (unsetLegacyContent).
+          ...(contentStoredChange === true || unsetLegacyContent ? { $unset: { content: '' } } : {}),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      await cleanupOrphanedSibling('a failed update');
+      throw error;
+    }
+    if (!updatedFeedback) {
+      // The document was deleted between the initial findById and this update - findOneAndUpdate
+      // returns null rather than throwing in that case, but the sibling still needs cleanup.
+      await cleanupOrphanedSibling('a missing update target');
+      throw new NotFoundError('Feedback not found');
+    }
+
+    // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so
+    // would defeat the 90-day retention this route otherwise enforces.
     await logEvent(
-      { userId, type: FeedbackEvents.UPDATE_FEEDBACK, metadata: { id, content, status, username } },
+      { userId, type: FeedbackEvents.UPDATE_FEEDBACK, metadata: { id, status, username } },
       { ability: req.ability }
     );
 
-    return res.json(updatedFeedback);
+    const [hydrated] = await hydrateFeedbackText([toRedactedFeedback(updatedFeedback)]);
+    return res.json({ ...hydrated, contentApplied });
   })
 );
 

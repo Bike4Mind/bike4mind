@@ -57,6 +57,18 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ fabFileId: metadata.id, ownerId: metadata.userId });
 
+    // `status` tracks the UPLOAD, and the bytes are in S3 by the time this event fires, so
+    // record it here rather than at the end of the transaction below. Everything after this
+    // point can bail out (a missing owner returns null out of the transaction) or throw with
+    // every Lambda attempt exhausted, and either would otherwise strand the record on
+    // 'pending' - permanently invisible to content-hash dedup, which excludes 'pending' as a
+    // never-landed upload (FabFileModel.findByContentHashes).
+    // Serving stays gated by moderationStatus, which this does not touch.
+    if (metadata.status !== 'complete') {
+      await FabFile.updateOne({ _id: metadata._id, status: { $ne: 'complete' } }, { $set: { status: 'complete' } });
+      metadata.status = 'complete';
+    }
+
     // Atomically claim the right to scan this file BEFORE the transaction
     // below touches it. `metadata` above was read outside a transaction with retry/backoff
     // - two concurrent invocations (a slow in-flight scan racing an S3 at-least-once
@@ -148,12 +160,16 @@ export const func = withContext(async (event, context, logger) => {
         }
       }
 
-      metadata.status = 'complete';
       changeStorageSize(user, object.size);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;
     });
+
+    // The lakes this file's meta-tags name can count it as soon as the bytes are known to have
+    // landed - same reason the status write moved up, and every site that marks a FabFile
+    // 'complete' owes this call. Does not depend on the owner resolving.
+    await recomputeStatsForUploadedFile(metadata, { logger });
 
     if (!user) continue;
 
@@ -195,9 +211,6 @@ export const func = withContext(async (event, context, logger) => {
         logger.error(`Error updating batch progress for batchId ${metadata.batchId}: ${error}`);
       }
     }
-
-    // Now that the bytes are in storage, the lakes this file's meta-tags name can count it.
-    await recomputeStatsForUploadedFile(metadata, { logger });
 
     const enableKnowledgeAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
 

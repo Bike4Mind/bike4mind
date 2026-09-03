@@ -15,6 +15,7 @@ import {
   type CacheUsageStats,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
@@ -27,6 +28,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -152,6 +154,8 @@ export class OpenAIBackend implements ICompletionBackend {
             // $2 / 1M Input tokens, $8 / 1M Output tokens. @see https://platform.openai.com/docs/models/gpt-4.1
             input: 2 / 1_000_000,
             output: 8 / 1_000_000,
+            // $0.50 / 1M cached input - 0.25x, NOT the 0.1x CACHE_READ_MULTIPLIER default.
+            cache_read: 0.5 / 1_000_000,
           },
         },
         supportsVision: true,
@@ -176,6 +180,7 @@ export class OpenAIBackend implements ICompletionBackend {
             // $0.40 / 1M Input tokens, $1.60 / 1M Output tokens. @see https://platform.openai.com/docs/models/gpt-4.1-mini
             input: 0.4 / 1_000_000,
             output: 1.6 / 1_000_000,
+            cache_read: 0.1 / 1_000_000, // $0.10 / 1M cached input (0.25x)
           },
         },
         supportsVision: true,
@@ -200,6 +205,7 @@ export class OpenAIBackend implements ICompletionBackend {
             // $0.10 / 1M Input tokens, $0.40 / 1M Output tokens. @see https://platform.openai.com/docs/models/gpt-4.1-nano
             input: 0.1 / 1_000_000,
             output: 0.4 / 1_000_000,
+            cache_read: 0.025 / 1_000_000, // $0.025 / 1M cached input (0.25x)
           },
         },
         supportsVision: true,
@@ -263,7 +269,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 100_000,
         can_stream: true,
         pricing: {
-          200000: { input: 2 / 1_000_000, output: 8 / 1_000_000 }, // $2 / 1M Input tokens, $8 / 1M Output tokens
+          // $2 / 1M Input, $8 / 1M Output, $0.50 / 1M cached input (0.25x, not the 0.1x default)
+          200000: { input: 2 / 1_000_000, output: 8 / 1_000_000, cache_read: 0.5 / 1_000_000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -349,7 +356,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 1.1 / 1_000_000, output: 4.4 / 1_000_000 }, // $1.10 / 1M Input tokens, $4.40 / 1M Output tokens
+          // $1.10 / 1M Input, $4.40 / 1M Output, $0.275 / 1M cached input (0.25x, not the 0.1x default)
+          200000: { input: 1.1 / 1_000_000, output: 4.4 / 1_000_000, cache_read: 0.275 / 1_000_000 },
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -723,7 +731,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 4096,
         can_stream: true,
         pricing: {
-          8000: { input: 2.5 / 1000000, output: 10 / 1000000 }, // $2.50 / 1M Input tokens, $10 / 1M Output tokens
+          // $2.50 / 1M Input, $10 / 1M Output, $1.25 / 1M cached input (0.5x, not the 0.1x default)
+          8000: { input: 2.5 / 1000000, output: 10 / 1000000, cache_read: 1.25 / 1000000 },
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -742,7 +751,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 16384,
         can_stream: true,
         pricing: {
-          8000: { input: 0.15 / 1000000, output: 0.6 / 1000000 }, // $0.15 / 1M Input tokens, $0.60 / 1M Output tokens
+          // $0.15 / 1M Input, $0.60 / 1M Output, $0.075 / 1M cached input (0.5x, not the 0.1x default)
+          8000: { input: 0.15 / 1000000, output: 0.6 / 1000000, cache_read: 0.075 / 1000000 },
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -948,7 +958,7 @@ export class OpenAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -967,6 +977,9 @@ export class OpenAIBackend implements ICompletionBackend {
     // tool-result transient cb calls intentionally keep tokens at 0.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads accumulate alongside the CACHE-INCLUSIVE accumInputTokens; the two
+    // are only made disjoint at the emit, by splitCachedInput.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
@@ -1176,6 +1189,8 @@ export class OpenAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
+      const totalCacheReadTokens =
+        accumCacheReadTokens + cachedTokensFromUsage(response.usage as unknown as Record<string, unknown> | undefined);
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from OpenAI API');
@@ -1228,6 +1243,12 @@ export class OpenAIBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -1293,6 +1314,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
                 }`;
                 streamedText[c.index] = errorMsg;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
                 // Push error result so the model can acknowledge the failure
                 this.pushToolMessages(
                   messages,
@@ -1333,6 +1355,9 @@ export class OpenAIBackend implements ICompletionBackend {
                     '[Artifact rendered and delivered to user]'
                   )
                 : resultStr;
+
+              // Record the sanitized string, not resultStr - that's what the model actually saw.
+              recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
               this.pushToolMessages(
                 messages,
@@ -1376,6 +1401,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  accumCacheReadTokens: totalCacheReadTokens,
                 },
               },
               recursiveCallback,
@@ -1395,7 +1421,10 @@ export class OpenAIBackend implements ICompletionBackend {
             // Terminal leaf - emit accumulated total plus this turn's tokens.
             this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
             await callback([null], {
-              inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
+              ...splitCacheInclusiveInput(
+                accumInputTokens + (response.usage?.prompt_tokens || 0),
+                totalCacheReadTokens
+              ),
               outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             });
@@ -1423,7 +1452,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // above). Emit accumulated total plus this turn's tokens.
       const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
       const completionInfo = {
-        inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
+        ...splitCacheInclusiveInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
@@ -1455,13 +1484,16 @@ export class OpenAIBackend implements ICompletionBackend {
 
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        // Capture cached tokens if available in streaming response.
-        // Do NOT forward this to CompletionInfo.cacheReadInputTokens: OpenAI's
-        // prompt_tokens INCLUDE cached tokens (unlike Anthropic, where the fields
-        // are disjoint), so forwarding without subtracting from inputTokens would
-        // double-bill the cached portion in provider-basis settlement.
+        // Capture cached tokens if available in streaming response. Forwarded to
+        // CompletionInfo via splitCachedInput, which SUBTRACTS them from inputTokens -
+        // OpenAI's prompt_tokens INCLUDE cached tokens (unlike Anthropic, where the
+        // fields are disjoint), so forwarding without subtracting would double-bill the
+        // cached portion in provider-basis settlement.
         if (chunk.usage.prompt_tokens_details?.cached_tokens !== undefined) {
-          cachedTokensFromStream = chunk.usage.prompt_tokens_details.cached_tokens;
+          // Max, not assign, for the same reason inputTokens is maxed above: a later
+          // usage chunk reporting 0 must not erase a cache hit an earlier one reported,
+          // which would silently restore full-rate billing on a warm turn.
+          cachedTokensFromStream = Math.max(cachedTokensFromStream, chunk.usage.prompt_tokens_details.cached_tokens);
           if (cachedTokensFromStream > 0) {
             this.logger.debug('[OpenAI] Captured cached tokens', {
               cachedTokens: cachedTokensFromStream,
@@ -1498,7 +1530,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // (assign-not-add) ends each turn at the cumulative cross-turn total.
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
-        inputTokens: accumInputTokens + inputTokens,
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
@@ -1550,7 +1582,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // the SSE consumer sees it on the last frame.
     if ((isO1Model || func.length === 0) && options.responseFormat?.type === 'json_schema') {
       await callback([], {
-        inputTokens: accumInputTokens + inputTokens,
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
@@ -1596,6 +1628,12 @@ export class OpenAIBackend implements ICompletionBackend {
             this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
@@ -1658,11 +1696,13 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMsg = `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
             // Push error result so the model can acknowledge the failure
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              errorMsg
             );
             continue;
           }
@@ -1682,7 +1722,10 @@ export class OpenAIBackend implements ICompletionBackend {
             thisToolHadArtifact = true;
             anyArtifactWasStreamed = true;
             await callback(results, {
-              inputTokens: accumInputTokens + inputTokens,
+              ...splitCacheInclusiveInput(
+                accumInputTokens + inputTokens,
+                accumCacheReadTokens + cachedTokensFromStream
+              ),
               outputTokens: accumOutputTokens + outputTokens,
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
               cacheStats,
@@ -1698,6 +1741,8 @@ export class OpenAIBackend implements ICompletionBackend {
                 '[Artifact rendered and delivered to user]'
               )
             : resultStr;
+
+          recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
           this.pushToolMessages(
             messages,
@@ -1731,6 +1776,7 @@ export class OpenAIBackend implements ICompletionBackend {
                 toolCallCount: toolCallCount + 1,
                 accumInputTokens: accumInputTokens + inputTokens,
                 accumOutputTokens: accumOutputTokens + outputTokens,
+                accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
               },
             },
             async (results, meta) => {
@@ -1766,6 +1812,7 @@ export class OpenAIBackend implements ICompletionBackend {
                 toolCallCount: toolCallCount + 1,
                 accumInputTokens: accumInputTokens + inputTokens,
                 accumOutputTokens: accumOutputTokens + outputTokens,
+                accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
               },
             },
             callback,
@@ -1777,7 +1824,7 @@ export class OpenAIBackend implements ICompletionBackend {
         // Terminal leaf - emit accumulated total plus this turn's tokens.
         this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
         await callback([null], {
-          inputTokens: accumInputTokens + inputTokens,
+          ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
           cacheStats,
@@ -1990,11 +2037,12 @@ export class OpenAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     const toolCallCount = options._internal?.toolCallCount ?? 0;
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
 
     // Reuse the chat-path message formatting (system consolidation + B4M->OpenAI
     // conversion), then translate to Responses input items.
@@ -2043,10 +2091,13 @@ export class OpenAIBackend implements ICompletionBackend {
     let finalResponse: OpenAIResponse | undefined;
     let inputTokens = 0;
     let outputTokens = 0;
+    // Named to match the chat streaming path: this turn's cache reads, known only at
+    // the terminal Response, so the per-delta emits below carry 0 for it.
+    let cachedTokensFromStream = 0;
     for await (const event of stream) {
       if (event.type === 'response.output_text.delta') {
         await callback([event.delta], {
-          inputTokens: accumInputTokens + inputTokens,
+          ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
@@ -2072,6 +2123,11 @@ export class OpenAIBackend implements ICompletionBackend {
 
     inputTokens = finalResponse.usage?.input_tokens ?? 0;
     outputTokens = finalResponse.usage?.output_tokens ?? 0;
+    // The Responses API nests cached tokens under input_tokens_details (not
+    // prompt_tokens_details), and like the chat path counts them INSIDE input_tokens.
+    cachedTokensFromStream = cachedTokensFromUsage(
+      finalResponse.usage as unknown as Record<string, unknown> | undefined
+    );
 
     const functionCalls = finalResponse.output.filter(
       (item): item is Extract<ResponseOutputItem, { type: 'function_call' }> => item.type === 'function_call'
@@ -2085,7 +2141,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // the chat-completions path uses.
       const stopReason = normalizeOpenAIResponsesStopReason(finalResponse.incomplete_details?.reason);
       await callback([], {
-        inputTokens: accumInputTokens + inputTokens,
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(stopReason ? { stopReason } : {}),
@@ -2101,7 +2157,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // executeTools === false: surface the calls without running them.
     if (options.executeTools === false) {
       await callback([null], {
-        inputTokens: accumInputTokens + inputTokens,
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
@@ -2133,6 +2189,12 @@ export class OpenAIBackend implements ICompletionBackend {
         });
       } catch {
         this.logger.warn(`JSON parse error for ${fc.name} arguments (Responses path)`);
+        recordToolResult(
+          toolsUsed,
+          { id: fc.call_id, name: fc.name },
+          'Error: Tool arguments were malformed and could not be parsed.',
+          false
+        );
       }
     }
 
@@ -2155,16 +2217,15 @@ export class OpenAIBackend implements ICompletionBackend {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
-        this.pushToolMessages(
-          messages,
-          { id: r.callId, name: r.name, parameters: r.args },
-          outcome.result.result.toString()
-        );
+        const resultStr = outcome.result.result.toString();
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
+        this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
         const errorMsg = `Error processing ${r.name} tool: ${
           outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
         }`;
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, errorMsg, false);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }
@@ -2186,6 +2247,7 @@ export class OpenAIBackend implements ICompletionBackend {
           toolCallCount: toolCallCount + 1,
           accumInputTokens: accumInputTokens + inputTokens,
           accumOutputTokens: accumOutputTokens + outputTokens,
+          accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
         },
       },
       callback,

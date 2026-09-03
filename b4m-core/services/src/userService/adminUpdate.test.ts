@@ -87,14 +87,73 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
   });
 
-  it('does not write the raw balance onto the user doc when auditing', async () => {
+  it('omits currentCredits entirely from the user doc write when auditing', async () => {
     const { adapters, update } = makeAdapters(100);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters);
 
     const written = update.mock.calls[0][0];
-    // The ledger increment owns the balance; the doc write must not carry the new value.
-    expect(written.currentCredits).toBe(100);
+    // The ledger $inc runs first and owns the balance; the doc write's $set must
+    // not carry currentCredits at all, or it would clobber the increment.
+    expect('currentCredits' in written).toBe(false);
+  });
+
+  it('runs the ledger adjustment before the user doc write', async () => {
+    const { adapters, incrementCredits, update } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters);
+
+    // The audited balance change must commit before the doc write, so a ledger
+    // failure cannot leave lastCreditsPurchasedAt / bundled fields stuck.
+    expect(incrementCredits.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]);
+  });
+
+  it('does not persist the user doc write when the ledger adjustment fails', async () => {
+    const { adapters, createTransaction, update } = makeAdapters(100);
+    createTransaction.mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    await expect(
+      adminUpdateUser(
+        ADMIN_ID,
+        // Bundle a non-credit edit with the credit change: it must not stick if
+        // the credit audit throws.
+        { id: TARGET_ID, currentCredits: 150, tags: ['vip'] },
+        adapters
+      )
+    ).rejects.toThrow('ledger unavailable');
+
+    expect(update).not.toHaveBeenCalled();
+    expect(adapters.db.users.setModerationStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not mutate org membership when the ledger fails on a bundled org + credit change', async () => {
+    const { adapters, createTransaction, target } = makeAdapters(100);
+    target.organizationId = 'org-old';
+    createTransaction.mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150, organizationId: 'org-new' }, adapters)
+    ).rejects.toThrow('ledger unavailable');
+
+    // The ledger runs before the org-membership block, so a ledger failure must
+    // leave both org docs untouched (no half-applied membership move).
+    expect(adapters.db.organizations.findById).not.toHaveBeenCalled();
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the committed ledger change when the later doc write fails', async () => {
+    const { adapters, incrementCredits, update } = makeAdapters(100);
+    update.mockRejectedValueOnce(new Error('doc write failed'));
+
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters)
+    ).rejects.toThrow('doc write failed');
+
+    // Inverse trade-off: the balance change is already committed and auditable;
+    // only the doc write and the moderation transition (which run after it) are
+    // skipped. The balance stays self-consistent with its CreditTransaction.
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 50, expect.anything());
+    expect(adapters.db.users.setModerationStatus).not.toHaveBeenCalled();
   });
 
   it('writes no transaction when credits are unchanged', async () => {

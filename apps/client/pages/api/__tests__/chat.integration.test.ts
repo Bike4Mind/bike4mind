@@ -32,6 +32,8 @@ const {
   mockIsChatModelUsable,
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
+  mockOrgFindAccessibleById,
+  mockSystemPromptText,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -43,6 +45,10 @@ const {
   mockIsChatModelUsable: vi.fn(),
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
+  mockOrgFindAccessibleById: vi.fn(),
+  // What process() leaves on itself, rather than on the quest: the disclosed text is never
+  // persisted. Holds a value only for the tests that opt in.
+  mockSystemPromptText: { value: undefined as unknown },
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -102,6 +108,9 @@ vi.mock('@bike4mind/services', async orig => {
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
     pipelinePhases = undefined;
+    get systemPromptText() {
+      return mockSystemPromptText.value;
+    }
     process = (...a: unknown[]) => mockProcess(...a);
   }
   return {
@@ -138,6 +147,15 @@ vi.mock('@bike4mind/database', async orig => {
       // Hoisted so tests can assert the per-user limiter actually ran, and drive
       // the over-limit path.
       tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
+    },
+    // resolveActiveOrg validates a request-supplied organizationId against the caller's
+    // memberships via this gate. Non-admin callers in these tests hit findAccessibleById.
+    organizationRepository: {
+      ...(actual.organizationRepository as object),
+      shareable: {
+        ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
+      },
     },
   };
 });
@@ -411,58 +429,61 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 
-  // req.user.organizationId arrives as a Mongo ObjectId (or, after a .populate(),
-  // a full Organization doc). It flows into the internal request at both top-level
-  // `organizationId` and `promptMeta.session.organizationId`, where a downstream
-  // schema parses it as z.string(). Un-normalized, an org-associated caller 422s
-  // ("expected string, received ObjectId"). The handler must coerce to a hex string
-  // at the boundary. The invoke stub here can't reproduce the downstream 422, so we
-  // assert the shape it receives instead - that IS the fix.
-  describe('organizationId boundary normalization', () => {
+  // Billing target is an explicit, opt-in choice: a request-supplied `organizationId` bills
+  // that org (after membership validation), and its absence bills the caller personally - even
+  // for a caller whose account has a home org. The org id flows into the internal request at
+  // both top-level `organizationId` and `promptMeta.session.organizationId`. The invoke stub
+  // can't observe the downstream credit-holder switch, so we assert the resolved scope it
+  // receives instead - that IS the fix.
+  describe('billing target (organizationId)', () => {
     const invokedBody = () =>
       mockInvoke.mock.calls[0][0] as {
         body: { organizationId?: unknown; promptMeta?: { session?: { organizationId?: unknown } } };
       };
 
-    it('coerces an ObjectId organizationId to a hex string on both surfaces (no 422)', async () => {
-      const orgId = new Types.ObjectId();
+    it('bills personally (no organizationId) when the request omits it, even for a caller with a home org', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
-      mockFindById.mockReturnValue(
-        Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false, organizationId: orgId })
-      );
-      const { req, res } = fire();
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(200);
-      const { body } = invokedBody();
-      expect(body.organizationId).toBe(orgId.toHexString());
-      expect(body.promptMeta?.session?.organizationId).toBe(orgId.toHexString());
-    });
-
-    it('flattens a populated Organization document to its _id hex string, never "[object Object]"', async () => {
-      const orgId = new Types.ObjectId();
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      // The caller's account carries a home org, but the request does not opt into org billing.
       mockFindById.mockReturnValue(
         Promise.resolve({
           id: 'user-1',
           _id: 'user-1',
           isBanned: false,
           disputePending: false,
-          organizationId: { _id: orgId, name: 'Acme' },
+          organizationId: new Types.ObjectId(),
         })
       );
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(invokedBody().body.organizationId).toBe(orgId.toHexString());
+      const { body } = invokedBody();
+      expect(body.organizationId).toBeUndefined();
+      expect(body.promptMeta?.session?.organizationId).toBeUndefined();
+      // The home-org field is never consulted as a billing source anymore.
+      expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
     });
 
-    it('leaves organizationId absent for a personal (org-less) caller', async () => {
+    it('bills the requested org on both surfaces once membership is validated', async () => {
+      const orgId = new Types.ObjectId().toHexString();
       validateWithScopes([ApiKeyScope.AI_CHAT]);
-      // beforeEach already returns a user with organizationId: undefined.
-      const { req, res } = fire();
+      mockOrgFindAccessibleById.mockResolvedValue({ id: orgId, name: 'Acme' });
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', organizationId: orgId } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(invokedBody().body.organizationId).toBeUndefined();
+      const { body } = invokedBody();
+      expect(body.organizationId).toBe(orgId);
+      expect(body.promptMeta?.session?.organizationId).toBe(orgId);
+      expect(mockOrgFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), orgId);
+    });
+
+    it('rejects billing an org the caller does not belong to (403) before creating a quest', async () => {
+      const orgId = new Types.ObjectId().toHexString();
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockOrgFindAccessibleById.mockResolvedValue(null); // not a member
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', organizationId: orgId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
 
@@ -516,6 +537,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSystemPromptText.value = undefined;
     mockGetSettingsMap.mockResolvedValue({});
     mockInvoke.mockResolvedValue({
       id: 'quest-2',
@@ -555,6 +577,71 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).not.toHaveProperty('promptDetails');
+  });
+
+  it('returns the prompt text when includeSystemPrompt is set', async () => {
+    const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
+    mockSystemPromptText.value = TEXT;
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().promptText).toEqual(TEXT);
+  });
+
+  it('omits the prompt text without the flag, so the text is never returned unasked', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).not.toHaveProperty('promptText');
+  });
+
+  it('passes includeSystemPrompt through to process, which is what gates building the text', async () => {
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
+    });
+    await handler(req, res);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ includeSystemPrompt: true }) })
+    );
+  });
+
+  describe('toolPayloads (structured tool output for programmatic callers)', () => {
+    const PROBLEM = { name: 'shop', jobs: [], machines: [] };
+    // Models what ToolBuilder does for real: it pushes onto the in-memory quest while
+    // process() runs, and the route reads that same object back.
+    const processEmitting = (effects: unknown[]) =>
+      mockProcess.mockImplementation(
+        async ({ prefetchedQuest }: { prefetchedQuest: { uiSideEffects?: unknown[] } }) => {
+          prefetchedQuest.uiSideEffects = effects;
+        }
+      );
+
+    it('returns the structured payload ALONGSIDE the unchanged prose reply', async () => {
+      processEmitting([{ type: 'populateProblem', payload: PROBLEM }]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const bodyOut = res._getJSONData();
+      expect(bodyOut.response).toBe('hi');
+      expect(bodyOut.responses).toEqual(['hi']);
+      expect(bodyOut.toolPayloads).toEqual([{ type: 'populateProblem', payload: PROBLEM }]);
+    });
+
+    it('returns an empty array when the turn fired no structured tool', async () => {
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getJSONData().toolPayloads).toEqual([]);
+    });
+
+    it('needs no opt-in flag, unlike promptDetails/promptText', async () => {
+      processEmitting([{ type: 'populateProblem', payload: PROBLEM }]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getJSONData()).not.toHaveProperty('promptDetails');
+      expect(res._getJSONData().toolPayloads).toHaveLength(1);
+    });
   });
 
   it('accepts promptMode: raw at the HTTP boundary', async () => {

@@ -1,25 +1,47 @@
 import type {
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake, type ManageActor } from './manageRule';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
-interface ArchiveDataLakeAdapters {
-  db: {
+interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<
       IDataLakeRepository,
-      'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'find' | 'claimFilesArchivedAt'
+      | 'findById'
+      | 'settleLifecycleStatus'
+      | 'setStats'
+      | 'activateIfDraft'
+      | 'find'
+      | 'claimFilesArchivedAt'
+      | 'claimArchiving'
     >;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<
       IFabFileRepository,
-      'archiveByDataLakeTag' | 'computeDataLakeStats' | 'findIdsByDataLakeTag' | 'hasArchivedByDataLakeTag'
+      | 'archiveByDataLakeTag'
+      | 'computeDataLakeStats'
+      | 'findIdsByDataLakeTag'
+      | 'hasArchivedMemberExclusiveToDataLakeTag'
     >;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -33,7 +55,7 @@ interface ArchiveDataLakeAdapters {
  * Owner or admin only. Uses transitional 'archiving' state for crash visibility.
  */
 export const archiveDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   { db, retrievalIndex, logger }: ArchiveDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
@@ -42,8 +64,22 @@ export const archiveDataLake = async (
     throw new NotFoundError('Data lake not found');
   }
 
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can archive this data lake');
+  // Loaded once and reused for the audit event's manage rung: the gate and the recorded rung must
+  // agree on one grant set, not two reads that could disagree.
+  const grants = await loadActiveLakeGrants(existing, { db });
+  if (!canManageLake(existing, actor, grants)) {
+    throw new BadRequestError('You do not have permission to archive this data lake');
+  }
+
+  // Refused ahead of the status handling below, and for the same reason restore refuses it: the
+  // purge has been accepted and its sweep is irreversible (#1744). Falling through would settle
+  // this lake on 'archived', clobbering the claim - and the release that is supposed to rescue an
+  // abandoned purge is conditional on 'purging' (releasePurgingToDeleted), so it would match
+  // nothing and no-op, leaving the accepted purge silently abandoned. Not reachable from the UI (a
+  // purging lake is absent from every list, so no Archive control renders), but this service is
+  // the guard, not the client - which is the whole point of #1744.
+  if (existing.status === 'purging') {
+    throw new BadRequestError('This data lake is being permanently deleted and can no longer be archived');
   }
 
   // Only short-circuit on the terminal state. A lake left in the transitional
@@ -51,6 +87,29 @@ export const archiveDataLake = async (
   // the side effects below (cancel batches, archive files, recompute) are idempotent.
   if (existing.status === 'archived') {
     return existing;
+  }
+
+  // Refused rather than fallen through, for the same reason 'purging' is: settling this lake on
+  // 'archived' would clobber a delete or restore that is already under way, and there is no release
+  // path that would put it back. A lake stranded in 'restoring' by a crashed attempt is not stuck -
+  // its own restore is re-entrant and lands it on 'active', where Archive works again.
+  if (
+    existing.status === 'deleting' ||
+    existing.status === 'deleted' ||
+    existing.status === 'restoring' ||
+    existing.status === 'unarchiving'
+  ) {
+    throw new BadRequestError(`Cannot archive a data lake in '${existing.status}' status`);
+  }
+
+  // Claimed BEFORE any side effect (transitional state, crash-visible), and conditional on the
+  // states the guards above admitted: they ran against a document read two round trips ago (the
+  // grant load), so a delete or restore landing in that gap must make this LOSE rather than be
+  // overwritten by it. Claiming first also means a lost claim cancels no batch and spends no
+  // `filesArchivedAt`.
+  const entered = await db.dataLakes.claimArchiving(dataLakeId);
+  if (!entered) {
+    throw new BadRequestError('This data lake changed status mid-request and can no longer be archived');
   }
 
   // Step 1: quiesce in-flight batches so no increment races the teardown.
@@ -71,23 +130,52 @@ export const archiveDataLake = async (
   // mark. Archiving unstamped instead leaves those rows exactly as unrecoverable as they already
   // were, which is the safe direction to fail in.
   //
-  // Also wider than the legacy case: the scope-matched query can't tell "pre-field legacy" apart
-  // from "a prefix-sharing sibling's own stamp", so either one skips the claim here - and with it,
-  // any freshly-archived rows this same sweep is about to write. Such a lake stays broken on
-  // restore until someone archives it again (once nothing is left unstamped) and then unarchives
-  // it - not "unarchive once" as a lake fresh out of restore is 'active', and unarchive only
-  // accepts 'archived'/'restoring'. A known limitation, not a full fix for either case.
-  const hasUnstampedArchive = !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag(scope));
+  // Scoped to the META-TAG arm alone, not the full scope. The full scope also matches a
+  // prefix-sharing sibling's own already-archived row, and for the SECOND lake to archive in a
+  // live collision that row is always present, so checking the full scope would make that lake
+  // skip claiming a stamp EVERY time; it could never bound its own later unarchive and would keep
+  // freeing the sibling's rows unbounded, the exact bug this whole fix exists to close. No other
+  // lake's document can carry this lake's own tag (see buildDataLakeMembershipFilter), so this
+  // check cannot get a false positive from a SIBLING's document that only shares a prefix.
+  //
+  // It also excludes a document that carries a SECOND lake's meta-tag too: `addFileToLake` has no
+  // exclusivity check, so one file can belong to more than one lake, and a co-tagged row already
+  // archived under a co-owner's own stamp is that lake's, not this lake's un-restorable orphan.
+  // Counting it here would make this lake skip claiming its own stamp forever and fall back to
+  // the pre-fix unbounded restore on every one of ITS OWN future unarchive calls - see
+  // `hasArchivedMemberExclusiveToDataLakeTag`'s own doc.
+  //
+  // What remains, and is NOT excluded: a document carrying ONLY this lake's meta-tag that a
+  // prefix-sharing sibling's own sweep stamped because it independently satisfies that sibling's
+  // prefix arm (same creator, a tag under that sibling's prefix). Nothing on the row records
+  // which lake's sweep touched it, so this guard still trips there - conservatively, and
+  // deliberately: a per-file lake-attribution marker doesn't exist today, and the precondition
+  // (a same-creator prefix collision) is rare enough that adding one isn't justified. Tracked and
+  // ratified as an accepted, disclosed limitation in #1729.
+  //
+  // Trade-off worth naming: a lake whose OWN pre-existing unstamped archive is entirely
+  // prefix-only (no meta-tagged member at all), OR whose only leftover unstamped member also
+  // carries a SECOND lake's meta-tag, no longer trips this guard either, so its next archive
+  // claims a real stamp and that leftover row stops being reachable by the (now-bounded) unbounded
+  // fallback once filesArchivedAt is no longer absent. For the co-tagged case this is only safe
+  // when the co-owning lake can itself still restore that row (an ordinary lake, with its own
+  // document, can); it is NOT safe for a leftover co-tagged with a hardcoded fallback/registry
+  // "lake" that has no backing document at all (see the fallback-lake registry) - such a lake can
+  // never run its own unarchive, so that row would go from "wrongly reachable by this lake's
+  // unbounded fallback" to permanently unreachable by anyone. Accepted deliberately: both leftover
+  // populations are fixed and shrinking (rows predating this field, or predating a since-tightened
+  // membership rule), while the sibling-freeing bug this scoping closes is live for as long as
+  // multi-membership or prefix collisions exist.
+  const hasUnstampedArchive =
+    !existing.filesArchivedAt &&
+    (await db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag({
+      kind: 'owned',
+      datalakeTag: existing.datalakeTag,
+    }));
   let stamp: Date | undefined;
-  // Whether THIS call's claim actually won the set-if-unset, rather than echoing back a value
-  // someone else (a crashed prior attempt, or a concurrent claim on this same lake) already held -
-  // see the zero-swept clear-back below, which only ever fires for a claim we ourselves minted.
-  let wasMinted = false;
   if (!hasUnstampedArchive) {
     const at = new Date();
-    const claimed = (await db.dataLakes.claimFilesArchivedAt(dataLakeId, at)) ?? undefined;
-    stamp = claimed;
-    wasMinted = claimed?.getTime() === at.getTime();
+    stamp = (await db.dataLakes.claimFilesArchivedAt(dataLakeId, at)) ?? undefined;
     if (!stamp) {
       logger?.warn('[dataLakes] archive recorded no stamp; a later restore will not clear archivedAt for this lake', {
         dataLakeId,
@@ -95,46 +183,82 @@ export const archiveDataLake = async (
     }
   }
 
-  // Step 2: transitional state (crash-visible).
-  await db.dataLakes.update({ id: dataLakeId, status: 'archiving' });
-
-  // Step 3: soft-hide files + best-effort index removal. The scope covers prefix-tagged
+  // Step 2: soft-hide files + best-effort index removal. The scope covers prefix-tagged
   // members too, so a file that never got the meta-tag no longer stays browsable here.
   // Archive hides files, so a colliding sibling lake loses its prefix-tagged files from every
-  // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
-  // archived files, since the flip matches on archivedAt alone.
+  // browse (they filter archivedAt: null). Unarchiving either lake now bounds its own reversal
+  // to its own stamp, so it no longer brings back the other's (see unarchiveByDataLakeTag).
   await warnOnPrefixCollision(db, existing, logger);
   // Generated here rather than left to archiveByDataLakeTag's default: when `stamp` is undefined,
   // this row-level timestamp is orphaned (no lake will ever name it) even though it is a real
   // Date, and that decision should be visible at the call site rather than buried in the repo
   // method's fallback.
   const sweepStamp = stamp ?? new Date();
-  const swept = await db.fabFiles.archiveByDataLakeTag(scope, sweepStamp);
-  // The probe-then-claim window above has no lock, so a concurrent archive - on a prefix-colliding
-  // sibling lake stamping a shared file, or on this SAME lake via a duplicate request - can leave
-  // this sweep matching nothing despite a stamp in hand. `wasMinted` is what makes clearing safe:
-  // it is true only when THIS call's claim actually won the set-if-unset, so it is false both for
-  // a crash re-entry (echoes an already-set stamp back) and for a same-lake concurrent claim
-  // (echoes the peer's winning stamp back) - in either of those, the stamp names rows that already
-  // exist and clearing it would strand them, reintroducing the bug this PR exists to fix. Only a
-  // truly fresh mint that then swept zero (the sibling race, or an empty lake) is safe to clear.
-  if (stamp && swept === 0 && wasMinted) {
-    await db.dataLakes.update({ id: dataLakeId, filesArchivedAt: null });
-  }
+  await db.fabFiles.archiveByDataLakeTag(scope, sweepStamp);
+  // A stamp is kept even when it names zero rows (an empty lake, or a concurrent sibling/same-lake
+  // claim that swept the shared rows first), NOT cleared back to null. A cleared stamp reads,
+  // downstream, as "this lake predates filesArchivedAt", which makes unarchiveByDataLakeTag run
+  // its reversal unbounded and free whatever a sibling or a co-owning lake legitimately holds
+  // archived under its own stamp, exactly the bug this field exists to prevent. An orphaned stamp
+  // that names nothing is the safe value here: a later unarchive bounded to it also matches
+  // nothing, which is the correct outcome for a lake with nothing of its own to restore.
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
   // count because it reports every member whatever its archived/deleted state, so a re-run after
   // a crashed attempt still hands the index the full set.
   await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
-  // Step 4: settle to archived and reconcile stats from source (now 0 live files).
-  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'archived' });
+  // Step 3: settle to archived and reconcile stats from source (now 0 live files).
+  // Stamped on the TERMINAL transition only (not the 'archiving' claim above): one stamp per
+  // operator action, so a crashed run that never settles leaves no half-record of an archive
+  // that did not happen.
+  // Conditional on the 'archiving' claimed above, not a plain write: claimDeleting admits
+  // 'archiving' deliberately (a lake stranded there by a crashed attempt has to stay deletable), so
+  // a teardown can start on top of this one and both sweeps run. Settling unconditionally would let
+  // whichever finished last stamp its status over the other's file state - a lake reading
+  // 'archived' whose every member is soft-deleted, or 'deleted' with rows still archive-hidden.
+  // Losing is reported, never swallowed: the sweep above already ran, and a silent no-op would
+  // return a lake this caller never actually archived.
+  const updated = await db.dataLakes.settleLifecycleStatus(dataLakeId, 'archiving', {
+    status: 'archived',
+    ...lakeConfigWriteStamp(actor),
+  });
   if (!updated) {
-    throw new NotFoundError('Data lake not found after archive');
+    // Re-read only on the loss path, so the error names the transition that actually won rather
+    // than asserting a NotFound the lake may well contradict.
+    const current = await db.dataLakes.findById(dataLakeId);
+    if (!current) {
+      throw new NotFoundError('Data lake not found after archive');
+    }
+    throw new BadRequestError(
+      `This data lake moved to '${current.status}' while it was being archived; its files were archived but the archive did not complete`
+    );
   }
-  // Always recompute from source, never short-circuit on `swept` (e.g. "swept === 0, so stats
-  // can't have changed") - a re-entry sweeps 0 for rows a PRIOR attempt already archived, and
-  // those rows are exactly what this recompute needs to reflect.
-  await recomputeLakeStats(existing, { db });
+  // Recorded on the terminal transition alongside the stamp, for the same reason and with the same
+  // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is
+  // attributed even if the recompute throws - the lake is already archived by this point either way.
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'archive',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      changes: diffLakeConfig(existing, { ...existing, status: 'archived' }),
+    },
+    { db, logger }
+  );
+  // Always recompute from source, never short-circuit on the sweep's own count ("it archived
+  // nothing, so stats can't have changed"): a re-entry sweeps 0 for rows a PRIOR attempt already
+  // archived, and those rows are exactly what this recompute needs to reflect.
+  // Logger forwarded for parity with every other recompute call, not because an audit row is
+  // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's
+  // draft/null window, so the recompute cannot emit an auto-activate event. Passing it anyway costs
+  // nothing and saves the next reader re-deriving that.
+  await recomputeLakeStats(existing, { db, logger });
 
   return updated;
 };

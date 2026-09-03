@@ -240,6 +240,9 @@ export interface IAgent extends ICreditHolder, IModelConfig {
 
   // System prompt for agent behavior
   systemPrompt?: string; // Generated system prompt for LLM interactions
+  // Set only by an actual Agent Ops generation run; the generation rate limiter
+  // keys off this rather than updatedAt, which any edit would bump.
+  lastSystemPromptGeneratedAt?: Date;
 
   // Orchestration fields (folded in from IAgentDefinition). All optional -
   // agent executor applies runtime defaults when absent.

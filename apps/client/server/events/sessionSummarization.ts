@@ -2,6 +2,7 @@ import { withEventContext } from '@server/events/utils';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
+  scopedSettingsRepository,
   dataLakeRepository,
   fabFileRepository,
   Quest,
@@ -12,15 +13,8 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import {
-  AiEvents,
-  ChatModelName,
-  DATALAKE_TAG_PREFIX,
-  IMessage,
-  KnowledgeType,
-  prefixArmTagNames,
-  SupportedFabFileMimeTypes,
-} from '@bike4mind/common';
+import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -207,54 +201,9 @@ export const handler = withEventContext(async (event, logger) => {
       // falls through to createFabFile - a duplicate beats clobbering someone else's file.
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
-        // Re-summarizing must not change which data lakes this file belongs to. The tags here are
-        // the SESSION's, which are not expected to carry a `datalake:` meta-tag or a prefix-arm
-        // content tag, and a whole-array tag write omitting one reads as leaving that lake - so
-        // without carrying the file's existing membership tags through, every re-summarization
-        // would evict a lake-indexed summary (and fail outright for a summariser who cannot
-        // manage the lake). `lakeTags` below drops anything already present in the session's own
-        // tags, so an overlap (an unusual case, not the norm described above) still can't produce
-        // a duplicate entry in the persisted array.
-        //
-        // Carries BOTH signals: the meta-tag, and any tag under a prefix arm the file's OWNER
-        // (session.userId - this query is anchored to it above) runs. Since #1263, a prefix tag
-        // alone is membership too, and reconcileLakeTags now gates its loss the same as a
-        // meta-tag's - this file must round-trip both or a re-summarization silently (or, for a
-        // non-managing summariser, loudly) evicts it.
-        //
-        // reconcileLakeTags may stamp a content tag for one of these lakes if this file lacks
-        // one - never a NEW membership, since `lakeTags` only ever carries through tags already
-        // stored on the file. Harmless either way: this FabFile always carries a sessionId,
-        // which both tag counters exclude unless it is a curated notebook, so a stamp here could
-        // never reach the tag tree.
-        const storedTagNames = (fabfile.tags ?? [])
-          .map(t => t?.name)
-          .filter((name): name is string => typeof name === 'string');
-        // Short-circuits the query when nothing stored could carry a prefix arm - every usable
-        // prefix ends in ':' (see `prefixArmTagNames`), and a meta-tag never matches one. Mirrors
-        // the guard `reconcileLakeTags`, `toggleTags`, and the bulk tag doors all use.
-        const couldCarryPrefixArm = storedTagNames.some(
-          name => !name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) && name.includes(':')
-        );
-        const prefixArmLakes = couldCarryPrefixArm
-          ? await dataLakeService.loadPrefixArmCandidateLakes([fabfile.userId], {
-              db: { dataLakes: dataLakeRepository },
-            })
-          : [];
-        // Computed once, not per tag: prefixArmTagNames re-scans the whole tag list per lake, so
-        // calling it inside the filter below would redo that scan for every tag on the file.
-        const prefixArmSignalNames = new Set(
-          prefixArmLakes.flatMap(lake => prefixArmTagNames(storedTagNames, lake.fileTagPrefix))
-        );
-        const sessionTagNames = new Set((fabFileData.tags ?? []).map(t => t.name));
-        const lakeTags = (fabfile.tags ?? []).filter(t => {
-          if (typeof t?.name !== 'string') return false;
-          if (sessionTagNames.has(t.name)) return false;
-          if (t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)) return true;
-          // prefixArmLakes is already scoped to fabfile.userId (the $in query above), so no
-          // further owner check is needed here.
-          return prefixArmSignalNames.has(t.name);
-        });
+        // Re-summarizing sends only the session's own tags - reconcileLakeTags preserves any
+        // `datalake:` meta-tag or prefix-arm content tag this file already holds regardless, so
+        // there is nothing to carry through by hand here.
         await fabFilesService.updateFabFile(
           user,
           {
@@ -264,12 +213,14 @@ export const handler = withEventContext(async (event, logger) => {
             type: fabFileData.type,
             fileContent: fabFileData.fileContent,
             sessionId: fabFileData.sessionId,
-            tags: [...(fabFileData.tags ?? []), ...lakeTags],
+            tags: fabFileData.tags ?? [],
           },
           {
             db: {
               fabFiles: fabFileRepository,
               dataLakes: dataLakeRepository,
+              adminSettings: adminSettingsRepository,
+              scopedSettings: scopedSettingsRepository,
             },
             storage: {
               upload: (filepath, content, options) => {
@@ -284,11 +235,77 @@ export const handler = withEventContext(async (event, logger) => {
         );
       } else {
         logger.info(`Creating Summary File`);
+        // A session's tags are carried forward, not a fresh self-tag action - #1101 asks that this
+        // path not SILENTLY join a lake, not that one stale/unmanageable datalake: tag (from before
+        // the session's user lost access, or was never granted it) takes the whole summary down.
+        // createFabFile's gate now refuses such a tag outright, so drop it here first and log it;
+        // the summary is the primary value this handler exists to preserve.
+        const sessionMetaTagNames = new Set(
+          dataLakeService.extractDataLakeMetaTags((fabFileData.tags ?? []).map(t => t.name))
+        );
+        const unmanageableMetaTags: string[] = [];
+        // The admission contract (#1680) is a SECOND refusal class on the same `createFabFile` call,
+        // and the drop-and-warn pass above does not cover it: an enforcing lake whose passage policy
+        // this summary cannot honor makes that call throw a BadRequestError the catch below rethrows,
+        // failing the summarization event on every retry (the refusal is deterministic) and losing the
+        // RAG-indexed summary over one misconfigured lake. Same call as the real gate, so the two
+        // cannot disagree about who would be refused - just asked here where a refusal costs a tag
+        // instead of the whole summary.
+        const inadmissibleMetaTags: string[] = [];
+        for (const tag of sessionMetaTagNames) {
+          // Mirror assertCanWriteDataLakeTags' own static-registry arm rather than re-deriving it:
+          // a static-registry lake (e.g. datalake:opti-knowledge) has no DB document at all, so
+          // findByDatalakeTag always returns null for it - treating that as "unmanageable" would
+          // drop the tag even for an admin the real gate would have let keep it.
+          if (dataLakeService.isStaticRegistryDatalakeTag(tag)) {
+            if (!user?.isAdmin) unmanageableMetaTags.push(tag);
+            continue;
+          }
+          const lake = await dataLakeRepository.findByDatalakeTag(tag);
+          if (!lake || !dataLakeService.canManageLake(lake, { userId: session.userId, isAdmin: !!user?.isAdmin })) {
+            unmanageableMetaTags.push(tag);
+            continue;
+          }
+          try {
+            // The summary does not exist yet, so the subject is its owner-to-be and the gate predicts
+            // from THEIR chunk policy - the same shape and the same owner createFabFile itself passes.
+            await dataLakeService.assertLakeAdmission([lake], [{ userId: session.userId }], {
+              db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+              logger,
+            });
+          } catch (admissionError) {
+            if (!(admissionError instanceof BadRequestError)) throw admissionError;
+            inadmissibleMetaTags.push(tag);
+          }
+        }
+        // A legacy static-registry content tag (e.g. opti:foo) predating this fix can also be
+        // sitting on a session from before #1101 closed this gap - same "don't take the summary
+        // down" reasoning as the meta-tag case above, no DB lookup needed since this arm is
+        // admin-only.
+        const unmanageablePrefixTags = user?.isAdmin
+          ? []
+          : dataLakeService.extractStaticRegistryPrefixedTags((fabFileData.tags ?? []).map(t => t.name));
+        const droppedMetaTags = [...unmanageableMetaTags, ...inadmissibleMetaTags];
+        const droppedTagNames = [...droppedMetaTags, ...unmanageablePrefixTags];
+        if (droppedTagNames.length > 0) {
+          logger.warn(
+            `Dropping unwritable data-lake tag(s) from session ${session.id} summary: ${droppedTagNames.join(', ')}` +
+              (inadmissibleMetaTags.length > 0 ? ` (refused at admission: ${inadmissibleMetaTags.join(', ')})` : '')
+          );
+          fabFileData.tags = (fabFileData.tags ?? []).filter(
+            t => !droppedMetaTags.includes(t.name.toLowerCase()) && !unmanageablePrefixTags.includes(t.name)
+          );
+        }
         const newFabFile = await fabFilesService.createFabFile(session.userId, fabFileData, {
           db: {
             fabFiles: fabFileRepository,
             adminSettings: adminSettingsRepository,
+            // Without this the admission lever resolves platform-only here, so a per-org, per-owner
+            // or per-lake enforcement override silently does nothing on this door - the no-op lever
+            // #1658 forbids. Same store the updateFabFile adapter above wires.
+            scopedSettings: scopedSettingsRepository,
             users: userRepository,
+            dataLakes: dataLakeRepository,
           },
           storage: {
             upload: (filepath, content, option) => {

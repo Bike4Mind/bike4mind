@@ -14,6 +14,11 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   User: {},
   adminSettingsRepository: {},
+  // Vitest throws on ACCESS of an export a factory does not declare, and the helper now passes
+  // this into createFabFile's adapters on every call. Empty is enough: the adapter is optional
+  // and only Pick<_, 'findOverrides'>, so absence just resolves the admission lever platform-only.
+  scopedSettingsRepository: {},
+  dataLakeRepository: {},
 }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() })),

@@ -5,6 +5,14 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
   analyzeBatchTaxonomy: vi.fn(),
+  // Real admin-or-creator logic (not a bare stub), matching the sibling lifecycle.test.ts mock,
+  // so the manage-gate call behaves identically to production, including the blank-identity case.
+  canManageLake: vi.fn(
+    (lake: { createdByUserId?: string }, actor: { userId?: string; isAdmin: boolean }) =>
+      actor.isAdmin || (!!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId)
+  ),
+  loadActiveLakeGrants: vi.fn().mockResolvedValue([]),
+  toAccessContext: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -25,7 +33,22 @@ vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({ analyzeBatchTaxonomy:
 vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findById: h.batchFindById, setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive },
   dataLakeRepository: { findById: h.lakeFindById },
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
 }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: { canManageLake: h.canManageLake, loadActiveLakeGrants: h.loadActiveLakeGrants },
+}));
+// Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
+// stub it to the caller identity, same shape the route previously built inline.
+vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../reanalyze-taxonomy';
 
@@ -53,13 +76,25 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
       batch: { id: 'b1', taxonomyStatus: 'ready' },
     });
     h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
+    h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
+      Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
+    );
   });
 
   it('rejects a non-owner, non-admin caller before touching the taxonomy phase', async () => {
     h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: 'someone-else', fileTagPrefix: 'acme:' });
     const { res } = makeRes();
 
-    await expect(run('b1', res)).rejects.toThrow(/creator/i);
+    await expect(run('b1', res)).rejects.toThrow(/permission/i);
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
+  });
+
+  it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
+    h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: '', fileTagPrefix: 'acme:' });
+    const { res } = makeRes();
+
+    await expect(run('b1', res, {}, { id: '', isAdmin: false })).rejects.toThrow(/permission/i);
+    expect(h.canManageLake).toHaveBeenCalled();
     expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
   });
 
@@ -118,17 +153,43 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   });
 
   // Unlike the queue handler, there's no SQS retry safety net on this synchronous path -
-  // an unexpected error must fail the batch immediately with the real reason rather than
-  // leaving it stuck in 'analyzing' until the reconciler's generic timeout kicks in.
-  it('reverts the batch to failed with the real error and rethrows on an unexpected exception', async () => {
+  // an unexpected error must fail the batch immediately rather than leaving it stuck in
+  // 'analyzing' until the reconciler's generic timeout kicks in. The stored taxonomyError,
+  // the logged message, AND the thrown HTTP error are all the curated message - the raw
+  // exception (which errorHandler.ts would otherwise put straight into the response body)
+  // never reaches the client, only the logger.
+  it('reverts the batch to failed with a curated message, logs the real error, and throws a curated HTTP error (not the raw exception)', async () => {
     const boom = new Error('OpenAI request timed out');
     h.analyzeBatchTaxonomy.mockRejectedValue(boom);
     const { res } = makeRes();
+    const request = req('b1');
 
-    await expect(run('b1', res)).rejects.toThrow(boom);
+    const thrown: unknown = await (handler as (req: unknown, res: unknown) => Promise<void>)(request, res).catch(
+      (e: unknown) => e
+    );
 
+    expect(thrown).toMatchObject({ statusCode: 500, message: 'Re-analysis failed unexpectedly - try again' });
+    expect(thrown).not.toBe(boom);
+    expect((thrown as Error).message).not.toContain('OpenAI request timed out');
     expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['analyzing'], 'failed', {
-      taxonomyError: 'OpenAI request timed out',
+      taxonomyError: 'Re-analysis failed unexpectedly - try again',
     });
+    expect((request as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('OpenAI request timed out')
+    );
+  });
+
+  it('logs (rather than swallows) a failure of the revert-to-failed write itself', async () => {
+    const boom = new Error('OpenAI request timed out');
+    h.analyzeBatchTaxonomy.mockRejectedValue(boom);
+    h.setTaxonomyStatusIfActive.mockRejectedValue(new Error('mongo down'));
+    const { res } = makeRes();
+    const request = req('b1');
+
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(request, res).catch(() => {});
+
+    expect((request as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('mongo down')
+    );
   });
 });

@@ -67,6 +67,11 @@ export interface PendingMessageFile {
 interface SessionLayoutControlState {
   layout: DefaultLayoutType;
   artifactData?: ArtifactData;
+  // Data-lake View: a file shown in the KnowledgeViewer WITHOUT being attached to the session
+  // workbench (viewing must not mutate the prompt - the explicit [+] action does that). The
+  // viewer renders it as one extra tab; replaced by the next View, cleared on session switch.
+  // Not persisted: a preview is a transient look, not session state.
+  previewFile: IFabFileDocument | null;
   recentArtifacts: ArtifactData[]; // Collection of recently clicked artifacts
   selectedArtifactId?: string;
   // Selected version number for viewing, keyed by artifact id. Per-artifact so a version
@@ -86,9 +91,8 @@ interface SessionLayoutControlState {
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
-  previousLayout?: DefaultLayoutType; // Track layout before entering floating mode for close behavior
   // Docked chat panel sizing (percentage)
-  dockChatWidth: number; // Width % for dockRight mode (default 35)
+  dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
   // Optimistic first-message: holds the user's prompt while the new session is being
   // confirmed by the server. Cleared on session.created. Not persisted.
@@ -103,6 +107,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
   persist(
     _set => ({
       layout: 'hide',
+      previewFile: null,
       knowledgeViewerWidth: 50, // Default to 50% width
       recentArtifacts: [],
       maxRecentArtifacts: 10, // Default max cache size
@@ -114,8 +119,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
-      previousLayout: undefined,
-      dockChatWidth: 35,
+      dockChatWidth: 40,
       dockChatHeight: 40,
     }),
     {
@@ -136,8 +140,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         // Docked chat panel sizing persisted for cross-session memory
         dockChatWidth: state.dockChatWidth,
         dockChatHeight: state.dockChatHeight,
-        // recentArtifacts, pendingMessageFiles, pendingModerationEvents, and previousLayout
-        // intentionally excluded
+        // recentArtifacts, pendingMessageFiles, and pendingModerationEvents intentionally excluded
       }),
     }
   )

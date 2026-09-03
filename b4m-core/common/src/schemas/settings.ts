@@ -1,6 +1,30 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+} from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+} from '../constants/lakeAccessAudit';
+import {
+  LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+} from '../constants/lakeConfigAudit';
+import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import {
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+} from '../constants/knowledgeBaseSearch';
+import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -11,6 +35,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -108,11 +133,15 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
  *
  * Counterweight to the completeness pressure the rest of the system prompt applies: without an
  * explicit licence to abstain, the model treats "answer fully" as unconditional and fills gaps with
- * invented specifics about the user or their data. Measured as the single largest quality gain on
- * questions whose correct answer is a refusal, so it ships on every completion rather than only on
- * the grounded surfaces. Kept short on purpose - it must be cheap and behaviorally light.
+ * invented specifics - including a named customer, competitor, deal or dollar figure a leading
+ * question implied but no source supports, volunteered with citation-like framing so it reads as
+ * sourced. In internal evaluation (a harness kept outside this repo) this was among the largest
+ * quality gains on questions whose correct answer is a refusal, so it ships on every completion
+ * rather than only on the grounded surfaces (it is also the only surface covering a turn that
+ * answers WITHOUT searching the knowledge base). Kept short
+ * on purpose - it must be cheap and behaviorally light.
  */
-export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data.`;
+export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
 /**
  * Default text for the formatting system message. Runtime fallback used by
@@ -168,8 +197,14 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakes',
   'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
+  'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
+  'PauseLakeConvergence',
+  'LakeConvergenceBulkChangeSharePct',
+  'EnforceLakeReadGrants',
+  'EnableDataLakeDrivePoll',
+  'EnforceLakeAdmission',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -195,6 +230,7 @@ export const SettingKeySchema = z.enum([
   'ReferralCreditsAmount',
   'registrationLink',
   'FeedbackReceiveEmail',
+  'FeedbackReceiveEmailNonProd',
   'FeedbackKyle',
   'EnableFeedBackToEmail',
   'EnableFeedBackToSlack',
@@ -270,6 +306,27 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'forcedRetrievalCharBudget',
+  'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
+
+  // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
+  'dataLakeEmbeddingSpendEnabled',
+  'dataLakeEmbeddingBudgetPerRunUsd',
+  'dataLakeEmbeddingBudgetPerLakeUsd',
+  'dataLakeEmbeddingBudgetPerPeriodUsd',
+  'dataLakeEmbeddingBudgetPeriodHours',
+  'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeEmbeddingMaxTokensPerMinute',
+  'dataLakeVectorizeChunkBatchSize',
+  'dataLakeEmbeddingTierMultiplierIndividual',
+  'dataLakeEmbeddingTierMultiplierOrganization',
+
+  // LAKE ACCESS AUDIT SETTINGS
+  'LakeAccessAuditRetentionDays',
+  'LakeAccessQueryTextRetentionDays',
+  'LakeConfigAuditRetentionDays',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -283,6 +340,7 @@ export const SettingKeySchema = z.enum([
   'SlackLiveopsWebhookUrl',
   'SlackUserActivityWebhookUrl',
   'SlackFeedbackWebhookUrl',
+  'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
 
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
@@ -385,6 +443,11 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
+  // PR REPORT GENERATOR
+  'prReportRepo',
+  'prReportIdentityMap',
+  'prReportWebhookUrl',
+  'prReportEgressAllowlist',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -426,12 +489,12 @@ export const OrchestrationDefaultsSchema = z.object({
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block. Mirrored client-side via
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
     // to expose. Mirrored client-side in
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'image_generation',
     'edit_image',
     'music_generation',
@@ -651,6 +714,14 @@ interface BaseSetting {
   publicSafe?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
+  /**
+   * Opt-in scoping (epic #1658 lane 0 / #1660). Absent = platform-only, the historical behavior:
+   * the value lives solely in `AdminSettings` and `resolveScopedSetting` returns it unchanged at
+   * every scope. Present, the setting also honors org/owner/lake OVERRIDES per `settableAt`, with
+   * the narrower scope winning. A setting is never silently scoped - it opts in here, which is why
+   * adding this field changes no existing consumer.
+   */
+  scope?: SettingScopeConfig;
 }
 
 function makeStringSetting(
@@ -687,6 +758,62 @@ function makeStringSetting(
  */
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
+
+/**
+ * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
+ * definitions below and resolveSpendLevers in the dataLakeService (imported there so the two
+ * cannot drift). Unlike the scan budgets above, these govern money, so their semantics differ
+ * deliberately: 0 is a VALID operator value meaning "stop spending", only an absent setting
+ * falls back to the default, and an unparseable one halts the spend path rather than resuming.
+ * The MAX_* rails are the "adjustable is not unbounded" ceilings - the resolver clamps to them
+ * even if a larger value is somehow stored.
+ */
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX = 500;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT = 100;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX = 10_000;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT = 50;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
+export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
+export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
+export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
+export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
+/**
+ * The TOKEN half of the throughput cap, and the one that maps to what providers actually meter.
+ * A call cap alone does not bound tokens: one call carries up to
+ * DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT passages of DEFAULT_PASSAGE_TOKEN_TARGET tokens, so
+ * 120 calls/min permits ~3.1M tokens/min - several times the smallest paid embeddings tier. The two
+ * levers are complementary: calls/min bounds RPM, this bounds TPM, and a call must fit both.
+ *
+ * Default is 60% of OpenAI's published Tier-1 embeddings quota (1M TPM), which is the floor across
+ * the supported cloud providers. The other 40% is deliberate headroom for QUERY-side embedding,
+ * which is exempt from this gate (see enforceEmbeddingSpendGate's doc comment): a retrieval query
+ * must not queue behind a backfill. Operators on a higher tier raise it to their own dashboard
+ * number, minus that same headroom.
+ */
+export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT = 600_000;
+export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX = 50_000_000;
+export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
+export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
+
+/**
+ * Cost TIERS (#1675): an individual-owned lake and an organization-owned one are different
+ * economic cases and must not share one number. The tier is expressed as a multiplier on the
+ * per-run and per-lake budgets rather than a second set of budget settings, so the thing an
+ * operator tunes over time is literally "the ratio between them" - and so a change to the base
+ * budget still moves both tiers together.
+ *
+ * Only the two per-resource budgets are tiered. The per-period budget and the rate limit meter
+ * the whole platform through a single shared window, so they have no owner to tier by; the period
+ * length and the chunk batch size are not spend values at all.
+ *
+ * Multiplier semantics follow the spend levers they scale: 0 is a valid "this tier spends nothing"
+ * and the effective budget is clamped to the same MAX_* rail as the untiered value, so raising a
+ * tier can never push spend past the platform ceiling ("adjustable is not unbounded").
+ */
+export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
+export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1298,6 +1425,31 @@ export const API_SERVICE_GROUPS = {
       { key: 'defaultEmbeddingModel', order: 1 },
       { key: 'dataLakeSearchMaxFiles', order: 2 },
       { key: 'dataLakeSearchMaxChunks', order: 3 },
+      { key: 'forcedRetrievalCharBudget', order: 4 },
+      { key: 'kbSearchDefaultResults', order: 5 },
+      { key: 'kbSearchResultTokenBudget', order: 6 },
+      { key: 'kbSearchMinRelevancePct', order: 7 },
+    ],
+  },
+  DATA_LAKE_COST: {
+    id: 'dataLakeCostGovernance',
+    name: 'Data Lake Cost Governance',
+    description:
+      'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
+      'Budgets are USD; 0 means stop spending, not "use the default". The two tier multipliers ' +
+      'scale the per-run and per-lake budgets by whether a lake is individual- or organization-owned.',
+    icon: 'Savings',
+    settings: [
+      { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
+      { key: 'dataLakeEmbeddingBudgetPerRunUsd', order: 2 },
+      { key: 'dataLakeEmbeddingBudgetPerLakeUsd', order: 3 },
+      { key: 'dataLakeEmbeddingBudgetPerPeriodUsd', order: 4 },
+      { key: 'dataLakeEmbeddingBudgetPeriodHours', order: 5 },
+      { key: 'dataLakeEmbeddingMaxCallsPerMinute', order: 6 },
+      { key: 'dataLakeEmbeddingMaxTokensPerMinute', order: 7 },
+      { key: 'dataLakeVectorizeChunkBatchSize', order: 8 },
+      { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 9 },
+      { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 10 },
     ],
   },
   VOICE_SESSION: {
@@ -1425,9 +1577,12 @@ export const API_SERVICE_GROUPS = {
       { key: 'SlackLiveopsWebhookUrl', order: 5 },
       { key: 'SlackUserActivityWebhookUrl', order: 6 },
       { key: 'SlackEmailAuditWebhookUrl', order: 6.5 },
+      { key: 'SlackFeedbackWebhookUrl', order: 6.75 },
+      { key: 'SlackNonProdFeedbackWebhookUrl', order: 6.8 },
       { key: 'FeedbackSendEmailUsername', order: 7 },
       { key: 'FeedbackSendEmailPassword', order: 8 },
       { key: 'FeedbackReceiveEmail', order: 9 },
+      { key: 'FeedbackReceiveEmailNonProd', order: 9.5 },
       { key: 'liveFeedbackEmail', order: 10 },
       { key: 'FeedbackKyle', order: 11 },
       { key: 'feedbackErik', order: 12 },
@@ -1637,6 +1792,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitProPerMin', order: 3 },
     ],
   },
+  DATA_LAKE_AUDIT: {
+    id: 'dataLakeAuditService',
+    name: 'Data Lake Audit',
+    description:
+      'Retention for the lake audit trail: who READ a lake (plus the opt-in query-text log) and who CHANGED its configuration',
+    icon: 'Security',
+    settings: [
+      { key: 'LakeAccessAuditRetentionDays', order: 1 },
+      { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+      { key: 'LakeConfigAuditRetentionDays', order: 3 },
+    ],
+  },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
 } satisfies {
@@ -1763,12 +1930,23 @@ export const settingsMap = {
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
     name: 'Data Lakes: Slack "@datalake add" path',
-    defaultValue: false,
+    defaultValue: true,
     description:
-      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". On by default. Turn OFF to make the Slack command inert - it is still intercepted deterministically, so the bot stays silent rather than falling through to the LLM.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGroundingMode: makeBooleanSetting({
+    key: 'EnableDataLakeGroundingMode',
+    name: 'Data Lakes: Per-lake grounding mode',
+    defaultValue: true,
+    description:
+      "Global rollback lever for the per-lake grounding mode (inline vs retrieve vs auto-by-size). On by default. Turn OFF to ignore every lake's configured mode and fall back to pure size-only corpus deferral (CorpusRetrievalMinInlineTokensPerDoc), reverting the retrieve-by-default behavior for all lakes at once without editing each lake.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
     dependsOn: 'EnableDataLakes',
   }),
   EnableLakeMemory: makeBooleanSetting({
@@ -1792,6 +1970,93 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
     dependsOn: 'EnableDataLakes',
+  }),
+  PauseLakeConvergence: makeBooleanSetting({
+    key: 'PauseLakeConvergence',
+    name: 'Data Lakes: Pause background convergence work',
+    defaultValue: false,
+    description:
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running - including overriding a platform-wide pause back OFF for one lake. Every producer honors the override, the global chunk rescue sweep included: it resolves each candidate against the lake it belongs to (#2157), so a file in no lake at all follows the platform value, which is correct for it. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 93,
+    dependsOn: 'EnableDataLakes',
+    // Per-lake override (#1676): the platform value is the global kill switch; a narrower override
+    // pauses just that scope. Org/Owner rungs ride along (the resolver derives them from the lake
+    // via scopeForLake, and the scheme requires Owner wherever Lake is settable) so an operator can
+    // also pause all of an org's/owner's lake convergence, not only one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  LakeConvergenceBulkChangeSharePct: makeNumberSetting({
+    key: 'LakeConvergenceBulkChangeSharePct',
+    name: 'Data Lakes: Convergence bulk-change confirmation threshold (%)',
+    // Shared with the resolver's own fallback (see BULK_CHANGE_SHARE_PCT_DEFAULT for the rationale
+    // and for why this is one constant rather than two literals).
+    defaultValue: BULK_CHANGE_SHARE_PCT_DEFAULT,
+    min: 1,
+    max: 100,
+    description:
+      'Share of a data lake, as a percentage of its gradable members, above which owner-triggered ' +
+      'convergence (#1681) requires an explicit confirmation before it rewrites anything. A mass ' +
+      'rewrite is the signature of a misconfigured chunk policy, and every individual change inside ' +
+      'one looks locally reasonable, so the share is the only place the mistake is visible. The ' +
+      'guard is suppressed on lakes with fewer gradable members than the plan needs for a ' +
+      'percentage to mean anything. Lower it to make convergence ask more often; it never blocks a ' +
+      'confirmed run.',
+    category: 'AI',
+    order: 4,
+    dependsOn: 'EnableDataLakes',
+    // Same rungs as the kill switch it sits beside: an operator tightening or relaxing the guard
+    // usually wants it per lake, and the scheme requires Owner wherever Lake is settable.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  EnforceLakeReadGrants: makeBooleanSetting({
+    key: 'EnforceLakeReadGrants',
+    name: 'Data Lakes: Enforce read-time grant resolution',
+    defaultValue: false,
+    description:
+      'Read-time grant cutover (#1673). OFF by default = report-only: the read gate resolves a persisted READER/org grant into an ephemeral membership view and logs where it WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision stays the legacy owner/org/tag/entitlement/public rule so no one gains or loses access. NOTE: turning this ON is currently a NO-OP guarded by a source-level interlock (READ_GRANT_ENFORCEMENT_READY) - enforcement will not activate until the follow-up code (member-management write path + retrieval arm) lands and flips it, and a premature toggle just logs a warning and stays report-only. This is deliberate so the setting cannot half-enable a half-wired gate. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 94,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeDrivePoll: makeBooleanSetting({
+    key: 'EnableDataLakeDrivePoll',
+    name: 'Data Lakes: Google Drive auto re-sync poll',
+    defaultValue: false,
+    description:
+      'Server-side gate for the scheduled poll that keeps connected Google Drive folders in sync with their data lakes (adds/edits/removals). Off by default - a connected folder still syncs on demand via the Re-sync button; turn this on to also reconcile it automatically on a schedule.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 95,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnforceLakeAdmission: makeBooleanSetting({
+    key: 'EnforceLakeAdmission',
+    name: 'Data Lakes: Enforce the admission contract',
+    defaultValue: false,
+    description:
+      'Retrievability contract at admission (#1680). OFF by default = report-only: a file whose chunks ' +
+      'cannot honor the chunk policy a lake REQUIRES is logged as quarantined ([admission] lines) but ' +
+      'still joins the lake, exactly as today. ON refuses the membership write instead, so unretrievable ' +
+      'content never becomes a member and no embedding spend is incurred for it; the caller gets an error ' +
+      'naming the required and actual passage targets. Enforcement applies to NEW memberships only - ' +
+      'files already in a lake are never evicted, and no query is ever blocked on lake health, which is ' +
+      'advisory permanently. Turn this on only after the lake health report shows how many members would ' +
+      'be refused. The lake rung is the one that matters (a lake enforces its own contract); the org and ' +
+      'owner rungs enforce across every lake in that scope at once. A flip is not instantaneous: the ' +
+      'settings cache is per-instance, so it applies immediately on the instance that served the change ' +
+      'and within ~5 min (one cache TTL) everywhere else - an upload that still succeeds right after ' +
+      'turning this on is stale cache, not a broken lever.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakes',
+    // Resolved through scopeForLake, so the rungs mirror PauseLakeConvergence: the contract is the
+    // LAKE's ("the policy I require"), which is why Lake is settable here even though the chunk
+    // policy it grades against is owner-altitude and deliberately is not (see DefaultChunkSize).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
@@ -2034,13 +2299,42 @@ export const settingsMap = {
     // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
     // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
     min: MIN_PASSAGE_TOKEN_TARGET,
+    // Ceiling is the under-chunked DETECTION threshold, not the chunker's capability bound (#1804).
+    // Above it, "Rebuild passages" stops converging: files re-chunk to a target that is correct per
+    // policy but still trips detection (tokenCount > OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so the badge
+    // never reaches zero and every click destructively re-chunks and re-embeds the same files at real
+    // cost. Detection is `$gt`, so a target of exactly the threshold is safe.
+    max: OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
     description:
       'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
       'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
       'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
-      'worsen retrieval.',
+      'worsen retrieval, and values above the under-chunked detection threshold also stop "Rebuild ' +
+      'passages" converging, so the accepted range is capped there. Resolves at file-OWNER altitude: ' +
+      'an org/individual owner may pin their own ' +
+      'default above the platform value; a data lake does NOT override it (epic decision 7) - a lake ' +
+      'declares the policy it REQUIRES and a file that cannot satisfy every lake it belongs to is ' +
+      'reported as a conflict rather than silently re-chunked.',
     category: 'AI',
     order: 3,
+    // Chunk policy at file-owner altitude (#1662). Owner-only (never lake): chunks are keyed per
+    // FabFile and shared by every consumer of that file, so a lake-owned policy would rewrite
+    // chunks for non-members and a file in two lakes with different policies would oscillate. The
+    // lake is a CONSTRAINT its consumer checks, not a narrower-wins override the resolver considers.
+    // FabFile carries no organizationId, so in practice the owner (uploading user) rung and the
+    // platform base are the reachable altitudes; Organization is registered for forward-compat.
+    // clamp: model-INDEPENDENT sanity bound only (the resolver clamp is pure and cannot know the
+    // embedding model); the exact per-model embedding-window cap is enforced downstream by the
+    // chunker (effectiveChunkTokenLimit), which reduces an over-large value further if needed.
+    scope: {
+      settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      // Ceiling matches the setting's own `max` rather than MAX_PASSAGE_TOKEN_TARGET, and that is
+      // what makes the #1804 bound RETROACTIVE: `max` only rejects new writes, so a value stored
+      // above the threshold before this shipped would still resolve at its stored size and keep the
+      // rebuild badge non-convergent. Clamping here bounds resolution itself.
+      clamp: (value: number) =>
+        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
+    },
   }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',
@@ -2089,7 +2383,7 @@ export const settingsMap = {
     name: 'Abstention Prompt',
     defaultValue: ABSTENTION_PROMPT,
     description:
-      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
+      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 11,
   }),
@@ -2223,6 +2517,16 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 9,
   }),
+  FeedbackReceiveEmailNonProd: makeStringSetting({
+    key: 'FeedbackReceiveEmailNonProd',
+    name: 'Non-Production Feedback Email',
+    defaultValue: '',
+    description:
+      'Comma-separated recipient list for feedback submitted from every non-production stage (dev, staging, previews). Does not apply to a self-host install, which routes through FeedbackReceiveEmail like production. Leave empty to suppress non-production email entirely - it never falls back to the production recipient list.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 9.5,
+  }),
   FeedbackKyle: makeStringSetting({
     key: 'FeedbackKyle',
     name: 'Kyle Feedback Email',
@@ -2297,7 +2601,18 @@ export const settingsMap = {
     description: 'The webhook URL for sending feedback to the #bike4mind-feedback Slack channel.',
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
-    order: 7,
+    order: 6.75,
+    isSensitive: true,
+  }),
+  SlackNonProdFeedbackWebhookUrl: makeStringSetting({
+    key: 'SlackNonProdFeedbackWebhookUrl',
+    name: 'Non-Production Feedback Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL that receives feedback submitted from every non-production stage (dev, staging, previews). Does not apply to a self-host install, which routes through SlackFeedbackWebhookUrl like production. Leave empty to suppress non-production feedback entirely - it never falls back to the production feedback channel.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 6.8,
     isSensitive: true,
   }),
   SlackEmailAuditWebhookUrl: makeStringSetting({
@@ -2925,9 +3240,9 @@ export const settingsMap = {
   }),
   bflApiKey: makeStringSetting({
     key: 'bflApiKey',
-    name: 'BlackForest Labs API Key',
+    name: 'Black Forest Labs API Key',
     defaultValue: '',
-    description: 'The API Key for BlackForest Labs image generation service.',
+    description: 'The API Key for Black Forest Labs image generation service.',
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.IMAGE_GENERATION.id,
@@ -2961,6 +3276,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
+    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -2972,6 +3289,288 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  forcedRetrievalCharBudget: makeNumberSetting({
+    key: 'forcedRetrievalCharBudget',
+    name: 'Forced Retrieval Char Budget',
+    defaultValue: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+    min: 1_000,
+    // 100,000 is ~2x the top of the planned validation sweep (12K/24K/48K), not a technical ceiling
+    // this codebase enforces elsewhere (unlike DefaultChunkSize's max, which is tied to the
+    // under-chunked detection threshold). Without SOME max, a fat-fingered extra zero (24000 ->
+    // 240000) passes write-time validation cleanly, then silently sheds conversation history via
+    // ChatCompletionProcess's overflow-recovery loop before eventually hard-erroring - the retrieval
+    // block itself is never shed, only prior turns are, so the failure looks like unrelated context
+    // loss rather than a misconfigured setting.
+    max: 100_000,
+    description:
+      'Total characters of retrieved chunk text injected into a Data-Lake-mode turn. Measured ' +
+      'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
+      'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
+      'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
+      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
+      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
+      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 4,
+  }),
+  kbSearchDefaultResults: makeNumberSetting({
+    key: 'kbSearchDefaultResults',
+    name: 'Knowledge Base Search Default Results',
+    defaultValue: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+    min: 1,
+    // 10 is the tool's own hard ceiling (KB_SEARCH_MAX_RESULTS), which stays a coded constant -
+    // it is also the tool schema's advertised `maximum` to the model, and that schema is built
+    // synchronously, so it cannot read this setting live. A default above the ceiling would be
+    // meaningless (every call would clamp down to 10 anyway), so the write path rejects it here.
+    max: 10,
+    description:
+      'Passages the search_knowledge_base tool returns when a model call omits max_results, ' +
+      'which is most calls. This is the exact bound while kbSearchResultTokenBudget is unset (0). ' +
+      'Once a token budget is set, it takes over as the primary bound for search results (this ' +
+      "setting's own value is then unused there, though it still governs the keyword-search " +
+      'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
+      "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
+      "from its own tool schema won't ask for more than that regardless of this setting.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 5,
+    // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
+    // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
+    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  kbSearchResultTokenBudget: makeNumberSetting({
+    key: 'kbSearchResultTokenBudget',
+    name: 'Knowledge Base Search Result Token Budget',
+    defaultValue: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+    min: 0,
+    // Above this, kbSearchDefaultResults' safety ceiling (KB_SEARCH_MAX_RESULTS, the tool's hard
+    // maximum of 10 passages) always binds first, so a larger value could never be reached:
+    // KB_SEARCH_MAX_RESULTS (10) x SERVE_CHUNK_CHARS_CEILING (8000, chunking.ts), at ~4 chars/token.
+    // Deliberately NOT the codebase's own CHARS_PER_TOKEN_SERVE_BOUND (6, chunking.ts) - that
+    // constant upper-bounds chars-per-token to keep a CHARACTER budget generous; a token CEILING
+    // needs the opposite direction (fewer chars per token -> more tokens for the same text), so 6
+    // would understate the true worst case and let a real value slip past this write-time cap.
+    max: 20_000,
+    description:
+      'Approximate tokens of served passage TEXT (post-trim, post-clip - what the model actually ' +
+      'receives, not the raw stored chunk) the search_knowledge_base tool may return in one call. ' +
+      'Counted with a fixed tokenizer as a proxy, not billed against any specific model. Replaces a ' +
+      'passage count as the primary bound once set, since it is invariant to chunk size - a lake ' +
+      'chunked smaller no longer silently returns less material for the same setting. 0 (default) ' +
+      'disables it: search_knowledge_base then serves exactly kbSearchDefaultResults passages, ' +
+      'unchanged from before this setting existed. The FIRST matching passage is always returned ' +
+      'even if it alone exceeds the budget - a search that found something never returns nothing.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 6,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  kbSearchMinRelevancePct: makeNumberSetting({
+    key: 'kbSearchMinRelevancePct',
+    name: 'Knowledge Base Search Minimum Relevance (%)',
+    defaultValue: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    description:
+      'Minimum cosine relevance, as a percent, a passage must clear to be returned by ' +
+      'search_knowledge_base. 0 (default) matches current behavior (no relevance floor beyond a ' +
+      'non-negative cosine score). Raising it lets breadth adapt per query - a narrow question can ' +
+      'return fewer, more relevant passages instead of always padding out to the configured count. ' +
+      'Cosine similarity is not comparable across embedding models: a floor tuned for one model can ' +
+      'filter out an entire alternate model, when a lake mixes embedding models, more aggressively ' +
+      "than intended. Start low and raise gradually while watching the tool's own retrieval-" +
+      'skipped notices.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 7,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  LakeAccessAuditRetentionDays: makeNumberSetting({
+    key: 'LakeAccessAuditRetentionDays',
+    name: 'Lake Access Audit Retention (days)',
+    defaultValue: LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+    // The enforced floor: the admin API rejects a save below this, and the write path
+    // (lakeAccessEventRepository.record) clamps to it unconditionally regardless of what is
+    // stored, so this control cannot be used to shorten the audit trail below the floor.
+    min: LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake access audit event (who read a lake, and when) is retained, in days. Has a ' +
+      'floor of 450 days (12 months live plus a Type II observation tail) - this is a platform-wide ' +
+      'value, not per-organization, until a scoped settings resolver exists. Applies only to events ' +
+      'written after a change: expiresAt is computed once at write time and is immutable, so ' +
+      'raising or lowering this value never affects rows already recorded.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 1,
+  }),
+  LakeAccessQueryTextRetentionDays: makeNumberSetting({
+    key: 'LakeAccessQueryTextRetentionDays',
+    name: 'Lake Access Query Text Retention (days)',
+    defaultValue: LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+    min: LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+    max: LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+    description:
+      'How long the opt-in query-text log (the natural-language question behind a lake retrieval) ' +
+      'is retained, in days. Always resolved shorter than the audit event retention itself, ' +
+      'regardless of this value, since the query text is more sensitive than the event metadata. ' +
+      'Applies only to events written after a change - already-recorded rows keep the expiry ' +
+      'computed at write time and are not retroactively shortened or extended.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 2,
+  }),
+  LakeConfigAuditRetentionDays: makeNumberSetting({
+    key: 'LakeConfigAuditRetentionDays',
+    name: 'Lake Config Change Audit Retention (days)',
+    defaultValue: LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+    // Same enforcement shape as the access retention above: the admin API rejects a save below
+    // this, and the write path (lakeConfigChangeEventRepository.record) clamps to it
+    // unconditionally regardless of what is stored.
+    min: LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake CONFIG-change event (who changed a lake, what they changed, and which ' +
+      'manage rung authorized it) is retained, in days. Floored at 1095 days - deliberately ' +
+      'longer than the access-audit retention above, because a config change is rare and alters ' +
+      'every future answer the lake gives, where a read is one turn. Platform-wide, not ' +
+      'per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 3,
+  }),
+  // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
+  // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only
+  // when a setting is absent, and resolveSpendLevers (dataLakeService) halts - never resumes at
+  // a default - on an unparseable stored value. Rails (max) mirror the MAX_* constants.
+  dataLakeEmbeddingSpendEnabled: makeBooleanSetting({
+    key: 'dataLakeEmbeddingSpendEnabled',
+    name: 'Data Lake Embedding Spend Enabled',
+    defaultValue: true,
+    description:
+      'Master switch for data-lake embedding spend (ingestion, reprocessing, convergence). Off halts all provider embedding calls on those paths; cached embeddings still apply.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 1,
+  }),
+  dataLakeEmbeddingBudgetPerRunUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerRunUsd',
+    name: 'Embedding Budget Per Run (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX,
+    description:
+      'Most USD one ingestion/reprocess run (upload batch) may spend on embedding calls. 0 stops runs from spending at all.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 2,
+  }),
+  dataLakeEmbeddingBudgetPerLakeUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerLakeUsd',
+    name: 'Embedding Budget Per Lake (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX,
+    description:
+      'Most USD one data lake may spend on embedding calls over its lifetime. 0 stops all spend for every lake.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 3,
+  }),
+  dataLakeEmbeddingBudgetPerPeriodUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerPeriodUsd',
+    name: 'Embedding Budget Per Period (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX,
+    description:
+      'Most USD the whole platform may spend on data-lake embedding calls per rolling period (see the period-hours setting). 0 stops all spend.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 4,
+  }),
+  dataLakeEmbeddingBudgetPeriodHours: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPeriodHours',
+    name: 'Embedding Budget Period (hours)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT,
+    min: 1,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX,
+    description:
+      'Length of the per-period budget window in hours. Not a spend value itself, so 0 is not meaningful here (min 1).',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 5,
+  }),
+  dataLakeEmbeddingMaxCallsPerMinute: makeNumberSetting({
+    key: 'dataLakeEmbeddingMaxCallsPerMinute',
+    name: 'Embedding Max Calls Per Minute',
+    defaultValue: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX,
+    description:
+      'Most provider embedding API calls per minute across all data-lake work. The real throttle in front of the embed call (the queue concurrency in infra is a deploy-time constant, not this lever). 0 stops all calls.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 6,
+  }),
+  dataLakeEmbeddingMaxTokensPerMinute: makeNumberSetting({
+    key: 'dataLakeEmbeddingMaxTokensPerMinute',
+    name: 'Embedding Max Tokens Per Minute',
+    defaultValue: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX,
+    description:
+      'Most provider embedding TOKENS per minute across all data-lake work, which is the quantity providers actually meter. The calls-per-minute lever alone does not bound this: one call carries a whole batch of passages. Set it from your provider dashboard TPM, leaving headroom for query-side embedding (exempt, so a search never queues behind a backfill). 0 stops all calls.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 7,
+  }),
+  dataLakeVectorizeChunkBatchSize: makeNumberSetting({
+    key: 'dataLakeVectorizeChunkBatchSize',
+    name: 'Vectorize Chunk Batch Size',
+    defaultValue: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
+    min: 1,
+    max: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX,
+    description:
+      'How many chunks the chunk handler packs into one vectorize-queue message. Smaller batches smooth the fan-out; not a spend value, so min 1.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 8,
+  }),
+  // Cost tiers (#1675). Multipliers, not budgets, so the tunable value is the RATIO between the
+  // two economic cases. Same spend-lever discipline as the budgets they scale: 0 is a valid stop.
+  dataLakeEmbeddingTierMultiplierIndividual: makeNumberSetting({
+    key: 'dataLakeEmbeddingTierMultiplierIndividual',
+    name: 'Cost Tier Multiplier - Individual-Owned Lakes',
+    defaultValue: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+    description:
+      'Scales the per-run and per-lake embedding budgets for lakes owned by an individual user. ' +
+      '1 means those lakes get exactly the configured budgets; 0 stops them spending at all. ' +
+      'The effective budget is still capped by the same hard rail as the untiered value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 9,
+  }),
+  dataLakeEmbeddingTierMultiplierOrganization: makeNumberSetting({
+    key: 'dataLakeEmbeddingTierMultiplierOrganization',
+    name: 'Cost Tier Multiplier - Organization-Owned Lakes',
+    defaultValue: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+    description:
+      'Scales the per-run and per-lake embedding budgets for lakes owned by an organization, ' +
+      'which serve a whole team rather than one person. 0 stops org-owned lakes spending at all. ' +
+      'The effective budget is still capped by the same hard rail as the untiered value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 10,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
@@ -3757,6 +4356,46 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 6,
+  }),
+  prReportRepo: makeStringSetting({
+    key: 'prReportRepo',
+    name: 'PR Report Repository',
+    defaultValue: '',
+    description:
+      'The `owner/repo` whose open pull requests the PR status digest reports on. Validated against an anchored GitHub repo grammar before it is interpolated into any authenticated outbound URL (SSRF guard) - a value with an empty or `..` segment is rejected.',
+    category: 'Admin',
+    order: 141,
+  }),
+  prReportIdentityMap: makeStringSetting({
+    key: 'prReportIdentityMap',
+    name: 'PR Report Identity Map',
+    defaultValue: '',
+    description:
+      'Maps GitHub logins and synthetic role keys (`qa_*`, `devops_*`, `reviewer_*`) to Slack member IDs, one mapping per line. Accepts `key value`, `key=value` or `key: value`; blank and `#` comment lines are ignored. Values must be real Slack member IDs - display names do not produce notification mentions.',
+    category: 'Admin',
+    order: 142,
+  }),
+  prReportWebhookUrl: makeStringSetting({
+    key: 'prReportWebhookUrl',
+    name: 'PR Report Slack Webhook URL',
+    defaultValue: '',
+    isSensitive: true,
+    description:
+      'Slack Incoming Webhook URL the PR status digest posts to (https://hooks.slack.com/services/...). It already encodes its channel and workspace, so no bot token or channel ID is needed to send. Bearer-equivalent: anyone holding it can post to the channel, so it is stored encrypted and never returned to the browser.',
+    category: 'Slack',
+    order: 143,
+  }),
+  prReportEgressAllowlist: makeObjectSetting({
+    key: 'prReportEgressAllowlist',
+    name: 'PR Report Egress Allowlist',
+    defaultValue: { hosts: ['hooks.slack.com'] },
+    description:
+      'Hosts the PR digest may post to, checked against the webhook URL its own hostname. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Slack incoming webhooks live at hooks.slack.com, so that is the default.',
+    category: 'Slack',
+    order: 144,
+    schema: z.object({
+      hosts: z.array(z.string()).default([]),
+    }),
   }),
   // Add more settings as needed
 } satisfies {

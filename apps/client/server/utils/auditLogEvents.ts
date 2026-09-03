@@ -76,3 +76,11 @@ export enum AdminOrgAuditEvents {
   // recipient's id. Without this event the grant side of that pair has no actor recorded.
   ORG_GROUP_INVITE_CREATED = 'ORG_GROUP_INVITE_CREATED',
 }
+
+export enum DataLakeAuditEvents {
+  // Permanent, unrecoverable destruction of one lake document plus its chunks and vectors. Audited
+  // because a deletion nobody can point at afterwards is indistinguishable from one that never ran:
+  // the payload carries the verification counts the sweep read back, so the record answers "was it
+  // actually destroyed", not just "was it requested".
+  LAKE_DOCUMENT_PURGED = 'LAKE_DOCUMENT_PURGED',
+}

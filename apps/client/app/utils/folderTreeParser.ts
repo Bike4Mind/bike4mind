@@ -59,7 +59,9 @@ export const DEFAULT_EXCLUDED_PATTERNS = [
   '.gitignore',
 ];
 
-const FILE_TYPE_MAP: Record<string, string> = {
+/** Exported (not module-private) so other surfaces - e.g. the wizard's upload-time cost
+ * estimate - reuse this exact extension-to-category mapping rather than hand-copying it. */
+export const FILE_TYPE_MAP: Record<string, string> = {
   // Documents
   pdf: 'PDF',
   // Word
@@ -252,6 +254,11 @@ function getExtension(fileName: string): string {
   const dotIndex = fileName.lastIndexOf('.');
   if (dotIndex === -1 || dotIndex === fileName.length - 1) return '';
   return fileName.slice(dotIndex + 1).toLowerCase();
+}
+
+/** The FILE_TYPE_MAP category for a file name ('Other' when the extension is unmapped). */
+export function categoryForFile(fileName: string): string {
+  return FILE_TYPE_MAP[getExtension(fileName)] || 'Other';
 }
 
 /**

@@ -12,9 +12,7 @@ beforeAll(async () => {
   mongod = await createMongoServer();
   await mongoose.connect(mongod.getUri());
   await UserApiKey.syncIndexes();
-  // Deliberately no CcBridgeDevice.syncIndexes(): its userId_lastSeenAt_active
-  // partial index uses `$exists: false`, which Mongo rejects in a
-  // partialFilterExpression. Pre-existing and unrelated to revocation.
+  await CcBridgeDevice.syncIndexes();
 });
 
 afterAll(async () => {

@@ -7,7 +7,7 @@ export const ProjectManagerAgent = (config?: ServerAgentConfig): ServerAgentDefi
   description:
     'Project management via Jira and Confluence (create issues, search, update status, manage attachments, write docs). ALWAYS delegate Jira/Confluence requests to this agent — you do not have direct access to these tools',
   model: config?.model ?? ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
-  fallbackModels: [ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
+  fallbackModels: [ChatModels.CLAUDE_4_6_SONNET, ChatModels.GPT4_1, ChatModels.GPT4_1_MINI],
   defaultThoroughness: config?.defaultThoroughness ?? 'medium',
   maxIterations: { quick: 3, medium: 8, very_thorough: 15 },
   allowedTools: ['atlassian__*', ...(config?.extraAllowedTools ?? [])],

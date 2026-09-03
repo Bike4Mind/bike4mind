@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import mongoose from 'mongoose';
 import { KnowledgeType, type DataLakeMembershipScope } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
+import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
 import { FabFile, fabFileRepository } from './FabFileModel';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -115,7 +116,20 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(await fabFileRepository.computeDataLakeStats(metaOnlyScope)).toEqual({
         fileCount: 1,
         totalSizeBytes: 100,
+        totalChunkedChars: 0,
       });
+    });
+
+    it('sums member files chunkedCharCount, treating missing as 0', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { chunkedCharCount: 1200 } });
+      // prefixOwned deliberately left without the field (legacy doc).
+      // Stranger-owned rows must not contribute even when stamped:
+      await FabFile.updateOne({ _id: rows.unrelated._id }, { $set: { chunkedCharCount: 999 } });
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+
+      expect(stats.totalChunkedChars).toBe(1200);
     });
 
     it('ignores archived and deleted members', async () => {
@@ -136,6 +150,237 @@ describe('FabFile data lake lifecycle membership', () => {
 
       expect(stats.fileCount).toBe(1);
       expect(stats.totalSizeBytes).toBe(100);
+    });
+
+    it('bounds the prefix-arm scan on userId instead of examining every stranger sharing the tag prefix (#1793)', async () => {
+      // autoIndex builds in the background on connect; explicitly await it here so the hints
+      // below can rely on both candidate indexes actually existing.
+      await FabFile.createIndexes();
+      await seedLakeRows();
+      const strangers = await Promise.all(
+        Array.from({ length: 50 }, (_, i) =>
+          makeFile({ fileName: `stranger-${i}.txt`, userId: STRANGER, tags: [{ name: `acme:stranger-${i}` }] })
+        )
+      );
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+      // Sanity: the 50 strangers must not be counted, matching the exclusion pinned above.
+      expect(stats.fileCount).toBe(2);
+
+      // Derived from the REAL buildDataLakeMembershipFilter output (its second $or branch is the
+      // prefix arm's $and of [tag regex, userId]), isolated from the meta-tag arm so the
+      // comparison below is not muddied by an $or plan. Deriving rather than hand-copying means
+      // this test cannot drift out of sync if that predicate's shape ever changes.
+      type PrefixArmShape = {
+        $or: [Record<string, unknown>, { $and: [Record<string, unknown>, Record<string, unknown>] }];
+      };
+      const membership = buildDataLakeMembershipFilter(scope) as PrefixArmShape;
+      const [tagCondition, userCondition] = membership.$or[1].$and;
+      const prefixArmFilter = {
+        ...tagCondition,
+        ...userCondition,
+        deletedAt: null,
+        archivedAt: null,
+        status: { $ne: 'pending' },
+      };
+
+      // Compare the two candidate indexes directly via hint, rather than trusting the planner's
+      // natural choice: on a collection this small the cost-based planner may prefer a plain
+      // COLLSCAN over either index regardless of which is better, which would make a
+      // planner-choice assertion flaky. Forcing each index isolates exactly what this PR changes:
+      // whether userId or tags.name leads the compound key.
+      const viaOldIndex = await FabFile.collection
+        .find(prefixArmFilter)
+        .hint('tags.name_1_archivedAt_1_deletedAt_1')
+        .explain('executionStats');
+      const viaNewIndex = await FabFile.collection
+        .find(prefixArmFilter)
+        .hint('userId_1_tags.name_1_archivedAt_1_deletedAt_1')
+        .explain('executionStats');
+
+      // Old index: tags.name leads, so the range covers this creator's file plus all 50
+      // strangers; userId is checked only after fetching each candidate.
+      expect(viaOldIndex.executionStats.totalDocsExamined).toBeGreaterThanOrEqual(strangers.length);
+      // New index: userId leads, bounding the scan to this creator's own matching documents.
+      expect(viaNewIndex.executionStats.totalDocsExamined).toBeLessThan(strangers.length);
+      expect(viaNewIndex.executionStats.totalDocsExamined).toBeLessThan(viaOldIndex.executionStats.totalDocsExamined);
+    });
+  });
+
+  // #1040: the single-lake browse (fabFileRepository.search with lakeMembership +
+  // restrictToDataLake, what GET /api/data-lakes/:id/articles runs) must agree with
+  // computeDataLakeStats above about who is a member - a file only reached through a share or a
+  // group grant is excluded from the listing itself, not merely from the count, so it can never
+  // be "listed but unremovable".
+  describe('search under a single-lake browse scope (lakeMemberships)', () => {
+    const pagination = { page: 1, limit: 20 };
+    const order = { by: 'fileName', direction: 'asc' } as const;
+
+    it('lists exactly the members computeDataLakeStats counts, excluding every stranger-owned prefix match', async () => {
+      const rows = await seedLakeRows();
+
+      const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        userGroups: [CREATOR_GROUP],
+        lakeMemberships: [scope],
+        restrictToDataLake: true,
+      });
+
+      expect(result.data.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+      const listedIds = result.data.map(f => f.id);
+      for (const id of rows.strangerIds) {
+        expect(listedIds).not.toContain(id);
+      }
+    });
+  });
+
+  // #2243: retrieval must resolve a dynamic lake's prefix arm against THAT LAKE'S CREATOR, exactly
+  // as membership does - never against the caller, and never as a bare prefix. These drive the
+  // real query (not just inspect a filter object), because only the executed search proves the
+  // tenancy boundary through casting and executeSearch.
+  describe('lakeMemberships parity with buildDataLakeMembershipFilter (#2243)', () => {
+    const pagination = { page: 1, limit: 20 };
+    const order = { by: 'fileName', direction: 'asc' } as const;
+    const VIEWER = 'u-viewer-not-creator';
+
+    it('a non-creator VIEWER reaches the prefix-only member only once lakeMemberships replaces the caller-anchored arm', async () => {
+      await seedLakeRows();
+
+      // Old shape: the meta-tag arm alone. This is what the caller-anchored `scopedTagPrefixes`
+      // option degraded to for a non-creator - its prefix arm was `prefix AND base access`, a
+      // strict subset of an arm already present, so it could never admit a creator-owned file.
+      // Only the lake arm differs between "before" and "after" here.
+      const before = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+      });
+      expect(before.data.map(f => f.fileName).sort()).toEqual(['meta.txt']);
+
+      // New shape: the creator-anchored membership arm reaches the prefix-only member too.
+      const after = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+      expect(after.data.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+    });
+
+    it("a VIEWER's search total equals the single-lake browse's own total for the same lake and caller", async () => {
+      await seedLakeRows();
+
+      const browse = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        userGroups: [CREATOR_GROUP],
+        lakeMemberships: [scope],
+        restrictToDataLake: true,
+      });
+      const viewerRetrieval = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+
+      // Precondition this equality relies on: seedLakeRows() seeds no pending and no
+      // session-scoped row, so buildFabFileSearchQuery's (status-blind) filter and
+      // computeDataLakeStats's ($ne: 'pending') filter would otherwise disagree - see
+      // dataLakeLifecycle's own note on why an unqualified fileCount comparison is unsound.
+      expect(viewerRetrieval.total).toBe(browse.total);
+      expect(viewerRetrieval.data.map(f => f.fileName).sort()).toEqual(browse.data.map(f => f.fileName).sort());
+    });
+
+    it('two lakes sharing a prefix under DIFFERENT creators never cross - each caller sees only their own creator arm', async () => {
+      await seedLakeRows();
+      const otherCreator = 'u-other-creator';
+      const otherTag = 'datalake:org2:globex-docs';
+      await makeFile({
+        fileName: 'other-meta.txt',
+        userId: otherCreator,
+        tags: [{ name: otherTag }],
+      });
+      const otherPrefixOwned = await makeFile({
+        fileName: 'other-prefix-owned.txt',
+        userId: otherCreator,
+        tags: [{ name: 'acme:other-report' }], // SAME prefix as `scope`, different creator
+      });
+      const otherScope: DataLakeMembershipScope = {
+        datalakeTag: otherTag,
+        fileTagPrefix: 'acme:',
+        creatorUserId: otherCreator,
+      };
+
+      const asOriginalCreatorViewer = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+      expect(asOriginalCreatorViewer.data.map(f => f.fileName)).not.toContain('other-prefix-owned.txt');
+
+      const asOtherCreatorViewer = await fabFileRepository.search(VIEWER, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [otherTag],
+        lakeMemberships: [otherScope],
+      });
+      expect(asOtherCreatorViewer.data.map(f => f.fileName)).not.toContain('prefix-owned.txt');
+      expect(asOtherCreatorViewer.data.map(f => f.fileName)).not.toContain('unrelated.txt');
+      const otherIds = asOtherCreatorViewer.data.map(f => f.id);
+      expect(otherIds).toContain(otherPrefixOwned._id.toString());
+    });
+
+    it('a file matching both a caller membership arm and their own ownership is returned once', async () => {
+      await seedLakeRows();
+      // The creator IS the searching viewer here, so prefix-owned.txt matches both the bare
+      // {userId} base-access arm AND the membership arm - dedupe must collapse it to one row.
+      const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        dataLakeTags: [DATALAKE_TAG],
+        lakeMemberships: [scope],
+      });
+      const names = result.data.map(f => f.fileName);
+      expect(names.filter(n => n === 'prefix-owned.txt')).toHaveLength(1);
+      expect(result.total).toBe(names.length);
+    });
+
+    it("an empty creatorUserId under restrictToDataLake matches meta-tagged only, never the caller's own colliding-prefix file", async () => {
+      await seedLakeRows();
+      // The CREATOR's own file is prefix-owned.txt (tag acme:report) - if the empty-creator scope
+      // fell through to matching the caller, this would wrongly include it.
+      const creatorlessScope: DataLakeMembershipScope = {
+        datalakeTag: DATALAKE_TAG,
+        fileTagPrefix: 'acme:',
+        creatorUserId: '',
+      };
+      const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        lakeMemberships: [creatorlessScope],
+        restrictToDataLake: true,
+      });
+      expect(result.data.map(f => f.fileName)).toEqual(['meta.txt']);
+    });
+
+    it('a prefix carrying regex metacharacters matches literally, not as a pattern', async () => {
+      const weirdCreator = 'u-weird-creator';
+      const weirdTag = 'datalake:org1:weird';
+      await makeFile({
+        fileName: 'weird-owned.txt',
+        userId: weirdCreator,
+        tags: [{ name: 'a.b+c:report' }],
+      });
+      await makeFile({
+        fileName: 'weird-not-a-match.txt',
+        userId: weirdCreator,
+        tags: [{ name: 'aXbYc:report' }], // would match the UNESCAPED `.` and `+` as regex metachars
+      });
+      const weirdScope: DataLakeMembershipScope = {
+        datalakeTag: weirdTag,
+        fileTagPrefix: 'a.b+c:',
+        creatorUserId: weirdCreator,
+      };
+      const result = await fabFileRepository.search(weirdCreator, '', {}, pagination, order, {
+        includeShared: true,
+        lakeMemberships: [weirdScope],
+        restrictToDataLake: true,
+      });
+      expect(result.data.map(f => f.fileName)).toEqual(['weird-owned.txt']);
     });
   });
 
@@ -158,9 +403,72 @@ describe('FabFile data lake lifecycle membership', () => {
       }
     });
 
-    it('restores everything it archived, so no member is stranded', async () => {
+    it('restores everything it archived when the stamp names it', async () => {
+      const rows = await seedLakeRows();
+      const STAMP = new Date('2026-06-01T00:00:00.000Z');
+
+      await fabFileRepository.archiveByDataLakeTag(scope, STAMP);
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, STAMP);
+
+      expect(restored).toBe(2);
+      for (const id of rows.memberIds) {
+        expect((await readRaw(id))?.archivedAt ?? null).toBeNull();
+      }
+    });
+
+    it('leaves a differently-stamped prefix member untouched - a sibling lake, or a self-drifted stamp the mechanism cannot tell apart from one', async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const OTHER_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      // prefixOwned carries no meta-tag, so it is reachable ONLY through the ambiguous prefix arm -
+      // exactly the row a prefix-sharing sibling's own archive could also have stamped this way.
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: OTHER_STAMP } });
+
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(restored).toBe(0);
+      expect((await readRaw(rows.prefixOwned._id.toString()))?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+    });
+
+    it('leaves a differently-stamped META-TAGGED member untouched too, proving the bound is not exempt on that arm', async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const OTHER_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: OTHER_STAMP } });
+
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(restored).toBe(0);
+      expect((await readRaw(rows.metaTagged._id.toString()))?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+    });
+
+    it('leaves a co-owned member archived when a lake it ALSO belongs to swept it first (addFileToLake allows multi-lake meta-tag membership)', async () => {
+      // A file can carry more than one lake's meta-tag at once - addFileToLake has no exclusivity
+      // check. Lake B's sweep only touches archivedAt: null rows, so once B archives this file
+      // under its own stamp, lake A's own (unrelated) archive/unarchive cycle must not touch it,
+      // even though A's meta-tag arm matches it unconditionally on membership.
+      const SIBLING_TAG = 'datalake:org1:sibling-lake';
+      const coMember = await makeFile({
+        fileName: 'co-member.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+      });
+      const SIBLING_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: SIBLING_STAMP } });
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(restored).toBe(0);
+      expect((await readRaw(coMember._id.toString()))?.archivedAt?.getTime()).toBe(SIBLING_STAMP.getTime());
+    });
+
+    it('falls back to unbounded when this lake has no stamp at all (legacy, pre-mark lake)', async () => {
       const rows = await seedLakeRows();
 
+      // archiveByDataLakeTag with no `at` still writes a real per-row timestamp (orphaned, no lake
+      // names it) - the lake itself passes `undefined` below, as it would for a lake torn down
+      // before `filesArchivedAt` existed.
       await fabFileRepository.archiveByDataLakeTag(scope);
       const restored = await fabFileRepository.unarchiveByDataLakeTag(scope);
 
@@ -170,7 +478,38 @@ describe('FabFile data lake lifecycle membership', () => {
       }
     });
 
-    it('finds archived members for the unarchive dedup pass', async () => {
+    it('sends the equality bound to Mongo, not just an end-state that could pass by luck', async () => {
+      await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const spy = vi.spyOn(FabFile, 'updateMany');
+
+      await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const filter = spy.mock.calls[0][0] as Record<string, unknown>;
+      expect(filter.archivedAt).toBe(OWN_STAMP);
+      spy.mockRestore();
+    });
+
+    it("is safe to retry after a completed sweep: a second call does not free a sibling's differently-stamped member", async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const SIBLING_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      await fabFileRepository.archiveByDataLakeTag(scope, OWN_STAMP);
+      // Simulates a sibling lake's own archive on the shared prefix, stamped differently.
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: SIBLING_STAMP } });
+
+      const first = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+      // The retry a crash-then-re-entry would produce: the bounded pass now matches nothing of
+      // ours (already cleared), which must NOT fall back to freeing the sibling's row.
+      const second = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(first).toBe(1);
+      expect(second).toBe(0);
+      expect((await readRaw(rows.prefixOwned._id.toString()))?.archivedAt?.getTime()).toBe(SIBLING_STAMP.getTime());
+    });
+
+    it('finds archived members for the unarchive dedup pass, unbounded when no stamp is given', async () => {
       await seedLakeRows();
       await fabFileRepository.archiveByDataLakeTag(scope);
 
@@ -179,14 +518,174 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(found.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
     });
 
-    it('hasArchivedByDataLakeTag reports existence without materializing the rows', async () => {
+    it('excludes a differently-stamped member from the dedup read when a stamp is given, so it cannot be nominated as a duplicate and soft-deleted', async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const SIBLING_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      await fabFileRepository.archiveByDataLakeTag(scope, OWN_STAMP);
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: SIBLING_STAMP } });
+
+      const found = await fabFileRepository.findArchivedByDataLakeTag(scope, OWN_STAMP);
+
+      expect(found.map(f => f.fileName)).toEqual(['meta.txt']);
+    });
+
+    it('hasArchivedMemberExclusiveToDataLakeTag reports existence without materializing the rows', async () => {
       await seedLakeRows();
 
-      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(false);
+      expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(scope)).toBe(false);
 
       await fabFileRepository.archiveByDataLakeTag(scope);
 
-      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(true);
+      expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(scope)).toBe(true);
+    });
+
+    describe('hasArchivedMemberExclusiveToDataLakeTag - excluding a co-owning lake (#1729)', () => {
+      const SIBLING_TAG = 'datalake:org1:sibling-lake';
+
+      it("ignores an archived member that also carries another lake's meta-tag - it is that lake's under its own stamp, not this lake's orphan", async () => {
+        const coMember = await makeFile({
+          fileName: 'co-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('agrees with the meta-only call site when passed the full scope (meta + prefix arm), even though the real caller never does', async () => {
+        // archiveDataLake.ts always calls with the meta-tag alone (see its own comment on why the
+        // full scope would trip on every second archiver in a live collision) - this just confirms
+        // the exclusion is not accidentally meta-only-scope-specific, in case a future caller
+        // passes the full scope.
+        const coMember = await makeFile({
+          fileName: 'co-member-full-scope.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(scope)).toBe(false);
+      });
+
+      it("still reports a row carrying ONLY this lake's meta-tag, the genuine legacy orphan the guard exists to protect", async () => {
+        // The unrelated tag matters: it keeps this test from passing by accident if the namespace
+        // regex were ever dropped entirely (which would exclude on ANY second tag, not just
+        // another lake's).
+        const mineOnly = await makeFile({
+          fileName: 'mine-only.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'unrelated-content-tag' }],
+        });
+        await FabFile.updateOne({ _id: mineOnly._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(true);
+      });
+
+      it("ignores a row carrying THREE lakes' meta-tags", async () => {
+        const triMember = await makeFile({
+          fileName: 'tri-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }, { name: 'datalake:org1:third-lake' }],
+        });
+        await FabFile.updateOne({ _id: triMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('decides per row: a genuine mine-only orphan still reports true alongside a co-tagged archived row', async () => {
+        const mineOnly = await makeFile({ fileName: 'mine-only.txt', userId: CREATOR, tags: [{ name: DATALAKE_TAG }] });
+        await FabFile.updateOne({ _id: mineOnly._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+        const coMember = await makeFile({
+          fileName: 'co-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(true);
+      });
+
+      it('does not trip on a co-tagged row that is not archived at all', async () => {
+        await makeFile({
+          fileName: 'co-member-live.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('folds case on the namespace, so a mixed-case sibling meta-tag still excludes the row', async () => {
+        const coMember = await makeFile({
+          fileName: 'co-member-mixed-case.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'DATALAKE:Org1:Sibling' }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it("treats a case-variant of THIS LAKE'S OWN tag as another lake's - the deliberate degenerate direction, since no lake can hold a non-canonical meta-tag anyway", async () => {
+        const variant = await makeFile({
+          fileName: 'own-tag-case-variant.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'DataLake:Org1:Acme-Docs' }],
+        });
+        await FabFile.updateOne({ _id: variant._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('lets lake A claim its own stamp so its bounded unarchive leaves the co-owned member archived, instead of the unbounded fallback freeing it', async () => {
+        const coMember = await makeFile({
+          fileName: 'co-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        const SIBLING_STAMP = new Date('2026-05-01T00:00:00.000Z');
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: SIBLING_STAMP } });
+        const liveOwnMember = await makeFile({
+          fileName: 'own-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }],
+        });
+        const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+
+        // What archiveDataLake's guard asks before deciding to claim: false here means "claim".
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+
+        // The sweep only touches archivedAt: null rows, so the already-archived co-member is
+        // never re-stamped - it archives just the live member under lake A's OWN stamp.
+        expect(await fabFileRepository.archiveByDataLakeTag(scope, OWN_STAMP)).toBe(1);
+        expect(await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP)).toBe(1);
+        expect((await readRaw(liveOwnMember._id.toString()))?.archivedAt ?? null).toBeNull();
+        expect((await readRaw(coMember._id.toString()))?.archivedAt?.getTime()).toBe(SIBLING_STAMP.getTime());
+
+        // Naming the damage the claim prevents: the unbounded call a permanently-unstamped lake
+        // (the pre-fix behavior) would have made instead frees the co-owner's row.
+        expect(await fabFileRepository.unarchiveByDataLakeTag(scope)).toBe(1);
+        expect((await readRaw(coMember._id.toString()))?.archivedAt ?? null).toBeNull();
+      });
+    });
+
+    describe('hasArchivedMemberExclusiveToDataLakeTag - the residual prefix-arm limitation, ratified not fixed (#1729)', () => {
+      it("still reports true for a row carrying ONLY this lake's meta-tag that a prefix-sharing sibling's own sweep independently archived - no per-file attribution exists to tell the two apart", async () => {
+        // No second DataLake document is needed: the probe only reads FabFile tags/archivedAt, so
+        // a row satisfying a sibling's PREFIX arm (same creator, a tag under a shared prefix) while
+        // carrying ONLY this lake's META tag is indistinguishable here from a genuine orphan -
+        // that is precisely the accepted limitation this test pins.
+        const prefixArmVictim = await makeFile({
+          fileName: 'prefix-arm-victim.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'acme:shared-prefix-content' }],
+        });
+        await FabFile.updateOne({ _id: prefixArmVictim._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(true);
+      });
     });
   });
 
@@ -539,6 +1038,83 @@ describe('FabFile data lake lifecycle membership', () => {
       await fabFileRepository.hardDeleteByDataLakeTag(scope);
 
       expect(await fabFileRepository.hardDeleteByDataLakeTag(scope)).toEqual([]);
+    });
+  });
+
+  /**
+   * The read the lake-memory extraction producer pages the lake with. It exists because the producer
+   * used to resolve every id the lake had ever held and then hydrate all of them UNPROJECTED, so
+   * `content`/`chunks`/`vector` reached the Lambda before the per-run cap applied - GBs on a large
+   * lake, killed before its own deadline guard could yield, and killed again on every redelivery.
+   * These pin the three properties that fix rests on: metadata only, live only, and bounded.
+   */
+  describe('findLakeMemoryExtractionMembers', () => {
+    const page = (options: { after?: string | null; limit: number }) =>
+      fabFileRepository.findLakeMemoryExtractionMembers(scope, options);
+
+    it('returns both membership arms and no stranger-owned prefix match', async () => {
+      const rows = await seedLakeRows();
+
+      const members = await page({ limit: 100 });
+
+      expect(members.map(m => m.fabFileId).sort()).toEqual([...rows.memberIds].sort());
+    });
+
+    it('projects the three fields the producer reads and NONE of the heavy payload', async () => {
+      const rows = await seedLakeRows();
+      // A member carrying every field the old unprojected read would have pulled into the Lambda.
+      //
+      // The RAW DRIVER, not `FabFile.updateOne`: none of `content`, `chunks` or `vector` is a declared
+      // path on FabFileSchema, so mongoose strict mode drops all three from the update silently (the
+      // same footgun the `sourceType` comment at the schema's provenance block records). Seeding through
+      // mongoose leaves the document with no heavy payload at all, which makes the assertion below pass
+      // for the wrong reason - it would still pass with `content: 1` added to the projection. The raw
+      // driver is also how these fields reach production documents in the first place.
+      await FabFile.collection.updateOne(
+        { _id: rows.metaTagged._id },
+        { $set: { content: 'x'.repeat(50_000), chunks: ['a', 'b'], vector: [0.1, 0.2, 0.3] } }
+      );
+
+      const [member] = await page({ limit: 1 });
+
+      expect(Object.keys(member).sort()).toEqual(['fabFileId', 'fileName', 'tags']);
+      expect(member.tags).toEqual([{ name: DATALAKE_TAG }]);
+    });
+
+    it('excludes soft-deleted and archived members in the DATABASE, not after hydration', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { deletedAt: new Date() } });
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: new Date() } });
+
+      // Contrast with its lifecycle sibling, which deliberately reports both (the chunk sweep needs
+      // them). A tombstone must never consume one of the producer's capped run slots.
+      expect(await page({ limit: 100 })).toEqual([]);
+      expect((await fabFileRepository.findIdsByDataLakeTag(scope)).sort()).toEqual([...rows.memberIds].sort());
+    });
+
+    it('pages forward from the keyset cursor in _id order and honors the limit', async () => {
+      const rows = await seedLakeRows();
+      const ascending = [...rows.memberIds].sort();
+
+      const first = await page({ limit: 1 });
+      expect(first.map(m => m.fabFileId)).toEqual([ascending[0]]);
+
+      const second = await page({ after: first[0].fabFileId, limit: 1 });
+      expect(second.map(m => m.fabFileId)).toEqual([ascending[1]]);
+
+      // Past the last member: an exhausted page is empty, which is how the producer learns the scan
+      // is complete and clears its cursor.
+      expect(await page({ after: ascending[1], limit: 1 })).toEqual([]);
+    });
+
+    it('ignores an unparseable cursor instead of throwing the run into the DLQ', async () => {
+      const rows = await seedLakeRows();
+
+      // A re-scan is merely wasteful (the producer's ledger append de-dups); a cast error would fail
+      // the invocation, and SQS would redeliver it to the same cast error.
+      const members = await page({ after: 'not-an-objectid', limit: 100 });
+
+      expect(members.map(m => m.fabFileId).sort()).toEqual([...rows.memberIds].sort());
     });
   });
 

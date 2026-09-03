@@ -14,7 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { liveopsTriageConfigRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { GitHubService } from '@server/services/githubService';
 import { SlackClient } from '@bike4mind/slack';
 import { apiKeyService } from '@bike4mind/services';
@@ -36,13 +36,6 @@ interface HealthCheckResult {
     details?: Record<string, unknown>;
   }>;
   timestamp: string;
-}
-
-/**
- * Validate ObjectId format
- */
-function isValidObjectId(id: string): boolean {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
 }
 
 const handler = baseApi().get(async (req, res) => {
