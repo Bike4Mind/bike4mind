@@ -17,7 +17,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
-import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
@@ -589,7 +589,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async findAllInIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllInIds') } });
     return result.map(d => d.toObject());
   }
 
@@ -671,8 +671,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return await super.find(filter, { content: 0 });
   }
 
+  /** Without this guard a CastError here is remapped by the API error handler into a confusing 404 on the notebook file list. */
   async findAllByIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
   }
 
@@ -1397,6 +1398,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * membership + liveness filter as computeDataLakeStats, and only members that produced chunks
    * (`chunkCount > 0`): a chunkless image or a still-pending upload carries no retrievable content.
    *
+   * `fileSize` and `serverTextHash` both feed `findDuplicateMembers`: a same-fileName pair whose
+   * sizes disagree, or whose hashes disagree, is confirmed to differ in content; a pair whose hashes
+   * match is confirmed IDENTICAL, which size alone can never prove. Both come back for free in this
+   * same `$project` - no second read - and `chunkCount` cannot serve either purpose (see that
+   * function's doc).
+   *
    * ONE exception, and it is the case this report exists for: a member the convergence kill switch
    * stopped mid-rewrite is chunkless because its passages were DELETED, not because it never had
    * any. Excluding it made a lake report "Reachable 100%" over the members it still had while a
@@ -1413,6 +1420,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     Array<{
       fabFileId: string;
       fileName?: string;
+      fileSize: number | null;
+      serverTextHash: string | null;
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
@@ -1453,6 +1462,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           _id: 0,
           fabFileId: { $toString: '$_id' },
           fileName: 1,
+          fileSize: { $ifNull: ['$fileSize', null] },
+          // Server-verified SHA-256 over normalized extracted text, stamped at chunk time. Equal hash
+          // is PROOF of identity - the thing `fileSize` cannot give (see the doc comment above).
+          serverTextHash: { $ifNull: ['$serverTextHash', null] },
           chunkCount: { $ifNull: ['$chunkCount', 0] },
           // Preserve null (UNMEASURED) rather than coalescing to 0 - the evaluator must tell "not yet
           // measured" from "measured as zero". $ifNull with null keeps an ABSENT field as null too.
@@ -2116,6 +2129,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
+  }
+
+  async hardDeleteOneById(fabFileId: string): Promise<boolean> {
+    // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
+    // concurrent purges of the same document exactly one is told it did the deleting.
+    const doc = await this.fabFileModel
+      .findOneAndDelete({ _id: fabFileId }, { hardDelete: true } as Record<string, unknown>)
+      .setOptions({ includeDeleted: true });
+    return !!doc;
   }
 
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {

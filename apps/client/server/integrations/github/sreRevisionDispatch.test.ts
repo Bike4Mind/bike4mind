@@ -117,7 +117,7 @@ describe('dispatchReviewToSreRevision', () => {
 
     expect(result.dispatched).toBe(true);
     expect(mockFindByPrNumber).toHaveBeenCalledWith(42, 'owner/repo');
-    expect(mockClaimRevision).toHaveBeenCalledWith('track-1', 2);
+    expect(mockClaimRevision).toHaveBeenCalledWith('track-1', 'owner/repo', 2);
     expect(mockSendToQueue).toHaveBeenCalledWith(
       'https://sqs.us-east-2.amazonaws.com/123/sreJobQueue',
       expect.objectContaining({

@@ -16,7 +16,7 @@
  *     is not re-used on future occurrences.
  *
  * Exactly-once semantics: callers invoke this helper ONLY after a successful
- * `atomicTransition(id, 'analyzing', 'recurrence_detected', ...)` CAS, which
+ * `atomicTransition(id, repoSlug, 'analyzing', 'recurrence_detected', ...)` CAS, which
  * guarantees a single execution per tracking doc even under SQS redelivery.
  */
 

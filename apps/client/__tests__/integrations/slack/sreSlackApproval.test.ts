@@ -14,6 +14,7 @@ import {
 const mockGetSettingsValue = vi.fn();
 const mockFindFullById = vi.fn();
 const mockFindByIdWithToken = vi.fn();
+const mockAtomicTransition = vi.fn();
 const mockPostMessage = vi.fn().mockResolvedValue({ ok: true });
 
 vi.mock('@slack/web-api', () => ({
@@ -32,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   sreErrorTrackingRepository: {
     findById: vi.fn(),
     findFullById: (...args: unknown[]) => mockFindFullById(...args),
-    atomicTransition: vi.fn(),
+    atomicTransition: (...args: unknown[]) => mockAtomicTransition(...args),
   },
   slackDevWorkspaceRepository: {
     findByIdWithToken: (...args: unknown[]) => mockFindByIdWithToken(...args),
@@ -317,15 +318,46 @@ describe('handleSreApprovalAction — authorization', () => {
   beforeEach(() => {
     mockFindFullById.mockResolvedValue({ repoSlug: 'MillionOnMars/lumina5' });
     mockGetSettingsValue.mockResolvedValue({ repos: [] });
+    mockAtomicTransition.mockReset();
+    mockAtomicTransition.mockResolvedValue(null);
   });
 
-  it('empty approverIds → anyone can approve', async () => {
-    mockResolveFullConfig.mockReturnValue({ slack: { approverIds: '' } });
+  it('unset approverIds → nobody can approve', async () => {
+    mockResolveFullConfig.mockReturnValue({ slack: {} });
 
     const result = await handleSreApprovalAction('sre_approve_fix', trackingId, { id: 'U_RANDOM' });
 
-    // Auth passed - response may be undefined text (downstream error) but NOT the unauthorized message
-    expect(String(result.response.text ?? '')).not.toContain(':no_entry:');
+    expect(result.response.text).toContain(':no_entry:');
+    expect(result.deferred).toBeUndefined();
+    expect(mockAtomicTransition).not.toHaveBeenCalled();
+  });
+
+  it('empty approverIds → nobody can approve', async () => {
+    mockResolveFullConfig.mockReturnValue({ slack: { approverIds: '   ' } });
+
+    const result = await handleSreApprovalAction('sre_approve_fix', trackingId, { id: 'U_RANDOM' });
+
+    expect(result.response.text).toContain(':no_entry:');
+    expect(result.deferred).toBeUndefined();
+    expect(mockAtomicTransition).not.toHaveBeenCalled();
+  });
+
+  it('unconfigured repo → nobody can approve', async () => {
+    mockResolveFullConfig.mockReturnValue(null);
+
+    const result = await handleSreApprovalAction('sre_approve_fix', trackingId, { id: 'U_RANDOM' });
+
+    expect(result.response.text).toContain(':no_entry:');
+    expect(mockAtomicTransition).not.toHaveBeenCalled();
+  });
+
+  it('unset approverIds → nobody can reject either', async () => {
+    mockResolveFullConfig.mockReturnValue({ slack: {} });
+
+    const result = await handleSreApprovalAction('sre_reject_fix', trackingId, { id: 'U_RANDOM' });
+
+    expect(result.response.text).toContain(':no_entry:');
+    expect(mockAtomicTransition).not.toHaveBeenCalled();
   });
 
   it('configured approverIds → authorized user proceeds', async () => {
@@ -334,6 +366,14 @@ describe('handleSreApprovalAction — authorization', () => {
     const result = await handleSreApprovalAction('sre_approve_fix', trackingId, { id: 'U01' });
 
     expect(String(result.response.text ?? '')).not.toContain(':no_entry:');
+    await result.deferred;
+    expect(mockAtomicTransition).toHaveBeenCalledWith(
+      trackingId,
+      'MillionOnMars/lumina5',
+      'awaiting_approval',
+      'fixing',
+      expect.objectContaining({ dispatchedAt: expect.any(Date) })
+    );
   });
 
   it('configured approverIds → unauthorized user rejected', async () => {
@@ -342,6 +382,7 @@ describe('handleSreApprovalAction — authorization', () => {
     const result = await handleSreApprovalAction('sre_approve_fix', trackingId, { id: 'U99' });
 
     expect(result.response.text).toContain(':no_entry:');
+    expect(mockAtomicTransition).not.toHaveBeenCalled();
   });
 });
 

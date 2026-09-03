@@ -3,7 +3,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   fabFileFind: vi.fn(),
+  fabFileSelect: vi.fn(),
   sendToQueue: vi.fn(),
+  findPauseOverrides: vi.fn(async () => [] as unknown[]),
+  dataLakeFind: vi.fn(async () => [] as unknown[]),
+  dataLakeSelect: vi.fn(),
   // Spied (not a bare stub) so a test can assert the sweep passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
   buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date, _opts?: unknown) => ({
@@ -13,13 +17,54 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  adminSettingsRepository: {
+    getSettingsValue: h.getSettingsValue,
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+  DataLakeModel: {
+    find: (...a: unknown[]) => ({
+      select: (projection: string) => {
+        h.dataLakeSelect(projection);
+        return { lean: async () => h.dataLakeFind(...(a as [])) };
+      },
+    }),
+  },
+  scopedSettingsRepository: { findBySettingName: (...a: unknown[]) => h.findPauseOverrides(...(a as [])) },
   FabFile: { find: h.fabFileFind },
+  buildDataLakeMembershipFilter: (scope: { datalakeTag: string }) => ({ membershipFor: scope.datalakeTag }),
+}));
+// Faithful-but-minimal stand-ins: meta-tag membership and lake-rung overrides are all these cases
+// use. The real predicate and the real narrower-wins resolution are exercised unmocked in
+// server/dataLakes/convergencePauseScope.test.ts and settings/resolveScopedSetting.test.ts.
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: {
+    satisfiesMembershipScope: (scope: { datalakeTag: string }, file: { tags?: { name: string }[] }) =>
+      (file?.tags ?? []).some(tag => tag.name === scope.datalakeTag),
+    registryMembershipScope: (config: { datalakeTag: string; fileTagPrefix?: string }) => ({
+      kind: 'registry',
+      datalakeTag: config.datalakeTag,
+      fileTagPrefix: config.fileTagPrefix,
+    }),
+  },
+  scopedSettingsService: {
+    scopeForLake: (lake: { id: string }) => ({ lakeId: lake.id }),
+    resolveScopedSettingFromOverrides: (
+      _key: string,
+      scopes: { lakeId?: string }[],
+      platformValue: boolean,
+      rows: { scopeLevel: string; scopeId: string; settingValue: string }[]
+    ) =>
+      scopes.map(scope => {
+        const row = rows.find(r => r.scopeLevel === 'lake' && r.scopeId === scope.lakeId);
+        return { value: row ? row.settingValue === 'true' : platformValue, source: row ? 'lake' : 'platform' };
+      }),
+  },
 }));
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-// Only the filter is stubbed; buildChunkScanQueuePayload stays real so the payload shape this
-// sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
+// Only the filter is stubbed; buildChunkRescueMessage stays real so the payload shape this sweep
+// sends is asserted against the shared producer, not a local copy of it. Spreading the actual
 // module also keeps the cutoff constants real, which the cutoff assertions below depend on.
 vi.mock('./chunkScan', async importActual => ({
   ...(await importActual<typeof import('./chunkScan')>()),
@@ -28,28 +73,26 @@ vi.mock('./chunkScan', async importActual => ({
 
 import { runChunkRescueSweep } from './chunkRescueSweep';
 
-type Candidate = { _id: string; userId: string; batchId?: string };
+type Candidate = { _id: string; userId: string; batchId?: string; tags?: { name: string; strength: number }[] };
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 /** The sweep only ever calls info/error on it; the real Logger's surface is irrelevant here. */
-const runSweep = () => runChunkRescueSweep(logger as never);
+const SELF_HOST_LIMIT = 50;
+const runSweep = (limit = SELF_HOST_LIMIT) => runChunkRescueSweep({ limit, logger: logger as never });
 
 const limitSpy = vi.fn();
-const selectSpy = vi.fn();
 const withCandidates = (candidates: Candidate[]) => {
   h.fabFileFind.mockReturnValue({
     // The projection is spied, not ignored: the lean() fixtures below carry userId whatever is
     // projected, so without this a trim back to '_id' would keep every test green and ship
     // `userId: 'undefined'` to the queue.
-    select: (projection: string) => {
-      selectSpy(projection);
-      return {
-        limit: (n: number) => {
-          limitSpy(n);
-          return { lean: async () => candidates };
-        },
-      };
-    },
+    select: (projection: string) => ({
+      limit: (n: number) => {
+        h.fabFileSelect(projection);
+        limitSpy(n);
+        return { lean: async () => candidates };
+      },
+    }),
   });
 };
 
@@ -61,6 +104,8 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     // makes sendToQueue reject would leak that into every test after it in file order.
     h.getSettingsValue.mockResolvedValue(true);
     h.sendToQueue.mockResolvedValue(undefined);
+    h.findPauseOverrides.mockResolvedValue([]);
+    h.dataLakeFind.mockResolvedValue([]);
     withCandidates([]);
   });
 
@@ -80,7 +125,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
 
     await runSweep();
 
-    expect(selectSpy).toHaveBeenCalledWith('_id userId');
+    expect(h.fabFileSelect).toHaveBeenCalledWith('_id userId');
   });
 
   it('selects with both cutoffs and the per-pass cap', async () => {
@@ -189,36 +234,47 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
   });
 });
 
-describe('runChunkRescueSweep convergence-pause wiring', () => {
-  // The self-host twin of the rows in dataLakeBatchReconcile.test.ts. Until the sweep was extracted
-  // out of main.ts this had nowhere to live, so this side of the wiring was unpinned: the flag could
-  // be dropped or hardcoded here and every suite stayed green.
+describe('runChunkRescueSweep convergence-pause wiring (#2120/#2157)', () => {
+  // Until the sweep was extracted out of main.ts this had nowhere to live, so this side of the
+  // wiring was unpinned: the flag could be dropped or hardcoded and every suite stayed green. Now
+  // both drivers share this function, so these rows cover the cron too.
   const withPauseFlag = (pauseFlag: unknown) =>
     h.getSettingsValue.mockImplementation(async (key: string) => (key === 'enableAutoChunk' ? true : pauseFlag));
 
+  const LAKE_ID = '0123456789abcdef01230001';
+  const lakeOverride = [
+    { scopeLevel: 'lake', scopeId: LAKE_ID, settingName: 'PauseLakeConvergence', settingValue: 'true' },
+  ];
+  const lakeDoc = [{ id: LAKE_ID, datalakeTag: 'datalake:alpha', createdByUserId: 'creator-1' }];
+
   beforeEach(() => {
     vi.clearAllMocks();
+    h.sendToQueue.mockResolvedValue(undefined);
+    h.findPauseOverrides.mockResolvedValue([]);
+    h.dataLakeFind.mockResolvedValue([]);
     withCandidates([]);
   });
 
   it.each([
-    ['ON - paused files must not consume the rescue cap', true, true],
-    ['OFF - paused files must be swept back in and rebuilt', false, false],
-  ])('kill switch %s', async (_label, pauseFlag, expected) => {
+    ['ON - stalled files must not consume the rescue cap', true, true],
+    ['OFF - stalled files must be swept back in and rebuilt', false, false],
+  ])('platform switch %s', async (_label, pauseFlag, expected) => {
     withPauseFlag(pauseFlag);
 
     await runSweep();
 
     // Pinned as the third ARGUMENT, not as an outcome: the filter itself is mocked here, so this is
-    // the only place this caller's wiring is observable. Dropping it no longer compiles; hardcoding
-    // it to a constant is what these two rows still catch.
+    // the only place the wiring is observable. Dropping it no longer compiles; hardcoding it to a
+    // constant is what these two rows still catch.
     expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
-    expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: expected });
+    expect(h.buildScanFilter.mock.calls[0][2]).toEqual({
+      convergencePause: { platformPaused: expected, paused: [], running: [] },
+    });
   });
 
   it('treats a missing or non-boolean setting as OFF, never as ON', async () => {
     // `=== true` rather than coercion, deliberately: wrongly EXCLUDING is the far worse direction -
-    // it strands every paused file with no automatic rebuild at all, since this sweep is their only
+    // it strands every stalled file with no automatic rebuild at all, since this sweep is their only
     // one. An unset setting or a legacy string must therefore fall to sweeping.
     for (const raw of [undefined, null, 'true', 1]) {
       h.buildScanFilter.mockClear();
@@ -226,7 +282,177 @@ describe('runChunkRescueSweep convergence-pause wiring', () => {
 
       await runSweep();
 
-      expect(h.buildScanFilter.mock.calls[0][2]).toEqual({ excludeConvergencePaused: false });
+      expect(h.buildScanFilter.mock.calls[0][2]).toEqual({
+        convergencePause: { platformPaused: false, paused: [], running: [] },
+      });
     }
+  });
+
+  it('reads BOTH settings by name - enableAutoChunk to gate, PauseLakeConvergence to scope', async () => {
+    // By KEY, not just by call count: a sweep reading the wrong key would still gate and still
+    // resolve, just against someone else's lever, and every other assertion here would pass.
+    withPauseFlag(false);
+
+    await runSweep();
+
+    const keys = h.getSettingsValue.mock.calls.map(c => c[0]);
+    expect(keys).toContain('enableAutoChunk');
+    expect(keys).toContain('PauseLakeConvergence');
+  });
+
+  it('with no override anywhere, never reads the lakes collection', async () => {
+    // The fast path this design rests on: a sweep on an install that has never set a scoped pause
+    // must cost exactly what it cost before #2157.
+    withPauseFlag(false);
+
+    await runSweep();
+
+    expect(h.dataLakeFind).not.toHaveBeenCalled();
+    expect(h.fabFileSelect).toHaveBeenLastCalledWith('_id userId');
+  });
+
+  it('reads the lakes collection PROJECTED, never as whole documents', async () => {
+    // An Owner- or Organization-rung override reaches every lake under that principal; none of a
+    // lake document's prose, stats or settings is read here, and this runs every 60s on self-host.
+    withPauseFlag(false);
+    h.findPauseOverrides.mockResolvedValue(lakeOverride);
+    h.dataLakeFind.mockResolvedValue(lakeDoc);
+
+    await runSweep();
+
+    expect(h.dataLakeSelect).toHaveBeenCalledWith('_id datalakeTag fileTagPrefix createdByUserId organizationId');
+  });
+
+  it.each([
+    ['the hosted cron', 500],
+    ['the self-host worker', 50],
+  ])('passes %s budget straight through to the query limit', async (_label, limit) => {
+    // The ONLY thing the two drivers differ on, and what silently regressed while they were separate
+    // copies: a hardcoded cap here would serve one driver the other's budget.
+    withPauseFlag(false);
+
+    await runSweep(limit);
+
+    expect(limitSpy).toHaveBeenCalledWith(limit);
+  });
+
+  it('routes a lake-scoped pause into the filter AND onto the message (#2157)', async () => {
+    // The end-to-end wiring of the fix. Before it, both halves read the raw platform value: this file
+    // was selected with no exclusion and enqueued with no lakeId, so the handler's own re-check
+    // resolved platform-only too and re-chunked a file whose lake was explicitly paused.
+    withPauseFlag(false);
+    h.findPauseOverrides.mockResolvedValue(lakeOverride);
+    h.dataLakeFind.mockResolvedValue(lakeDoc);
+    withCandidates([
+      { _id: 'ff-member', userId: 'u1', tags: [{ name: 'datalake:alpha', strength: 1 }] },
+      { _id: 'ff-outsider', userId: 'u2', tags: [{ name: 'datalake:other', strength: 1 }] },
+    ]);
+
+    await runSweep();
+
+    expect(h.buildScanFilter.mock.calls[0][2]).toEqual({
+      convergencePause: { platformPaused: false, paused: [{ membershipFor: 'datalake:alpha' }], running: [] },
+    });
+    // `tags` is projected only when an override exists - it is the sole input to the resolution below.
+    expect(h.fabFileSelect).toHaveBeenLastCalledWith('_id userId tags');
+    // Exact shapes, not objectContaining: a dropped lakeId is precisely the silent regression this
+    // guards, and objectContaining passes just as happily without it.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff-member',
+      userId: 'u1',
+      origin: 'convergence',
+      lakeId: LAKE_ID,
+    });
+    // A file outside every overridden lake gets no lakeId, so it keeps platform-only resolution -
+    // correct for it. It is still stamped haltable, because every sweep message is (#2309).
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff-outsider',
+      userId: 'u2',
+      origin: 'convergence',
+    });
+  });
+
+  it('stamps a RUNNING lake too, which is how an override of a platform pause is honoured', async () => {
+    // Without the lakeId the handler would resolve the platform value (ON) and halt a file whose lake
+    // explicitly opted out of the pause.
+    withPauseFlag(true);
+    h.findPauseOverrides.mockResolvedValue([{ ...lakeOverride[0], settingValue: 'false' }]);
+    h.dataLakeFind.mockResolvedValue(lakeDoc);
+    withCandidates([{ _id: 'ff1', userId: 'u1', tags: [{ name: 'datalake:alpha', strength: 1 }] }]);
+
+    await runSweep();
+
+    expect(h.buildScanFilter.mock.calls[0][2]).toEqual({
+      convergencePause: { platformPaused: true, paused: [], running: [{ membershipFor: 'datalake:alpha' }] },
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff1',
+      userId: 'u1',
+      origin: 'convergence',
+      lakeId: LAKE_ID,
+    });
+  });
+
+  it('does NOT stamp the exempted lake when an ungraded lake also holds the file (#2167 review)', async () => {
+    // The exemption above, with a second lake that carries no override at all - so it sits at the
+    // platform value (ON) and never appears in scopedLakes. Stamping the exempted lake would
+    // un-pause the file and rewrite the frozen lake's passages, since chunks are shared per file.
+    withPauseFlag(true);
+    h.findPauseOverrides.mockResolvedValue([{ ...lakeOverride[0], settingValue: 'false' }]);
+    // Two reads: the override-reachable grading first, then the candidate-bounded widening.
+    h.dataLakeFind
+      .mockResolvedValueOnce(lakeDoc)
+      .mockResolvedValueOnce([...lakeDoc, { id: 'ungraded-1', datalakeTag: 'datalake:frozen', createdByUserId: 'c9' }]);
+    withCandidates([
+      {
+        _id: 'ff-both',
+        userId: 'u1',
+        tags: [
+          { name: 'datalake:alpha', strength: 1 },
+          { name: 'datalake:frozen', strength: 1 },
+        ],
+      },
+      { _id: 'ff-exempt-only', userId: 'u1', tags: [{ name: 'datalake:alpha', strength: 1 }] },
+    ]);
+
+    await runSweep();
+
+    // No lakeId, so the handler resolves the platform value - ON - and halts it.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff-both',
+      userId: 'u1',
+      origin: 'convergence',
+    });
+    // The exemption still works for a file only the exempted lake holds.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff-exempt-only',
+      userId: 'u1',
+      origin: 'convergence',
+      lakeId: LAKE_ID,
+    });
+  });
+
+  it('does not widen the lakes read when no lake is exempted', async () => {
+    // The widening exists only to catch an invisible PAUSED lake disagreeing with a visible running
+    // one. With every graded lake paused there is no such disagreement, so the second read is waste.
+    withPauseFlag(true);
+    h.findPauseOverrides.mockResolvedValue(lakeOverride);
+    h.dataLakeFind.mockResolvedValue(lakeDoc);
+    withCandidates([{ _id: 'ff1', userId: 'u1', tags: [{ name: 'datalake:alpha', strength: 1 }] }]);
+
+    await runSweep();
+
+    expect(h.dataLakeFind).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed override read aborts the sweep rather than sweeping as if nothing were paused', async () => {
+    // Unknown must not become "not paused": that would re-chunk a scoped-paused lake's files,
+    // rewriting passages an operator froze. The only cost of aborting is rescue latency.
+    withPauseFlag(false);
+    h.findPauseOverrides.mockRejectedValue(new Error('overlay down'));
+    withCandidates([{ _id: 'ff1', userId: 'u1' }]);
+
+    await expect(runSweep()).rejects.toThrow('overlay down');
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });

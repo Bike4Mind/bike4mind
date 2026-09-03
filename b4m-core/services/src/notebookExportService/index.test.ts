@@ -256,7 +256,7 @@ describe('notebook export', () => {
     await new NotebookExportService(adapters).exportNotebooks('user-1', OPTIONS);
 
     expect(uploaded).toHaveLength(1);
-    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('knowledge ids'), {
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('[knowledge]'), {
       skipped: ['not-an-objectid'],
     });
   });

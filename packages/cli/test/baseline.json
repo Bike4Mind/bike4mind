@@ -1,7 +1,7 @@
 {
   "_doc": "Structural baselines for the CLI build. Used by test/e2e/baseline.test.ts to detect bundle bloat during refactors. Refresh with `pnpm --filter @bike4mind/cli build && node packages/cli/test/scripts/refresh-baseline.mjs` after intentional size changes.",
-  "_recordedAt": "2026-09-02",
-  "_recordedAfterCommit": "be3e46c8a",
+  "_recordedAt": "2026-09-03",
+  "_recordedAfterCommit": "b7f8196b2",
   "bundle": {
     "totalBytes": 2698696,
     "fileCount": 43,

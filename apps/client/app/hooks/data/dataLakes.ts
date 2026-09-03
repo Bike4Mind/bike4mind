@@ -1,6 +1,7 @@
 import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
+  DataLakeDocumentPurgeReceipt,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
   IDataLakeBatchDocument,
@@ -914,6 +915,66 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // curator needs here.
       const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
       toast.error(refusal || error.message || 'Failed to remove file from data lake');
+    },
+  });
+}
+
+/**
+ * Hook: permanently destroy one lake document, its chunks and its vectors, and keep the receipt
+ * the server returns as proof. The reversible sibling is `useRemoveFileFromDataLake`, which only
+ * unpicks lake membership - this one is unrecoverable and removes the file everywhere, so the
+ * caller is expected to confirm first and to show the receipt afterwards.
+ *
+ * A receipt with `verified: false` is surfaced as a warning, not a success: the request completed
+ * but the sweep did not converge, and telling the owner their content is gone would be a claim
+ * the server explicitly declined to make.
+ */
+export function usePurgeDataLakeDocument(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fabFileId: string) => {
+      const res = await api.post<DataLakeDocumentPurgeReceipt>(
+        `/api/data-lakes/${dataLakeId}/files/${fabFileId}/purge`
+      );
+      return res.data;
+    },
+    onSuccess: receipt => {
+      if (receipt.verified) {
+        toast.success(
+          `Deleted permanently: the document and its ${receipt.chunksBefore} chunk(s) and vectors are gone.`
+        );
+      } else {
+        toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
+      }
+      // `filesRoot`, not `filesOf(dataLakeId)`: membership removal is lake-scoped and this is not,
+      // so any OTHER lake's cached file list is stale too.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+      // Health is computed from the chunk/vector rollups this purge destroys outright, so the badge
+      // would otherwise keep counting the destroyed document's chunks as reachable content until it
+      // goes stale. Root prefix for the same reason as filesRoot: every lake that held the document
+      // is affected, not just this one.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // The document is gone globally, not just from this lake, so the Files list is stale too.
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      if (dataLakeId) {
+        // Purging an under-chunked document can move the purged lake's rebuild badge, and can
+        // reach recomputeLakeStats' draft -> active flip, which writes a config-history row - same
+        // two keys invalidateLakeFileMembershipQueries refreshes for a membership change.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      // Same extraction as the other lake doors: this is the irreversible one, and a mid-sweep
+      // failure is exactly the case where "Request failed with status code 500" is the one message
+      // that cannot tell the owner whether their document is half destroyed. Body key is `error`
+      // (server/middlewares/errorHandler.ts).
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to permanently delete this file');
     },
   });
 }

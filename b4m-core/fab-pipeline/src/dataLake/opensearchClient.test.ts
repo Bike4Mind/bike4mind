@@ -166,6 +166,30 @@ describe('getOpenSearchRetryAfterMs', () => {
     expect(getOpenSearchRetryAfterMs(new Error('429'))).toBeNull();
     expect(getOpenSearchRetryAfterMs(Object.assign(new Error('429'), { headers: {} }))).toBeNull();
   });
+
+  // #2118: withRetry treats any non-null return as authoritative OVER its backoff, so a zero is not
+  // "wait a moment" - it is "abandon the backoff and retry immediately", five times, against a
+  // cluster that only sends Retry-After when it is already struggling.
+  it.each([
+    ['an explicit zero', '0'],
+    ['a negative value', '-5'],
+  ])('returns null for %s rather than disabling the backoff', (_label, value) => {
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': value } });
+    expect(getOpenSearchRetryAfterMs(err)).toBeNull();
+  });
+
+  it('returns null for an HTTP date that has already elapsed', () => {
+    // Needs no misbehaving server: clock skew, or seconds of queueing between the cluster writing
+    // the header and this code reading it, is enough. Math.max(0, ...) used to floor this to zero.
+    const past = new Date(Date.now() - 5000).toUTCString();
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': past } });
+    expect(getOpenSearchRetryAfterMs(err)).toBeNull();
+  });
+
+  it('still honours a positive hint, so the fix does not just disable Retry-After', () => {
+    const err = Object.assign(new Error('429'), { headers: { 'retry-after': '1' } });
+    expect(getOpenSearchRetryAfterMs(err)).toBe(1000);
+  });
 });
 
 describe('OpenSearchClient retry/backoff', () => {

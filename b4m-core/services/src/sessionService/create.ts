@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { usableObjectIds } from '../utils/objectIds';
+import { usableSessionIds } from '../utils/objectIds';
 import { projectService } from '..';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 
@@ -83,12 +83,12 @@ export const createSession = async (
     ...rest
   } = secureParameters(parameters, createSessionParametersSchema);
 
-  // Both arrays reference ObjectId-keyed collections; artifactIds does not. See usableObjectIds.
+  // Both arrays reference ObjectId-keyed collections; artifactIds does not. See usableSessionIds.
   // NOTE: notebookImportService writes sessions through sessionRepository.create directly, so it
   // does NOT pass through here - the read-side guards still carry rows it produces.
   const dropLogger = adapters.logger ?? Logger.globalInstance;
-  const knowledgeIds = usableObjectIds(rawKnowledgeIds, 'knowledge', dropLogger);
-  const agentIds = usableObjectIds(rawAgentIds, 'agent', dropLogger);
+  const knowledgeIds = usableSessionIds(rawKnowledgeIds, 'knowledge', dropLogger);
+  const agentIds = usableSessionIds(rawAgentIds, 'agent', dropLogger);
 
   // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
   // tags is authoritative, so derivation runs only for a file-seeded session that named neither.

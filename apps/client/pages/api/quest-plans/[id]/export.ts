@@ -4,16 +4,12 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { sendToQueue } from '@server/utils/sqs';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
 
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
-
-const exportRateLimit = rateLimit({ limit: 5, windowMs: 60000 });
+const exportRateLimit = rateLimit({ limit: 5, windowMs: 60000, bucket: 'quest-plans/export' });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))
