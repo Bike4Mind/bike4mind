@@ -26,7 +26,13 @@ interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<
       IDataLakeRepository,
-      'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'find' | 'claimFilesArchivedAt' | 'claimArchiving'
+      | 'findById'
+      | 'settleLifecycleStatus'
+      | 'setStats'
+      | 'activateIfDraft'
+      | 'find'
+      | 'claimFilesArchivedAt'
+      | 'claimArchiving'
     >;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
@@ -87,7 +93,12 @@ export const archiveDataLake = async (
   // 'archived' would clobber a delete or restore that is already under way, and there is no release
   // path that would put it back. A lake stranded in 'restoring' by a crashed attempt is not stuck -
   // its own restore is re-entrant and lands it on 'active', where Archive works again.
-  if (existing.status === 'deleting' || existing.status === 'deleted' || existing.status === 'restoring') {
+  if (
+    existing.status === 'deleting' ||
+    existing.status === 'deleted' ||
+    existing.status === 'restoring' ||
+    existing.status === 'unarchiving'
+  ) {
     throw new BadRequestError(`Cannot archive a data lake in '${existing.status}' status`);
   }
 
@@ -200,9 +211,27 @@ export const archiveDataLake = async (
   // Stamped on the TERMINAL transition only (not the 'archiving' claim above): one stamp per
   // operator action, so a crashed run that never settles leaves no half-record of an archive
   // that did not happen.
-  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'archived', ...lakeConfigWriteStamp(actor) });
+  // Conditional on the 'archiving' claimed above, not a plain write: claimDeleting admits
+  // 'archiving' deliberately (a lake stranded there by a crashed attempt has to stay deletable), so
+  // a teardown can start on top of this one and both sweeps run. Settling unconditionally would let
+  // whichever finished last stamp its status over the other's file state - a lake reading
+  // 'archived' whose every member is soft-deleted, or 'deleted' with rows still archive-hidden.
+  // Losing is reported, never swallowed: the sweep above already ran, and a silent no-op would
+  // return a lake this caller never actually archived.
+  const updated = await db.dataLakes.settleLifecycleStatus(dataLakeId, 'archiving', {
+    status: 'archived',
+    ...lakeConfigWriteStamp(actor),
+  });
   if (!updated) {
-    throw new NotFoundError('Data lake not found after archive');
+    // Re-read only on the loss path, so the error names the transition that actually won rather
+    // than asserting a NotFound the lake may well contradict.
+    const current = await db.dataLakes.findById(dataLakeId);
+    if (!current) {
+      throw new NotFoundError('Data lake not found after archive');
+    }
+    throw new BadRequestError(
+      `This data lake moved to '${current.status}' while it was being archived; its files were archived but the archive did not complete`
+    );
   }
   // Recorded on the terminal transition alongside the stamp, for the same reason and with the same
   // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is

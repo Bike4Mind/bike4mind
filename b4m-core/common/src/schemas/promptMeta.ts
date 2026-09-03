@@ -338,11 +338,23 @@ export const CitableSourceSchema = z.object({
  *
  * Absent-or-fully-present, matching `lakeMemory` above - see the Mongoose-side subSchema comment
  * in QuestModel.ts for why partial-write and default-array shapes are unsafe here.
+ *
+ * WIDER THAN ITS NAME SUGGESTS as of `mode` (#1394). The field is no longer written only when
+ * retrieval ran: it is now seeded on every turn that could have retrieved (forced retrieval
+ * enabled, or the knowledge tool offered), so `attempted: false` is a recorded fact rather than
+ * an absence to be inferred. Presence therefore means "this turn was in a position to retrieve",
+ * and turns with no knowledge in scope still carry no field at all. The distinction matters to a
+ * rollup: absence is now ambiguous between "not a retrieval turn" and "written before this
+ * existed", which is why `mode` documents its own date-bounding requirement.
  */
 export const RetrievalSummarySchema = z.object({
   /** True once a retrieval-capable surface actually ran (not merely offered) this turn. */
   attempted: z.boolean(),
   /**
+   * Present if and only if `attempted` is true - an outcome describes a run, and a turn that
+   * never ran retrieval has none. A reader testing for a specific value is unaffected (absence
+   * is not any of them); a reader switching exhaustively must handle undefined.
+   *
    * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
    * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
    * 'not_indexed' - ran to completion having compared nothing: the corpus in scope carries no
@@ -352,11 +364,13 @@ export const RetrievalSummarySchema = z.object({
    *   confident-wrong-answer this field exists to catch. Distinct from 'failed' because nothing
    *   broke: the remedy is re-vectorizing, which the corpus owner can do themselves, and a retry
    *   never helps.
-   *   COVERAGE: only forced retrieval records this today. The same condition is reachable through
-   *   knowledgeBaseSearch's semantic arm, which still records 'ok' when every candidate was
-   *   withheld for having no usable vector - so a turn that used only that surface still
-   *   under-reports. Anything cutting on this field should treat 'ok' as "not proven searched"
-   *   until that arm is corrected.
+   *   COVERAGE: recorded by forced retrieval (KnowledgeRetrievalFeature's `scoredCount === 0`
+   *   exit) and by knowledgeBaseSearch, whose semantic arms carry the same verdict through to the
+   *   keyword arm's write - the two agree on "not one passage was compared against the query",
+   *   not on any withholding flag, so a relevance floor that emptied a real search and a partial
+   *   withholding alongside a real search both stay 'ok' on both surfaces.
+   *   knowledgeBaseRetrieve cannot reach this state: it fetches named files rather than ranking
+   *   against a query embedding, so it has no comparison to come up empty.
    * 'failed' - recall did not complete: it threw, OR the retrieval repository is not wired on
    *   this host (the guards in ChatCompletionFeatures / knowledgeBaseSearch / knowledgeBaseRetrieve
    *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
@@ -368,7 +382,35 @@ export const RetrievalSummarySchema = z.object({
    * success on another surface cannot erase it, and a real success is never masked by another
    * surface's "no lakes in scope" abstain in the same turn.
    */
-  outcome: z.enum(['ok', 'no_lakes', 'not_indexed', 'failed']),
+  outcome: z.enum(['ok', 'no_lakes', 'not_indexed', 'failed']).optional(),
+  /**
+   * Whether forced retrieval was ENABLED for this turn, independent of whether it then ran.
+   *
+   * This is what makes the optional path measurable. `attempted` says retrieval happened;
+   * without `mode` there is no way to ask the complementary question - of the turns where the
+   * model was merely OFFERED the knowledge tools, how often did it choose to retrieve - because
+   * a forced turn and an optional turn both land as `attempted: true`.
+   *
+   * Optional on the schema, and absence NEVER means 'optional' - it means unclassified. Two
+   * sources, one historical and one ongoing: turns recorded before this field landed, and
+   * agent-mode runs, which write a retrieval summary through `persistRunAsQuest` but never pass
+   * the seed site at the `offeredTools` write in ChatCompletionProcess. So date-bounding a rollup
+   * removes the first source but not the second; count the unclassified bucket rather than
+   * assuming it empties.
+   */
+  mode: z.enum(['forced', 'optional']).optional(),
+  /**
+   * Why the forced arm did not run on a turn that had it enabled. Only ever set with
+   * `mode: 'forced'`, and only for the deliberate suppressions in
+   * ChatCompletionFeatures.getContextMessages - a forced turn that ran and failed reports that
+   * through `outcome`, not here.
+   *
+   * These turns are the reason this field exists: forced retrieval is configured, a rule
+   * suppresses it, and the model falls back to the offered tool. That is exactly the population
+   * the per-turn routing question is about, and before this it was indistinguishable from a turn
+   * where forced retrieval was never configured at all.
+   */
+  forcedSkipReason: z.enum(['attached_files', 'personal_corpus']).optional(),
   /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */

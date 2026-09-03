@@ -79,15 +79,17 @@ describe('sreStaleDispatch cron', () => {
   });
 
   it('should blame GitHub Actions when the dispatch reached GitHub', async () => {
-    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1', githubRunDispatched: true }]);
+    mockFindStaleDispatches.mockResolvedValue([
+      { id: 'doc-1', repoSlug: 'acme/widgets', errorFingerprint: 'fp-1', githubRunDispatched: true },
+    ]);
 
     const result = await handler();
 
     expect(mockFindStaleDispatches).toHaveBeenCalledWith(20);
-    expect(mockAtomicTransition).toHaveBeenCalledWith('doc-1', 'fixing', 'failed', {
+    expect(mockAtomicTransition).toHaveBeenCalledWith('doc-1', 'acme/widgets', 'fixing', 'failed', {
       errorMessage: expect.stringContaining('timed out after 20 minutes'),
     });
-    const { errorMessage } = mockAtomicTransition.mock.calls[0][3];
+    const { errorMessage } = mockAtomicTransition.mock.calls[0][4];
     expect(errorMessage).toContain('dispatched to GitHub Actions but no callback received');
     expect(errorMessage).not.toContain('sreFix handler never dispatched');
     expect(result.transitioned).toBe(1);
@@ -97,11 +99,11 @@ describe('sreStaleDispatch cron', () => {
   // githubRunDispatched absent, and the old message blamed GitHub Actions for a
   // dispatch that never happened.
   it('should blame the sreFix handler when githubRunDispatched is absent', async () => {
-    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1' }]);
+    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', repoSlug: 'acme/widgets', errorFingerprint: 'fp-1' }]);
 
     const result = await handler();
 
-    const { errorMessage } = mockAtomicTransition.mock.calls[0][3];
+    const { errorMessage } = mockAtomicTransition.mock.calls[0][4];
     expect(errorMessage).toContain('timed out after 20 minutes');
     expect(errorMessage).toContain('sreFix handler never dispatched to GitHub');
     expect(errorMessage).not.toContain('no callback received');
@@ -111,25 +113,27 @@ describe('sreStaleDispatch cron', () => {
   // A revision cycle resets githubRunDispatched to false, so explicit false must
   // read the same as absent rather than falling through to the dispatched branch.
   it('should treat githubRunDispatched: false as never dispatched', async () => {
-    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1', githubRunDispatched: false }]);
+    mockFindStaleDispatches.mockResolvedValue([
+      { id: 'doc-1', repoSlug: 'acme/widgets', errorFingerprint: 'fp-1', githubRunDispatched: false },
+    ]);
 
     await handler();
 
-    const { errorMessage } = mockAtomicTransition.mock.calls[0][3];
+    const { errorMessage } = mockAtomicTransition.mock.calls[0][4];
     expect(errorMessage).toContain('sreFix handler never dispatched to GitHub');
     expect(errorMessage).not.toContain('no callback received');
   });
 
   it('should timeout stale analyzing docs after 10 min', async () => {
     mockFindStaleByStatus.mockImplementation((status: string) => {
-      if (status === 'analyzing') return Promise.resolve([{ id: 'doc-2' }]);
+      if (status === 'analyzing') return Promise.resolve([{ id: 'doc-2', repoSlug: 'acme/widgets' }]);
       return Promise.resolve([]);
     });
 
     const result = await handler();
 
     expect(mockFindStaleByStatus).toHaveBeenCalledWith('analyzing', 10);
-    expect(mockAtomicTransition).toHaveBeenCalledWith('doc-2', 'analyzing', 'failed', {
+    expect(mockAtomicTransition).toHaveBeenCalledWith('doc-2', 'acme/widgets', 'analyzing', 'failed', {
       errorMessage: expect.stringContaining('Analysis timed out'),
     });
     expect(result.transitioned).toBe(1);
@@ -141,6 +145,7 @@ describe('sreStaleDispatch cron', () => {
         return Promise.resolve([
           {
             id: 'doc-3',
+            repoSlug: 'acme/widgets',
             updatedAt: new Date(Date.now() - 13 * 60 * 60 * 1000), // 13h ago — exceeds 12h timeout
           },
         ]);
@@ -150,9 +155,15 @@ describe('sreStaleDispatch cron', () => {
     const result = await handler();
 
     expect(mockFindStaleByStatus).toHaveBeenCalledWith('awaiting_approval', 720);
-    expect(mockAtomicTransition).toHaveBeenCalledWith('doc-3', 'awaiting_approval', 'approval_expired', {
-      errorMessage: expect.stringContaining('Approval timed out after 12h'),
-    });
+    expect(mockAtomicTransition).toHaveBeenCalledWith(
+      'doc-3',
+      'acme/widgets',
+      'awaiting_approval',
+      'approval_expired',
+      {
+        errorMessage: expect.stringContaining('Approval timed out after 12h'),
+      }
+    );
     expect(result.transitioned).toBe(1);
   });
 

@@ -90,9 +90,9 @@ describe('isRetrievalExcluded', () => {
   });
 
   it('keeps a PRE-MIGRATION stranded file, whose marker is still legacy prose in notes', () => {
-    // The queue stack does not wait on #2016's migrator, and a code rollback does not revert the
-    // data, so both windows can hand this reader a row with the marker only in `notes`. Without the
-    // transitional arm it is dropped here - upstream of the withhold - and the hole goes unreported.
+    // The queue stack does not wait on #2016's migrator, so it can hand this reader a row with the
+    // marker only in `notes`. Without the transitional arm it is dropped here - upstream of the
+    // withhold - and the hole goes unreported.
     const legacy = { fileName: 'Report.pdf', vectorized: false, notes: CHUNK_STALL_NOTICES.rechunkPaused };
     expect(isRetrievalExcluded(legacy, { vectorizedOnly: true })).toBe(false);
     // The owner's own prose is not a marker; only the exact handler wording is.

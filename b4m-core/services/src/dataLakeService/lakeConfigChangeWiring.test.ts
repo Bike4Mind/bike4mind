@@ -49,6 +49,13 @@ const auditSpy = () => {
 const echoUpdate = (existing: IDataLakeDocument) =>
   vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...existing, ...d }));
 
+/** echoUpdate's conditional twin: a settle that always wins, echoing back the merged document. */
+const echoSettle = (existing: IDataLakeDocument) =>
+  vi.fn().mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => ({
+    ...existing,
+    ...set,
+  }));
+
 const noGrants = { listByLake: vi.fn().mockResolvedValue([]) };
 
 describe('updateDataLake', () => {
@@ -529,6 +536,7 @@ describe('lifecycle services', () => {
     dataLakes: {
       findById: vi.fn().mockResolvedValue(existing),
       update: echoUpdate(existing),
+      settleLifecycleStatus: echoSettle(existing),
       setStats: vi.fn(),
       activateIfDraft: vi.fn().mockResolvedValue(false),
       claimRestoring: vi.fn().mockResolvedValue(true),
@@ -593,9 +601,13 @@ describe('lifecycle services', () => {
     async (_n, service, existing) => {
       const audit = auditSpy();
       const db = { ...lifecycleDb(existing), ...audit.db };
-      db.dataLakes.update = vi
+      db.dataLakes.settleLifecycleStatus = vi
         .fn()
-        .mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...existing, name: 'Renamed By Admin', ...d }));
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => ({
+          ...existing,
+          name: 'Renamed By Admin',
+          ...set,
+        }));
 
       await service(owner, 'lake1', { db });
 
@@ -700,16 +712,21 @@ describe('lifecycle services', () => {
     }
   );
 
-  // BaseModel.update is a findOneAndUpdate that RESOLVES null when the lake vanished mid-operation.
-  // Without the guard, diffLakeConfig(existing, null) throws and turns a previously-succeeding
-  // unarchive/restore into a 500 - a regression introduced purely by adding the audit call.
+  // settleLifecycleStatus RESOLVES null when the lake vanished mid-operation. Without the guard,
+  // diffLakeConfig(existing, null) throws and turns a previously-succeeding unarchive/restore into
+  // a 500 - a regression introduced purely by adding the audit call. A null settle is ALSO how a
+  // lost settle reads, so the re-read below is what separates them: gone stays lenient, moved
+  // throws (pinned separately in dataLakeService.test.ts).
   it.each([
     ['unarchive', unarchiveDataLake, lake({ status: 'archived' })],
     ['restore', restoreDeletedDataLake, lake({ status: 'deleted' })],
   ])('%s survives the lake vanishing mid-operation and records nothing', async (_name, service, existing) => {
     const audit = auditSpy();
     const db = { ...lifecycleDb(existing), ...audit.db };
-    db.dataLakes.update = vi.fn().mockResolvedValue(null);
+    db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
+    // The entry read still finds the lake; every read after it does not - which is what "vanished
+    // mid-operation" means, and what the settle's loss path re-reads to detect.
+    db.dataLakes.findById = vi.fn().mockResolvedValueOnce(existing).mockResolvedValue(null);
 
     await expect(
       (service as (a: unknown, id: string, adapters: unknown) => Promise<unknown>)(owner, 'lake1', { db })

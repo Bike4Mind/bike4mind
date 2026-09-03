@@ -9,15 +9,17 @@ const baseView = (over: Partial<LakeAccessView> = {}): LakeAccessView => ({
   channels: [],
   history: [],
   historyTruncated: false,
+  candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
   ...over,
 });
 
 describe('lakeAccessViewToCsv', () => {
-  it('emits three labeled sections with headers', () => {
+  it('emits four labeled sections with headers', () => {
     const csv = lakeAccessViewToCsv(baseView());
     expect(csv).toContain('# Members and grants');
     expect(csv).toContain('# Access channels');
+    expect(csv).toContain('# Candidate-cap pressure');
     expect(csv).toContain('# Access history');
     // Every field is quoted (shared escapeCsvCell), headers included.
     expect(csv).toContain('"principalType","principalId","principalName","role","status"');
@@ -199,6 +201,42 @@ describe('lakeAccessViewToCsv', () => {
 
   it('adds no truncation signal when the history was not capped', () => {
     expect(lakeAccessViewToCsv(baseView({ historyTruncated: false }))).not.toContain('truncated');
+  });
+
+  it('exports candidate-cap pressure with its counts and last at-cap date', () => {
+    const csv = lakeAccessViewToCsv(
+      baseView({
+        candidateCapPressure: {
+          turnsWithSignal: 12,
+          turnsAtCap: 5,
+          lastAtCapAt: new Date('2026-08-13T09:30:00.000Z'),
+        },
+      })
+    );
+    expect(csv).toContain('"turnsWithSignal","turnsAtCap","lastAtCapAt"');
+    expect(csv).toContain('"12","5","2026-08-13T09:30:00.000Z"');
+    expect(csv).toContain('# NOTE: attribution is approximate');
+    expect(csv).toContain('not as this lake causing it');
+  });
+
+  it('still emits the pressure section at zero, labeled not-reported rather than cap-free', () => {
+    // A section that disappeared when nothing reported would be indistinguishable from a lake whose
+    // reads all had full candidate coverage - the exact conflation turnsWithSignal exists to break.
+    const csv = lakeAccessViewToCsv(baseView());
+    expect(csv).toContain('# Candidate-cap pressure');
+    expect(csv).toContain('"0","0",""');
+    expect(csv).toContain('turnsWithSignal 0 means not reported');
+  });
+
+  it('qualifies the pressure counts as window-scoped when the history was capped', () => {
+    const csv = lakeAccessViewToCsv(
+      baseView({
+        historyTruncated: true,
+        windowStartsAt: new Date('2026-08-01T00:00:00.000Z'),
+        candidateCapPressure: { turnsWithSignal: 3, turnsAtCap: 3 },
+      })
+    );
+    expect(csv).toContain('# NOTE: these counts cover only the truncated window above, not all time');
   });
 
   it('names the export file after the lake id', () => {

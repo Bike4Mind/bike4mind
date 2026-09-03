@@ -660,6 +660,8 @@ Direct access to AI capabilities outside the chat flow.
 POST /api/ai/llm
 \`\`\`
 
+**Required API-key scope:** \`ai:chat\`.
+
 **Request Body:**
 
 | Field | Type | Required | Description |
@@ -1107,6 +1109,12 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | POST | /api/admin/context-telemetry/[id]/create-issue | Create GitHub issue |
 | GET | /api/admin/context-telemetry/integration-status | Integration status |
 | GET | /api/admin/context-telemetry/metrics | Telemetry metrics |
+
+### Retrieval Rate
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/admin/retrieval-rate | Optional-path retrieval rate over a date window |
 
 ### LiveOps Triage
 

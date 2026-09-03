@@ -4,7 +4,7 @@ import { Invite } from '@bike4mind/database/social';
 import { getInviteDetails } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import mongoose from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 
 interface IParams {
   type?: string;
@@ -19,7 +19,7 @@ const handler = baseApi().get(
       return res.status(400).json({ message: 'Invite Share request' });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!isValidObjectId(id)) {
       return res.status(400).json({ message: 'Invalid ID format' });
     }
 

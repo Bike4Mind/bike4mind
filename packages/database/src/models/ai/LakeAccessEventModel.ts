@@ -58,6 +58,10 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
     returnedChunkCount: { type: Number, required: true, min: 0 },
     returnedFileCount: { type: Number, required: true, min: 0 },
     identifiersTruncated: { type: Boolean, default: false },
+    // `default: undefined`, unlike identifiersTruncated above: absent is a THIRD state here, not a
+    // synonym for false. A `default: false` would stamp every non-reporting surface's row as
+    // "considered its whole candidate set" - see ILakeAccessEvent.candidateCapReached.
+    candidateCapReached: { type: Boolean, required: false, default: undefined },
     surface: { type: String, enum: LAKE_ACCESS_SURFACES, required: true },
     queryTextLogged: { type: Boolean, default: false },
     // No enum: this is a diagnostic join key, not a value this schema's job is to validate - see
@@ -180,6 +184,9 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         returnedChunkCount,
         returnedFileCount,
         identifiersTruncated,
+        // `typeof`, not truthiness: an explicit `false` is a real assertion (this surface
+        // considered everything) and must not be silently dropped into the absent state.
+        ...(typeof input.candidateCapReached === 'boolean' ? { candidateCapReached: input.candidateCapReached } : {}),
         surface: input.surface,
         queryTextLogged,
         // `|| undefined`, so an empty string is stored as absent rather than indexed: the questId

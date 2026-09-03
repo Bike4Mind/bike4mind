@@ -1,6 +1,7 @@
 import { del } from 'idb-keyval';
 import { dexie } from './dexie';
 import { tagCacheManager } from './tagCache';
+import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLocalStorageKeys.generated';
 
 /**
  * User-specific localStorage keys that must be removed on identity change.
@@ -21,6 +22,7 @@ export async function clearClientCaches(): Promise<void> {
   try {
     // Clear user-specific localStorage entries (Zustand stores + artifact cache)
     USER_SPECIFIC_LS_KEYS.forEach(key => localStorage.removeItem(key));
+    removePremiumLocalStorageKeys();
 
     await Promise.all([
       // React Query IndexedDB persistence (idb-keyval)
@@ -36,4 +38,24 @@ export async function clearClientCaches(): Promise<void> {
   } catch (error) {
     console.warn('Failed to clear client caches:', error);
   }
+}
+
+/**
+ * Removes every localStorage key a premium overlay has claimed via
+ * `b4mContributions.localStorageKeyPrefixes` (see `PremiumLocalStorageKeyPrefixes`).
+ *
+ * Prefix matching rather than an allowlist because core cannot know the whole key:
+ * an overlay's keys are typically user-scoped (`<prefix><userId>`), so the set is
+ * open-ended and only the overlay can name its shape. This runs here, in core's
+ * identity-change teardown, so it fires in EVERY tab that signs out - including one
+ * that never loaded the overlay's routes and therefore never ran a line of its code.
+ */
+function removePremiumLocalStorageKeys(): void {
+  if (premiumLocalStorageKeyPrefixes.length === 0) return;
+
+  // Snapshot the keys first: Object.keys returns a plain array, whereas iterating
+  // localStorage by index while removing entries re-indexes underneath and skips keys.
+  Object.keys(localStorage)
+    .filter(key => premiumLocalStorageKeyPrefixes.some(prefix => key.startsWith(prefix)))
+    .forEach(key => localStorage.removeItem(key));
 }
