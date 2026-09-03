@@ -22,6 +22,7 @@ import {
   deriveServeCharBudget,
   isChunkRebuildPending,
   isChunkStalled,
+  isChunklessStall,
 } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
@@ -212,7 +213,11 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // outlives a rebuild the RESCUE SWEEP performs (that path enqueues without a reset), so keying on
   // the reason alone would fail a repaired file forever.
   // Same guard, same reason, as `decideMemberConvergence`'s own arm.
-  const passagesRemoved = member.chunkCount === 0 && member.chunkStallReason === 'rechunkPaused';
+  //
+  // `isChunklessStall`, not the bare `rechunkPaused`: `unchunkedPaused` is the same halted state on a
+  // file that arrived empty rather than one a wave emptied, and it grades identically here. NOT the
+  // full CHUNK_STALL_REASONS - a vectorize-paused file still has its passages.
+  const passagesRemoved = member.chunkCount === 0 && isChunklessStall(member.chunkStallReason);
   // A rebuild that was REQUESTED and has not committed (#1939). Deliberately NOT folded into
   // `passagesRemoved`: the passages are equally gone, but this one is expected back, so forcing P3
   // to `fail` here would make every ordinary "Rebuild passages" wave and every per-file reprocess
@@ -339,12 +344,13 @@ export type LakeHealthReport = {
  * to drop the lake off `healthy` regardless of the percentage beside it.
  */
 /**
- * The members `summarizeLakeHealth` grades: chunked, or chunkless via one of the two markers that
- * mean "expected back", not "never had any". Exported so a sibling report over the same scan - e.g.
+ * The members `summarizeLakeHealth` grades: chunked, or chunkless via a marker that says so. A
+ * chunkless member with no marker at all is the one thing left out - nothing distinguishes it from an
+ * image or a pending upload. Exported so a sibling report over the same scan - e.g.
  * `findDuplicateMembers` in `computeLakeHealth` - agrees by construction about which members are "in"
  * the lake, rather than by a comment promising the two filters stay in sync.
  *
- * The CHUNK arm only, matching `findDataLakeHealthMembers`'s own `$match` and
+ * The CHUNK arm only (`isChunklessStall`), matching `findDataLakeHealthMembers`'s own `$match` and
  * `partitionByIndexAvailability`: the vectorize arm of the switch leaves chunks in place, so it is
  * already admitted by `chunkCount > 0` and needs no exception here.
  *
@@ -358,7 +364,7 @@ export function selectLakeHealthMembers<
   T extends Pick<LakeHealthMemberInput, 'chunkCount' | 'chunkStallReason' | 'chunkRebuildRequestedAt'>,
 >(members: T[]): T[] {
   return members.filter(
-    m => m.chunkCount > 0 || m.chunkStallReason === 'rechunkPaused' || isChunkRebuildPending(m.chunkRebuildRequestedAt)
+    m => m.chunkCount > 0 || isChunklessStall(m.chunkStallReason) || isChunkRebuildPending(m.chunkRebuildRequestedAt)
   );
 }
 
