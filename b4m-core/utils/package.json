@@ -79,6 +79,16 @@
         "default": "./dist/escapeRegex.cjs"
       }
     },
+    "./contentDisposition": {
+      "import": {
+        "types": "./dist/contentDisposition.d.mts",
+        "default": "./dist/contentDisposition.mjs"
+      },
+      "require": {
+        "types": "./dist/contentDisposition.d.cts",
+        "default": "./dist/contentDisposition.cjs"
+      }
+    },
     "./normalizeId": {
       "import": {
         "types": "./dist/normalizeId.d.mts",

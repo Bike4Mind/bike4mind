@@ -19,10 +19,14 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
         { tag: 'docs:policy:v2', count: 5 },
       ],
       uniqueArticleCounts: { total: 7 },
+      totalLakeFileCount: 7,
+      lakeFileCounts: {},
+      uncategorizedFileCounts: {},
     },
     isLoading: false,
     isError: false,
   }),
+  useGetDataLakeUncategorizedFiles: () => ({ data: undefined, isLoading: false }),
   useGetDataLakeArticles: (params?: { tags?: string[] } | null) => {
     const tag = params?.tags?.[0];
     if (tag === 'docs:policy' || tag === 'docs:policy:v2') {

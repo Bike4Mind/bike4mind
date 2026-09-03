@@ -25,11 +25,17 @@ describe('isFingerprint', () => {
   // The whole bucketing rule rests on this: `null` is a RECORDED fact ("chunked, no extractable
   // text"), not a missing value, so it reads as comparable until you notice every image in a lake
   // carries it. See FabFileTypes' tri-state note.
-  it('accepts only a non-empty hex fingerprint, never null or absent', () => {
+  it('accepts any RECORDED hash and rejects null, absent or empty', () => {
     expect(isFingerprint('abc123')).toBe(true);
     expect(isFingerprint(null)).toBe(false);
     expect(isFingerprint(undefined)).toBe(false);
     expect(isFingerprint('')).toBe(false);
+  });
+
+  it('does NOT validate the encoding - the only producer is the internal hashing pipeline', () => {
+    // Pinning the absence of a format check so the contract and the code cannot drift apart again:
+    // the docstring used to claim hex validation this predicate never performed.
+    expect(isFingerprint('not-hex!!')).toBe(true);
   });
 });
 
@@ -73,6 +79,29 @@ describe('summarizeLakeMembership bucketing', () => {
     const report = summarize([
       member({ serverTextHash: 'aaa', fileSize: 100 }),
       member({ serverTextHash: 'aaa', fileSize: 250 }),
+    ]);
+
+    expect(report.duplicateGroups[0].bucket).toBe('differing');
+  });
+
+  it('does NOT prove identity when neither member has a known size', () => {
+    // The size conjunct went vacuous exactly where it cannot discriminate: `fileSize` is optional on
+    // the schema and coalesces to null, so two size-less members satisfied null === null and reached
+    // the one bucket that removes membership with no owner prompt. Same rule as `isFingerprint` - a
+    // missing value is never compared for equality.
+    const report = summarize([
+      member({ serverTextHash: 'aaa', fileSize: null }),
+      member({ serverTextHash: 'aaa', fileSize: null }),
+    ]);
+
+    expect(report.duplicateGroups[0].bucket).toBe('differing');
+    expect(report.bucketCounts['proven-identical']).toBe(0);
+  });
+
+  it('does NOT prove identity when only one member has a known size', () => {
+    const report = summarize([
+      member({ serverTextHash: 'aaa', fileSize: 100 }),
+      member({ serverTextHash: 'aaa', fileSize: null }),
     ]);
 
     expect(report.duplicateGroups[0].bucket).toBe('differing');
@@ -198,6 +227,49 @@ describe('summarizeLakeMembership disclosure and shape', () => {
     expect(report.duplicateGroups[0].bucket).toBe('unverified');
     // The count is of ALL groups, so a capped list never implies fewer duplicates than exist.
     expect(report.duplicateNameCount).toBe(2);
+  });
+
+  it('caps a group members array but keeps its exact memberCount', () => {
+    // maxGroups bounds the group LIST only; one shared file name is a single group, so without a
+    // per-group cap the payload was bounded only by the caller's scan limit.
+    const report = summarize(
+      [
+        member({ createdAt: new Date('2026-01-03T00:00:00Z') }),
+        member({ createdAt: new Date('2026-01-02T00:00:00Z') }),
+        member({ createdAt: new Date('2026-01-01T00:00:00Z') }),
+      ],
+      { maxGroupMembers: 2 }
+    );
+
+    expect(report.duplicateGroups[0].members).toHaveLength(2);
+    expect(report.duplicateGroups[0].memberCount).toBe(3);
+    // Newest kept, since that is what "keep newest" reads and what a reviewer needs to see.
+    expect(report.duplicateGroups[0].members[0].createdAt).toEqual(new Date('2026-01-03T00:00:00Z'));
+    // Both totals stay exact, so no reader is told there are fewer members than there are.
+    expect(report.duplicateMemberCount).toBe(3);
+    expect(report.totalMembers).toBe(3);
+  });
+
+  it('buckets a group over ALL its members, not just the ones that survive the cap', () => {
+    // The cap bounds the payload; it must not change what the group IS. If it were applied before
+    // classification, dropping the odd member out would silently promote a group to collapsible.
+    const report = summarize(
+      [
+        member({ serverTextHash: 'aaa', createdAt: new Date('2026-01-03T00:00:00Z') }),
+        member({ serverTextHash: 'aaa', createdAt: new Date('2026-01-02T00:00:00Z') }),
+        member({ serverTextHash: 'bbb', createdAt: new Date('2026-01-01T00:00:00Z') }),
+      ],
+      { maxGroupMembers: 2 }
+    );
+
+    expect(report.duplicateGroups[0].bucket).toBe('differing');
+  });
+
+  it('leaves members uncapped when no per-group cap is given', () => {
+    const report = summarize([member(), member(), member()]);
+
+    expect(report.duplicateGroups[0].members).toHaveLength(3);
+    expect(report.duplicateGroups[0].memberCount).toBe(3);
   });
 
   it('passes scanTruncated through, so every count reads as a lower bound', () => {

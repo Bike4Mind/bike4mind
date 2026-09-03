@@ -41,6 +41,8 @@ const group = (
   fileName,
   bucket,
   members,
+  // Exact by construction here: these fixtures are never capped, so the count is the array length.
+  memberCount: members.length,
 });
 
 const decision = (g: DuplicateGroup, overrides: Partial<MembershipDecisionRecord> = {}): MembershipDecisionRecord => ({

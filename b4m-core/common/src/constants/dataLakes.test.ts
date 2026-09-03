@@ -6,6 +6,7 @@ import {
   getDataLakeTags,
   lakeMatchesAccess,
   isReservedTagPrefix,
+  effectiveTagPrefixArm,
   normalizeEntitlementKey,
   normalizeTagPrefix,
   toDataLakeConfig,
@@ -222,6 +223,35 @@ describe('isReservedTagPrefix', () => {
 
   it.each(['acme:', 'opti:', 'data:', undefined, null])('allows %o', prefix => {
     expect(isReservedTagPrefix(prefix as string | undefined | null)).toBe(false);
+  });
+});
+
+describe('effectiveTagPrefixArm - the one decision the filter and its disclosure share', () => {
+  it('returns the normalized prefix for an owned scope with a creator', () => {
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: ' acme: ', creatorUserId: 'u1' })).toBe('acme:');
+  });
+
+  it('drops the arm for an owned scope with no creator to anchor to', () => {
+    // The reachable case, and the one that made a registry lake's report lie: a hardcoded lake's
+    // synthetic document carries createdByUserId '', so an `owned` scope fails closed to meta-tag
+    // only - while a disclosure read off the lake document still named the prefix.
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: 'acme:', creatorUserId: '' })).toBeNull();
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: 'acme:', creatorUserId: null })).toBeNull();
+    expect(effectiveTagPrefixArm({ kind: 'owned', fileTagPrefix: 'acme:' })).toBeNull();
+  });
+
+  it('keeps the arm for a registry scope, which needs no anchor', () => {
+    // A registry prefix is compile-time config, so its arm is open by design.
+    expect(effectiveTagPrefixArm({ kind: 'registry', fileTagPrefix: 'opti:' })).toBe('opti:');
+  });
+
+  it('drops an unusable or reserved-namespace prefix for either kind', () => {
+    for (const kind of ['owned', 'registry'] as const) {
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: 'datalake:', creatorUserId: 'u1' })).toBeNull();
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: 'no-colon', creatorUserId: 'u1' })).toBeNull();
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: '  ', creatorUserId: 'u1' })).toBeNull();
+      expect(effectiveTagPrefixArm({ kind, fileTagPrefix: null, creatorUserId: 'u1' })).toBeNull();
+    }
   });
 });
 

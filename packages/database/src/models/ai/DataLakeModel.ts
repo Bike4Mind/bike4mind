@@ -13,6 +13,7 @@ import type {
   BatchCounterField,
   AccessContext,
   DataLakeStatus,
+  LakeSettleFields,
   TaxonomyStatus,
   IDataLakeBatch,
 } from '@bike4mind/common';
@@ -567,15 +568,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   async claimDeleting(id: string): Promise<boolean> {
-    // 'restoring' is deliberately absent: a teardown must lose to an unarchive or restore already
-    // in flight rather than plain-write over it, which is what left a lake 'active' with every one
-    // of its files soft-deleted. 'deleted'/'purging' are handled by deleteDataLake's own guards.
+    // 'restoring' and 'unarchiving' are deliberately absent: a teardown must lose to a reversal on
+    // either axis already in flight rather than plain-write over it, which is what left a lake
+    // 'active' with every one of its files soft-deleted. 'deleted'/'purging' are handled by
+    // deleteDataLake's own guards.
     //
-    // 'archiving' IS admitted, and that is a deliberate asymmetry rather than an oversight: a
-    // delete may take the lake out from under an in-flight archive. It is safe only because that
-    // archive's own sweep is write-once, but its terminal settle is unconditional, so the pair
-    // still converges on 'archived' rather than 'deleted' - the one lifecycle pair this claim set
-    // does not close. Tracked separately; do not read the admitted set as covering it.
+    // 'archiving' IS admitted, and that asymmetry is deliberate: a delete may take the lake out
+    // from under an in-flight archive. The archive's own sweep is write-once, and its terminal
+    // settle is conditional on 'archiving', so once this claim lands the archive loses that settle
+    // and reports the conflict instead of converging back on 'archived'.
     return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
   }
 
@@ -585,7 +586,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // write must win. Losing here yields the same refusal the caller's guard would have given, where
     // a plain $set would instead leave the lake 'active' with every member soft-deleted and
     // restoreDeletedDataLake refusing it - unreachable files with no route back.
-    return this.claimLifecycleStatus(id, ['archived', 'restoring'], 'restoring');
+    //
+    // Lands on 'unarchiving', NOT the 'restoring' claimRestoring uses: sharing one value let an
+    // unarchive and a restore-from-deleted both hold it (each admits it for crash re-entry) and
+    // both settle 'active'. 'restoring' is still admitted as a SOURCE so an archive-axis reversal
+    // caught mid-flight by the deploy that split them converts onto this axis rather than
+    // stranding; that also demotes any delete-axis claimant holding it to a lost terminal settle.
+    return this.claimLifecycleStatus(id, ['archived', 'unarchiving', 'restoring'], 'unarchiving');
   }
 
   /**
@@ -596,6 +603,22 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   private async claimLifecycleStatus(id: string, from: DataLakeStatus[], to: DataLakeStatus): Promise<boolean> {
     const res = await this.dataLakeModel.updateOne({ _id: id, status: { $in: from } }, { $set: { status: to } });
     return res.matchedCount === 1;
+  }
+
+  async settleLifecycleStatus(
+    id: string,
+    from: DataLakeStatus,
+    set: LakeSettleFields
+  ): Promise<IDataLakeDocument | null> {
+    // The closing half of claimLifecycleStatus, and conditional for the mirror reason: the claim
+    // decides who may START, this decides who may RECORD the outcome. Both sweeps run regardless -
+    // an operation that lost here has already applied its side effects - so settling
+    // unconditionally would let the loser stamp its own terminal status over the winner's, leaving
+    // a lake whose status and file state come from different operations.
+    //
+    // findOneAndUpdate rather than updateOne so the settled document comes back for the audit diff,
+    // matching what the plain `update` call this replaced returned.
+    return this.dataLakeModel.findOneAndUpdate({ _id: id, status: from }, { $set: set }, { new: true });
   }
 
   async releasePurgingToDeleted(id: string): Promise<boolean> {
@@ -750,6 +773,10 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // accounting; upload-complete.ts's browser-reported failures never touch it.
     processingFailedFiles: { type: Number, default: 0 },
     skippedFiles: { type: Number, default: 0 },
+    // Drive-ingest-only: the driveFileIds skip() has already counted into skippedFiles, so a later
+    // slice of the same chain can subtract them (see IDataLakeBatch.skippedDriveFileIds) instead of
+    // re-fetching and re-skipping (and re-incrementing) the same permanently-unsupported file.
+    skippedDriveFileIds: [{ type: String }],
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },
     // Embedding spend metered against this run, integer micro-USD - see IDataLakeBatch.
@@ -892,6 +919,22 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   /**
+   * Drive-ingest-only: record a skipped driveFileId and increment `skippedFiles` in one atomic
+   * write, gated on that driveFileId not already being recorded. Without the gate, a chain that
+   * re-diffs the same permanently-unsupported file on every slice (skip() mints no FabFile, so the
+   * ordinary alreadyIngested subtraction can't see it) would increment skippedFiles once per slice
+   * for one file. Returns false when the driveFileId was already recorded (a genuine no-op, not an
+   * error) so the caller can tell a fresh skip from a repeat.
+   */
+  async recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES }, skippedDriveFileIds: { $ne: driveFileId } },
+      { $addToSet: { skippedDriveFileIds: driveFileId }, $inc: { skippedFiles: 1 } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  /**
    * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
    * incrementCounter calls can never leave a caller's counters partially applied (e.g.
    * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
@@ -978,6 +1021,17 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // the queue finalizer) write a settled batch back to a non-terminal status - resurrecting it into
     // findActiveByUserId, where reconcileStuckBatches would later force-fail a batch that succeeded.
     return this.guardedActiveUpdate(batchId, fields as Record<string, unknown>);
+  }
+
+  /**
+   * Re-plan a still-active batch's expected file count. Only the multi-run Drive ingest needs this:
+   * its batch is created from the first slice's candidate list, and later slices re-walk a folder that
+   * may have grown, so `totalFiles` has to be raised before the chain can overrun it (finalizing the
+   * batch mid-chain) and set exactly once the chain ends. Guarded like every other write here, so it
+   * cannot re-plan a batch someone already settled.
+   */
+  async setTotalFilesIfActive(batchId: string, totalFiles: number): Promise<IDataLakeBatchDocument | null> {
+    return this.guardedActiveUpdate(batchId, { totalFiles });
   }
 
   async touchIfActive(batchId: string): Promise<void> {

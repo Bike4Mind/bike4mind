@@ -118,6 +118,33 @@ export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix:
   prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
 
 /**
+ * The prefix arm a membership scope RESOLVES TO, or null when the membership predicate drops it.
+ *
+ * The single decision behind two things that must never disagree: `buildDataLakeMembershipFilter`
+ * (`@bike4mind/database`) builds its prefix arm from this, and any caller that DISCLOSES the scope it
+ * queried reports it. Deriving a disclosure from the lake document instead is the bug this exists to
+ * prevent - it claims an arm the filter dropped, so a number computed over the meta-tag alone is
+ * presented as though the prefix arm had run (#2243). A registry lake is the reachable case: it has no
+ * backing document, so `createdByUserId` is `''` and an `owned` scope fails closed to meta-tag-only
+ * while the document still carries a real `fileTagPrefix`.
+ *
+ * Three reasons the arm is dropped, and the caller cannot tell them apart from the scope alone:
+ * an unusable prefix, a reserved-namespace one, and an `owned` scope with no creator to anchor to.
+ */
+export const effectiveTagPrefixArm = (scope: {
+  kind: 'owned' | 'registry';
+  fileTagPrefix?: string | null;
+  creatorUserId?: string | null;
+}): string | null => {
+  const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix)) return null;
+  // An owned lake's prefix is user-chosen and unique only per creator, so with no creator there is
+  // nothing safe to match on. A registry prefix is compile-time config and needs no anchor.
+  if (scope.kind === 'owned' && !scope.creatorUserId) return null;
+  return prefix;
+};
+
+/**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
  * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
  * deleting either would take files the other holds.

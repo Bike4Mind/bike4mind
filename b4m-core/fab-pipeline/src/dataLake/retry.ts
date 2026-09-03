@@ -1,14 +1,25 @@
-// Self-contained retry helper for the data-lake clients.
+// The retry helper the data-lake clients use: a deliberate copy of the retry loop in
+// @bike4mind/common's retry.ts. MUST STAY IN SYNC with it on backoff semantics; that file carries the
+// reciprocal note.
 //
-// NOTE: this is a deliberately small, dependency-free copy of the retry logic in
-// @bike4mind/utils/src/retry.ts. We cannot import that package here: @bike4mind/utils
-// already depends on @bike4mind/fab-pipeline, so depending on it back would create a
-// circular package dependency. Keep the backoff *semantics* in sync with that file.
+// Why a copy at all, precisely - because the reason is narrower than it used to be stated:
 //
-// This copy's API intentionally differs from the utils version - do NOT blindly swap imports
-// during any future consolidation: this `withRetry` returns `Promise<T>` (the raw result),
-// whereas the utils version returns `Promise<RetryResult<T>>` (`{ result, attempts, totalDelayMs }`).
+//  - It is the API that cannot be shared, not the package. This `withRetry` returns `Promise<T>` (the
+//    raw result) where the upstream one returns `Promise<RetryResult<T>>`, and this one takes a
+//    caller-injected `getRetryAfterMs` where the upstream one calls its own. So do NOT blindly swap
+//    imports during a future consolidation - the signatures genuinely differ.
+//  - There is NO dependency barrier to importing from @bike4mind/common: fab-pipeline already
+//    declares it and already imports values from this directory (see BaseSearchIndex.ts). Its own
+//    deps are hearth/axios/dayjs/zod, so nothing cycles back. Anything shareable SHOULD be imported
+//    rather than copied, and `retryAfterHintOrNull` now is.
+//  - The cycle that does exist is with @bike4mind/utils, which depends on @bike4mind/fab-pipeline, so
+//    importing *utils* here would cycle. But utils holds no retry implementation to import - it
+//    re-exports common's. Do not restate that cycle as a reason not to share anything with common: it
+//    is not one, and stated too broadly it reads as forbidding the sharing this file now does.
+//
 // Feature parity (Retry-After handling, abortSignal cancellation) is maintained - see options below.
+
+import { retryAfterHintOrNull } from '@bike4mind/common';
 
 export interface RetryOptions {
   /** Maximum number of retry attempts after the initial try (default: 3). */
@@ -23,8 +34,14 @@ export interface RetryOptions {
   isRetryable: (error: Error) => boolean;
   /**
    * Optional: extract a server-requested delay (e.g. a `Retry-After` header) from the error,
-   * in milliseconds. When it returns a value, that delay (capped at `maxDelayMs`) is used for
-   * the next wait instead of the calculated backoff - so we honor what the cluster asked for.
+   * in milliseconds. When it returns a POSITIVE value, that delay (capped at `maxDelayMs`) is used
+   * for the next wait instead of the calculated backoff - so we honor what the cluster asked for.
+   *
+   * A zero or negative return is treated as no hint at all, and the calculated backoff is used
+   * instead. A delay that does not ask us to wait carries no timing information, and honoring it
+   * would mean discarding the backoff for every remaining attempt at exactly the moment the server
+   * is signalling distress. Guarded here rather than trusted from the extractor, since this option
+   * is caller-injected.
    */
   getRetryAfterMs?: (error: Error) => number | null;
   /** Optional signal to cancel retries - checked before each attempt and during the backoff sleep. */
@@ -96,8 +113,14 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
         throw error;
       }
 
-      // Honor a server-requested Retry-After (capped) over the calculated backoff.
-      const retryAfterMs = getRetryAfterMs?.(err) ?? null;
+      // Honor a server-requested Retry-After (capped) over the calculated backoff - but only a
+      // POSITIVE one. `getRetryAfterMs` is caller-injected, so this cannot rely on the producer
+      // having the rule: a zero or negative hint would otherwise win over the backoff (it is not
+      // null) and collapse every remaining attempt into an immediate burst. Through the shared
+      // predicate rather than an inline `> 0`, so the injected producer and this guard cannot end up
+      // disagreeing about what counts as a usable hint.
+      const rawRetryAfterMs = getRetryAfterMs?.(err);
+      const retryAfterMs = rawRetryAfterMs == null ? null : retryAfterHintOrNull(rawRetryAfterMs);
       const delayMs =
         retryAfterMs !== null
           ? Math.min(retryAfterMs, maxDelayMs)

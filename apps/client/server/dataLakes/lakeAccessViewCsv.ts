@@ -14,7 +14,8 @@ const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString
 
 /**
  * Render an assembled access view as a sectioned CSV compliance artifact - a metadata block plus
- * three labeled blocks (members & grants, access channels, access history) in one downloadable file.
+ * four labeled blocks (members & grants, access channels, candidate-cap pressure, access history)
+ * in one downloadable file.
  * Sectioned rather than one wide sparse table because the audience is human compliance review in a
  * spreadsheet; each block keeps its own header so every column is meaningful. A blank line separates
  * blocks. Static section labels are raw `#` comments; every value that could carry user input goes
@@ -88,6 +89,28 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
     // holderCount is left blank (not 0) when uncounted - a tag/entitlement channel is never scanned.
     lines.push(row([c.kind, c.value, c.label, c.holderCount ?? '', describeLakeAccessChannel(c)]));
   }
+  lines.push('');
+
+  lines.push('# Candidate-cap pressure (turns that read this lake and hit the forced-retrieval candidate cap)');
+  // Exported even at zero, with the reason: a section that vanished when nothing was reported would
+  // be indistinguishable from a lake whose reads all had full candidate coverage.
+  lines.push(
+    '# NOTE: turnsWithSignal counts reads whose surface reports this at all - turnsWithSignal 0 means not reported, which is not the same as no read hitting the cap'
+  );
+  lines.push(
+    '# NOTE: attribution is approximate - the cap applies to the whole candidate listing for a turn, across every source that turn could read; read this as turns that read this lake hit the cap, not as this lake causing it'
+  );
+  if (view.historyTruncated) {
+    lines.push('# NOTE: these counts cover only the truncated window above, not all time');
+  }
+  lines.push(row(['turnsWithSignal', 'turnsAtCap', 'lastAtCapAt']));
+  lines.push(
+    row([
+      view.candidateCapPressure.turnsWithSignal,
+      view.candidateCapPressure.turnsAtCap,
+      iso(view.candidateCapPressure.lastAtCapAt),
+    ])
+  );
   lines.push('');
 
   lines.push('# Access history (who actually read the lake)');

@@ -80,6 +80,7 @@ import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent'
 import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
@@ -708,11 +709,24 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     // outer-scoped variable, not read from a local inside the try, because the catch below must
     // report whichever lakes were resolved even if recall itself is what threw.
     let attemptedDataLakeTags: string[] = [];
-    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+    // NonNullable, not RetrievalSummary['outcome']: the latter now includes undefined, so an
+    // explicit `outcome: undefined` would type-check here and merge through verbatim, breaking
+    // the present-iff-`attempted` contract. Same guard recordForcedSkip uses for forcedSkipReason.
+    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        // Both recorders run only under forced retrieval, so they can label the turn themselves.
+        // Redundant with the seed in ChatCompletionProcess, which every path that constructs this
+        // feature also reaches - the redundancy is for ORDERING, not for a second entry point: a
+        // turn that exits between this write and the seed keeps its label.
+        //
+        // CAUTION for a third writer: 'forced' wins the merge irreversibly, so stamping it on an
+        // optional turn silently removes that turn from the #1394 denominator. Self-label only if
+        // the surface cannot run except under forced retrieval; otherwise omit `mode` and let the
+        // seed classify.
+        mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags,
       });
@@ -1682,8 +1696,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
     const reasons: string[] = [];
     if (coverage.moreFilesBeyondCap) {
+      // Names the selection RULE, not just the shortfall: candidates come off a fileName-ascending
+      // page (see the listing above), so an over-cap library does not lose a random slice - it
+      // loses the same tail on every turn, permanently. A reader told only "some were skipped"
+      // reasonably assumes a retry or a rephrase reaches the rest. It never does.
       reasons.push(
-        `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, so some were never considered`
+        `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
+          'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
+          'of the library is never reached'
       );
     }
     if (coverage.stoppedByChunkBudget) {
@@ -1833,6 +1853,29 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return [{ role: 'system' as const, content: forcedRetrievalNoContextPrompt(finding) }];
   }
 
+  /**
+   * Record that forced retrieval was enabled for this turn but a rule suppressed it (#1394).
+   *
+   * `attempted: false` on purpose - nothing ran, so there is no outcome to report and this must
+   * not read as a zero-recall retrieval. What it does say is that the model was left on the
+   * optional tool path DESPITE the session being configured for forced retrieval, which is
+   * otherwise unrecoverable from the stored turn: the skips below return before the recorder, so
+   * these turns used to look exactly like turns that were never forced.
+   */
+  private recordForcedSkip(
+    quest: IChatHistoryItemDocument,
+    forcedSkipReason: NonNullable<RetrievalSummary['forcedSkipReason']>
+  ): void {
+    quest.promptMeta = quest.promptMeta ?? {};
+    quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+      attempted: false,
+      mode: 'forced',
+      forcedSkipReason,
+      surfaces: [],
+      dataLakeTags: [],
+    });
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
@@ -1848,6 +1891,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // itself if it genuinely needs the library alongside the attachment.
     if (quest.fabFileIds && quest.fabFileIds.length > 0) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
+      this.recordForcedSkip(quest, 'attached_files');
       return [];
     }
 
@@ -1861,6 +1905,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // retrieve_knowledge_content(file_id) for an unowned lake doc is denied too.
     if (this.chatCompletion.personalCorpusOnly) {
       this.logger.log('🔒 Forced retrieval: skipped (session corpus is personal files, not lake content)');
+      this.recordForcedSkip(quest, 'personal_corpus');
       return [];
     }
 
@@ -1872,11 +1917,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // the audit spine and the per-turn summary name this surface identically.
     // Outer-scoped so the catch can report whichever lakes were resolved even when the scan threw.
     let attemptedDataLakeTags: string[] = [];
-    const recordRetrieval = (outcome: RetrievalSummary['outcome'], dataLakeTags: string[]) => {
+    // NonNullable for the same reason as LakeMemoryFeature's recorder above.
+    const recordRetrieval = (outcome: NonNullable<RetrievalSummary['outcome']>, dataLakeTags: string[]) => {
       quest.promptMeta = quest.promptMeta ?? {};
       quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
         attempted: true,
         outcome,
+        mode: 'forced',
         surfaces: ['forced-retrieval'],
         dataLakeTags,
       });
@@ -2192,10 +2239,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // wraps `name` alone, never the whole heading: it strips brackets, so applying it wider
         // would eat the `[N]` the indexed citation contract depends on.
         const safeName = toContentLabel(name);
+        // The date is read off the file document, not the candidate: `excludeContent` projects by
+        // EXCLUSION, so `createdAt` is already on the docs in `fileById` and no extra read or
+        // candidate field is needed. Unwrapped by toContentLabel on purpose - documentDateClause
+        // emits digits and separators only, so it cannot forge a marker the way `name` could.
+        const datedClause = documentDateClause(file?.createdAt);
         const heading =
           this.citationStyle === 'indexed'
-            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})`
-            : `### ${safeName} (ID: ${candidate.fabFileId})`;
+            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})${datedClause}`
+            : `### ${safeName} (ID: ${candidate.fabFileId})${datedClause}`;
         sections.push(`${heading}\n${text}`);
         used += text.length;
       }
@@ -2361,6 +2413,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             fileIds: sourceFileIds,
             chunkIds: injectedChunkIds,
             scores: injectedScores,
+            candidateCapReached: coverage.moreFilesBeyondCap,
             surface: 'forced-retrieval',
             queryText: query,
             questId: quest.id,

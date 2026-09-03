@@ -489,17 +489,24 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   }
 
   /**
-   * Atomic state transition: only updates if current status matches expectedStatus.
-   * Returns the updated document, or null if the transition was not possible.
+   * Atomic state transition: only updates if current status matches expectedStatus
+   * AND the doc belongs to repoSlug. Returns the updated document, or null if the
+   * transition was not possible.
+   *
+   * repoSlug is required rather than optional so every caller has to name the repo
+   * it believes it is acting on: an id alone is caller-supplied and does not prove
+   * which repo the doc belongs to. Callers driven by an authenticated request must
+   * pass the repo that authenticated it, not one read off the doc.
    */
   async atomicTransition(
     id: string,
+    repoSlug: string,
     expectedStatus: ISreErrorTracking['status'],
     newStatus: ISreErrorTracking['status'],
     updates?: Partial<ISreErrorTracking>
   ): Promise<ISreErrorTracking | null> {
     const result = await this.model.findOneAndUpdate(
-      { _id: id, status: expectedStatus },
+      { _id: id, ...repoSlugFilter(repoSlug), status: expectedStatus },
       { $set: { status: newStatus, ...updates } },
       { returnDocument: 'after' }
     );
@@ -539,12 +546,14 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
    *   - no PR was created (fixPrNumber missing)
    *   - revisionCount >= maxRevisions (cap reached)
    *   - PR already merged (fixMergedAt exists)
+   *   - the doc does not belong to repoSlug (see atomicTransition on why it is required)
    * Also resets githubRunDispatched for the new dispatch cycle.
    */
-  async claimRevision(id: string, maxRevisions: number): Promise<ISreErrorTracking | null> {
+  async claimRevision(id: string, repoSlug: string, maxRevisions: number): Promise<ISreErrorTracking | null> {
     const result = await this.model.findOneAndUpdate(
       {
         _id: id,
+        ...repoSlugFilter(repoSlug),
         status: { $in: ['fixed', 'failed', 'wont_fix'] },
         fixPrNumber: { $exists: true },
         revisionCount: { $lt: maxRevisions },
@@ -562,12 +571,14 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   /**
    * Atomic CI retry claim: transitions 'fixing' -> 'revision_requested' when below maxCiRetries.
    * Uses $expr/$ifNull to handle docs where ciRetryCount is absent (treated as 0).
-   * Returns null for duplicate callbacks AND when the retry cap is already reached.
+   * Returns null for duplicate callbacks, when the retry cap is already reached, AND
+   * when the doc does not belong to repoSlug (see atomicTransition on why it is required).
    */
-  async claimCiRetry(id: string, maxCiRetries: number): Promise<ISreErrorTracking | null> {
+  async claimCiRetry(id: string, repoSlug: string, maxCiRetries: number): Promise<ISreErrorTracking | null> {
     const result = await this.model.findOneAndUpdate(
       {
         _id: id,
+        ...repoSlugFilter(repoSlug),
         status: 'fixing',
         $expr: { $lt: [{ $ifNull: ['$ciRetryCount', 0] }, maxCiRetries] },
       },
