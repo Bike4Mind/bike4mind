@@ -230,6 +230,88 @@ describe('supersession collapse against real Mongo', () => {
     expect(on.supersession.count).toBe(0);
   });
 
+  /**
+   * The shape the collapse used to miss entirely: a DYNAMIC lake whose members carry only its
+   * content-tag prefix and no `datalake:` meta-tag. Both halves have to be real here - the members
+   * only reach retrieval scope through the `lakeMemberships` arm, and they only ATTRIBUTE through
+   * the creator-ownership conjunct - so a mock could not tell whether the collapse fired for the
+   * right reason.
+   */
+  it('collapses prefix-only members of a dynamic lake, which meta-tags alone could not reach', async () => {
+    const membership = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: userId,
+    };
+    const dynamicLake = {
+      id: 'lake-acme',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      membership,
+    };
+    const older = await makeFile({
+      fileName: 'Handbook.pdf',
+      tags: [{ name: 'acme:hr' }],
+      createdAt: '2024-01-01T00:00:00Z',
+      text: 'OLD handbook text',
+    });
+    const newer = await makeFile({
+      fileName: 'Handbook.pdf',
+      tags: [{ name: 'acme:hr' }],
+      createdAt: '2025-06-01T00:00:00Z',
+      text: 'NEW handbook text',
+    });
+
+    const scoped = { lakeMemberships: [membership], lakes: [dynamicLake] };
+
+    // Both generations are genuinely in scope - otherwise "only one ranked" would prove nothing.
+    const off = await run(scoped);
+    expect(off.results.map(r => r.fileId).sort()).toEqual([older, newer].sort());
+    expect(off.supersession.count).toBe(0);
+
+    const on = await run({ ...scoped, supersessionCollapseEnabled: true });
+    expect(on.results.map(r => r.fileId)).toEqual([newer]);
+    expect(on.supersession.sample[0]).toMatchObject({ fileId: older, supersededBy: newer });
+  });
+
+  /**
+   * The other half of the same rule, and the reason the prefix arm is safe to reverse at all: a
+   * prefix-only file the lake's creator does NOT own is not a member, so it can neither be
+   * collapsed nor suppress anything. Asserted against real Mongo because the ownership conjunct is
+   * the single thing standing between this feature and a cross-tenant suppression.
+   */
+  it('leaves a prefix-only file owned by someone else alone', async () => {
+    const membership = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      // A lake created by somebody else entirely: the seeded files below are the caller's.
+      creatorUserId: 'a-different-creator',
+    };
+    const dynamicLake = { id: 'lake-acme', datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', membership };
+    await makeFile({
+      fileName: 'Handbook.pdf',
+      tags: [{ name: 'acme:hr' }],
+      createdAt: '2024-01-01T00:00:00Z',
+      text: 'OLD handbook text',
+    });
+    await makeFile({
+      fileName: 'Handbook.pdf',
+      tags: [{ name: 'acme:hr' }],
+      createdAt: '2025-06-01T00:00:00Z',
+      text: 'NEW handbook text',
+    });
+
+    const on = await run({
+      lakeMemberships: [membership],
+      lakes: [dynamicLake],
+      supersessionCollapseEnabled: true,
+    });
+    expect(on.results).toHaveLength(2);
+    expect(on.supersession.count).toBe(0);
+  });
+
   it('survives a legacy row whose tag object carries no name', async () => {
     const older = await makeFile({
       fileName: 'Legacy.pdf',

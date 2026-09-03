@@ -204,6 +204,78 @@ describe('partitionBySupersession', () => {
   });
 });
 
+/**
+ * The case the collapse used to miss entirely: a dynamic lake whose members carry only its
+ * content-tag prefix and no `datalake:` meta-tag. Attribution reaches them now, but only through
+ * the creator-ownership conjunct, so these tests pin BOTH halves - it collapses for the creator's
+ * files and stays inert for anyone else's.
+ */
+describe('partitionBySupersession: prefix-only members of a dynamic lake', () => {
+  const CREATOR = 'creator-1';
+  const DYNAMIC = [
+    {
+      id: 'lakeDyn',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:acme',
+        fileTagPrefix: 'acme:',
+        creatorUserId: CREATOR,
+      },
+    },
+  ];
+  const prefixOnly = (over: Partial<SupersedableFile> & { id: string }): SupersedableFile => ({
+    fileName: 'handbook.md',
+    fileTags: ['acme:hr'],
+    userId: CREATOR,
+    createdAt: new Date('2024-01-01'),
+    ...over,
+  });
+
+  it('collapses two prefix-only generations the creator owns', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [prefixOnly({ id: 'old' }), prefixOnly({ id: 'new', createdAt: new Date('2025-01-01') })],
+      { lakes: DYNAMIC }
+    );
+    expect(idsOf(servable)).toEqual(['new']);
+    expect(superseded[0]).toMatchObject({ tier: 'fileName', supersededBy: 'new' });
+  });
+
+  it('lets a prefix-only newer generation displace a meta-tagged older one', () => {
+    const { servable } = partitionBySupersession(
+      [
+        prefixOnly({ id: 'old', fileTags: ['datalake:acme'] }),
+        prefixOnly({ id: 'new', createdAt: new Date('2025-01-01') }),
+      ],
+      { lakes: DYNAMIC }
+    );
+    expect(idsOf(servable)).toEqual(['new']);
+  });
+
+  // Not a member by `buildDataLakeMembershipFilter` either, so it must not group - attribution here
+  // must never claim a membership the lake's own browse and delete paths would deny.
+  it('does not group a prefix-only file owned by someone other than the creator', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [prefixOnly({ id: 'mine' }), prefixOnly({ id: 'theirs', userId: 'someone-else' })],
+      { lakes: DYNAMIC }
+    );
+    expect(idsOf(servable).sort()).toEqual(['mine', 'theirs']);
+    expect(superseded).toEqual([]);
+  });
+
+  // The owner is carried per FILE, so an absent one degrades that file to meta-tag attribution
+  // rather than throwing or attributing it to the whole scope.
+  it('leaves a prefix-only file with no owner ungrouped', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [prefixOnly({ id: 'a', userId: undefined }), prefixOnly({ id: 'b', userId: undefined })],
+      { lakes: DYNAMIC }
+    );
+    expect(idsOf(servable).sort()).toEqual(['a', 'b']);
+    expect(superseded).toEqual([]);
+  });
+});
+
 describe('buildSupersessionReport / describeSupersession', () => {
   const supersededOf = (count: number) =>
     partitionBySupersession(

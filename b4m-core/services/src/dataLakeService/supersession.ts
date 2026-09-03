@@ -23,16 +23,18 @@ import { toSingleLine } from './renderDataLakePromptBlock';
  * the tier that suppressed them rather than only counting them: a bad collapse has to be
  * diagnosable from a transcript alone.
  *
- * KNOWN GAP, and the one to check before reading a collapse count as evidence of anything: on a
- * DYNAMIC lake, a member carrying only the lake's content-tag prefix and no `datalake:` meta-tag
- * attributes to no lake at all, so it groups only with itself and can never collapse. That is
- * `attributeFileToLakeIds`' prefix arm refusing to treat a user-controlled prefix as a standalone
- * attribution signal - correct there, and the safe direction here - but it means a prefix-only
- * newer generation cannot displace a meta-tagged older one. A lake whose members are largely
- * prefix-only will report a collapse count of zero no matter how many duplicates it holds - and
- * that shape got more common, not less, once `lakeMemberships` widened which prefix-only members
- * reach retrieval scope at all. Closing it means giving attribution a membership-anchored arm,
- * which is a change to `attributeFileToLakeIds` and its audit-trail caller both, not to this file.
+ * Attribution reaches prefix-only members, which is why `userId` is part of the input: a dynamic
+ * lake's content-tag prefix is user-chosen, so it identifies a lake only when conjoined with the
+ * lake creator's ownership of the file - the same conjunction `buildDataLakeMembershipFilter` uses
+ * to decide membership for the browse and every lifecycle write. Dropping `userId` from a builder
+ * therefore does not merely lose a field: it silently narrows the collapse back to meta-tagged
+ * members, on lakes whose members are largely prefix-only.
+ *
+ * REMAINING GAP, and the one to check before reading a collapse count as evidence of anything: a
+ * prefix-only member the creator does NOT own - an admin's upload into someone else's lake is the
+ * documented case - is not a member by that predicate either, so it still groups only with itself.
+ * That is deliberate rather than missing: attribution here must not claim a membership the lake's
+ * own delete and browse paths would deny. Such a member cannot be collapsed, and cannot suppress.
  */
 
 /** How many suppressed files to name, so a caller can act without dumping the lake. */
@@ -49,6 +51,8 @@ export type SupersedableFile = {
   id: string;
   fileName?: string;
   fileTags?: string[];
+  /** The file's owner. Enables the dynamic-lake prefix arm of attribution - see the module comment. */
+  userId?: string;
   /** Populated for folder uploads and Drive ingest; absent on a plain single-file re-upload. */
   relativePath?: string;
   /** Drive ingest only - its own doc comment calls it the stable dedup key within a lake. */
@@ -124,8 +128,9 @@ function winsOver(candidate: SupersedableFile, incumbent: SupersedableFile): boo
  * Split a scoped file set into the newest generation of each source document and the older
  * generations it supersedes, PER LAKE. Pure; no I/O.
  *
- * Attribution comes from the resolved `lakes`, not from meta-tags alone, so a static-registry lake
- * whose members carry only a content-tag prefix still groups (see `attributeFileToLakeIds`). A file
+ * Attribution comes from the resolved `lakes`, not from meta-tags alone, so a member carrying only
+ * a content-tag prefix still groups - for a static-registry lake on the prefix alone, and for a
+ * dynamic lake when its creator owns the file (see `attributeFileToLakeIds`). A file
  * that attributes to NO lake, or to more than one, groups only with itself and is never collapsed:
  * without a single owning lake there is no scope in which "the same document" is even well defined,
  * and the wrong answer here silently drops a document from retrieval.
@@ -141,7 +146,7 @@ export function partitionBySupersession<T extends SupersedableFile>(
   const keyed: { file: T; identity: { key: string; tier: SupersessionTier } | null }[] = [];
 
   for (const file of files) {
-    const lakeIds = attributeFileToLakeIds(file.fileTags ?? [], lakes);
+    const lakeIds = attributeFileToLakeIds(file.fileTags ?? [], lakes, file.userId);
     const identity = lakeIds.length === 1 ? supersessionKeyFor(file, lakeIds[0]) : null;
     keyed.push({ file, identity });
     if (!identity) continue;

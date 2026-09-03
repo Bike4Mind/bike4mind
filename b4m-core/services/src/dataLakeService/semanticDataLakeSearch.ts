@@ -367,6 +367,12 @@ interface RankableFile {
    */
   relativePath?: string;
   driveFileId?: string;
+  /**
+   * The file's owner, read by the collapse's ATTRIBUTION rather than its key: a dynamic lake's
+   * content-tag prefix identifies a lake only when the lake's creator owns the file. Omitting it
+   * fails quiet - the collapse silently narrows to meta-tagged members - so both builders carry it.
+   */
+  userId?: string;
 }
 
 /**
@@ -720,11 +726,13 @@ async function rankChunksForFiles(args: {
       chunkStallReason: file?.chunkStallReason,
       notes: file?.notes,
       chunkRebuildRequestedAt: file?.chunkRebuildRequestedAt,
-      // Source identity for the supersession collapse below; `fileTags` above is what attributes
-      // the file to a lake, so it is part of the same key and not the mismatch projection's concern.
+      // Source identity for the supersession collapse below. `fileTags` above and `userId` here are
+      // what attribute the file to a lake (a dynamic lake's prefix arm is creator-anchored), so they
+      // belong to the same partition and are not the mismatch projection's concern.
       relativePath: file?.relativePath,
       driveFileId: file?.driveFileId,
       createdAt: file?.createdAt,
+      userId: file?.userId,
     };
   });
   // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old
@@ -1148,6 +1156,7 @@ export async function semanticDataLakeSearch(
         // collapse a silent no-op rather than an error.
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
+        userId: f.userId,
       },
     ])
   );
@@ -1264,6 +1273,7 @@ export async function fileScopedSemanticSearch(
         // collapse a silent no-op rather than an error.
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
+        userId: f.userId,
       },
     ])
   );

@@ -1396,6 +1396,35 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     expect(content).not.toContain('content of old');
   });
 
+  /**
+   * Prefix-only members of a dynamic lake, which meta-tag attribution alone could never group. This
+   * path builds its own candidate shape rather than reusing `RankableFile`, so it needs its own
+   * proof that the file's `userId` - what the creator-anchored prefix arm is conjoined with -
+   * actually reaches `partitionBySupersession` here.
+   */
+  it('collapses prefix-only generations the lake creator owns', async () => {
+    const prefixOnly = [
+      gen('old', { tags: [{ name: 'x:hr' }], userId: OWNER, createdAt: new Date('2024-01-01') }),
+      gen('new', { tags: [{ name: 'x:hr' }], userId: OWNER, createdAt: new Date('2025-01-01') }),
+    ];
+    const ctx = makeCtx(prefixOnly, true);
+    const { content } = await run(ctx);
+    expect(content).toContain('content of new');
+    expect(content).not.toContain('content of old');
+  });
+
+  // The ownership conjunct is the whole reason a user-chosen prefix is reversible at all, so the
+  // refusal gets asserted at this site too rather than only in the unit suite.
+  it('does not collapse prefix-only files the lake creator does not own', async () => {
+    const notOwned = [
+      gen('old', { tags: [{ name: 'x:hr' }], userId: 'someone-else', createdAt: new Date('2024-01-01') }),
+      gen('new', { tags: [{ name: 'x:hr' }], userId: 'someone-else', createdAt: new Date('2025-01-01') }),
+    ];
+    const { content } = await run(makeCtx(notOwned, true));
+    expect(content).toContain('content of old');
+    expect(content).toContain('content of new');
+  });
+
   it('reports the collapse in the coverage warning with ids and the matching tier', async () => {
     const { quest } = await run(makeCtx(twoGenerations, true));
     const reasons =
