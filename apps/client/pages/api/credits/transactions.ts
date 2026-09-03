@@ -31,7 +31,11 @@ const handler = baseApi().get(async (req, res) => {
   });
 
   if (!validation.success) {
-    return res.status(400).json({ error: 'Invalid query parameters', details: validation.error });
+    // Just the messages: serializing the ZodError puts a pretty-printed blob of zod's own
+    // issue structure on the wire, and `?days=400`/`0`/negatives now land here routinely.
+    return res
+      .status(400)
+      .json({ error: 'Invalid query parameters', details: validation.error.issues.map(i => i.message) });
   }
 
   const { days, type } = validation.data;

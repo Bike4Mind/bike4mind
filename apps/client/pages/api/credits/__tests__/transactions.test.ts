@@ -57,6 +57,13 @@ describe('GET /api/credits/transactions - days bound', () => {
     expect(res._getStatusCode()).toBe(400);
     // Nothing reached the database, so no CastError could be thrown.
     expect(mockFindByOwner).not.toHaveBeenCalled();
+    // Messages only. Serializing the ZodError itself puts zod's issue structure (`origin`,
+    // `code`, `maximum`, the `path` array) on the wire as a pretty-printed blob.
+    const body = res._getJSONData();
+    expect(Array.isArray(body.details)).toBe(true);
+    for (const d of body.details) expect(typeof d).toBe('string');
+    expect(JSON.stringify(body)).not.toContain('ZodError');
+    expect(JSON.stringify(body)).not.toContain('too_big');
   });
 
   it('passes a window inside the bound through to the repository', async () => {

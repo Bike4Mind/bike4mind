@@ -29,7 +29,10 @@ const handler = baseApi()
     // Used to shift date-only strings so "Feb 20" for a PST user means
     // local midnight in UTC (e.g. T08:00:00Z for PST) instead of UTC midnight.
     const offsetMinutes = typeof tzOffset === 'string' ? parseInt(tzOffset, 10) : 0;
-    const validOffset = Number.isFinite(offsetMinutes) ? offsetMinutes : 0;
+    // Clamped to the real UTC offset range (+/-14h). A finite but absurd value passes the
+    // isFinite check and then overflows the setUTCMinutes shifts below into an Invalid Date,
+    // which casts on the Date-typed `createdAt` and answers 500 rather than a client error.
+    const validOffset = Number.isFinite(offsetMinutes) ? Math.min(Math.max(offsetMinutes, -840), 840) : 0;
 
     const createdAtFilter: { $gte?: Date; $lte?: Date } = {};
     if (typeof dateFrom === 'string') {
