@@ -24,6 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
       {
         use: () => chain,
         delete: (fn: (req: unknown, res: unknown) => unknown) => ((routes.DELETE = fn), chain),
+        post: (fn: (req: unknown, res: unknown) => unknown) => ((routes.POST = fn), chain),
       }
     );
     return chain;
@@ -41,6 +42,8 @@ vi.mock('@bike4mind/database', () => ({
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
   },
+  lakeMembershipRemovalRepository: { upsertRemoval: vi.fn(), findLive: vi.fn().mockResolvedValue(null) },
+  scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', () => ({
@@ -48,6 +51,7 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     assertLakeWritable: h.assertLakeWritable,
     removeFileFromDataLake: h.removeFileFromDataLake,
+    addFileToDataLake: vi.fn(),
   },
 }));
 

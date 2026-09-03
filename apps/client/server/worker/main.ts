@@ -10,12 +10,15 @@ import { dispatch as researchEngineDispatch } from '@server/queueHandlers/resear
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
+import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep } from './chunkRescueSweep';
+import { CHUNK_SCAN_BATCH } from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -29,6 +32,7 @@ import {
  * so `Resource.*` reads resolve from env. It is the self-host stand-in for the hosted
  * SST queue consumers (infra/queues.ts) and cron (infra/cron.ts):
  *   - polls researchEngineQueue -> researchEngineQueue.dispatch (same handler as hosted)
+ *   - polls imageGenerationQueue / imageEditQueue -> the same dispatch handlers hosted uses
  *   - runs taskSchedulerService.process every 5 minutes with the same handler map as
  *     the hosted cron/scheduler.ts (kept in sync with it).
  */
@@ -39,6 +43,10 @@ const bootLogger = new Logger({ metadata: { service: 'selfHostWorker' } });
 const RESEARCH_VISIBILITY_TIMEOUT_SEC = 900;
 /** Chunking/embedding a file (esp. local Ollama embeddings on CPU) can take minutes. */
 const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
+/** Matches the 11-minute visibility timeout hosted gives both image queues (infra/queues.ts),
+ *  which sits above their 10-minute handler timeout so a slow render is never redelivered
+ *  mid-flight - a duplicate would charge the user's credits a second time. */
+const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
@@ -79,6 +87,36 @@ async function main() {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
     maxReceiveCount: FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   });
+
+  // Image generation and image edit. The app enqueues here from POST /api/ai/generate-image and
+  // POST /api/ai/edit-image (the `/image` chat command), so without a consumer the quest sits at
+  // 'pending' forever. The in-chat image_generation / edit_image LLM tools do NOT come through
+  // here - they render inline in ChatCompletion. Optional in the manifest: an install that
+  // upgraded without adding the env vars keeps the rest of the worker up and says so on boot.
+  const registerImageQueue = (
+    name: string,
+    feature: string,
+    url: string | undefined,
+    dispatch: typeof imageGenerationDispatch
+  ) => {
+    if (!url) {
+      bootLogger.warn(`${name} not configured; ${feature} will not run`);
+      return;
+    }
+    worker.registerQueueHandler(name, url, dispatch, {
+      visibilityTimeoutSec: IMAGE_VISIBILITY_TIMEOUT_SEC,
+      // Explicit rather than registerQueueHandler's default: hosted's dlq.retry is 3
+      // (infra/queues.ts), and image renders cost provider money per attempt.
+      maxReceiveCount: 3,
+    });
+  };
+  registerImageQueue(
+    'imageGenerationQueue',
+    'image generation',
+    Resource.imageGenerationQueue?.url,
+    imageGenerationDispatch
+  );
+  registerImageQueue('imageEditQueue', 'image edit', Resource.imageEditQueue?.url, imageEditDispatch);
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
   // in the self-host manifest - a basic install that never set the env var simply never runs
@@ -132,10 +170,11 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. Selection and enqueue
-  // accounting live in chunkRescueSweep.ts, shared in shape with the hosted daily cron.
+  // notification is missed, sweep un-chunked files and enqueue them. Selection, pause scoping and
+  // enqueue accounting all live in chunkRescueSweep.ts, which the hosted daily cron also calls -
+  // the per-tick budget below is the only thing that differs.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    await runChunkRescueSweep(bootLogger);
+    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger });
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):

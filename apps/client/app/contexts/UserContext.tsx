@@ -379,11 +379,11 @@ export function resolveIdentifyEffect(params: {
 export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): boolean => !heldToken;
 
 /**
- * Merge a `users` WebSocket push onto the existing store user. The push carries only the
- * subscription's projected fields, so replacing would wipe every non-projected field (integration
- * settings, lastNotebookId, isBanned/isModerated, ...); merging updates the projected fields and
- * preserves the rest. `existing` may be null (no user yet), in which case the pushed subset is
- * adopted as-is. Exported for unit testing.
+ * Merge a `users` WebSocket push onto the existing store user. The push carries the full user
+ * document minus the server's security exclusions (password, stripeCustomerId, resetPasswordToken -
+ * see resolveFieldLimits), so replacing would wipe those excluded fields from the store; merging
+ * applies the pushed fields and preserves the excluded ones. `existing` may be null (no user yet),
+ * in which case the pushed document is adopted as-is. Exported for unit testing.
  */
 export const applyUserPush = (existing: IUserDocument | null, pushed: IUserDocument): IUserDocument =>
   ({ ...(existing ?? {}), ...pushed }) as IUserDocument;
@@ -407,12 +407,11 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       (_type: string, data: IUserDocument) => {
         if (data && data.id === userId) {
           try {
-            // The 'users' push carries only the projected `fields` (see the options below), so
-            // replacing the store user would wipe every field outside that projection (integration
-            // settings, lastNotebookId, isBanned/isModerated, ...). Merge onto the existing user so
-            // a push updates the projected fields and leaves the rest intact. Tradeoff: a field
-            // cleared server-side but absent from the projection keeps its stale value until the
-            // next refreshUser()/identify.
+            // The 'users' push carries the full user document minus the server's security
+            // exclusions (password, stripeCustomerId, resetPasswordToken), so replacing the store
+            // user would wipe those excluded fields. Merge onto the existing user so a push applies
+            // its fields and leaves the excluded ones intact. Tradeoff: a field cleared server-side
+            // but absent from the push keeps its stale value until the next refreshUser()/identify.
             setCurrentUser(applyUserPush(useUser.getState().currentUser, data));
             // Real-time kill switch: if the user's tokenVersion has advanced
             // past the version embedded in this tab's access token, the session
@@ -446,43 +445,7 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       },
       [setCurrentUser, userId, accessToken]
     ),
-    {
-      fetchInitialData: true,
-      fields: {
-        currentCredits: 1,
-        lastCreditsPurchasedAt: 1,
-        id: 1,
-        tokenVersion: 1,
-        emailVerified: 1,
-        name: 1,
-        email: 1,
-        username: 1,
-        systemFiles: 1,
-        showCreditsUsed: 1,
-        atlassianConnect: 1,
-        googleDrive: 1,
-        authProviders: 1,
-        // Critical fields for modal filtering and UI
-        tags: 1,
-        isAdmin: 1,
-        level: 1,
-        photoUrl: 1,
-        organizationId: 1,
-        // User presence fields
-        isOnline: 1,
-        lastActiveAt: 1,
-        // Additional user preferences
-        preferredVoice: 1,
-        preferences: 1,
-        // Security and permissions
-        mfa: 1,
-        groups: 1,
-        // Integration settings: projected so a real-time slackSettings change reaches this tab.
-        // The handler now merges rather than replaces, so a field absent here is no longer wiped -
-        // it just doesn't update in real time and refreshes on the next refreshUser()/identify.
-        slackSettings: 1,
-      },
-    }
+    { fetchInitialData: true }
   );
 
   // Fetch the current user's data and access token when the component mounts.

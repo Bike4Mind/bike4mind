@@ -138,6 +138,20 @@ own once indexing completes - re-run the search then. Prefer to converge a lake 
 people are querying it.
 :::
 
+:::note A large repair is paced on purpose
+Rebuilding or converging a lake re-embeds every file it touches, and every embedding call in the
+platform shares one provider quota. Both doors therefore run against a platform-wide throughput cap -
+a limit on embedding calls per minute and on tokens per minute - so a big repair drains steadily
+instead of arriving all at once and crowding out ordinary uploads. Searches are deliberately outside
+that cap: querying a lake never waits behind a repair.
+
+What you may see while a large repair runs: files finishing in waves rather than all together, and
+occasionally a file that reports being throttled. Throttling resolves itself - the work retries
+automatically, and no action is needed unless it persists for hours. If indexing stops entirely and
+files report that a throughput limit is set to 0, that is a deliberate platform-admin setting rather
+than a fault; ask an administrator, since nothing you can change from the lake will restart it.
+:::
+
 ### Vector Embeddings
 Every chunk is:
 - **Semantically Indexed** - Meaning-based search
@@ -401,9 +415,15 @@ opens a compliance surface answering the two questions a lake owner is asked fir
     exists only for a retrieval surface that emits access events, the audit write is best-effort by
     design, and events age out on their own retention window. An empty history means "no reads
     recorded", not "nobody read this lake".
+  - **Candidate-cap pressure** - how many of those reads ran against a truncated candidate list,
+    because more documents matched than the retrieval candidate cap considers. Shown as a pair
+    ("N of M reported reads"), since only some retrieval surfaces report it at all: "not reported
+    for this window" means nothing measured it, not that every read saw the whole library. The cap
+    applies to a turn's entire candidate list, across every source that turn could read, so read
+    this as reads of this lake that hit the cap - not as this lake causing it.
 
 Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
-same three sections plus a note when the history was truncated.
+same four sections plus a note when the history was truncated.
 
 ### Transferring a data lake to someone else
 

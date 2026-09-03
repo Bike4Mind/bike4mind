@@ -53,7 +53,7 @@ describe('every execution-terminating path settles its stranded quests', () => {
         'pages/api/admin/agent-executions/cleanup.ts',
         'server/cron/agentExecutionAbandonedSweep.ts',
         'server/questmaster/v5/runQuestNode.ts',
-        'server/websocket/agentExecute.ts',
+        'server/utils/startAgentExecution.ts',
       ])
     );
   });

@@ -109,6 +109,7 @@ describe('countFailedLakeFiles', () => {
     const result = await countFailedLakeFiles(lake, { db: { fabFiles: { countFailedFilesByScope } } });
     expect(result).toBe(3);
     expect(countFailedFilesByScope).toHaveBeenCalledWith({
+      kind: 'owned',
       datalakeTag: 'datalake:acme',
       fileTagPrefix: 'acme:',
       creatorUserId: 'owner-1',

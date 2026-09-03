@@ -32,6 +32,12 @@ const h = vi.hoisted(() => ({
   indexChunks: vi.fn(),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   enforceEmbeddingSpendGate: vi.fn(async () => undefined),
+  // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
+  // tag-joined members are both lake work, everything else is not. Its own decision table is
+  // pinned in resolveIngestSpendScope.test.ts.
+  resolveIngestSpendScope: vi.fn(async (file: { batchId?: string }) =>
+    file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+  ),
   batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
   batchReleaseSpend: vi.fn(async () => true),
   lakeReleaseSpend: vi.fn(async () => true),
@@ -82,6 +88,7 @@ vi.mock('@bike4mind/services', () => ({
   recordOperationalUsage: h.recordOperationalUsage,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
+    resolveIngestSpendScope: h.resolveIngestSpendScope,
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
     EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
       retryable: boolean;
@@ -109,12 +116,8 @@ vi.mock('@bike4mind/common', async () => {
   return {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
-    // Pulled from the real module rather than retyped. This handler WRITES the note and the lake-health
-    // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
-    // drift (both import the same constant), but a literal here would let THIS suite keep passing
-    // against a string the constant no longer has.
-    CONVERGENCE_PAUSED_NOTE: actual.CONVERGENCE_PAUSED_NOTE,
-    // Same reason, for the provenance vocabulary convergenceProvenance.ts re-exports from common:
+    // Pulled from the real module rather than retyped, for the provenance vocabulary
+    // convergenceProvenance.ts re-exports from common:
     // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
     // tests below exercise, so a stub here would make them assert against themselves.
     WORK_ORIGINS: actual.WORK_ORIGINS,
@@ -146,7 +149,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
-import { dispatch, CONVERGENCE_PAUSED_NOTE } from './fabFileVectorize';
+import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -199,7 +202,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
     expect(h.fabFileUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'ff1', notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
+      expect.objectContaining({ id: 'ff1', chunkStallReason: 'vectorizePaused', isVectorizing: false })
     );
     // Embedding is gated: neither the chunk load nor the provider call runs.
     expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
@@ -214,7 +217,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
 
     // User work short-circuits before any settings read; the file is never flagged paused.
     expect(h.getSettingsValue).not.toHaveBeenCalled();
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ chunkStallReason: 'vectorizePaused' }));
   });
 
   // The marker is what makes an abandoned chunked-but-unvectorized file ENUMERABLE - the rebuild
@@ -248,7 +251,7 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
 
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ chunkStallReason: 'vectorizePaused' }));
     // Passed the gate and reached chunk loading.
     expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
@@ -350,20 +353,37 @@ describe('fabFileVectorize handler - spend gate', () => {
     // clearAllMocks resets calls but not replaced implementations - re-grant so a
     // denial mocked in one test can never leak into later describes.
     h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.resolveIngestSpendScope.mockImplementation(async (file: { batchId?: string }) =>
+      file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+    );
   });
 
-  it('runs the gate for a data-lake file before any provider call', async () => {
+  it('runs the gate for a data-lake file before any provider call, metering its tokens', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
-      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1' })
+      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1', estimatedTokens: 5 })
     );
   });
 
-  it('skips the gate entirely for a turn-attached file (no batchId)', async () => {
+  it('runs the gate for a tag-joined lake member that carries NO batchId', async () => {
+    // The population a bulk rebuild is largest for: membership is by tag, so batchId is absent and
+    // the pre-#1743 gate skipped these files entirely - unthrottled and unmetered.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.resolveIngestSpendScope.mockResolvedValue({ dataLakeId: 'lake-9' });
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
+      expect.objectContaining({ batchId: undefined, dataLakeId: 'lake-9', estimatedTokens: 5 })
+    );
+  });
+
+  it('skips the gate entirely for a file that belongs to no lake', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 

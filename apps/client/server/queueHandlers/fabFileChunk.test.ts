@@ -139,11 +139,6 @@ vi.mock('@bike4mind/common', async () => {
   return {
     isSupportedEmbeddingModel: vi.fn(() => true),
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
-    // Real value, not a placeholder: the halt path writes it and the assertion below is what keeps
-    // the handler's marker and the evaluators' predicate reading the same string.
-    CONVERGENCE_PAUSED_CHUNK_NOTE:
-      'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
-      'rebuilt when convergence resumes.',
     ChunkClaimLostError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
     // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
@@ -174,7 +169,6 @@ vi.mock('sst', () => ({
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
-import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
 import { dispatch } from './fabFileChunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
 
@@ -352,10 +346,29 @@ describe('fabFileChunk handler - idempotency guard against re-chunking (human re
       id: 'ff1',
       batchId: 'batch-1',
       chunked: false,
-      notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload.`,
+      noExtractableTextAt: new Date(),
     });
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.chunkFabfile).not.toHaveBeenCalled();
+  });
+
+  // The WRITE half of the guard above. Both halves name the same field and nothing checks that they
+  // agree: Mongoose `strict` silently drops a $set on a misspelt field, and `buildFabFileChunkScanFilter`
+  // then matches `noExtractableTextAt: null` forever, so the rescue sweep re-enqueues the file on every
+  // pass. A field-name drift here is invisible in both directions without this.
+  it('stamps noExtractableTextAt (and nothing else) on a file that chunks to zero', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: false });
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.chunkFabfile.mockResolvedValue([]);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $set: { noExtractableTextAt: expect.any(Date) } }
+    );
+    // The owner's own note is never named by a pipeline write (#2016).
+    for (const [, update] of h.fabFileUpdateOne.mock.calls) {
+      expect(JSON.stringify(update)).not.toContain('notes');
+    }
   });
 
   it('still chunks a file that has not been chunked yet', async () => {
@@ -553,12 +566,23 @@ describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
   });
 
   it('forwards origin + lakeId into the vectorize fan-out so the switch still bites downstream', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'chunk-1' }]);
+
     await dispatch(makeEvent({ ...convergencePayload, lakeId: 'lake-9' }), {} as never, mockLogger);
 
-    expect(h.sendToQueue).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ fabFileId: 'ff1', origin: 'convergence', lakeId: 'lake-9' })
-    );
+    // EXACT shape, not objectContaining: the scope is the whole point of this message, and an
+    // objectContaining passes just as happily against a body that dropped a field it was not asked
+    // about. A silently dropped lakeId is how the rescue sweep resolved the pause platform-only for
+    // two releases (#2157), so the shape is pinned whole.
+    expect(h.sendToQueue).toHaveBeenCalledWith(expect.anything(), {
+      fabFileId: 'ff1',
+      chunkIds: ['chunk-1'],
+      userId: 'u1',
+      embeddingModel: 'text-embedding-3-small',
+      batchSize: 1,
+      origin: 'convergence',
+      lakeId: 'lake-9',
+    });
   });
 });
 
@@ -758,9 +782,6 @@ describe('fabFileChunk handler - chunk computation runs outside the transaction 
 // the case that reaches here: the switch was flipped WHILE a wave was in flight, which is the
 // switch's whole purpose. By now the producer has already deleted these files' passages.
 describe('fabFileChunk handler - convergence kill switch', () => {
-  const PAUSED_CHUNK_NOTE =
-    'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
-    'rebuilt when convergence resumes.';
   const convergencePayload = { fabFileId: 'ff1', userId: 'u1', origin: 'convergence', lakeId: undefined };
 
   beforeEach(() => {
@@ -790,7 +811,7 @@ describe('fabFileChunk handler - convergence kill switch', () => {
 
     expect(h.fabFileUpdate).toHaveBeenCalledWith({
       id: 'ff1',
-      notes: PAUSED_CHUNK_NOTE,
+      chunkStallReason: 'rechunkPaused',
       chunkRebuildRequestedAt: null,
     });
   });
@@ -828,7 +849,7 @@ describe('fabFileChunk handler - convergence kill switch', () => {
 
     await dispatch(makeEvent({ fabFileId: 'ff1', userId: 'u1' }), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: PAUSED_CHUNK_NOTE }));
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ chunkStallReason: 'rechunkPaused' }));
   });
 });
 

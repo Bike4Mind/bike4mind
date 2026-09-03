@@ -1,4 +1,4 @@
-import type { IFabFileDocument } from '@bike4mind/common';
+import { isImageAttachment, type IFabFileDocument } from '@bike4mind/common';
 
 /**
  * Minimal structural Logger contract - kept here so this module doesn't have
@@ -35,6 +35,45 @@ export const CONTENT_READ_TOOL = 'retrieve_knowledge_content';
 /** Discovery tool for files trimmed by `MAX_PREAMBLE_FILES`; also optional in a profile. */
 const CONTENT_SEARCH_TOOL = 'search_knowledge_base';
 
+/** The subset of the FabFile record this module reads. Widened past name/mime so a file can be
+ *  classified as readable-or-not without a second query - the chunk state is already on the doc. */
+type PreambleFile = Pick<
+  IFabFileDocument,
+  'id' | 'fileName' | 'mimeType' | 'chunkCount' | 'isChunking' | 'isVectorizing'
+>;
+
+/**
+ * Why a listed file cannot be opened by `CONTENT_READ_TOOL` in this run, or null when it can.
+ *
+ * This exists because the metadata-only preamble points the agent at a reader that may have
+ * nothing to serve, and the agent then invents an explanation. Observed in production: an agent
+ * told the user a markdown file was "still indexing" three times over an hour, for a file whose
+ * chunking had finished failing long before and was not going to run again; and told the user it
+ * had no OCR capability for an image, which is true but reads as a model limitation rather than
+ * "this run cannot see images at all".
+ *
+ * Note the split between the two zero-chunk arms. "Try again shortly" is honest ONLY while
+ * chunking is actually in flight; saying it about a stalled file is what cost that hour.
+ */
+function unreadableReason(file: PreambleFile, inlinedFileIds: ReadonlySet<string>): string | null {
+  // Content materialization (see `agentExecutor.attachmentContent.ts`) already put this file in
+  // front of the agent, so chunk state says nothing about whether it can be read - it is right
+  // there in the message. Checked first: a chunkless file that WAS inlined is exactly the case the
+  // chunk-state arms below would get backwards.
+  if (inlinedFileIds.has(file.id)) return null;
+  // No agent code path builds an image message block (verified across the executor and the
+  // agents package), so an image is metadata and nothing else here regardless of the toolbelt or
+  // the model's own vision support. Says WHY, so the agent does not report it as its own defect.
+  if (isImageAttachment(file.mimeType)) {
+    return 'NOT READABLE: this run cannot open images, only their file names';
+  }
+  if ((file.chunkCount ?? 0) > 0) return null;
+  if (file.isChunking || file.isVectorizing) {
+    return 'NOT READABLE YET: indexing is in progress, so there is no stored text to read yet';
+  }
+  return 'NOT READABLE: no indexed text exists for this file and none is being produced, so waiting will not help';
+}
+
 /**
  * Sanitize a filename for safe interpolation inside the `[ATTACHED FILES ...]`
  * preamble. In an org workbench the uploader of a `sessionFabFileIds` entry
@@ -66,6 +105,12 @@ interface FabFileAccessibleRepo {
  * agent claim it "couldn't access the attached file" and ask the user to paste the contents
  * (the file itself was complete, chunked, and vectorized).
  *
+ * When the reader IS present, each listed file is additionally checked by `unreadableReason` and
+ * marked in place if the reader still cannot serve it - an image (no agent path builds an image
+ * block) or a file with no stored chunks. Without that mark the agent is pointed at a reader with
+ * nothing to return and narrates its own guess: production runs told the user a stalled file was
+ * "still indexing" across an hour, and reported an unviewable image as a missing OCR capability.
+ *
  * Mirrors the pattern in `ServerSubagentOrchestrator` (`taskWithFiles`) - we
  * inject metadata, not content, so the agent decides what to read instead of
  * burning context on files it may not need. Content materialization (parity
@@ -92,7 +137,9 @@ export async function buildFirstIterationQuery(
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo,
   scope: Record<string, unknown>,
-  availableToolNames: readonly string[]
+  availableToolNames: readonly string[],
+  /** Ids whose content was already inlined into this run's first message; never marked unreadable. */
+  inlinedFileIds: readonly string[] = []
 ): Promise<string> {
   // `sessionFabFileIds` + `messageFileIds` are client-snapshotted at dispatch
   // (stable across Lambda handoffs), while `sessionKnowledgeIds` is re-read
@@ -111,7 +158,7 @@ export async function buildFirstIterationQuery(
   );
   if (requestedIds.length === 0) return baseQuery;
 
-  let files: Array<Pick<IFabFileDocument, 'id' | 'fileName' | 'mimeType'>>;
+  let files: PreambleFile[];
   try {
     files = await repo.getAccessibleFiles(requestedIds, scope);
   } catch (err) {
@@ -135,11 +182,22 @@ export async function buildFirstIterationQuery(
 
   const truncated = files.length > MAX_PREAMBLE_FILES;
   const listed = truncated ? files.slice(0, MAX_PREAMBLE_FILES) : files;
-  const fileLines = listed.map(
-    f => `  - "${escapePreambleFilename(f.fileName)}" (${f.mimeType || 'unknown'}) -> fabFileId: ${f.id}`
-  );
   const canRead = availableToolNames.includes(CONTENT_READ_TOOL);
   const canSearch = availableToolNames.includes(CONTENT_SEARCH_TOOL);
+
+  // Only meaningful when a reader exists: without one the whole preamble already says NOTHING is
+  // readable, and a per-file reason there would just contradict the header.
+  const inlined = new Set(inlinedFileIds);
+  const unreadable = canRead
+    ? listed.map(f => ({ file: f, reason: unreadableReason(f, inlined) })).filter(entry => entry.reason !== null)
+    : [];
+  const unreadableById = new Map(unreadable.map(entry => [entry.file.id, entry.reason as string]));
+
+  const fileLines = listed.map(f => {
+    const line = `  - "${escapePreambleFilename(f.fileName)}" (${f.mimeType || 'unknown'}) -> fabFileId: ${f.id}`;
+    const reason = unreadableById.get(f.id);
+    return reason ? `${line}  [${reason}]` : line;
+  });
 
   const hiddenCount = files.length - MAX_PREAMBLE_FILES;
   const trailer = !truncated
@@ -157,6 +215,20 @@ export async function buildFirstIterationQuery(
     });
   }
 
+  // The line an "the agent said it could not read my file" report gets read from. Names the ids so
+  // a stalled chunking record can be looked up directly rather than inferred from the reply.
+  if (unreadable.length > 0) {
+    logger.warn('[FileContext] Attached files listed but not readable in this run', {
+      unreadable: unreadable.map(entry => ({
+        fabFileId: entry.file.id,
+        mimeType: entry.file.mimeType,
+        chunkCount: entry.file.chunkCount ?? 0,
+        reason: entry.reason,
+      })),
+      readable: listed.length - unreadable.length,
+    });
+  }
+
   const header = canRead
     ? `[ATTACHED FILES - Use these fabFileId values with ${CONTENT_READ_TOOL} to access content. ` +
       'Use the exact filename and fabFileId provided.]'
@@ -165,7 +237,17 @@ export async function buildFirstIterationQuery(
       'analysis as though you had. Name the files, state plainly that you cannot open them in ' +
       'this run, and ask the user to paste the contents or retry with file access enabled.]';
 
-  return `${baseQuery}\n\n${header}\n${fileLines.join('\n')}${trailer}`;
+  // Only when SOME file is readable and some is not - the all-unreadable case is already covered
+  // by the header above, and repeating the instruction there would just be noise.
+  const unreadableTrailer =
+    unreadable.length === 0
+      ? ''
+      : `\n[Any file marked NOT READABLE above cannot be opened in this run: do not call ` +
+        `${CONTENT_READ_TOOL} on it, do not claim to have read it, and do not describe or infer its ` +
+        `contents from its file name. Say plainly which file you cannot read and give the reason ` +
+        `shown. Do not tell the user to wait unless the reason says indexing is in progress.]`;
+
+  return `${baseQuery}\n\n${header}\n${fileLines.join('\n')}${trailer}${unreadableTrailer}`;
 }
 
 /**
@@ -190,6 +272,8 @@ export async function maybeBuildFirstIterationQuery(
     scope: Record<string, unknown>;
     /** The run's resolved toolbelt - see `buildFirstIterationQuery`. */
     availableToolNames: readonly string[];
+    /** See `buildFirstIterationQuery`. */
+    inlinedFileIds?: readonly string[];
   },
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo
@@ -202,6 +286,7 @@ export async function maybeBuildFirstIterationQuery(
     logger,
     repo,
     args.scope,
-    args.availableToolNames
+    args.availableToolNames,
+    args.inlinedFileIds ?? []
   );
 }

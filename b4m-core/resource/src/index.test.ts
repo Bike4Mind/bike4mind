@@ -119,6 +119,8 @@ describe('DEFAULT_MANIFEST — the self-host manifest contract', () => {
     expect(map.fabFileChunkQueue).toBe('http://mq:9324/q/chunk');
     expect(map.fabFileVectorizeQueue).toBe('http://mq:9324/q/vectorize');
     // A queue with no env var resolves to undefined (getSourceQueueUrl then reports missing).
-    expect(map.imageGenerationQueue).toBeUndefined();
+    // videoGenerationQueue is a real dlqRegistry source queue with no self-host counterpart
+    // (no manifest entry, no elasticmq.conf declaration, no .env.selfhost.example var).
+    expect(map.videoGenerationQueue).toBeUndefined();
   });
 });

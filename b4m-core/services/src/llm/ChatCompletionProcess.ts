@@ -67,6 +67,8 @@ import {
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
+import type { FabFileNotice } from '@bike4mind/utils';
+import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -87,12 +89,18 @@ import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
-import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  getDynamicDataLakeAccess,
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+  type ResolvedLakeAccess,
+} from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -780,7 +788,12 @@ export class ChatCompletionProcess {
    * the two can never disagree - it is the SAME access the knowledge tool resolves with.
    */
   private accessibleDataLakeAccessMemo:
-    { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
+    | {
+        dataLakeTags: string[];
+        dataLakeTagPrefixes: string[];
+        lakes: ResolvedLakeAccess[];
+      }
+    | undefined;
   /**
    * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
    * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
@@ -911,7 +924,7 @@ export class ChatCompletionProcess {
   private async getAccessibleDataLakeAccess(): Promise<{
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
-    scopedTagPrefixes: string[];
+    lakes: ResolvedLakeAccess[];
   }> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
@@ -925,7 +938,11 @@ export class ChatCompletionProcess {
         this.logger.warn(
           `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
         );
-        this.accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] };
+        this.accessibleDataLakeAccessMemo = {
+          dataLakeTags: [],
+          dataLakeTagPrefixes: [],
+          lakes: [],
+        };
       }
     }
     return this.accessibleDataLakeAccessMemo;
@@ -951,6 +968,8 @@ export class ChatCompletionProcess {
     try {
       const access = await this.getAccessibleDataLakeAccess();
       if (access.dataLakeTags.length === 0) return null;
+      const lakeMemberships = lakeMembershipsFrom(access.lakes);
+      warnIfManyLakeMemberships(lakeMemberships, this.logger, 'countLakeReachableAttachments');
       const res = await this.db.fabfiles!.search(
         this.user.id,
         '',
@@ -963,7 +982,18 @@ export class ChatCompletionProcess {
           userGroups: this.user.groups || [],
           dataLakeTags: access.dataLakeTags,
           dataLakeTagPrefixes: access.dataLakeTagPrefixes,
-          scopedTagPrefixes: access.scopedTagPrefixes,
+          // Anchored to each lake's CREATOR rather than the caller (#2243): a creator-owned
+          // prefix-only member now counts as lake-reachable for every member, not only its
+          // creator. The one call site in the repo where this swap changes what matches at all,
+          // because restrictToDataLake drops the broad owner/shared arms. BOTH directions fire
+          // here, for different callers:
+          //   NARROWS for everyone - the caller's own file carrying a merely colliding prefix no
+          //   longer counts, since the arm now requires the lake creator's userId.
+          //   WIDENS only where the attachment is readable by a route buildOwnershipConditions'
+          //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
+          //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
+          //   full-resolution guard first, so this count is never reached at all.
+          lakeMemberships,
           restrictToDataLake: true,
           excludeContent: true,
         }
@@ -1787,6 +1817,11 @@ export class ChatCompletionProcess {
         : session.systemPromptId && this.loadSystemPromptById
           ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
           : undefined;
+      // Hoisted out of the buildOptimizedFeatures argument it used to be inlined into: the
+      // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
+      // must be the same value - a telemetry field that recomputes its own answer is a field that
+      // can disagree with the behaviour it claims to describe.
+      const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1801,7 +1836,7 @@ export class ChatCompletionProcess {
         organization,
         sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
-        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
+        forcedRetrievalEnabled,
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session)
@@ -2377,7 +2412,15 @@ export class ChatCompletionProcess {
         featureContextMessages,
         actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
+        attachmentNotices,
       } = dataSources;
+
+      // Persisted before the completion runs: an attachment that failed to arrive is worth showing
+      // even on a turn that later errors out, and this is the only durable record the user sees.
+      if (attachmentNotices.length > 0) {
+        quest.attachmentNotices = attachmentNotices;
+        await saveQuest(quest);
+      }
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
       timer.phase('tool_setup');
@@ -2573,6 +2616,28 @@ export class ChatCompletionProcess {
       // the model was actually given, so it reflects server-side offers like the attached-
       // knowledge auto-offer above.
       if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
+
+      // Seed the turn's retrieval mode (#1394). Paired with `offeredTools` above deliberately:
+      // together they are the denominator of "the model was OFFERED retrieval and chose not to
+      // use it", which is the measurement the per-turn routing question rests on. Before this,
+      // promptMeta recorded retrieval only when it RAN, so a turn where forced retrieval was
+      // enabled but suppressed (ChatCompletionFeatures.getContextMessages' attached-files and
+      // personal-corpus skips) was indistinguishable from a turn that was never forced at all -
+      // and those are precisely the turns the question is about.
+      //
+      // Seeded only for turns that could have retrieved, so a turn with no knowledge in scope
+      // still carries no `retrieval` field at all. Merged rather than assigned: the forced arm
+      // and the knowledge tools write the same field later in the turn (mergeRetrievalSummary
+      // keeps 'forced' and never lets this not-attempted seed erase a real outcome).
+      const knowledgeToolOffered = offeredToolNames.includes('search_knowledge_base');
+      if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
+        quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
+          attempted: false,
+          mode: forcedRetrievalEnabled ? 'forced' : 'optional',
+          surfaces: [],
+          dataLakeTags: [],
+        });
+      }
 
       // Loud warning for the invisible failure mode: the caller has retrievable knowledge
       // (attached documents OR an accessible lake) but no knowledge tool survived into the final
@@ -5473,16 +5538,16 @@ export class ChatCompletionProcess {
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-    const convertedFabFiles = await fetchAndConvertFabFiles(
+    const { files: convertedFabFiles, missingIds } = await fetchAndConvertFabFiles(
       fabFileIds,
       { scope },
-      { db: this.db, storage: this.storage }
+      { db: this.db, storage: this.storage, logger: this.logger }
     );
     const {
       userMessages: promptMessages,
       deliveredFileIds,
       fullyDeliveredFileIds,
-      // errorMessages,
+      fileNotices,
     } = await processFabFilesServer(
       embeddingFactory,
       convertedFabFiles,
@@ -5523,7 +5588,34 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds };
+    // An id `getAccessibleFiles` never returned reaches processFabFilesServer as nothing at all, so
+    // it can only be reported here. The file name is unknown by definition - the id is what the user
+    // and an operator can match against the attachment.
+    const allNotices: FabFileNotice[] = [
+      ...missingIds.map(id => ({
+        fabFileId: id,
+        fileName: id,
+        band: 'unresolved' as const,
+        message: `An attached file (id ${id}) could not be found or is no longer accessible, so its content was not sent.`,
+        delivered: false,
+      })),
+      ...fileNotices,
+    ];
+
+    if (allNotices.length > 0) {
+      promptMessages.unshift({
+        role: 'system',
+        content: buildAttachmentNoticePrompt(allNotices),
+      });
+    }
+
+    const result = {
+      promptMessages,
+      convertedFabFiles,
+      deliveredFileIds,
+      fullyDeliveredFileIds,
+      fileNotices: allNotices,
+    };
     return result;
   }
 
@@ -5859,6 +5951,10 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  "you already have everything, no need to search/retrieve further" for (#1163 review: the
      *  wording was claiming this for a merely-inlined file, which can still be a partial delivery). */
     fullyInlinedAttachmentIds: string[];
+    /** User-facing lines for every attachment that did not arrive intact, already said to the model
+     *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
+     *  thing - an attachment must never fail silently (#2228). */
+    attachmentNotices: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -6006,6 +6102,32 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const fullyDeliveredKnowledgeIds = new Set(fabResult?.fullyDeliveredFileIds ?? []);
     const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
 
+    const fileNotices: FabFileNotice[] = fabResult?.fileNotices ?? [];
+    if (dedupedFileIds.length > 0) {
+      // The one line a production attachment report is read from: what was asked for, what actually
+      // reached the model, and why the rest did not. Requested-minus-delivered is computed here (not
+      // taken from the notice list) so the counts stay true even if a drop site stops reporting.
+      const delivered = new Set(fabResult?.deliveredFileIds ?? []);
+      const droppedIds = dedupedFileIds.filter(id => !delivered.has(id));
+      const bandTally = fileNotices.reduce<Record<string, number>>((acc, notice) => {
+        acc[notice.band] = (acc[notice.band] ?? 0) + 1;
+        return acc;
+      }, {});
+      const summary = {
+        requested: dedupedFileIds.length,
+        delivered: delivered.size,
+        fullyDelivered: fullyDeliveredKnowledgeIds.size,
+        dropped: droppedIds.length,
+        droppedIds,
+        bands: bandTally,
+      };
+      if (droppedIds.length > 0 || fileNotices.length > 0) {
+        logger.warn('📎 Attachment delivery summary', summary);
+      } else {
+        logger.info('📎 Attachment delivery summary', summary);
+      }
+    }
+
     return {
       urlMessages: urlResult.userMessages,
       remainingUserPrompt: urlResult.remainingPrompt,
@@ -6018,6 +6140,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       featureContextMessages,
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
+      attachmentNotices: toAttachmentNoticeStrings(fileNotices),
     };
   }
 }
