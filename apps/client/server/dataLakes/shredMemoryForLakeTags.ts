@@ -17,11 +17,10 @@ import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
  * lakes, which is anchored on the owner and needs no prefix-uniqueness guarantee.
  *
  * The purging lake is shredded from `purgingLake` directly rather than resolved back through this
- * lookup: `findMemberLakesForFile`'s meta-tag arm still round-trips through
- * `extractDataLakeMetaTags` (which lowercases) and an exact-match `findByDatalakeTag`, so a lake
- * whose stored `datalakeTag` is not lowercase would otherwise resolve to nothing even though it is
- * the very lake the purge ran through. Deduped against the lookup's results by lake id, so a
- * purging lake that also resolves normally is not shredded (and logged) twice.
+ * lookup: a prefix-arm-only member carries no `datalake:*` tag for this lake at all, so no meta-tag
+ * lookup could ever find it, even though it is the very lake the purge ran through. Deduped against
+ * the lookup's results by lake id, so a purging lake that also resolves normally is not shredded
+ * (and logged) twice.
  *
  * Best-effort at two granularities. Each RESOLVED lake's shred is caught and logged individually,
  * not rethrown - unlike the adapter docstring's default "a throw propagates", the destruction has
