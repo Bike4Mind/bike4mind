@@ -1,10 +1,25 @@
-import { withTransaction, projectRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import { z } from 'zod';
+import {
+  withTransaction,
+  projectRepository,
+  fabFileRepository,
+  userRepository,
+  inviteRepository,
+} from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents } from '@bike4mind/common';
 import { getFilesStorage } from '@server/utils/storage';
+
+const addFileIdsBodySchema = z.object({
+  fileIds: z.array(z.string()).min(1),
+});
+
+const removeFileIdsBodySchema = z.object({
+  fileIds: z.array(z.string()),
+});
 
 const handler = baseApi()
   .get(
@@ -31,14 +46,14 @@ const handler = baseApi()
   .post(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { fileIds } = req.body as any;
+      const { fileIds } = addFileIdsBodySchema.parse(req.body);
 
       const project = await withTransaction(() =>
         projectService.addFiles(
           req.user,
           {
             projectId: id,
-            fileIds,
+            fileIds: fileIds as [string, ...string[]],
           },
           {
             db: {
@@ -73,7 +88,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { fileIds } = req.body as any;
+      const { fileIds } = removeFileIdsBodySchema.parse(req.body);
 
       const project = await withTransaction(() =>
         projectService.removeFiles(
@@ -87,6 +102,7 @@ const handler = baseApi()
               fabFiles: fabFileRepository,
               projects: projectRepository,
               users: userRepository,
+              invites: inviteRepository,
             },
           }
         )

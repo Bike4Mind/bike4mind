@@ -1,5 +1,5 @@
 import AdminSettingsTab from '@client/app/components/admin/AdminSettingsTab';
-import FeedbackTab from '@client/app/components/admin/Feedbacks';
+import FeedbackTab from '@client/app/components/admin/Feedback';
 import AdminFilesTab from '@client/app/components/admin/FilesTab';
 import WorldTimeTab from '@client/app/components/admin/WorldTime';
 import SystemPromptsTab from '@client/app/components/admin/SystemPromptsTab';
@@ -92,12 +92,14 @@ const SlackMetricsPage = dynamic(() => import('./SlackMetrics'), { ssr: false })
 const GitHubConnectionTab = dynamic(() => import('./GitHubConnectionTab'), { ssr: false });
 const HelpAnalyticsTab = dynamic(() => import('./HelpAnalyticsTab'), { ssr: false });
 const ContextInspectorTab = dynamic(() => import('./ContextInspectorTab'), { ssr: false });
+const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: false });
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
 const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false });
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
+const PrReportTab = dynamic(() => import('./PrReport/PrReportTab'), { ssr: false });
 const ArchitectureDiagramsTab = dynamic(() => import('./ArchitectureDiagramsTab'), { ssr: false });
 const DependenciesTab = dynamic(() => import('./DependenciesTab'), { ssr: false });
 
@@ -186,7 +188,15 @@ const SidebarNav = ({
         const { Icon: SectionIcon } = section;
         const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
         return (
-          <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
+          <Accordion
+            key={section.key}
+            expanded={isExpanded(section.key)}
+            onChange={() => toggleSection(section.key)}
+            // raise an expanded panel above its neighbors so a neighboring
+            // header cannot intercept clicks on this section's nav items. Joy
+            // elevates a summary to zIndex 1 on focus/hover, so beat that.
+            sx={{ position: 'relative', ...(isExpanded(section.key) && { zIndex: 2 }) }}
+          >
             <AccordionSummary>
               <SectionIcon color="primary" />
               <Typography color="primary" level="body-md">
@@ -455,7 +465,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
-              <TabPanel value={AdminTab.Feedbacks}>{activeTab === AdminTab.Feedbacks && <FeedbackTab />}</TabPanel>
+              <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
               <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
               <TabPanel value={AdminTab.RegistrationInvites} sx={{ padding: 0 }}>
                 {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
@@ -518,6 +528,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.RetrievalRate}>
+                {activeTab === AdminTab.RetrievalRate && <RetrievalRateTab />}
               </TabPanel>
               <TabPanel value={AdminTab.EventMetrics}>
                 {activeTab === AdminTab.EventMetrics && <EventMetricsTab />}
@@ -583,6 +596,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.PublishedPages}>
                 {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.PrReport}>{activeTab === AdminTab.PrReport && <PrReportTab />}</TabPanel>
             </Tabs>
           </Grid>
         </Grid>

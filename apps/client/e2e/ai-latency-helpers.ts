@@ -109,13 +109,35 @@ export interface PromptScenario {
   id: string;
   prompt: string;
   expectedKeywords: string[];
+  /**
+   * The reply's deliverable is a generated image (rendered as `ai-response-image`). Success is
+   * asserted on the rendered image, not on text keywords - an image-only reply carries no prose,
+   * so keyword-on-text is a false negative for it. Also grants the image-generation time budget.
+   */
+  expectsImage?: boolean;
+  /**
+   * The reply streams an artifact (shows the "Generating artifact..." placeholder) before its
+   * text is final. Grants the image-generation time budget and waits for the placeholder to clear
+   * before scraping text, so the keyword check reads the resolved article rather than the spinner.
+   */
+  generatesArtifact?: boolean;
 }
 
 export interface PromptResult {
   id: string;
   prompt: string;
   response: string;
+  /** Token-stream latency only (start -> stop-generation button gone), excluding image/artifact render. */
   responseTimeMs: number;
   responseTimeSec: number;
   responseRateCharsPerSec: number;
+  /** Image render / artifact settle time after the stream ended; 0 for plain text prompts. */
+  renderTimeMs: number;
+  renderTimeSec: number;
+  /**
+   * True for image/artifact prompts. Even measured stream-only their window runs for minutes, so
+   * they are excluded from the gated latency average, which must stay a text-streaming signal that
+   * still catches a real text regression. Absent (falsy) for text prompts.
+   */
+  measuresDeliverable?: boolean;
 }

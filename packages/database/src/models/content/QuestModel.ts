@@ -1,5 +1,5 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
+import { IChatHistoryItem, IChatHistoryItemRepository, IChatHistoryItemDocument, PromptMeta } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -40,6 +40,32 @@ const MessageTruncationSchema = subSchema({
 const LakeMemorySchema = subSchema({
   beliefCount: { type: Number, required: false },
   dataLakeTags: [{ type: String, required: false }],
+});
+
+// Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
+// auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
+// re-parse since `attempted` is required). Top-level on promptMeta, not nested under
+// `context` - see the field's own comment in QuestModel.ts and in promptMeta.ts for why a
+// one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
+const RetrievalSummarySchema = subSchema({
+  attempted: { type: Boolean, required: true },
+  // No enum -- see the file header on why this schema's job is to not lose the value, not
+  // to validate it. Zod (RetrievalSummarySchema, promptMeta.ts) remains the contract.
+  // Optional because it is present iff `attempted`: the seeded not-attempted turn has no outcome.
+  outcome: { type: String, required: false },
+  mode: { type: String, required: false },
+  forcedSkipReason: { type: String, required: false },
+  surfaces: [{ type: String, required: false }],
+  dataLakeTags: [{ type: String, required: false }],
+});
+
+// Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
+// RetrievalSummarySchema above: without it Mongoose auto-vivifies `{ reasons: [] }` on every
+// quest, which has no `partial` and so fails the Zod re-parse - and the client reads this field's
+// mere presence to decide whether to banner the reply, so every reply would carry the banner.
+const RetrievalCoverageSchema = subSchema({
+  partial: { type: Boolean, required: true },
+  reasons: [{ type: String, required: false }],
 });
 
 // `content` is deliberately absent - see the exclusion note on the context path below.
@@ -181,6 +207,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // is the capped cache-read count used for the discount; estimatedCost /
       // creditsUsed are the billed amounts (previously computed but not persisted).
       cacheReadInputTokens: { type: Number, required: false },
+      // cacheCreationInputTokens is the billed cache-WRITE count (1.25x rate), the most
+      // expensive component of a cold turn. Must stay declared alongside the Zod field or
+      // strict mode strips it and the write rate becomes unmeasurable again.
+      cacheCreationInputTokens: { type: Number, required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },
@@ -259,6 +289,11 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         verbatimTurnsExcluded: { type: Number, required: false },
       },
     },
+    // Must stay in sync with the Zod PromptMeta `retrieval` (parity test enforces it). Top-level,
+    // not nested under `context` above - see RetrievalSummarySchema's comment.
+    retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
+    retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
@@ -347,7 +382,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     claudeMessageId: { type: String, required: false },
     timestamp: { type: Date, required: true },
     type: { type: String, required: true },
-    prompt: { type: String, required: true },
+    // NOT required, despite the TS type being `prompt: string`. An assistant-side voice turn is
+    // created by upsertBySessionIdAndConversationItemId (a bare upsert - no validators) which sets
+    // only replies/status/type/timestamp, so prompt-less quests are normal on disk. `required: true`
+    // could therefore never protect the write that omits it; it only fired on create(), the copy
+    // path, turning someone else's prompt-less turn into a failed fork/snip/clone of a whole
+    // notebook. Same reasoning as promptMeta.session (see rebindPromptMetaSession), one field over.
+    // Note `prompt ?? ''` is not an alternative: Mongoose's `required` on a String rejects '' too.
+    prompt: { type: String, required: false },
     fabFileIds: { type: [String], required: false },
     agentIds: { type: [String], required: false },
     reply: { type: String, required: false },
@@ -525,6 +567,9 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       ],
       required: false,
     },
+    // Per-file attachment delivery problems, shown under the reply. Must stay in the
+    // findPageBySessionId projection below or the banner vanishes on reload.
+    attachmentNotices: { type: [String], required: false },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -569,6 +614,14 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
   }
 );
+
+/**
+ * The statuses that mean a quest will never be written to again. Anything else
+ * (`pending`, `running`) is still claiming to be live, and is what a settle pass
+ * is allowed to take over. Shared by the two halves of that pass so its read and
+ * its write cannot drift on what "unfinished" means.
+ */
+const TERMINAL_QUEST_STATUSES = ['done', 'stopped'];
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -619,7 +672,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const { limit, page, sort = 'asc' } = options;
     const result = await this.model
       .find({ sessionId, deletedAt: null })
-      .select('sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed')
+      .select(
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices'
+      )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
       .limit(limit + 1);
@@ -706,6 +761,54 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Quests still showing as in-flight for the given agent executions.
+   * Shape is `UnfinishedQuestView`, declared below the class.
+   *
+   * Used by the abandoned sweep to find bubbles stranded by an execution it just
+   * terminated: the execution reaches a terminal status but nothing else writes
+   * the quest, so without this the UI spins forever on a run the backend knows
+   * is dead. Returns only the content fields the terminal-patch decision reads
+   * (`terminalRecoveryFor`), not whole quest documents - a sweep can match many
+   * rows and the checkpoint/context fields are large.
+   *
+   * `done` and `stopped` are the terminal statuses; anything else (`pending`,
+   * `running`) is still claiming to be live. Terminal quests are excluded rather
+   * than re-patched so a natural completion racing the sweep always wins.
+   */
+  async findUnfinishedByAgentExecutionIds(agentExecutionIds: string[]): Promise<UnfinishedQuestView[]> {
+    if (agentExecutionIds.length === 0) return [];
+    // MUST STAY IN SYNC with `QuestContentView` in questTimeoutRecovery.ts: a
+    // content field the decision reads but this does not project reads as
+    // absent, and a run that produced that content gets stamped as a failure.
+    const docs = await this.model
+      .find(
+        { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: TERMINAL_QUEST_STATUSES } },
+        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
+      )
+      .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
+  }
+
+  /**
+   * Write a terminal patch to a quest only while it is still unfinished, and
+   * report whether a document actually matched.
+   *
+   * The status predicate is the atomic half of the settle pass. Candidates are
+   * read in one query and written one at a time, so a natural completion can
+   * land in the gap; an `_id`-only write (`BaseRepository.update`) would then
+   * overwrite a real answer with the abandoned-run error. Callers count only
+   * the writes that matched, so a quest that finished in that window is
+   * reported as not settled rather than as settled.
+   */
+  async settleIfUnfinished(
+    id: string,
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply'>>
+  ): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } }, { $set: patch });
+    return result.matchedCount > 0;
+  }
+
+  /**
    * Append generated-file names to a Quest's `images` array, keyed by the agent execution
    * that produced them. Uses `$addToSet` so concurrent writers - the parent run and any
    * subagents, each in its own Lambda - accumulate into the same array instead of clobbering
@@ -723,6 +826,50 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   // session has been used before, so it should not count as brand-new.
   async existsBySessionId(sessionId: string): Promise<boolean> {
     return !!(await this.model.exists({ sessionId }));
+  }
+
+  /**
+   * Quests stuck at `status: 'running'` whose `updatedAt` has gone stale, oldest first.
+   * Shape is `StaleRunningQuestView`, declared below the class.
+   *
+   * Used by the questTimeoutSweep cron to give a terminal state to runs no client
+   * will ever poll again. `newerThan` is a floor rather than an optimization:
+   * unbounded, the first sweeps after deploy would rewrite every quest ever
+   * abandoned at `running`, wearing the same metric as steady-state recovery.
+   *
+   * Sorted so a run that hits `limit` takes the oldest candidates rather than an
+   * arbitrary slice, which also makes a deliberate backlog drain deterministic.
+   */
+  async findStaleRunning(opts: {
+    olderThan: Date;
+    newerThan?: Date;
+    limit?: number;
+  }): Promise<StaleRunningQuestView[]> {
+    // MUST STAY IN SYNC with `QuestTimeoutView` in questTimeoutRecovery.ts: a
+    // content field the decision reads but this does not project reads as
+    // absent, and a run that produced that content gets stamped as a failure.
+    const docs = await this.model
+      .find(
+        {
+          status: 'running',
+          updatedAt: { $lt: opts.olderThan, ...(opts.newerThan ? { $gt: opts.newerThan } : {}) },
+        },
+        {
+          _id: 1,
+          status: 1,
+          updatedAt: 1,
+          reply: 1,
+          replies: 1,
+          images: 1,
+          videos: 1,
+          structuredReplies: 1,
+          toolResults: 1,
+        }
+      )
+      .sort({ updatedAt: 1 })
+      .limit(opts.limit ?? 500)
+      .lean<Array<Omit<StaleRunningQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...quest }) => ({ ...quest, id: _id.toString() }));
   }
 
   // Returns the most recent quest in the session that has no reply yet, or
@@ -787,10 +934,33 @@ function initializeQuestModel() {
     // followed by $group on the same field
     ChatHistoryItemSchema.index({ 'promptMeta.model.name': 1 }, { name: 'promptMeta_model_name', sparse: true });
 
+    // Index for /api/admin/retrieval-rate: $match { 'promptMeta.retrieval': { $exists: true } }
+    // sorted by timestamp desc. Partial rather than sparse so the filter itself is the index
+    // predicate - only turns that could have retrieved are indexed, and the endpoint's sort and
+    // limit are served from the index instead of examining (and blocking-sorting) every Quest.
+    // Pre-built by 20260902000000_ensure-quest-retrieval-index rather than left to autoIndex, for
+    // the same DocumentDB foreground-lock reason as status_updatedAt below.
+    ChatHistoryItemSchema.index(
+      { timestamp: -1 },
+      {
+        name: 'retrieval_timestamp_desc',
+        partialFilterExpression: { 'promptMeta.retrieval': { $exists: true } },
+      }
+    );
+
     // Index for `persistRunAsQuest` lookup by agentExecutionId on every agent
     // completion. Sparse because most Quests are chat_completion and
     // lack the field - a dense index would waste space on nulls.
     ChatHistoryItemSchema.index({ agentExecutionId: 1 }, { name: 'agentExecutionId', sparse: true });
+
+    // Serves findStaleRunning (questTimeoutSweep cron). No existing index has a
+    // usable `status` prefix - `id_status` is `{_id: 1, status: 1}` - so without
+    // this the sweep collection-scans the largest collection every 5 minutes.
+    // Dense on purpose: both fields exist on every quest. Pre-built by
+    // 20260826000000_ensure-quest-status-updatedat-index rather than left to
+    // autoIndex, because prod runs DocumentDB where the build takes a foreground
+    // collection lock and would otherwise land on a request path.
+    ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
   } catch (error) {
     // Plugin already applied, ignore error
   }
@@ -804,3 +974,29 @@ function initializeQuestModel() {
 export const Quest = initializeQuestModel();
 
 export const questRepository = new QuestRepository(Quest);
+
+/**
+ * Content fields the stranded-quest settle reads, plus the id it writes back to.
+ *
+ * Picked from `IChatHistoryItem` rather than restated so this and
+ * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
+ * projection in the query above still has to list the same fields by hand.
+ */
+export type UnfinishedQuestView = { id: string } & Pick<
+  IChatHistoryItem,
+  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;
+
+/**
+ * Everything the liveness recovery decision reads, plus the id it writes back to.
+ *
+ * Picked from `IChatHistoryItem` rather than restated so this and
+ * `QuestTimeoutView` (questTimeoutRecovery.ts) cannot drift on field types.
+ * `updatedAt` is declared here because it lives on the mongo document, not on
+ * `IChatHistoryItem`. The projection in the query above still lists the same
+ * fields by hand.
+ */
+export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
+  IChatHistoryItem,
+  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+>;

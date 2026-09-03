@@ -92,6 +92,64 @@ export function resolveRelativePath(basePath: string, relativePath: string): str
 }
 
 /**
+ * Video extensions the help renderer treats as gif-style demo videos
+ * (autoplay, muted, looping), authored with the same ![alt](path) markdown
+ * syntax as images.
+ *
+ * This is the canonical list used by:
+ * - The React media renderer (HelpContent.tsx) to dispatch img vs video
+ * - The content validator (validate-help-content.ts) to recognize/size-check media
+ * - The bundler (bundle-help-content.ts) to copy media into public/help-content
+ *
+ * IMPORTANT: Any changes here must keep those three consumers in sync.
+ */
+export const VIDEO_EXTENSIONS = ['.webm', '.mp4'];
+
+/** True when the path (or URL) ends in a supported help video extension. */
+export function hasVideoExtension(target: string): boolean {
+  const lower = target.toLowerCase();
+  return VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+/**
+ * Extract the 11-character video id from a YouTube URL, or null if the URL is
+ * not a YouTube link. Handles watch, youtu.be, embed, shorts, the m. mobile
+ * host, and the privacy-preserving -nocookie variant. Uses the URL parser so
+ * the host is matched exactly (e.g. "notyoutube.com" is not YouTube), which
+ * means authored links must be absolute https URLs.
+ *
+ * Canonical helper shared by:
+ * - The React media renderer (HelpContent.tsx) to render a YouTube embed
+ * - The content validator (validate-help-content.ts) to allow YouTube embeds
+ *   (hosted video never bloats the repo) while still rejecting other external
+ *   media.
+ * IMPORTANT: keep the renderer and validator in sync via this one helper.
+ */
+export function parseYouTubeId(url: string): string | null {
+  if (!url) return null;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.replace(/^www\./, '').toLowerCase();
+  const valid = (id: string | null | undefined) => (id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null);
+  if (host === 'youtu.be') return valid(u.pathname.slice(1).split('/')[0]);
+  if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
+    if (u.pathname === '/watch') return valid(u.searchParams.get('v'));
+    const m = u.pathname.match(/^\/(?:embed|shorts)\/([A-Za-z0-9_-]{11})/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** True when the URL is an embeddable YouTube link. */
+export function isYouTubeUrl(url: string): boolean {
+  return parseYouTubeId(url) !== null;
+}
+
+/**
  * Approximate token count using chars/4 heuristic.
  * Good enough for budget management; avoids pulling in tiktoken as a dependency.
  */

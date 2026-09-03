@@ -12,6 +12,7 @@ This document explains everything you need to know to get a change from idea to 
 - [Ways to contribute](#ways-to-contribute)
 - [Before you write code: issue-first](#before-you-write-code-issue-first)
 - [The open/closed boundary](#the-openclosed-boundary)
+- [Premium overlays and the tracked lockfile](#premium-overlays-and-the-tracked-lockfile)
 - [Development setup](#development-setup)
 - [Project structure](#project-structure)
 - [Engineering standards](#engineering-standards)
@@ -80,6 +81,39 @@ Practical guidance:
 - Contributions that improve the **engine, adapters, CLI, self-host experience, docs, tests, and developer experience** are the sweet spot.
 - PRs that add **new third-party paid-service dependencies**, alter **billing/entitlement mechanics**, or change **hosted-deployment infrastructure** need explicit maintainer sign-off in an issue before you start.
 - When in doubt, ask in an issue — "is this in scope for a community PR?" is always a fine question.
+
+## Premium overlays and the tracked lockfile
+
+**If you are contributing to the open core, this section does not affect you** — there are no overlays in a public checkout, so `pnpm install` leaves `pnpm-lock.yaml` untouched. It matters only if you work in a tree where a private overlay has been hydrated.
+
+Closed-source features ship as *overlays*: separate private repositories mounted under `packages/premium/<name>/`. Nothing is committed there. Every mount point is listed individually in [`.gitignore`](./.gitignore) (deliberately — there is no blanket `packages/premium/*/` pattern, so an unlisted mount shows up as untracked instead of hiding), and the deploy pipeline clones each overlay at its pinned ref *before* running `pnpm install`.
+
+### How overlays attach
+
+`pnpm-workspace.yaml` globs `packages/premium/*` (plus a few nested build packages) as workspace members, **unconditionally, in every checkout**. The globs are inert when `packages/premium/` is empty, which is the state of every public clone and fork, so gating them behind a flag would buy nothing: pnpm resolves overlay `workspace:*` dependencies only when the globs are live, and making them conditional would mean preprocessing a static YAML file on every install.
+
+Overlay code is wired into the app by codegen (`apps/client/scripts/generate-premium-glue.mjs`, run at postinstall), never by a hand-written import. Every generated file is gitignored. If an overlay is hydrated but not linked into `node_modules`, the codegen emits the *absent* form of each generated file rather than an import that cannot resolve — so a hydrated tree typechecks either way, with no manual symlinking.
+
+### The lockfile rule
+
+**`pnpm-lock.yaml` must always be generated with `packages/premium/` empty.**
+
+Because the globs are live, an install with an overlay hydrated rewrites the lockfile to include the overlay's importer blocks — package names and dependency sets. Committing that would publish private structure into this public repository as ordinary-looking lockfile churn. Two guards enforce this:
+
+- **Pre-commit** (`.husky/pre-commit`) rejects a staged lockfile containing `packages/premium/` paths.
+- **CI** (`.github/workflows/lockfile-integrity.yml`) rejects it on every PR.
+
+Both run [`scripts/check-no-overlay-lockfile.sh`](./scripts/check-no-overlay-lockfile.sh).
+
+The rewrite is expected locally and is not a problem until you try to commit it. To clear it:
+
+```bash
+pnpm lockfile:restore
+```
+
+That restores the tracked lockfile from `HEAD` when — and only when — the change adds overlay paths; a real dependency change is left alone. Restoring is safe: `node_modules` is already linked and nothing rereads the lockfile until the next install.
+
+To change a dependency for real from an overlay-hydrated tree, empty `packages/premium/` first, re-run `pnpm install`, and commit the resulting lockfile.
 
 ## Development setup
 
@@ -235,6 +269,7 @@ All of these are required and blocking:
 | **Lint** | ESLint error-severity violations | `pnpm lint:check` |
 | **Run Tests** | Full test suite (sharded in CI) | `pnpm turbo:test` |
 | **Secret scan** | No credentials in the diff | gitleaks pre-commit hook |
+| **Lockfile Integrity** | No integrity-less tarballs, and no [overlay paths](#premium-overlays-and-the-tracked-lockfile), in `pnpm-lock.yaml` | `bash scripts/check-no-overlay-lockfile.sh` |
 | **Semgrep** | Static security analysis | — |
 | **CLA** | You've signed the CLA | one-time, via bot |
 

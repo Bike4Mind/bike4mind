@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useCallback } from 'react';
-import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
+import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import ChatPanelControls from './ChatPanelControls';
+import ChatPanelControls, { chatHeaderToolButtonSx } from './ChatPanelControls';
 
 interface DockedChatPanelProps {
   children: React.ReactNode;
@@ -16,16 +16,14 @@ interface DockedChatPanelProps {
 const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title }) => {
   const layout = useSessionLayout(s => s.layout);
 
-  // Dismiss the panel down to the bottom-right "AI Chat" launcher (the minimized
-  // FloatingChatWindow pill) rather than opening the floating window. previousLayout is
-  // recorded so expanding and then closing the float window returns to this dock.
-  const handleMinimize = useCallback(() => {
+  // "Hide chat": dismiss the panel down to the bottom-right "AI Chat" launcher (the
+  // minimized FloatingChatWindow pill) rather than opening the floating window.
+  const handleHide = useCallback(() => {
     setSessionLayout({
       layout: 'floatingChat',
       floatingChatMinimized: true,
-      previousLayout: layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined,
     });
-  }, [layout]);
+  }, []);
 
   return (
     <Box
@@ -35,7 +33,11 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         flexDirection: 'column',
         height: '100%',
         width: '100%',
+        // overflow:hidden is what makes the radius actually clip the header bar's corners.
         overflow: 'hidden',
+        border: '1px solid',
+        borderColor: 'divider',
+        borderRadius: '8px',
       }}
     >
       {/* Header bar */}
@@ -44,7 +46,9 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          height: '48px',
+          // Matches the sidenav header and the /opti mission-deck header so the
+          // three top bars line up across the app chrome.
+          height: '56px',
           padding: '0 16px',
           backgroundColor: theme.palette.background.level1,
           borderBottom: '1px solid',
@@ -65,23 +69,24 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           )}
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          {/* Session actions first (headerActions leads with the primary New Chat),
-              then window controls. */}
-          {headerActions}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Layout menu leads the cluster, then the surface's own actions (headerActions),
+              with Hide chat last as the control nearest the pane edge. */}
           <ChatPanelControls
             testIdPrefix="docked-chat"
             activeLayout={layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined}
             showFloat
           />
-          <Tooltip title="Minimize" disableInteractive>
+          {headerActions}
+          <Tooltip title="Hide chat" disableInteractive>
             <IconButton
-              size="sm"
-              variant="plain"
+              size="md"
+              variant="outlined"
               color="neutral"
-              onClick={handleMinimize}
+              onClick={handleHide}
               data-testid="docked-chat-close"
-              sx={{ '--IconButton-size': '28px' }}
+              aria-label="Hide chat"
+              sx={chatHeaderToolButtonSx}
             >
               <CloseIcon sx={{ fontSize: 16 }} />
             </IconButton>

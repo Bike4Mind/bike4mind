@@ -352,5 +352,23 @@ describe('processOrgWebhook — delivery-status priority chain', () => {
       const failedCalls = mockEmitWebhookDeliveryMetric.mock.calls.filter(c => c[0] === 'DeliveryFailed');
       expect(failedCalls).toHaveLength(0);
     });
+
+    it('also emits a dimensionless DeliveryFailed total, so the alarm (which has no dimension filter) receives data', async () => {
+      mockFindByOrgAndRepo.mockResolvedValue([makeSubscriber('user-a'), makeSubscriber('user-b')]);
+      mockHandle.mockResolvedValue({
+        notifiedUserIds: [],
+        failedNotifications: [
+          { userId: 'user-a', error: 'channel_not_found' },
+          { userId: 'user-b', error: 'account_inactive' },
+        ],
+      });
+
+      await dispatch(makeSqsEvent(makeOrgMessage()), mockContext, mockLogger);
+
+      const calls = mockEmitWebhookDeliveryMetric.mock.calls;
+      const dimensionless = calls.find(c => c[0] === 'DeliveryFailed' && Object.keys(c[2] as object).length === 0);
+      expect(dimensionless).toBeDefined();
+      expect(dimensionless![1]).toBe(2);
+    });
   });
 });

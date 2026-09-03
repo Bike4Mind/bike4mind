@@ -42,6 +42,7 @@ const baseArgs = {
   startParams: undefined,
   llm: undefined,
   model: 'claude-sonnet',
+  modelInfo: { id: 'claude-sonnet', contextWindow: 200_000, max_tokens: 8192, type: 'text' } as never,
   historyCount: 0,
   fabFileIds: [],
   questId: 'q1',

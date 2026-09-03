@@ -1,5 +1,12 @@
 import type { IDataLakeRepository } from '@bike4mind/common';
-import { isReservedTagPrefix, normalizeTagPrefix, prefixArmTagNames } from '@bike4mind/common';
+import {
+  foldTagName,
+  isDataLakeTagName,
+  isReservedTagPrefix,
+  matchesTagPrefixArm,
+  normalizeTagPrefix,
+  prefixArmTagNames,
+} from '@bike4mind/common';
 import type { MembershipLake } from './lakeMembership';
 
 export interface PrefixArmChange {
@@ -51,6 +58,61 @@ export const loadPrefixArmCandidateLakes = async (
   const ids = [...new Set(fileOwnerUserIds.filter((id): id is string => !!id))];
   if (ids.length === 0) return [];
   return (await db.dataLakes.find({ createdByUserId: { $in: ids } })) as MembershipLake[];
+};
+
+export interface OtherLakeClaims {
+  /** Meta-tag arm: `datalake:` tags on the file naming a lake other than the excluded one. */
+  metaTagNames: string[];
+  /** Prefix arm: lakes whose `fileTagPrefix` matches a tag on this file, which their creator owns. */
+  prefixArmLakes: MembershipLake[];
+}
+
+/** True when either arm still holds the file. See `findOtherLakeClaims`. */
+export const hasOtherLakeClaim = (claims: OtherLakeClaims): boolean =>
+  claims.metaTagNames.length > 0 || claims.prefixArmLakes.length > 0;
+
+/**
+ * Every lake OTHER than `excludeLake` that still counts this file as a member, under EITHER arm of
+ * `buildDataLakeMembershipFilter` - the `datalake:` meta-tag, or a `fileTagPrefix` match on a file
+ * the lake's creator owns.
+ *
+ * The gate for "may this lake hard-delete this file". Testing only the meta-tag arm is the trap:
+ * a file a human curated into a second lake through THAT lake's prefix carries no meta-tag for it
+ * (`fallbackLakeTags`: a prefix tag on a creator-owned file is full membership, including that
+ * lake's permanent delete), so a meta-tag-only check reads "no one else wants this" and evicts it,
+ * unrecoverably, from a lake the caller has no business touching.
+ *
+ * Pass the tag names the file will hold AFTER the caller's own membership write settles, so the
+ * answer is about who is left rather than who was there before.
+ *
+ * The meta arm folds case (`foldTagName`), matching how the rest of the reserved namespace is
+ * compared: a differently-cased variant of the excluded lake's own tag is treated as that lake's,
+ * not as a stranger's. The prefix arm is case-sensitive because the read arm's regex is.
+ */
+export const findOtherLakeClaims = async (
+  file: { userId?: string | null; tagNames: readonly string[] },
+  excludeLake: { id: string; datalakeTag: string },
+  { db, candidateLakes }: PrefixArmAdapters
+): Promise<OtherLakeClaims> => {
+  const metaTagNames = file.tagNames.filter(
+    name => isDataLakeTagName(name) && foldTagName(name) !== foldTagName(excludeLake.datalakeTag)
+  );
+  // Every usable fileTagPrefix ends in ':' (`normalizeTagPrefix`), so a colon-free tag set cannot
+  // satisfy any prefix arm - skip the lake query for the common case. An unowned file has nothing
+  // for the arm's ownership conjunct to anchor to and is likewise unreachable by it.
+  if (!file.userId || !file.tagNames.some(name => name.includes(':'))) {
+    return { metaTagNames, prefixArmLakes: [] };
+  }
+  const candidates = candidateLakes ?? (await loadPrefixArmCandidateLakes([file.userId], { db }));
+  const prefixArmLakes = candidates.filter(
+    lake =>
+      lake.id !== excludeLake.id &&
+      // Re-asserted here rather than trusted from the query, so a BATCH caller's (deliberately
+      // over-broad) candidate set is held to the same anchor the read arm's ownership conjunct uses.
+      lake.createdByUserId === file.userId &&
+      matchesTagPrefixArm(file.tagNames, lake.fileTagPrefix)
+  );
+  return { metaTagNames, prefixArmLakes };
 };
 
 interface PrefixArmDiffInput {

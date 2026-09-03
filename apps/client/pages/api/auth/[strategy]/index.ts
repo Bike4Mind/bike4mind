@@ -4,6 +4,7 @@
 import passport from '@server/auth/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 const SERVICES: { [service: string]: { scope: string[] | string } } = {
   google: {
@@ -43,7 +44,7 @@ const handler = baseApi({ auth: false }).get(
     // In dev, derive callback URL from the actual request host so OAuth
     // redirects back to the correct port (Next.js may not be on :3000)
     const authenticateOptions: Record<string, unknown> = { scope: SERVICES[strategy].scope };
-    if (process.env.APP_URL?.includes('localhost')) {
+    if (isLocalAppUrl()) {
       const protocol = req.headers['x-forwarded-proto'] || 'http';
       const host = req.headers.host || 'localhost:3000';
       authenticateOptions.callbackURL = `${protocol}://${host}/api/auth/${strategy}/callback`;

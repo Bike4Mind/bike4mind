@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import JSZip from 'jszip';
-import { SmartChunker, Chunk, DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from './chunk';
+import {
+  SmartChunker,
+  Chunk,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  effectiveChunkTokenLimit,
+  embeddingModelContextWindow,
+} from './chunk';
 import { Logger } from '@bike4mind/observability';
 
 // Minimal mock storage - chunkText doesn't use storage
@@ -20,6 +27,52 @@ function createChunker(chunkTokenLimit = CHUNK_TOKEN_LIMIT): SmartChunker {
   const buffer = 8192 - chunkTokenLimit;
   return new SmartChunker(MODEL, mockStorage, logger, buffer);
 }
+
+// text-embedding-3-small: 8192-token window. Default 20% buffer => floor(8192*0.2)=1638, so the
+// hard limit a passage target is capped to is 8192 - 1638 = 6554.
+const MODEL_WINDOW = 8192;
+const DEFAULT_BUFFERED_HARD_LIMIT = MODEL_WINDOW - Math.floor(MODEL_WINDOW * 0.2); // 6554
+
+describe('embeddingModelContextWindow', () => {
+  it('returns the model window for a supported model', () => {
+    expect(embeddingModelContextWindow('text-embedding-3-small')).toBe(MODEL_WINDOW);
+  });
+
+  it('throws on an unsupported model (matching the chunker)', () => {
+    expect(() => embeddingModelContextWindow('not-a-real-model')).toThrow(/Unsupported embedding model/);
+  });
+});
+
+describe('effectiveChunkTokenLimit', () => {
+  const model = 'text-embedding-3-small';
+
+  it('passes a passage target through unchanged when it fits under the buffered window', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 512 })).toBe(512);
+  });
+
+  it('falls back to the default when no target is supplied', () => {
+    expect(effectiveChunkTokenLimit({ model })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('floors a below-minimum target to MIN_PASSAGE_TOKEN_TARGET', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 1 })).toBe(MIN_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('caps a target larger than the model can embed to the buffered window (#1662 clamp)', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 100_000 })).toBe(DEFAULT_BUFFERED_HARD_LIMIT);
+  });
+
+  it('two over-window targets clamp to the SAME effective limit (so they never false-conflict)', () => {
+    const a = effectiveChunkTokenLimit({ model, passageTokenTarget: 100_000 });
+    const b = effectiveChunkTokenLimit({ model, passageTokenTarget: 50_000 });
+    expect(a).toBe(b);
+  });
+
+  it('treats a non-finite/negative target as absent (default)', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: -5 })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: Number.NaN })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
 
 describe('SmartChunker', () => {
   let chunker: SmartChunker;
@@ -318,5 +371,40 @@ describe('SmartChunker', () => {
       expect(allText).toContain('Attributed run text');
       expect(allText).toContain('Bare run text');
     });
+  });
+});
+
+describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
+  const buildChunker = (passageTokenTarget: number): SmartChunker =>
+    new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), { passageTokenTarget });
+
+  it('is identical across chunk sizes even when the chunk OUTPUT is not - the fingerprint is policy-independent', async () => {
+    // A long whitespace-free token routes through splitOversizedSegment (mid-token splits): it is
+    // fragmented into many chunks at a small target and stays whole at a large one, so the chunk
+    // TEXT differs by policy. The extracted text - what the admission hash fingerprints - must not.
+    const text = 'x'.repeat(4000);
+    const buf = Buffer.from(text, 'utf8');
+
+    const small = buildChunker(MIN_PASSAGE_TOKEN_TARGET); // 64
+    const chunksSmall = await small.chunkFile(buf, 'text/plain');
+    small.freeEncoder();
+
+    const large = buildChunker(6000);
+    const chunksLarge = await large.chunkFile(buf, 'text/plain');
+    large.freeEncoder();
+
+    // Output genuinely diverges with policy...
+    expect(chunksSmall.length).toBeGreaterThan(chunksLarge.length);
+    expect(chunksSmall.map(c => c.text)).not.toEqual(chunksLarge.map(c => c.text));
+    // ...but the extracted text (and therefore the fingerprint) is stable and equals the source.
+    expect(small.getExtractedText()).toBe(text);
+    expect(small.getExtractedText()).toBe(large.getExtractedText());
+  });
+
+  it('is undefined for a file that yields no extractable text', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
+    chunker.freeEncoder();
+    expect(chunker.getExtractedText()).toBeUndefined();
   });
 });

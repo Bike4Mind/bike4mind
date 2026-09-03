@@ -3,7 +3,10 @@ import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { CounterLog, User } from '@bike4mind/database';
 import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common';
 
@@ -47,6 +50,10 @@ import handler from '../counterLogs';
 import { buildUserActivityPipeline } from '@server/analytics/userActivityQuery';
 import { ApiKeyScope } from '@bike4mind/common';
 
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let mongoServer: MongoMemoryServer;
 
 beforeAll(async () => {
@@ -55,12 +62,12 @@ beforeAll(async () => {
   // Ensure declared indexes exist before querying. autoIndex is fire-and-forget, so on a fresh
   // database the first query can race the index build.
   await CounterLog.init();
-}, 30000);
+});
 
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
-}, 30000);
+});
 
 afterEach(async () => {
   await mongoose.connection.dropDatabase();

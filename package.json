@@ -34,6 +34,7 @@
     "lint:check": "eslint . --quiet --cache --cache-location node_modules/.cache/eslint/",
     "lint:md": "markdownlint '**/*.md' '**/*.mdx' --ignore node_modules",
     "lint:md:fix": "markdownlint '**/*.md' '**/*.mdx' --ignore node_modules --fix",
+    "lockfile:restore": "bash scripts/restore-tracked-lockfile.sh",
     "migrate": "pnpm --filter scripts migrate",
     "pre-push": "pnpm exec turbo typecheck:fast && pnpm run typecheck:infra:local",
     "prepare": "husky || true",

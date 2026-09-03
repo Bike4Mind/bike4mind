@@ -113,6 +113,20 @@ const FULL_PROMPT_META = {
       removedMessages: [{ role: 'user', tokens: 10, priority: 1 }],
     },
   },
+  // Top-level, not nested under context - see the field's own comment in QuestModel.ts (#1867).
+  retrieval: {
+    attempted: true,
+    outcome: 'ok',
+    surfaces: ['knowledgeBaseSearch', 'lake-memory'],
+    dataLakeTags: ['datalake:x'],
+  },
+  // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
+  // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would
+  // silently take the banner off every reply.
+  retrievalCoverage: {
+    partial: true,
+    reasons: ['more than the 100-document candidate cap matched, so some were never considered'],
+  },
   functionCalls: [
     {
       name: 'web_search',

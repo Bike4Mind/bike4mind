@@ -14,6 +14,11 @@ export interface AnnSearchAdapter {
 interface AnnRankableFile {
   fileName: string;
   fileTags: string[];
+  /**
+   * Parent-document date for the passage header (#2236). Structurally satisfied by the caller's
+   * `RankableFile`, so this stays the narrow shape this module actually reads.
+   */
+  createdAt?: Date | string | null;
 }
 
 export interface AnnVectorSearchResult {
@@ -84,6 +89,7 @@ export async function annVectorSearch(args: {
       fileTags: file.fileTags,
       chunkText: hit.text,
       score,
+      fileCreatedAt: file.createdAt ?? null,
     });
   }
 

@@ -144,6 +144,7 @@ setup → unauthenticated
 |---------|---------|------------|
 | **setup** | Creates test users, logs them in, saves browser state | None (creates auth) |
 | **unauthenticated** | Login and signup flows | None (tests auth UI) |
+| **websocket-auth** | WebSocket token gates (`typ`, tokenVersion revocation) | None (mints throwaway users) |
 | **admin** | Admin-only features (dashboard, settings) | `.auth/admin.json` |
 | **chromium** | Main test suite (everything except auth/signup/admin) | `.auth/user.json` |
 

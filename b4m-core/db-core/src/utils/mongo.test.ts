@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
+import { ChunkClaimLostError } from '@bike4mind/common';
 import {
   compareMongoIds,
   convertId,
   convertIds,
+  usableObjectIds,
   mongoExportedRecordConverter,
   isTransientTransactionError,
   withTransaction,
@@ -146,6 +148,14 @@ describe('MongoDB Utility Functions', () => {
     it('should return false for non-object errors', () => {
       expect(isTransientTransactionError('error string')).toBe(false);
       expect(isTransientTransactionError(123)).toBe(false);
+    });
+
+    // #1802 Phase 2 T5: a lost chunk claim is a benign no-op the caller must NOT retry as
+    // transient - it carries no MongoDB errorLabels/code, so this must return false, or
+    // withTransaction would retry (and then eventually rethrow) a condition that will never
+    // resolve differently on retry - the successor already owns the claim.
+    it('should return false for ChunkClaimLostError', () => {
+      expect(isTransientTransactionError(new ChunkClaimLostError('file-1'))).toBe(false);
     });
 
     it('should return false for errors without code or labels', () => {
@@ -372,5 +382,47 @@ describe('MongoDB Utility Functions', () => {
       expect(delays[1]).toBeGreaterThanOrEqual(200);
       expect(delays[1]).toBeLessThanOrEqual(250);
     });
+  });
+});
+
+describe('usableObjectIds', () => {
+  const GOOD = '507f1f77bcf86cd799439011';
+  const JUNK = 'legacy-uuid-not-an-objectid';
+  const logger = () => ({ warn: vi.fn() });
+
+  it('keeps only the ids that can address a row', () => {
+    expect(usableObjectIds([GOOD, JUNK, '0123456789ab'], 'FabFileModel', logger())).toEqual([GOOD]);
+  });
+
+  it('accepts uppercase hex, a valid ObjectId rendering', () => {
+    const upper = GOOD.toUpperCase();
+    expect(usableObjectIds([upper], 'FabFileModel', logger())).toEqual([upper]);
+  });
+
+  /**
+   * These are optional document fields, so a caller can hand over `undefined`. Before the guard
+   * existed, `_id: { $in: undefined }` returned nothing; it must not start throwing a TypeError.
+   */
+  it.each([
+    ['an undefined field', undefined],
+    ['an empty array', [] as string[]],
+  ])('returns nothing and stays quiet for %s', (_label, input) => {
+    const log = logger();
+    expect(usableObjectIds(input, 'FabFileModel', log)).toEqual([]);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('names what it skipped, and the label of the caller that skipped it', () => {
+    const log = logger();
+    usableObjectIds([GOOD, JUNK], 'SessionModel.findAllByIds', log);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[SessionModel.findAllByIds]'), {
+      skipped: [JUNK],
+    });
+  });
+
+  it('stays quiet when every id is usable', () => {
+    const log = logger();
+    usableObjectIds([GOOD], 'FabFileModel', log);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
