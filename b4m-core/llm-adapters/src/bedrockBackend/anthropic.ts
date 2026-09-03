@@ -231,6 +231,11 @@ const TEMPERATURE_ONLY_MODELS = [
 ];
 
 export default class AnthropicBedrockBackend extends BaseBedrockBackend {
+  /** Reports done only on message_stop (anthropic.ts translateStreamChunk), so a missing terminal event means a truncated stream. */
+  protected override get signalsStreamTermination(): boolean {
+    return true;
+  }
+
   // Track thinking block state
   private isInThinkingBlock = false;
   /**

@@ -70,7 +70,9 @@ export async function resolveIngestSpendScope(
     const tagNames = (file.tags ?? []).map(t => t?.name);
     const staticTags = extractDataLakeMetaTags(tagNames).filter(isStaticRegistryDatalakeTag);
     if (staticTags.length > 0) {
-      logger?.log?.(`[spendGate] file ${file.id} is a static-registry lake member (${staticTags[0]}); metering platform windows only`);
+      logger?.log?.(
+        `[spendGate] file ${file.id} is a static-registry lake member (${staticTags[0]}); metering platform windows only`
+      );
       return {};
     }
     return null;

@@ -44,16 +44,28 @@ const LakeMemorySchema = subSchema({
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
-// re-parse since `attempted`/`outcome` are required). Top-level on promptMeta, not nested under
+// re-parse since `attempted` is required). Top-level on promptMeta, not nested under
 // `context` - see the field's own comment in QuestModel.ts and in promptMeta.ts for why a
 // one-level spread merge (ToolBuilder.applyQuestStatusChanges) makes nesting unsafe here.
 const RetrievalSummarySchema = subSchema({
   attempted: { type: Boolean, required: true },
   // No enum -- see the file header on why this schema's job is to not lose the value, not
   // to validate it. Zod (RetrievalSummarySchema, promptMeta.ts) remains the contract.
-  outcome: { type: String, required: true },
+  // Optional because it is present iff `attempted`: the seeded not-attempted turn has no outcome.
+  outcome: { type: String, required: false },
+  mode: { type: String, required: false },
+  forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+});
+
+// Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
+// RetrievalSummarySchema above: without it Mongoose auto-vivifies `{ reasons: [] }` on every
+// quest, which has no `partial` and so fails the Zod re-parse - and the client reads this field's
+// mere presence to decide whether to banner the reply, so every reply would carry the banner.
+const RetrievalCoverageSchema = subSchema({
+  partial: { type: Boolean, required: true },
+  reasons: [{ type: String, required: false }],
 });
 
 // `content` is deliberately absent - see the exclusion note on the context path below.
@@ -280,6 +292,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     // Must stay in sync with the Zod PromptMeta `retrieval` (parity test enforces it). Top-level,
     // not nested under `context` above - see RetrievalSummarySchema's comment.
     retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
+    retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
@@ -920,6 +934,20 @@ function initializeQuestModel() {
     // followed by $group on the same field
     ChatHistoryItemSchema.index({ 'promptMeta.model.name': 1 }, { name: 'promptMeta_model_name', sparse: true });
 
+    // Index for /api/admin/retrieval-rate: $match { 'promptMeta.retrieval': { $exists: true } }
+    // sorted by timestamp desc. Partial rather than sparse so the filter itself is the index
+    // predicate - only turns that could have retrieved are indexed, and the endpoint's sort and
+    // limit are served from the index instead of examining (and blocking-sorting) every Quest.
+    // Pre-built by 20260902000000_ensure-quest-retrieval-index rather than left to autoIndex, for
+    // the same DocumentDB foreground-lock reason as status_updatedAt below.
+    ChatHistoryItemSchema.index(
+      { timestamp: -1 },
+      {
+        name: 'retrieval_timestamp_desc',
+        partialFilterExpression: { 'promptMeta.retrieval': { $exists: true } },
+      }
+    );
+
     // Index for `persistRunAsQuest` lookup by agentExecutionId on every agent
     // completion. Sparse because most Quests are chat_completion and
     // lack the field - a dense index would waste space on nulls.
@@ -929,7 +957,7 @@ function initializeQuestModel() {
     // usable `status` prefix - `id_status` is `{_id: 1, status: 1}` - so without
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
-    // 20260825000000_ensure-quest-status-updatedat-index rather than left to
+    // 20260826000000_ensure-quest-status-updatedat-index rather than left to
     // autoIndex, because prod runs DocumentDB where the build takes a foreground
     // collection lock and would otherwise land on a request path.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });

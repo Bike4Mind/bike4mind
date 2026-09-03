@@ -11,6 +11,7 @@ import type {
   LakeAccessHistoryEntry,
   LakeAccessSurface,
   LakeAccessView,
+  LakeCandidateCapPressure,
   LakeGrantStatus,
 } from '@bike4mind/common';
 import { ORG_MEMBERSHIP_ACL_PERMISSIONS } from '@bike4mind/common';
@@ -104,6 +105,32 @@ export function aggregateAccessHistory(
     .sort((a, b) => b.lastAccessedAt.getTime() - a.lastAccessedAt.getTime());
 }
 
+/**
+ * Project the per-event candidate-cap flag into the two counters + date the view publishes. Pure
+ * over the same event list `aggregateAccessHistory` sees, so the numbers describe exactly the same
+ * window.
+ *
+ * PRESENCE-BASED, not surface-filtered: a row raises `turnsWithSignal` iff it carries the field at
+ * all, so a surface that starts reporting its own cap later is counted with no change here. An
+ * absent field raises neither counter - see `ILakeAccessEvent.candidateCapReached` for why absent
+ * must never be read as `false`.
+ */
+export function aggregateCandidateCapPressure(
+  events: Pick<ILakeAccessEventDocument, 'candidateCapReached' | 'createdAt'>[]
+): LakeCandidateCapPressure {
+  const pressure: LakeCandidateCapPressure = { turnsWithSignal: 0, turnsAtCap: 0 };
+  for (const event of events) {
+    if (typeof event.candidateCapReached !== 'boolean') continue;
+    pressure.turnsWithSignal += 1;
+    if (!event.candidateCapReached) continue;
+    pressure.turnsAtCap += 1;
+    if (!pressure.lastAtCapAt || event.createdAt.getTime() > pressure.lastAtCapAt.getTime()) {
+      pressure.lastAtCapAt = event.createdAt;
+    }
+  }
+  return pressure;
+}
+
 export interface AssembleLakeAccessViewAdapters {
   db: {
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
@@ -164,6 +191,9 @@ export async function assembleLakeAccessView(
   const events = historyTruncated ? fetchedEvents.slice(0, historyLimit) : fetchedEvents;
 
   const history = aggregateAccessHistory(events);
+  // Same already-sliced window as the history above - a projection of rows already in hand, never
+  // a second listByLake read.
+  const candidateCapPressure = aggregateCandidateCapPressure(events);
   const channels = deriveAccessChannels(lake);
 
   // One batched name resolution across every user id the view references: user-principal grants,
@@ -242,6 +272,7 @@ export async function assembleLakeAccessView(
     })),
     historyTruncated,
     windowStartsAt,
+    candidateCapPressure,
     generatedAt: now,
   };
 }

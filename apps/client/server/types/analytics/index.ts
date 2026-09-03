@@ -50,7 +50,12 @@ import {
   BriefcaseEvents,
   BriefcaseEventPayload,
 } from '@bike4mind/common';
-import { AdminConfigAuditEvents, AdminOrgAuditEvents, EmailAuditEvents } from '@server/utils/auditLogEvents';
+import {
+  AdminConfigAuditEvents,
+  AdminOrgAuditEvents,
+  DataLakeAuditEvents,
+  EmailAuditEvents,
+} from '@server/utils/auditLogEvents';
 
 export const ANALYTICS_EVENTS = {
   ...BriefcaseEvents,
@@ -83,6 +88,7 @@ export const ANALYTICS_EVENTS = {
   ...EmailAuditEvents,
   ...AdminConfigAuditEvents,
   ...AdminOrgAuditEvents,
+  ...DataLakeAuditEvents,
 };
 
 export type AnalyticsEvents = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS];
