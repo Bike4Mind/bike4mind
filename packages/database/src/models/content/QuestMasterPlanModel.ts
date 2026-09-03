@@ -7,7 +7,9 @@ import {
   QuestDecision,
   QuestHandoff,
   REVIEW_GATE_STATUS_VALUES,
+  ReviewGateStatus,
   SUBQUEST_STATUS_VALUES,
+  SubQuestStatus,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -264,6 +266,13 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       {
         arrayFilters: [{ 'quest.id': mainQuestId }, { 'subQuest.id': subQuestId }],
         new: true,
+        // Mongoose resolves the positional paths above to `quests.N.subQuests.M.status` and runs
+        // the schema enum against them. Without this the enum on that path is dead on every
+        // update (it only fires on create), which is how a retired status vocabulary could
+        // persist and then be read back unvalidated by every consumer. Update validators only
+        // check the paths actually present in the update, so this cannot fail on unrelated
+        // fields of the stored document.
+        runValidators: true,
       }
     );
 
@@ -487,21 +496,12 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return result;
   }
 
-  // Valid status values for runtime validation
-  private static readonly VALID_SUBQUEST_STATUSES = [
-    'not_started',
-    'in_progress',
-    'completed',
-    'skipped',
-    'deleted',
-  ] as const;
-
   async updateQuestProgress(
     planId: string,
     questId: string,
     subQuestId: string,
     updates: {
-      status?: 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted';
+      status?: SubQuestStatus;
       timeSpent?: number;
       chatMessageId?: string;
       startedAt?: number;
@@ -511,8 +511,9 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       autoResumeIfPaused?: boolean;
     }
   ): Promise<IQuestMasterPlanDocument | null> {
-    // Runtime validation for updates
-    if (updates.status && !QuestMasterPlanRepository.VALID_SUBQUEST_STATUSES.includes(updates.status)) {
+    // Runtime validation: callers include API routes and CLI tools, so an
+    // unvetted status can still reach here past the compile-time type.
+    if (updates.status && !SUBQUEST_STATUS_VALUES.includes(updates.status)) {
       throw new Error(`Invalid status: ${updates.status}`);
     }
 
@@ -591,6 +592,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
         {
           arrayFilters: [{ 'quest.id': questId }, { 'subQuest.id': subQuestId }],
           new: true,
+          runValidators: true,
         }
       );
 
@@ -605,6 +607,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     const result = await this.questMasterPlanModel.findOneAndUpdate(query, updateOp, {
       arrayFilters: [{ 'quest.id': questId }, { 'subQuest.id': subQuestId }],
       new: true,
+      runValidators: true,
     });
 
     if (!result) {
@@ -730,7 +733,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     planId: string,
     questId: string,
     subQuestId: string,
-    reviewStatus: 'pending' | 'approved' | 'rejected',
+    reviewStatus: ReviewGateStatus,
     reviewNote?: string
   ): Promise<IQuestMasterPlanDocument | null> {
     const setFields: Record<string, unknown> = {
@@ -751,6 +754,9 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
       {
         arrayFilters: [{ 'quest.id': questId }, { 'subQuest.id': subQuestId }],
         new: true,
+        // Same reason as the status writes above: without this the reviewStatus enum is dead on
+        // the update path, and this is the only writer of that field.
+        runValidators: true,
       }
     );
   }

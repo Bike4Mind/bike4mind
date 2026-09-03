@@ -19,10 +19,14 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
         { tag: 'docs:policy:v2', count: 5 },
       ],
       uniqueArticleCounts: { total: 7 },
+      totalLakeFileCount: 7,
+      lakeFileCounts: {},
+      uncategorizedFileCounts: {},
     },
     isLoading: false,
     isError: false,
   }),
+  useGetDataLakeUncategorizedFiles: () => ({ data: undefined, isLoading: false }),
   useGetDataLakeArticles: (params?: { tags?: string[] } | null) => {
     const tag = params?.tags?.[0];
     if (tag === 'docs:policy' || tag === 'docs:policy:v2') {
@@ -45,6 +49,10 @@ vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => vi.fn() 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/layouts/Notebook', () => ({
   useNotebookLayout: (sel: (s: { openSideNav: boolean }) => unknown) => sel({ openSideNav: true }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector?: (s: { currentUser: { id: string } }) => unknown) =>
+    selector ? selector({ currentUser: { id: 'u1' } }) : { currentUser: { id: 'u1' } },
 }));
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }));
 

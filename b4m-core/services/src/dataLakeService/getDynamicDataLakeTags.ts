@@ -83,6 +83,46 @@ export interface ResolvedLakeAccess {
 }
 
 /**
+ * The membership arms a retrieval query should carry for a resolved access set: one per lake that
+ * HAS a membership scope. Registry lakes have none (no creator to anchor to) and keep using the
+ * OPEN `dataLakeTagPrefixes` arm - dropping them here is what stops a registry lake being silently
+ * demoted to meta-tag-only matching.
+ *
+ * INVARIANT: every scope this returns is creator-anchored to a DYNAMIC lake. Two independent
+ * guards hold it, because presence alone is no longer enough: `membership` is set ONLY on the
+ * `source: 'dynamic'` branch below, AND the `kind` filter here drops a registry scope even if some
+ * future construction site attaches one. #2216 gave `DataLakeMembershipScope` that discriminant
+ * precisely so this could be checked - a registry scope's prefix arm carries no ownership conjunct
+ * (see `buildDataLakeMembershipFilter`), so letting one reach a retrieval query would reopen the
+ * cross-tenant promotion the SCOPED/OPEN split exists to forbid. Registry lakes keep using the
+ * OPEN `dataLakeTagPrefixes` arm instead.
+ */
+export const lakeMembershipsFrom = (lakes: ResolvedLakeAccess[]): DataLakeMembershipScope[] =>
+  lakes.flatMap(l => (l.membership && l.membership.kind !== 'registry' ? [l.membership] : []));
+
+/** Above this many per-lake `$or` arms, subplanning cost may start to show in latency (R3). */
+const LARGE_MEMBERSHIP_ARM_COUNT = 50;
+
+/**
+ * R3: surface a large per-caller membership-arm count in logs before it shows up in latency.
+ * Ship without a cap - a caller legitimately reaching this many lakes still gets every one of them;
+ * this only makes the regime visible. Call once per retrieval-call-site query, right after
+ * `lakeMembershipsFrom`.
+ */
+export const warnIfManyLakeMemberships = (
+  memberships: DataLakeMembershipScope[],
+  logger: Logger | undefined,
+  surface: string
+): void => {
+  if (memberships.length > LARGE_MEMBERSHIP_ARM_COUNT) {
+    logger?.warn(
+      `[dataLakes] ${surface}: retrieval query carries ${memberships.length} lake membership arms ` +
+        `(> ${LARGE_MEMBERSHIP_ARM_COUNT}) - watch for subplanning cost showing up in latency`
+    );
+  }
+};
+
+/**
  * Fetches dynamic data lake configs from DB (if available) and returns
  * the merged datalake: tags for the user.
  *
@@ -263,6 +303,17 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       .filter(dl => !isShadowedRegistryTag(dl))
       .map(dl => {
         const isDynamic = dynamicIds.has(dl.id);
+        const creatorUserId = isDynamic ? (creatorByDynamicId.get(dl.id) ?? '') : '';
+        // `createdByUserId` is `required: true` on the persisted lake, so an empty value here is a
+        // legacy row or a bad ingest, not a normal state (R8). Fail-closed to meta-tag-only matching
+        // is still the right behavior (see buildDataLakeMembershipFilter) - this just makes the
+        // silent under-retrieval visible so an operator can backfill it.
+        if (isDynamic && !creatorUserId) {
+          context.logger?.warn(
+            `[dataLakes] dynamic lake "${dl.id}" (${dl.datalakeTag}) resolved with no creator - its ` +
+              'prefix-only members will retrieve/count as meta-tag-only for every caller until backfilled'
+          );
+        }
         return {
           id: dl.id,
           name: dl.name,
@@ -276,7 +327,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
                 membership: lakeMembershipScope({
                   datalakeTag: dl.datalakeTag,
                   fileTagPrefix: dl.fileTagPrefix,
-                  createdByUserId: creatorByDynamicId.get(dl.id) ?? '',
+                  createdByUserId: creatorUserId,
                 }),
               }
             : {}),

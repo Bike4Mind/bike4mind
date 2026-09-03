@@ -3,7 +3,14 @@ import { scopedSettingsService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { shouldHaltConvergence, WorkOrigin } from '@server/queueHandlers/convergenceProvenance';
 
-const SETTING_KEY = 'PauseLakeConvergence' as const;
+/**
+ * The platform/lake-scoped convergence pause switch. Exported so a caller that resolves the flag
+ * ITSELF rather than asking whether to halt a message - the chunk rescue sweep's per-run pause map
+ * (server/dataLakes/convergencePauseScope.ts), which grades every overridden lake at once - reads the
+ * same key this module gates on instead of a second copy of the string.
+ */
+export const CONVERGENCE_PAUSE_SETTING_KEY = 'PauseLakeConvergence' as const;
+const SETTING_KEY = CONVERGENCE_PAUSE_SETTING_KEY;
 
 export interface ConvergenceKillSwitchDeps {
   adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue' | 'findBySettingNames' | 'findAll'>;

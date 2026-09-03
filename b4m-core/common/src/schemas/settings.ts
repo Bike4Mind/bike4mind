@@ -318,6 +318,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeEmbeddingBudgetPerPeriodUsd',
   'dataLakeEmbeddingBudgetPeriodHours',
   'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeEmbeddingMaxTokensPerMinute',
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
@@ -488,12 +489,12 @@ export const OrchestrationDefaultsSchema = z.object({
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
     // minute-precision date block. Mirrored client-side via
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
     // to expose. Mirrored client-side in
-    // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
+    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
     'image_generation',
     'edit_image',
     'music_generation',
@@ -777,6 +778,21 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
+/**
+ * The TOKEN half of the throughput cap, and the one that maps to what providers actually meter.
+ * A call cap alone does not bound tokens: one call carries up to
+ * DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT passages of DEFAULT_PASSAGE_TOKEN_TARGET tokens, so
+ * 120 calls/min permits ~3.1M tokens/min - several times the smallest paid embeddings tier. The two
+ * levers are complementary: calls/min bounds RPM, this bounds TPM, and a call must fit both.
+ *
+ * Default is 60% of OpenAI's published Tier-1 embeddings quota (1M TPM), which is the floor across
+ * the supported cloud providers. The other 40% is deliberate headroom for QUERY-side embedding,
+ * which is exempt from this gate (see enforceEmbeddingSpendGate's doc comment): a retrieval query
+ * must not queue behind a backfill. Operators on a higher tier raise it to their own dashboard
+ * number, minus that same headroom.
+ */
+export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT = 600_000;
+export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX = 50_000_000;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
 
@@ -1430,9 +1446,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeEmbeddingBudgetPerPeriodUsd', order: 4 },
       { key: 'dataLakeEmbeddingBudgetPeriodHours', order: 5 },
       { key: 'dataLakeEmbeddingMaxCallsPerMinute', order: 6 },
-      { key: 'dataLakeVectorizeChunkBatchSize', order: 7 },
-      { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 8 },
-      { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 9 },
+      { key: 'dataLakeEmbeddingMaxTokensPerMinute', order: 7 },
+      { key: 'dataLakeVectorizeChunkBatchSize', order: 8 },
+      { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 9 },
+      { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 10 },
     ],
   },
   VOICE_SESSION: {
@@ -1959,7 +1976,7 @@ export const settingsMap = {
     name: 'Data Lakes: Pause background convergence work',
     defaultValue: false,
     description:
-      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running - including overriding a platform-wide pause back OFF for one lake. Every producer honors the override, the global chunk rescue sweep included: it resolves each candidate against the lake it belongs to (#2157), so a file in no lake at all follows the platform value, which is correct for it. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 93,
@@ -3501,6 +3518,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 6,
   }),
+  dataLakeEmbeddingMaxTokensPerMinute: makeNumberSetting({
+    key: 'dataLakeEmbeddingMaxTokensPerMinute',
+    name: 'Embedding Max Tokens Per Minute',
+    defaultValue: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX,
+    description:
+      'Most provider embedding TOKENS per minute across all data-lake work, which is the quantity providers actually meter. The calls-per-minute lever alone does not bound this: one call carries a whole batch of passages. Set it from your provider dashboard TPM, leaving headroom for query-side embedding (exempt, so a search never queues behind a backfill). 0 stops all calls.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 7,
+  }),
   dataLakeVectorizeChunkBatchSize: makeNumberSetting({
     key: 'dataLakeVectorizeChunkBatchSize',
     name: 'Vectorize Chunk Batch Size',
@@ -3511,7 +3540,7 @@ export const settingsMap = {
       'How many chunks the chunk handler packs into one vectorize-queue message. Smaller batches smooth the fan-out; not a spend value, so min 1.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
-    order: 7,
+    order: 8,
   }),
   // Cost tiers (#1675). Multipliers, not budgets, so the tunable value is the RATIO between the
   // two economic cases. Same spend-lever discipline as the budgets they scale: 0 is a valid stop.
@@ -3527,7 +3556,7 @@ export const settingsMap = {
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
-    order: 8,
+    order: 9,
   }),
   dataLakeEmbeddingTierMultiplierOrganization: makeNumberSetting({
     key: 'dataLakeEmbeddingTierMultiplierOrganization',
@@ -3541,7 +3570,7 @@ export const settingsMap = {
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
-    order: 9,
+    order: 10,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

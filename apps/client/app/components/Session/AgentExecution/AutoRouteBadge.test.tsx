@@ -63,12 +63,12 @@ describe('AutoRouteBadge', () => {
     expect(mocks.setLLM).toHaveBeenCalledWith({ disableAutoRouteForThisSession: true });
   });
 
-  // The complexity-routed variant must explain that the user's Smart
-  // Tools selection was replaced, not just that "research" was detected.
+  // The complexity-routed variant says why it fired, distinctly from the
+  // classifier's "research" wording.
   it('renders the complexity-specific copy when source="complexity"', () => {
     render(<AutoRouteBadge source="complexity" />, { wrapper: Wrapper });
     expect(screen.getByTestId('auto-route-badge')).toBeInTheDocument();
-    expect(screen.getByText(/Smart Tools selection was replaced/i)).toBeInTheDocument();
+    expect(screen.getByText(/complex prompt detected/i)).toBeInTheDocument();
     // Must NOT show the classifier's "multi-step research" wording.
     expect(screen.queryByText(/multi-step research/i)).not.toBeInTheDocument();
   });
@@ -76,7 +76,16 @@ describe('AutoRouteBadge', () => {
   it('renders the classifier copy when source="classifier" (and by default)', () => {
     render(<AutoRouteBadge source="classifier" />, { wrapper: Wrapper });
     expect(screen.getByText(/multi-step research detected/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Smart Tools selection was replaced/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/complex prompt detected/i)).not.toBeInTheDocument();
+  });
+
+  // An agentless run now carries the user's Smart Tools (unioned with the
+  // agent-mode defaults), so neither variant may claim the selection was
+  // swapped out. Locks the copy fix against a regression.
+  it.each(['complexity', 'classifier'] as const)('never claims the Smart Tools were replaced (%s)', source => {
+    render(<AutoRouteBadge source={source} />, { wrapper: Wrapper });
+    expect(screen.queryByText(/smart tools/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/replaced/i)).not.toBeInTheDocument();
   });
 
   // Dismiss still works from the complexity variant and sets the same

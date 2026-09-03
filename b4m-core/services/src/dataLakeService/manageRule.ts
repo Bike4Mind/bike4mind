@@ -134,22 +134,27 @@ export function canManageLake(
  * `null` for an actor who cannot manage the lake at all, so it is exactly `canManageLake` with the
  * winning rung named instead of collapsed to `true`.
  *
- * Reports the FIRST rung that grants, in `canManageLake`'s own short-circuit order, so several
- * applicable rungs report the most privileged one - which is the honest answer to "what let them
- * do this": a platform admin who also happens to own the lake could have done it either way, and
- * the admin rung is the one worth surfacing.
+ * Reports the rungs in `canManageLake`'s order with ONE deliberate departure: `platform-admin` is
+ * checked LAST, so it is reported only when no lake-side relationship of the actor's own would have
+ * authorized the write. The rung feeds a history surface that renders `platform-admin` as a warning
+ * ("somebody outside this lake's own people changed it"), so reporting the most privileged
+ * applicable rung fired that warning on a dual-role account's routine edits to a lake it owns -
+ * technically true, but a false alarm on the one surface whose whole purpose is trust. Ownership,
+ * curatorship and the org rungs are standing relationships to THIS lake and are the more
+ * informative answer whenever one of them applies.
  *
  * MUST stay in sync with `canManageLake` above; a test pins agreement across both directions
  * (a rung implies manage, and no-rung implies no-manage), so a new rung added there without one
- * here fails rather than silently recording every write under an older rung.
+ * here fails rather than silently recording every write under an older rung. The reordering is safe
+ * for that agreement precisely because it only changes WHICH of several granting rungs is named.
  */
 export function resolveLakeManageRung(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
   actor: ManageActor,
   grants: readonly LakeGrant[] = []
 ): LakeManageRung | null {
-  if (actor.isAdmin) return 'platform-admin';
-  if (!actor.userId) return null;
+  // A principal-less actor has no lake-side relationship to find, so admin is the only answer left.
+  if (!actor.userId) return actor.isAdmin ? 'platform-admin' : null;
 
   // Split where isEffectiveOwner does not: an `owner` USER grant supersedes the creator, so the two
   // arms answer different questions after a transfer (who it was moved to vs. the original author
@@ -173,5 +178,7 @@ export function resolveLakeManageRung(
       (g.role === 'owner' || g.role === 'curator') &&
       administeredOrgIds.includes(g.principalId)
   );
-  return hasOrgGrant ? 'org-grant' : null;
+  if (hasOrgGrant) return 'org-grant';
+
+  return actor.isAdmin ? 'platform-admin' : null;
 }

@@ -72,7 +72,7 @@ describe('count_knowledge_base', () => {
     const ctx = makeContext();
     await run(ctx);
     expect(searchCalls(ctx)[0][5]).toMatchObject({
-      lakeMembership: dynamicLake.membership,
+      lakeMemberships: [dynamicLake.membership],
       restrictToDataLake: true,
       includeShared: true,
       userGroups: ['g1'],
@@ -95,7 +95,7 @@ describe('count_knowledge_base', () => {
       dataLakeTagPrefixes: [registryLake.fileTagPrefix],
       restrictToDataLake: true,
     });
-    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('lakeMembership');
+    expect(searchCalls(ctx)[0][5]).not.toHaveProperty('lakeMemberships');
   });
 
   it('totals several libraries and names each', async () => {
@@ -151,13 +151,11 @@ describe('count_knowledge_base', () => {
       expect(out).toContain('at least');
       expect(out).toContain('counting stopped at a scan limit');
       expect(search).toHaveBeenCalledTimes(10);
-    });
-
-    it('pages a walked count in a total order so no document is counted twice', async () => {
-      const search = vi.fn().mockResolvedValue(page([{ fileName: 'Clean.pdf' }], false));
-      const ctx = makeContext(excluded, search);
-      await run(ctx);
-      expect(searchCalls(ctx)[0][5]).toMatchObject({ stableSort: true });
+      // Only a fileName sort gets buildFabFileSearchQuery's _id tiebreaker, so this walk is a
+      // total order - and so safe from counting a document twice - only while it asks for one.
+      expect((search.mock.calls as unknown[][]).map(call => call[4])).toEqual(
+        Array(10).fill({ by: 'fileName', direction: 'asc' })
+      );
     });
 
     it('an unset filter is a plain count - no walk', async () => {
@@ -227,7 +225,13 @@ describe('count_knowledge_base narrows lake access to the session lake', () => {
       scopedTagPrefixes: [],
       lakes: [
         { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
-        { id: 'l2', name: 'Unrelated-Product-KB', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:', source: 'registry' },
+        {
+          id: 'l2',
+          name: 'Unrelated-Product-KB',
+          datalakeTag: 'datalake:unrelated',
+          fileTagPrefix: 'unrel:',
+          source: 'registry',
+        },
       ],
     });
     const out = await run(makeContext({ sessionRetrievalTags: ['datalake:mine'] } as never));

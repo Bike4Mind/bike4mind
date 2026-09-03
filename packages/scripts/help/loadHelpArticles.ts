@@ -131,8 +131,9 @@ export function getCategory(filePath: string): string {
 
 /**
  * Find all help-article file paths (absolute), applying category inclusion and
- * file exclusion. Preserves glob traversal order (per-category), which the index
- * builder relies on as the stable tie-break for equal sidebar positions.
+ * file exclusion. Returns glob traversal order, which is stable on one machine but
+ * differs between machines - so callers that need a reproducible order must impose
+ * their own. The index builder does: see `compareEntries` in build-help-index.ts.
  */
 export async function findHelpArticleFiles(): Promise<string[]> {
   const categoryPatterns = INCLUDED_CATEGORIES.map(cat => `${cat}/**/*.md`);
