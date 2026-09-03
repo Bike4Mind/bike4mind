@@ -3832,7 +3832,9 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
 /**
  * Redact secrets from a single setting before it leaves the server.
  *
- * Two boundaries, both fail-closed against the stored value reaching a client:
+ * Three boundaries, all fail-closed against the stored value reaching a client:
+ *  - a `settingName` with no entry in `settingsMap` (removed/renamed setting, orphaned row)
+ *    is treated as sensitive and masked, rather than falling through unmasked,
  *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
  *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
  *    callbackToken masked; parsed through the schema first so the v1->v2 migration
@@ -3843,7 +3845,7 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
   const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
-  if (definition?.isSensitive) {
+  if (!definition || definition.isSensitive) {
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
 
@@ -3875,10 +3877,13 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
  * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ *
+ * A `settingName` absent from `settingsMap` is treated as sensitive too, matching
+ * redactSettingSecrets - an orphaned row must never broadcast unmasked.
  */
 export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
   const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
-  if (definition?.isSensitive) {
+  if (!definition || definition.isSensitive) {
     const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
     return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
   }
