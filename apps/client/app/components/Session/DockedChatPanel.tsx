@@ -22,9 +22,9 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
     setSessionLayout({
       layout: 'floatingChat',
       floatingChatMinimized: true,
-      // Remembered so expanding the pill returns the chat to this dock. Only this panel's
-      // two layouts reach here, and dockRight is the one the split row renders on the left.
-      hiddenFromLayout: layout === 'dockBottom' ? 'dockBottom' : 'dockRight',
+      // Remembered so expanding the pill returns the chat to this dock. Narrowed rather than
+      // defaulted so a dock layout added later cannot silently collapse to dockRight.
+      hiddenFromLayout: layout === 'dockBottom' || layout === 'dockRight' ? layout : 'dockRight',
     });
   }, [layout]);
 
