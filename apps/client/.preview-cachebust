@@ -3,4 +3,4 @@ Cache key for preview container image builds.
 The image tag is derived from git tree objects, so a container rebuild only
 happens when one of the hashed paths changes. Bumping this file forces one.
 
-nonce: 20260903T095057Z
+nonce: 20260903T193655Z
