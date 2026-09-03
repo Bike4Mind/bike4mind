@@ -438,9 +438,10 @@ describe('production call sites pass the stale-claim cutoff', () => {
   // Source-shape guard, because the regression is silent: staleClaimBefore is optional (the arm is
   // opt-in), so dropping it type-checks, passes every other test, and just quietly turns the
   // recovery arm back off. The cron's call is covered behaviourally in dataLakeBatchReconcile.test.ts;
-  // the self-host worker's is inside an unexported main(), so this is what watches it.
+  // the self-host worker's call lives in chunkRescueSweep.ts (exported so it's independently
+  // testable - see chunkRescueSweep.test.ts), so this is what watches its source shape.
   const sources = {
-    'server/worker/main.ts': 'main.ts',
+    'server/worker/chunkRescueSweep.ts': 'chunkRescueSweep.ts',
     'server/cron/dataLakeBatchReconcile.ts': '../cron/dataLakeBatchReconcile.ts',
   } as const;
 
