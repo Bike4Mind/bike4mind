@@ -18,6 +18,7 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep } from './chunkRescueSweep';
+import { CHUNK_SCAN_BATCH } from './chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -169,10 +170,11 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. Selection and enqueue
-  // accounting live in chunkRescueSweep.ts, shared in shape with the hosted daily cron.
+  // notification is missed, sweep un-chunked files and enqueue them. Selection, pause scoping and
+  // enqueue accounting all live in chunkRescueSweep.ts, which the hosted daily cron also calls -
+  // the per-tick budget below is the only thing that differs.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
-    await runChunkRescueSweep(bootLogger);
+    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger });
   });
 
   // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):

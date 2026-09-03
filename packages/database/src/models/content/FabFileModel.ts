@@ -17,7 +17,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
-import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
@@ -590,7 +590,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async findAllInIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllInIds') } });
     return result.map(d => d.toObject());
   }
 
@@ -672,8 +672,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return await super.find(filter, { content: 0 });
   }
 
+  /** Without this guard a CastError here is remapped by the API error handler into a confusing 404 on the notebook file list. */
   async findAllByIds(ids: string[]) {
-    const result = await this.fabFileModel.find({ _id: { $in: ids } });
+    const result = await this.fabFileModel.find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findAllByIds') } });
     return result.map(d => d.toJSON());
   }
 
@@ -2175,6 +2176,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
+  }
+
+  async hardDeleteOneById(fabFileId: string): Promise<boolean> {
+    // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
+    // concurrent purges of the same document exactly one is told it did the deleting.
+    const doc = await this.fabFileModel
+      .findOneAndDelete({ _id: fabFileId }, { hardDelete: true } as Record<string, unknown>)
+      .setOptions({ includeDeleted: true });
+    return !!doc;
   }
 
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
