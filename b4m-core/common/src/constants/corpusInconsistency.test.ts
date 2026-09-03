@@ -100,6 +100,36 @@ describe('relationship conflicts', () => {
       kinds([doc('a', 'Northwind Logistics is a customer.'), doc('b', 'Northwind Logistics is a customer of ours.')])
     ).toEqual([]);
   });
+
+  it('does not treat a sentence-initial "The" as an organization', () => {
+    // The regression guard for ORG's trailing quantifier. At `{0,3}` a single capitalized token was a
+    // complete organization, so `The` became a subject - and because CUSTOMER/PROSPECT carry generic
+    // technical vocabulary (`deployed`, `pipeline`), two entirely unrelated sentences conflicted on
+    // the subject `"the"`, which then sorted ahead of every real organization conflict.
+    //
+    // Pinned by SUBJECT rather than by emptiness: asserting only `[]` would also pass if the rule
+    // stopped finding organizations altogether, which is the opposite failure.
+    // Each sentence carries exactly ONE label so the both-label guard does not skip it first:
+    // `deployed` is CUSTOMER, `pipeline` is PROSPECT. Neither names an organization at all.
+    const report = run([
+      doc('a', 'The system was deployed last spring.'),
+      doc('b', 'The pipeline is reviewed each quarter.'),
+    ]);
+
+    expect(report.findings.map(f => f.subject)).not.toContain('the');
+    expect(report.findings.filter(f => f.kind === 'relationship-conflict')).toEqual([]);
+  });
+
+  it('still sees a two-token organization, which is what the quantifier costs', () => {
+    // The other half of the same guard: `{1,3}` is deliberately blind to single-word company names,
+    // so this pins that tightening it further would cost real findings.
+    const report = run([
+      doc('a', 'Northwind Logistics is a customer running in production.'),
+      doc('b', 'Northwind Logistics is a prospect evaluating the platform.'),
+    ]);
+
+    expect(report.findings.map(f => f.subject)).toContain('northwind logistics');
+  });
 });
 
 describe('expired claims', () => {

@@ -5,20 +5,52 @@ const h = vi.hoisted(() => ({
   detectLakeInconsistencies: vi.fn(),
   update: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  // The rate limiter is a middleware, so it is only reachable if the mocked chain below actually
+  // RUNS what the route hands to `.use` - see that mock.
+  rateLimit: vi.fn(),
+  rateLimitOptions: undefined as Record<string, unknown> | undefined,
+  isDevelopment: vi.fn(() => false),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
-      use: () => chain,
-      get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.GET = fns[fns.length - 1]), chain),
-      post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.POST = fns[fns.length - 1]), chain),
-    });
+    // `use` middlewares are RUN, in order, before the verb handler. The previous stub discarded them,
+    // which is why the rate limit had no coverage: the route's POST-only guard was never executed.
+    // Each is called with a `next` that continues the chain, so a middleware that does not call
+    // `next` short-circuits here exactly as it would in production.
+    const middlewares: ((req: unknown, res: unknown, next: () => unknown) => unknown)[] = [];
+    const chain = Object.assign(
+      async (req: { method?: string }, res: unknown) => {
+        let index = 0;
+        const next = async (): Promise<unknown> => {
+          const middleware = middlewares[index++];
+          if (middleware) return middleware(req, res, next);
+          return routes[req.method ?? 'POST']?.(req, res);
+        };
+        return next();
+      },
+      {
+        use: (fn: (req: unknown, res: unknown, next: () => unknown) => unknown) => (middlewares.push(fn), chain),
+        get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.GET = fns[fns.length - 1]), chain),
+        post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.POST = fns[fns.length - 1]), chain),
+      }
+    );
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (options: Record<string, unknown>) => {
+    h.rateLimitOptions = options;
+    return (req: unknown, res: unknown, next: () => unknown) => (h.rateLimit(), next());
+  },
+}));
+vi.mock('@server/utils/config', () => ({ isDevelopment: h.isDevelopment }));
+// Must call `next()` now that the chain above actually runs its middlewares - a no-op stub would
+// short-circuit every request before the verb handler.
+vi.mock('@server/middlewares/featureFlag', () => ({
+  requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
+}));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeWriteAccess: h.assertLakeWriteAccess,
@@ -181,5 +213,46 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
 
     const { done } = invoke({}, 'GET');
     await expect(done).rejects.toThrow('forbidden');
+  });
+});
+
+describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
+  it('buckets per CALLER rather than per lake', () => {
+    // The load-bearing detail, and the reason the bucket is explicit. Without it the middleware keys
+    // on `req.url`, which carries the lake id - so the cap would be per lake per caller and "loop
+    // over every lake I own" would stay unbounded, the amplification converge already closed.
+    expect(h.rateLimitOptions?.bucket).toBe('data-lakes/inconsistencies');
+  });
+
+  it('caps detection at 20 runs an hour outside development', () => {
+    const limit = h.rateLimitOptions?.limit as () => number;
+
+    expect(h.rateLimitOptions?.windowMs).toBe(60 * 60 * 1000);
+    expect(limit()).toBe(20);
+  });
+
+  it('lifts the cap in development', () => {
+    h.isDevelopment.mockReturnValueOnce(true);
+    const limit = h.rateLimitOptions?.limit as () => number;
+
+    expect(limit()).toBe(Infinity);
+  });
+
+  it('applies the limit to POST', async () => {
+    const { done } = invoke({});
+    await done;
+
+    expect(h.rateLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves GET outside the cap, so looking at a report is never throttled', async () => {
+    // GET reads what was already stored and runs no detection. Throttling it would throttle looking
+    // at a report rather than producing one - and re-reading is the whole reason GET exists.
+    h.assertLakeWriteAccess.mockResolvedValue({ ...lake, inconsistencyReport: report() });
+
+    const { done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.rateLimit).not.toHaveBeenCalled();
   });
 });
