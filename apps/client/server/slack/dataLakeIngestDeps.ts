@@ -40,6 +40,15 @@ export function buildSlackLakeIngestDeps(args: {
     // shared adapter so BOTH the attachment and link paths are gated - a link path that quietly
     // skipped it would be a tag-write hole, since this PR is what gives that path caller-set tags.
     dataLakes: dataLakeRepository,
+    // GATE 4 (found live, #2034): `createFabFile`'s own tag gate re-resolves manage from THIS `db`,
+    // not from the caller's already-authorized ctx. Absent, `resolveCanManageLake` there degrades to
+    // createdByUserId + org rungs only (`CreateFabFileAdapters.db.dataLakeAccessGrants`'s own
+    // comment names this exact case: "NOT... adequate... where the reviewer may be a curator or a
+    // grant-transferred owner" - the Slack `add` door is exactly that shape) - so a curator grantee
+    // passed both prologue gates and was refused here with "You do not have permission to change
+    // this data lake's files", identical wording to gate 3's `administeredOrgIds` omission but a
+    // different missing field. Mirrors `proposalAdmissionDeps.ts`'s wiring.
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
     // Scoped-override store for the admission contract's enforcement lever (#1680); without it the
     // lever would resolve platform-only and a per-lake enforcement setting would silently do
     // nothing on the Slack door.
