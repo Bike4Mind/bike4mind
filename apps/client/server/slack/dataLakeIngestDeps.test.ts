@@ -48,6 +48,7 @@ vi.mock('@server/utils/storage', () => ({
 }));
 
 const { buildSlackLakeIngestDeps } = await import('./dataLakeIngestDeps');
+const { dataLakeAccessGrantRepository } = await import('@bike4mind/database');
 
 describe('buildSlackLakeIngestDeps forwards administeredOrgIds to the file create', () => {
   const deps = () =>
@@ -104,5 +105,57 @@ describe('buildSlackLakeIngestDeps forwards administeredOrgIds to the file creat
     });
 
     expect(createFabFileByUrl.mock.calls[0][2]).toHaveProperty('administeredOrgIds', []);
+  });
+});
+
+/**
+ * GATE 4, found live against #2034's actual grant fixture: the shared `db` object wired here had no
+ * `dataLakeAccessGrants`, so `createFabFile`'s own tag gate could not see ANY grant - a curator
+ * grantee passed both prologue gates and was refused here with "You do not have permission to
+ * change this data lake's files". The field is OPTIONAL on `CreateFabFileAdapters.db` (legitimately
+ * - the upload doors apply their own tags and need no grant supersession), so this typechecked green
+ * and failed only for a curator/grant-transferred-owner actor, same shape as the
+ * `administeredOrgIds` gaps above.
+ */
+describe('buildSlackLakeIngestDeps wires dataLakeAccessGrants into the shared db', () => {
+  const deps = () =>
+    buildSlackLakeIngestDeps({
+      downloadFile: vi.fn(),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+  beforeEach(() => {
+    createFabFile.mockClear();
+    createFabFileByUrl.mockClear();
+  });
+
+  it('gives the FILE create the same grants repo the module exports for gates 1/2', async () => {
+    await deps().createLakeFile('user-1', {
+      fileName: 'doc.txt',
+      mimeType: 'text/plain',
+      fileSize: 5,
+      type: KnowledgeType.FILE,
+      content: Buffer.from('hello'),
+      contentType: 'text/plain',
+      contentHash: 'abc',
+      tags: [{ name: 'datalake:sales', strength: 1 }],
+      provenance: { sourceType: FabFileSourceType.SLACK, sourceMetadata: {} },
+      administeredOrgIds: [],
+    });
+
+    const { db } = createFabFile.mock.calls[0][2];
+    expect(db.dataLakeAccessGrants).toBe(dataLakeAccessGrantRepository);
+  });
+
+  it('gives the LINK create the same grants repo', async () => {
+    await deps().createLakeFileFromUrl('user-1', {
+      url: 'https://example.com/article',
+      tags: [],
+      provenance: { sourceType: FabFileSourceType.SLACK, sourceMetadata: {} },
+      administeredOrgIds: [],
+    });
+
+    const { db } = createFabFileByUrl.mock.calls[0][2];
+    expect(db.dataLakeAccessGrants).toBe(dataLakeAccessGrantRepository);
   });
 });
