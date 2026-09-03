@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import mongoose from 'mongoose';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, fabFileRepository } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -77,6 +78,30 @@ describe('markConvergencePaused', () => {
     await fabFileRepository.markConvergencePaused(String(file._id));
 
     expect(await reasonOf(String(file._id))).not.toBe('vectorizePaused');
+  });
+
+  it('handles a legacy row whose chunkStallReason field is absent, not null', async () => {
+    // The #2016 backfill only set the field on rows carrying the legacy prose, so a row predating it
+    // has no `chunkStallReason` key at all - and the sweep's `$nin` filter matches an absent field,
+    // so these do reach the halt branch. `FabFile.create` cannot produce the state (the schema
+    // defaults it to null), hence the raw insert. Both pipeline operators resolve a missing path as
+    // falsy rather than erroring, which is what keeps the write off the DLQ; pinned because it is a
+    // MongoDB semantic, not something the code says.
+    const fabFiles = mongoose.connection.db!.collection('fabfiles');
+    const { insertedId } = await fabFiles.insertOne({
+      userId: 'u-paused',
+      fileName: 'legacy.pdf',
+      mimeType: 'application/pdf',
+      filePath: 'legacy.pdf',
+      status: 'complete',
+      chunkCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await fabFileRepository.markConvergencePaused(String(insertedId));
+
+    expect(await reasonOf(String(insertedId))).toBe('unchunkedPaused');
   });
 
   it('still bumps updatedAt, as the object-form write it replaced did', async () => {
